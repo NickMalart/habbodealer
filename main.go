@@ -455,6 +455,7 @@ type ParsedUsers28User struct {
 	Sex        string `json:"sex,omitempty"`
 	Motto      string `json:"motto,omitempty"`
 	TokenHex   string `json:"token_hex,omitempty"`
+	RawNameBlock string `json:"raw_name_block,omitempty"`
 }
 
 type ParsedUsers28Trade struct {
@@ -3518,16 +3519,44 @@ func scanTradeOpenFields(data []byte) []string {
 }
 
 func users28UserEqual(a ParsedUsers28User, b ParsedUsers28User) bool {
-	return strings.TrimSpace(a.Username) == strings.TrimSpace(b.Username) &&
-		a.TradeID == b.TradeID &&
-		strings.TrimSpace(a.TradeIDRaw) == strings.TrimSpace(b.TradeIDRaw) &&
-		a.ChatID == b.ChatID &&
-		strings.TrimSpace(a.ChatIDRaw) == strings.TrimSpace(b.ChatIDRaw) &&
-		strings.TrimSpace(a.EntityID) == strings.TrimSpace(b.EntityID) &&
-		strings.TrimSpace(a.Figure) == strings.TrimSpace(b.Figure) &&
-		strings.TrimSpace(a.Sex) == strings.TrimSpace(b.Sex) &&
-		strings.TrimSpace(a.Motto) == strings.TrimSpace(b.Motto) &&
-		strings.TrimSpace(a.TokenHex) == strings.TrimSpace(b.TokenHex)
+	// Compare username strictly, but treat missing/zero numeric IDs as unknown
+	if strings.TrimSpace(a.Username) != strings.TrimSpace(b.Username) {
+		return false
+	}
+
+	// If both sides have a non-zero ChatID and they differ, it's a real change.
+	if a.ChatID > 0 && b.ChatID > 0 && a.ChatID != b.ChatID {
+		return false
+	}
+
+	// If both sides have a non-zero TradeID and they differ, it's a real change.
+	if a.TradeID > 0 && b.TradeID > 0 && a.TradeID != b.TradeID {
+		return false
+	}
+
+	// If both have non-empty EntityID and they differ, treat as change.
+	if strings.TrimSpace(a.EntityID) != "" && strings.TrimSpace(b.EntityID) != "" &&
+		strings.TrimSpace(a.EntityID) != strings.TrimSpace(b.EntityID) {
+		return false
+	}
+
+	if strings.TrimSpace(a.Figure) != strings.TrimSpace(b.Figure) {
+		return false
+	}
+
+	if strings.TrimSpace(a.Sex) != strings.TrimSpace(b.Sex) {
+		return false
+	}
+
+	// If both tokens present and differ, it's a change.
+	at := strings.TrimSpace(a.TokenHex)
+	bt := strings.TrimSpace(b.TokenHex)
+	if at != "" && bt != "" && at != bt {
+		return false
+	}
+
+	// Ignore raw VL64/text fragments such as chat_id_raw/trade_id_raw and motto differences.
+	return true
 }
 
 func parseUsers28Int(raw string) int {
@@ -3564,15 +3593,41 @@ func handleUsers28Packet(a *App, e *g.Intercept) {
 		if username == "" {
 			continue
 		}
-		key := strings.ToLower(username)
-		oldUser, exists := users28Canonical[key]
-		if !exists {
-			joined = append(joined, u.Username)
-		} else if !users28UserEqual(oldUser, u) {
-			changed = append(changed, fmt.Sprintf("%s(chat:%d->%d trade:%s->%s)", u.Username, oldUser.ChatID, u.ChatID, oldUser.TradeIDRaw, u.TradeIDRaw))
+
+		// Compute a canonical key by stripping known token prefixes where possible.
+		canonical := strings.ToLower(strings.TrimSpace(normalizeUsers28Name(u.Username, u.TokenHex)))
+		if canonical == "" {
+			canonical = strings.ToLower(username)
 		}
 
-		users28Canonical[key] = u
+		oldUser, exists := users28Canonical[canonical]
+		if !exists {
+			// New canonical entry
+			users28Canonical[canonical] = u
+			if token := strings.TrimSpace(u.TokenHex); token != "" {
+				users28ByToken[token] = u
+			}
+			if u.ChatID > 0 {
+				users28ByIndex[u.ChatID] = u
+			}
+			if u.TradeID > 0 {
+				users28ByTradeID[u.TradeID] = u
+			}
+			joined = append(joined, u.Username)
+			a.AddLogMsg(fmt.Sprintf("[ROOM_USERS_DEBUG] added user=%s canonical=%s raw=%s chat_id=%d chat_raw=%s trade_id=%d trade_raw=%s",
+				u.Username, canonical, u.RawNameBlock, u.ChatID, u.ChatIDRaw, u.TradeID, u.TradeIDRaw))
+			continue
+		}
+
+		if users28UserEqual(oldUser, u) {
+			// No meaningful change; skip rewriting maps to avoid noisy "replaced" logs.
+			a.AddLogMsg(fmt.Sprintf("[ROOM_USERS_DEBUG] unchanged user=%s canonical=%s raw=%s",
+				u.Username, canonical, u.RawNameBlock))
+			continue
+		}
+
+		// Significant change: update canonical record and associated indexes.
+		users28Canonical[canonical] = u
 		if token := strings.TrimSpace(u.TokenHex); token != "" {
 			users28ByToken[token] = u
 		}
@@ -3582,7 +3637,10 @@ func handleUsers28Packet(a *App, e *g.Intercept) {
 		if u.TradeID > 0 {
 			users28ByTradeID[u.TradeID] = u
 		}
-		a.AddLogMsg(fmt.Sprintf("[ROOM_USERS_DEBUG] stored user=%s chat_id=%d chat_raw=%s trade_id=%d trade_raw=%s", u.Username, u.ChatID, u.ChatIDRaw, u.TradeID, u.TradeIDRaw))
+		changed = append(changed, fmt.Sprintf("%s(chat:%d->%d trade:%s->%s)",
+			u.Username, oldUser.ChatID, u.ChatID, oldUser.TradeIDRaw, u.TradeIDRaw))
+		a.AddLogMsg(fmt.Sprintf("[ROOM_USERS_DEBUG] updated user=%s canonical=%s raw=%s chat_id=%d chat_raw=%s trade_id=%d trade_raw=%s",
+			u.Username, canonical, u.RawNameBlock, u.ChatID, u.ChatIDRaw, u.TradeID, u.TradeIDRaw))
 	}
 	users28Mu.Unlock()
 
