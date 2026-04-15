@@ -445,16 +445,16 @@ type ParsedUsers28Result struct {
 }
 
 type ParsedUsers28User struct {
-	Username   string `json:"username"`
-	TradeID    int    `json:"trade_id"`
-	TradeIDRaw string `json:"trade_id_raw"`
-	ChatID     int    `json:"chat_id"`
-	ChatIDRaw  string `json:"chat_id_raw"`
-	EntityID   string `json:"entity_id,omitempty"`
-	Figure     string `json:"figure,omitempty"`
-	Sex        string `json:"sex,omitempty"`
-	Motto      string `json:"motto,omitempty"`
-	TokenHex   string `json:"token_hex,omitempty"`
+	Username     string `json:"username"`
+	TradeID      int    `json:"trade_id"`
+	TradeIDRaw   string `json:"trade_id_raw"`
+	ChatID       int    `json:"chat_id"`
+	ChatIDRaw    string `json:"chat_id_raw"`
+	EntityID     string `json:"entity_id,omitempty"`
+	Figure       string `json:"figure,omitempty"`
+	Sex          string `json:"sex,omitempty"`
+	Motto        string `json:"motto,omitempty"`
+	TokenHex     string `json:"token_hex,omitempty"`
 	RawNameBlock string `json:"raw_name_block,omitempty"`
 }
 
@@ -2257,7 +2257,12 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		// already send an immediate outgoing TRADE_CLOSE when needed.
 
 		if !wasCompleted {
-			if payoutTradeActive {
+			// If this was part of a payout flow, retry the payout when either
+			// the payout trade was active or we had recently attempted an
+			// outgoing payout open (payoutActive && payoutTradeSent). The
+			// latter case covers quick partner cancels where an incoming
+			// TRADE_OPEN packet never arrived.
+			if payoutTradeActive || (payoutActive && payoutTradeSent) {
 				retryTargetID := payoutTargetID
 				retryTargetName := payoutTargetName
 				payoutTradeActive = false
@@ -2298,6 +2303,9 @@ func handleTradePacket(a *App, e *g.Intercept) {
 					return
 				}
 
+				// Reset the "sent" flag so the retry loop will resend the open
+				// cleanly, then start a fresh payout attempt.
+				payoutTradeSent = false
 				startPayout(a, retryTargetID, retryTargetName)
 				return
 			} else {
@@ -2436,7 +2444,7 @@ func (a *App) startPayoutResponseTimeoutMonitor(playerName string, targetID int,
 	payoutResponseTimeoutActive = true
 
 	go func(id int, player string, retryTargetID int, retryTargetName string) {
-		time.Sleep(30 * time.Second)
+		time.Sleep(45 * time.Second)
 
 		if id != payoutResponseTimeoutMonitorID || !payoutResponseTimeoutActive || !payoutTradeActive {
 			return
