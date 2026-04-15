@@ -2004,6 +2004,12 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			if tradeToken != "" {
 				lastTradePartnerToken = tradeToken
 				tradeStarterToken = tradeToken
+				a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN] extracted token=%q payload_hex=% X", tradeToken, e.Packet.Data))
+				if !isLikelyToken(tradeToken) {
+					a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN] extracted token looks suspicious: %q", tradeToken))
+				}
+			} else {
+				a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN] no 4-byte token found in payload (raw=% X)", e.Packet.Data))
 			}
 
 			if id, ok := decodeLeadingVL64(e.Packet.Data); ok {
@@ -8061,11 +8067,57 @@ func extractTradeTokenFromPacket(data []byte) string {
 	if len(data) < 1 {
 		return ""
 	}
-	vlen := gencoding.VL64DecodeLen(data[0])
-	if vlen <= 0 || vlen+4 > len(data) {
-		return ""
+
+	// Primary fast-path: token immediately follows leading VL64 room index.
+	if vlen := gencoding.VL64DecodeLen(data[0]); vlen > 0 && vlen+4 <= len(data) {
+		tok := string(data[vlen : vlen+4])
+		if isLikelyToken(tok) {
+			return tok
+		}
 	}
-	return string(data[vlen : vlen+4])
+
+	// Fallback: scan for any printable 4-byte token which is preceded by
+	// a VL64 value that ends exactly at the token start. Prefer candidates
+	// that are followed by a plausible name marker (letter or brace).
+	for tokenStart := 0; tokenStart+4 <= len(data); tokenStart++ {
+		cand := string(data[tokenStart : tokenStart+4])
+		if !isLikelyToken(cand) {
+			continue
+		}
+
+		// Look back up to 6 bytes for a VL64 that finishes at tokenStart.
+		scanStart := tokenStart - 6
+		if scanStart < 0 {
+			scanStart = 0
+		}
+		for startOff := scanStart; startOff < tokenStart; startOff++ {
+			vlen := gencoding.VL64DecodeLen(data[startOff])
+			if vlen <= 0 || startOff+vlen != tokenStart {
+				continue
+			}
+			v := gencoding.VL64Decode(data[startOff:tokenStart])
+			if v <= 0 {
+				continue
+			}
+
+			// Heuristic: require the byte after the token to look like a name
+			// start (letter, brace, bracket or space) when available.
+			nameStart := tokenStart + 4
+			if nameStart < len(data) {
+				b := data[nameStart]
+				if (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || b == '{' || b == '[' || b == ' ' {
+					return cand
+				}
+				// If next byte is not a strong name marker, still accept the
+				// token as a weaker fallback.
+				return cand
+			}
+
+			return cand
+		}
+	}
+
+	return ""
 }
 
 // lookupTokenByName reverses parsed USERS28 token_hex values to find the token for a username.
