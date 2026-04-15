@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bytes"
@@ -1908,7 +1908,9 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				a.AddLogMsg(fmt.Sprintf("[PAYOUT] trade opened successfully with %s, proceeding", savedPayoutTargetName))
 				// Fall through to normal trade-open handling below
 				go a.autoAddPayoutItems()
-				go a.startPayoutResponseTimeoutMonitor(savedPayoutTargetName, savedPayoutTargetID, savedPayoutTargetName)
+				// Don't start the payout response timeout at trade-open; start it
+				// only after the dealer (us) actually accepts the payout so we
+				// don't time out while auto-adding many items.
 			} else {
 				// Someone else opened a trade with us during payout — block it
 				a.AddLogMsg(fmt.Sprintf("[PAYOUT] incoming trade blocked during payout to %s, closing", payoutTargetName))
@@ -2691,6 +2693,15 @@ func (a *App) autoAddPayoutItems() {
 			tradeAutoAccepted = true
 			tradeAutoAcceptPending = false
 			a.AddLogMsg(fmt.Sprintf("[PAYOUT] auto-accept sent after full payout placement (%d/%d sent=%d)", total, requiredTotal, payoutActualAddCount))
+
+			// Start the payout response timeout monitor only after we've
+			// accepted the payout. This avoids the 30s partner-accept timeout
+			// from running while we are still auto-adding potentially large
+			// numbers of items.
+			if payoutTradeActive && !payoutResponseTimeoutActive {
+				a.AddLogMsg("[PAYOUT] starting payout response timeout monitor after dealer auto-accept")
+				a.startPayoutResponseTimeoutMonitor(payoutTargetName, payoutTargetID, payoutTargetName)
+			}
 		} else {
 			a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] accept deferred: planned=%d/%d sent=%d/%d", total, requiredTotal, payoutActualAddCount, requiredTotal))
 		}
@@ -2820,6 +2831,12 @@ func (a *App) tryAcceptPayoutTrade(required map[string]int, source string) bool 
 	tradeAutoAccepted = true
 	tradeAutoAcceptPending = false
 	a.AddLogMsg(fmt.Sprintf("[PAYOUT] auto-accept sent after verifying payout items (%s)", source))
+
+	// Start response timeout monitor after dealer (us) accepted.
+	if payoutTradeActive && !payoutResponseTimeoutActive {
+		a.AddLogMsg("[PAYOUT] starting payout response timeout monitor after dealer accept (verified)")
+		a.startPayoutResponseTimeoutMonitor(payoutTargetName, payoutTargetID, payoutTargetName)
+	}
 	return true
 }
 
@@ -2879,6 +2896,12 @@ func (a *App) verifyAndRetryPayoutAdds(plannedIDs []int) {
 		tradeAutoAccepted = true
 		tradeAutoAcceptPending = false
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT] auto-accept fallback after queued full payout (%d/%d sent=%d)", len(plannedIDs), requiredTotal, payoutActualAddCount))
+
+		// Start response timeout monitor after dealer accept (fallback path).
+		if payoutTradeActive && !payoutResponseTimeoutActive {
+			a.AddLogMsg("[PAYOUT] starting payout response timeout monitor after dealer auto-accept (fallback)")
+			a.startPayoutResponseTimeoutMonitor(payoutTargetName, payoutTargetID, payoutTargetName)
+		}
 		return
 	}
 
@@ -3311,6 +3334,12 @@ func scheduleAutoTradeAccept(a *App, payload string) {
 		tradeAutoAcceptPending = false
 		tradeAutoAccepted = true
 		a.AddLogMsg("[TRADE_ACCEPT] sent outgoing[69]")
+		// If this was a payout flow, start the payout response timeout monitor
+		// now that the dealer has accepted and we're waiting for the partner.
+		if payoutTradeActive && !payoutResponseTimeoutActive {
+			a.AddLogMsg("[PAYOUT] starting payout response timeout monitor after dealer accept")
+			a.startPayoutResponseTimeoutMonitor(payoutTargetName, payoutTargetID, payoutTargetName)
+		}
 	}(flowID)
 }
 
@@ -4205,19 +4234,18 @@ func (a *App) extractTradeItemAndQuantity(field string) (string, int, bool) {
 
 	if match := stripItemNameRe.FindString(field); match != "" {
 		a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] fallback strict matched=%q inside=%q", match, field))
-		// Try to accept a strict pattern match even when it isn't yet known
-		// in the catalog or current hand. This helps detect incoming items
-		// that the dealer doesn't have (e.g., petals) so shortage logic can
-		// close the trade promptly instead of silently ignoring the field.
+		// Try to accept a strict pattern match only if it verifies against the
+		// known sources (catalog or frozen/live hand). This prevents accepting
+		// token-like headers that resemble class names but are not present in
+		// the snapshot we send to the API (the authoritative view).
 		if normalized, ok := normalizeClassKeyWithVariant(match); ok {
-			// Prefer the verified path when available (catalog/hand check).
+			// Prefer the verified path when available (catalog/hand/snapshot check).
 			if name, qty, ok2 := a.normalizeTradeFieldClassWithQty(match); ok2 {
 				a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS_PARSE_FALLBACK] matched %q inside %q (verified)", match, field))
 				return name, qty, true
 			}
-			// Accept the unverified normalized class to allow shortage detection.
-			a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS_PARSE_FALLBACK] strict fallback accepted %q inside %q (unverified)", normalized, field))
-			return normalized, 1, true
+			// Verification failed: do not accept unverified normalized classes.
+			a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS_PARSE_FALLBACK] strict fallback found %q inside %q but verification failed; skipping", normalized, field))
 		}
 		a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] fallback strict match %q rejected by normalisation/raw-check", match))
 	}
@@ -4307,10 +4335,15 @@ func isKnownTradeClassName(a *App, name string) bool {
 	}
 
 	// Also accept items observed in the dealer's scanned hand (single-word
-	// items or uncatalogued classes). This preserves the previous behaviour
-	// of permitting hand-only names while rejecting arbitrary tokens.
+	// items or uncatalogued classes). Prefer the frozen trade snapshot when
+	// available so parsing uses the same authoritative view we send to the
+	// live-dealer API. Fall back to the live hand when no snapshot.
 	handItemsMu.Lock()
-	for _, item := range currentHandItems {
+	itemsToCheck := currentHandItems
+	if tradeHandSnapshotReady && len(tradeHandSnapshot) > 0 {
+		itemsToCheck = tradeHandSnapshot
+	}
+	for _, item := range itemsToCheck {
 		if strings.ToLower(strings.TrimSpace(item.Name)) == name {
 			handItemsMu.Unlock()
 			return true
@@ -5506,6 +5539,12 @@ func (a *App) maybeAutoAcceptOnSnapshotReady(context string) {
 	tradeAutoAccepted = true
 	tradeAutoAcceptPending = false
 	a.AddLogMsg(fmt.Sprintf("[TRADE_ACCEPT] sent outgoing[69] (snapshot-ready %s)", context))
+	// If this is a payout, start the payout response timeout monitor now that
+	// we've accepted and are waiting for the partner to confirm.
+	if payoutTradeActive && !payoutResponseTimeoutActive {
+		a.AddLogMsg("[PAYOUT] starting payout response timeout monitor after snapshot-ready accept")
+		a.startPayoutResponseTimeoutMonitor(payoutTargetName, payoutTargetID, payoutTargetName)
+	}
 }
 
 func formatTradeShortages(shortages []tradeShortage) string {
