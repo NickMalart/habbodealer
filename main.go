@@ -1144,6 +1144,9 @@ func (a *App) setCurrentGameHistoryResults(playerResult string, dealerResult str
 	a.gameHistoryMu.Unlock()
 	a.AddLogMsg("[GAME_HISTORY] setCurrentGameHistoryResults unlocked, syncing")
 	a.syncGameHistory()
+	if complete {
+		a.sendLiveDealerGames(5)
+	}
 }
 
 func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
@@ -5336,6 +5339,105 @@ func (a *App) sendLiveDealerStatus(open bool, dealerName string) {
 			a.AddLogMsg("[LIVE_DEALER_STATUS] webhook sent to " + url)
 		}
 	}(open, dealerName)
+}
+
+// sendLiveDealerGames posts an anonymized summary of the last N completed games
+// to the configured live-dealer webhook. Never exposes the player name; winner
+// is mapped to "Player"/"Dealer"/"Unknown".
+func (a *App) sendLiveDealerGames(last int) {
+	go func(n int) {
+		type GameSummary struct {
+			ID          string      `json:"id"`
+			Game        string      `json:"game"`
+			Winner      string      `json:"winner"`
+			Outcome     string      `json:"outcome"`
+			StartedAt   string      `json:"startedAt,omitempty"`
+			CompletedAt string      `json:"completedAt,omitempty"`
+			BetItems    []TradeItem `json:"betItems,omitempty"`
+			PayoutItems []TradeItem `json:"payoutItems,omitempty"`
+		}
+		payload := struct {
+			LastSeenAt string        `json:"lastSeenAt"`
+			DealerName string        `json:"dealerName"`
+			RoomName   string        `json:"roomName"`
+			Games      []GameSummary `json:"games"`
+		}{}
+		payload.LastSeenAt = time.Now().UTC().Format(time.RFC3339)
+		payload.DealerName = a.getCurrentDealerName()
+		payload.RoomName = a.getCurrentRoomName()
+
+		a.gameHistoryMu.Lock()
+		// iterate newest-first; a.gameHistory is prepended on beginGameHistory
+		count := 0
+		for i := 0; i < len(a.gameHistory) && count < n; i++ {
+			entry := a.gameHistory[i]
+			if strings.TrimSpace(entry.CompletedAt) == "" {
+				continue
+			}
+
+			winner := strings.TrimSpace(entry.Winner)
+			publicWinner := "Unknown"
+			dealerName := strings.TrimSpace(a.getCurrentDealerName())
+			if winner != "" {
+				if strings.EqualFold(winner, dealerName) {
+					publicWinner = "Dealer"
+				} else {
+					publicWinner = "Player"
+				}
+			}
+
+			gs := GameSummary{
+				ID:          entry.ID,
+				Game:        entry.Game,
+				Winner:      publicWinner,
+				Outcome:     entry.Status,
+				StartedAt:   entry.StartedAt,
+				CompletedAt: entry.CompletedAt,
+				BetItems:    cloneTradeItems(entry.BetItems),
+				PayoutItems: cloneTradeItems(entry.PayoutItems),
+			}
+			payload.Games = append(payload.Games, gs)
+			count++
+		}
+		a.gameHistoryMu.Unlock()
+
+		if len(payload.Games) == 0 {
+			a.AddLogMsg("[LIVE_DEALER_GAMES] no completed games to send")
+			return
+		}
+
+		jb, err := json.Marshal(payload)
+		if err != nil {
+			a.AddLogMsg("[LIVE_DEALER_GAMES] marshal error: " + err.Error())
+			return
+		}
+
+		url := os.Getenv("LIVE_SYNC_URL")
+		if url == "" {
+			url = "http://rollorigins.club/api/live-dealer"
+		}
+
+		req, err := http.NewRequest("POST", url, bytes.NewReader(jb))
+		if err != nil {
+			a.AddLogMsg("[LIVE_DEALER_GAMES] request error: " + err.Error())
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer s3cUr3-r4nd0m_v4lu3-6f2b8a")
+
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			a.AddLogMsg("[LIVE_DEALER_GAMES] POST error: " + err.Error())
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			a.AddLogMsg(fmt.Sprintf("[LIVE_DEALER_GAMES] webhook responded: %s %d", url, resp.StatusCode))
+		} else {
+			a.AddLogMsg("[LIVE_DEALER_GAMES] webhook sent to " + url)
+		}
+	}(last)
 }
 
 func (a *App) captureTradeHandSnapshot() {
