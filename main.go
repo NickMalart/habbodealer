@@ -263,17 +263,32 @@ type TradeItem struct {
 	RawData  string // Store raw field for debugging
 }
 
+// LiveGameSummary is an anonymized, frontend-friendly summary of a completed
+// game. It intentionally does not expose player names — `Winner` is mapped
+// to "Player"/"Dealer"/"Unknown".
+type LiveGameSummary struct {
+	ID          string      `json:"id"`
+	Game        string      `json:"game"`
+	Winner      string      `json:"winner"`
+	Outcome     string      `json:"outcome"`
+	StartedAt   string      `json:"startedAt,omitempty"`
+	CompletedAt string      `json:"completedAt,omitempty"`
+	BetItems    []TradeItem `json:"betItems,omitempty"`
+	PayoutItems []TradeItem `json:"payoutItems,omitempty"`
+}
+
 type LiveDealerStatusPayload struct {
-	LastSeenAt         string      `json:"lastSeenAt"`
-	DealerOpen         bool        `json:"dealerOpen"`
-	TradeOpen          bool        `json:"tradeOpen"`
-	GameActive         bool        `json:"gameActive"`
-	SnapshotReady      bool        `json:"snapshotReady"`
-	DealerName         string      `json:"dealerName"`
-	RoomName           string      `json:"roomName"`
-	MaxUniqueItems     int         `json:"maxUniqueItems"`
-	MaxQuantityPerItem int         `json:"maxQuantityPerItem"`
-	Snapshot           []TradeItem `json:"snapshot,omitempty"`
+	LastSeenAt         string            `json:"lastSeenAt"`
+	DealerOpen         bool              `json:"dealerOpen"`
+	TradeOpen          bool              `json:"tradeOpen"`
+	GameActive         bool              `json:"gameActive"`
+	SnapshotReady      bool              `json:"snapshotReady"`
+	DealerName         string            `json:"dealerName"`
+	RoomName           string            `json:"roomName"`
+	MaxUniqueItems     int               `json:"maxUniqueItems"`
+	MaxQuantityPerItem int               `json:"maxQuantityPerItem"`
+	Snapshot           []TradeItem       `json:"snapshot,omitempty"`
+	RecentGames        []LiveGameSummary `json:"recentGames,omitempty"`
 }
 
 type tradeLimitViolation struct {
@@ -891,6 +906,60 @@ func cloneTradeItems(items []TradeItem) []TradeItem {
 	copyItems := make([]TradeItem, len(items))
 	copy(copyItems, items)
 	return copyItems
+}
+
+// getRecentGameSummaries returns the last n completed games as anonymized
+// summaries suitable for public status APIs. Player names are not exposed —
+// winners are mapped to "Player"/"Dealer"/"Unknown".
+func (a *App) getRecentGameSummaries(n int) []LiveGameSummary {
+	a.gameHistoryMu.Lock()
+	defer a.gameHistoryMu.Unlock()
+
+	out := make([]LiveGameSummary, 0, n)
+	count := 0
+	dealerName := strings.TrimSpace(a.getCurrentDealerName())
+
+	for i := 0; i < len(a.gameHistory) && count < n; i++ {
+		entry := a.gameHistory[i]
+		if strings.TrimSpace(entry.CompletedAt) == "" {
+			continue
+		}
+
+		winner := strings.TrimSpace(entry.Winner)
+		publicWinner := "Unknown"
+		if winner != "" {
+			// Treat either the configured dealer name or the literal
+			// "Dealer" (case-insensitive) as a dealer win.
+			if strings.EqualFold(winner, dealerName) || strings.EqualFold(winner, "Dealer") {
+				publicWinner = "Dealer"
+			} else {
+				publicWinner = "Player"
+			}
+		}
+
+		// If the dealer won, omit payout items (no payout to player).
+		var payoutItems []TradeItem
+		if publicWinner == "Dealer" {
+			payoutItems = nil
+		} else {
+			payoutItems = cloneTradeItems(entry.PayoutItems)
+		}
+
+		gs := LiveGameSummary{
+			ID:          entry.ID,
+			Game:        entry.Game,
+			Winner:      publicWinner,
+			Outcome:     entry.Status,
+			StartedAt:   entry.StartedAt,
+			CompletedAt: entry.CompletedAt,
+			BetItems:    cloneTradeItems(entry.BetItems),
+			PayoutItems: payoutItems,
+		}
+		out = append(out, gs)
+		count++
+	}
+
+	return out
 }
 
 func gameHistoryTimestamp() string {
@@ -5288,6 +5357,7 @@ func (a *App) sendLiveDealerStatus(open bool, dealerName string) {
 			RoomName:           a.getCurrentRoomName(),
 			MaxUniqueItems:     maxTradeUniqueItems,
 			MaxQuantityPerItem: maxTradeQuantityPerItem,
+			RecentGames:        a.getRecentGameSummaries(5),
 		}
 
 		jb, err := json.Marshal(payload)
@@ -6666,7 +6736,7 @@ func (a *App) finalize13Round(playerWins bool, reason string) {
 		return
 	}
 
-	a.setCurrentGameHistoryResults(playerHand, dealerHand, "Dealer", "Completed", true)
+	a.setCurrentGameHistoryResults(playerHand, dealerHand, a.getCurrentDealerName(), "Completed", true)
 	a.noteCurrentGameHistory(winnerMsg)
 	go a.openDealerAfterRound()
 }

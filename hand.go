@@ -107,7 +107,7 @@ func (a *App) evaluatePokerHand() {
 			resetPayoutRetryState()
 			startPayout(a, payoutTargetID, payoutTargetName)
 		} else {
-			a.setCurrentGameHistoryResults(playerHand, hand, "Dealer", "Completed", true)
+			a.setCurrentGameHistoryResults(playerHand, hand, a.getCurrentDealerName(), "Completed", true)
 			a.noteCurrentGameHistory(winnerMsg)
 			go a.openDealerAfterRound()
 		}
@@ -343,7 +343,7 @@ func (a *App) finalizeBlackjackRound(playerWins bool, reason string) {
 		return
 	}
 
-	a.setCurrentGameHistoryResults(playerHand, dealerHand, "Dealer", "Completed", true)
+	a.setCurrentGameHistoryResults(playerHand, dealerHand, a.getCurrentDealerName(), "Completed", true)
 	a.noteCurrentGameHistory(winnerMsg)
 	go a.openDealerAfterRound()
 }
