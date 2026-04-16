@@ -409,23 +409,6 @@ func normalizeUsers28Name(name string, tokenHex string) string {
 			}
 		}
 	}
-	if len(name) >= 5 {
-		prefix := name[:4]
-		tail := name[4:]
-		printable := true
-		for _, ch := range prefix {
-			if ch < 64 || ch > 125 {
-				printable = false
-				break
-			}
-		}
-		if printable && len(tail) > 0 {
-			r := rune(tail[0])
-			if r >= 'A' && r <= 'Z' {
-				return strings.TrimSpace(tail)
-			}
-		}
-	}
 	return name
 }
 

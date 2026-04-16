@@ -16,8 +16,19 @@ def read_packet_bytes(input_path: Optional[str]) -> bytes:
     return sys.stdin.buffer.read()
 
 
-def split_packet_fields(packet: bytes) -> List[str]:
-    return [part.decode('ascii', errors='ignore').strip() for part in packet.split(b'\x02')]
+def split_packet_fields(packet: bytes) -> List[Dict[str, object]]:
+    """Return list of field dicts with raw bytes and ascii-decoded string.
+
+    Keeps the original raw bytes (for token extraction) while preserving
+    the previous ascii/ignore decoding used by the parser heuristics.
+    """
+    parts: List[Dict[str, object]] = []
+    for part in packet.split(b'\x02'):
+        parts.append({
+            'raw': part,
+            'str': part.decode('ascii', errors='ignore').strip(),
+        })
+    return parts
 
 
 def vl64_chunk_length(text: str) -> int:
@@ -73,7 +84,14 @@ def prefix_count_from_live_block(text: str) -> int:
     return 3
 
 
-def extract_entity_and_username(name_block: str) -> Dict[str, object]:
+def extract_entity_and_username(name_block: str, name_block_raw: bytes) -> Dict[str, object]:
+    """Parse the name_block string and include raw bytes token hex.
+
+    `name_block` is the ascii-decoded form used by the existing heuristics.
+    `name_block_raw` is the raw bytes for the same field (may contain non-ascii
+    token bytes). We emit `token_hex` computed from the first up-to-4 bytes
+    of the raw block so external code can reliably detect encoded tokens.
+    """
     original = name_block
     working = name_block
     if working.startswith('@\\'):
@@ -111,6 +129,14 @@ def extract_entity_and_username(name_block: str) -> Dict[str, object]:
     trade_id_raw = parsed_ints[-1] if len(parsed_ints) >= 1 else ''
     entity_id = ''.join(parsed_ints)
 
+    # Compute token_hex from the first up-to-4 raw bytes of the name block.
+    token_hex = ''
+    try:
+        if name_block_raw:
+            token_hex = name_block_raw[:4].hex()
+    except Exception:
+        token_hex = ''
+
     return {
         'entity_id': entity_id,
         'chat_id_raw': chat_id_raw,
@@ -119,6 +145,7 @@ def extract_entity_and_username(name_block: str) -> Dict[str, object]:
         'trade_id': decode_vl64(trade_id_raw),
         'username': remaining,
         'raw_name_block': original,
+        'token_hex': token_hex,
     }
 
 
@@ -127,16 +154,18 @@ def parse_users28(packet: bytes) -> List[Dict[str, object]]:
     users: List[Dict[str, object]] = []
 
     for i, field in enumerate(fields):
-        if not FIGURE_RE.match(field):
+        field_str = field['str']
+        if not FIGURE_RE.match(field_str):
             continue
         # Allow index 0 (there may be no preceding field); use safe indexing.
-        name_block = fields[i - 1] if i > 0 else ''
-        parsed = extract_entity_and_username(name_block)
-        sex = fields[i + 1] if i + 1 < len(fields) else ''
+        name_block_str = fields[i - 1]['str'] if i > 0 else ''
+        name_block_raw = fields[i - 1]['raw'] if i > 0 else b''
+        parsed = extract_entity_and_username(name_block_str, name_block_raw)
+        sex = fields[i + 1]['str'] if i + 1 < len(fields) else ''
 
         motto = ''
         if i + 2 < len(fields):
-            candidate = fields[i + 2]
+            candidate = fields[i + 2]['str']
             if (
                 len(candidate) > 5
                 and not MOTTO_SKIP_RE.match(candidate)
@@ -151,9 +180,10 @@ def parse_users28(packet: bytes) -> List[Dict[str, object]]:
             'chat_id': parsed['chat_id'],
             'chat_id_raw': parsed['chat_id_raw'],
             'entity_id': parsed['entity_id'],
-            'figure': field,
+            'figure': field_str,
             'sex': sex,
             'motto': motto,
+            'token_hex': parsed.get('token_hex', ''),
         })
 
     users.sort(key=lambda u: (
