@@ -2459,6 +2459,12 @@ func (a *App) startPayoutResponseTimeoutMonitor(playerName string, targetID int,
 		ext.Send(out.SHOUT, timeoutMsg)
 
 		time.Sleep(1200 * time.Millisecond)
+		// Mark this as a forced/local close so incoming TRADE_CLOSE isn't
+		// treated as a player cancel and no false "closed trade" shout
+		// is emitted by the incoming handler.
+		hiddenBlockedTradeCleanupPending = true
+		ignoreNextGuardCloseRecovery = true
+		suppressNextTradeCloseAnnouncement = true
 		ext.Send(out.TRADE_CLOSE)
 
 		if payoutResponseTimeoutAttempts >= 3 {

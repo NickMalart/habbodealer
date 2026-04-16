@@ -159,6 +159,30 @@ func (a *App) evaluateBlackjackHand() {
 			return
 		}
 
+		// auto-announce and proceed when player reaches 21
+		if blackjackPlayerTotal == 21 {
+			playerLabel := strings.TrimSpace(blackjackPlayerName)
+			if playerLabel == "" {
+				playerLabel = strings.TrimSpace(lastTradePartnerName)
+			}
+			if playerLabel == "" {
+				playerLabel = "Player"
+			}
+
+			msg := fmt.Sprintf("%s got 21", playerLabel)
+			a.AddLogMsg(fmt.Sprintf("[BJ] announcing: %q", msg))
+			log.Printf("[BJ] announcing: %q", msg)
+			if !ChatIsDisabled {
+				waitForUnmute(90 * time.Second)
+				time.Sleep(800 * time.Millisecond)
+				sendMessageWithDelay(msg)
+			}
+
+			a.startBlackjackDealerTurn("player reached 21")
+			isBJRolling = false
+			isHitting = false
+			return
+		}
 		if blackjackPlayerTotal < 15 {
 			a.AddLogMsg(fmt.Sprintf("[BJ] player total %d < 15; auto-hit", blackjackPlayerTotal))
 			log.Printf("[BJ] player total %d < 15; auto-hit", blackjackPlayerTotal)
@@ -369,9 +393,24 @@ func (a *App) evaluate13Hand() {
 		}
 
 		if thirteenPlayerTotal == 13 {
-			a.AddLogMsg("[13] player total 13; auto-stay and moving to dealer roll")
-			log.Printf("[13] player total 13; auto-stay and moving to dealer roll")
-			a.start13DealerTurn("player reached 13 auto-stay")
+			playerLabel := strings.TrimSpace(thirteenPlayerName)
+			if playerLabel == "" {
+				playerLabel = strings.TrimSpace(lastTradePartnerName)
+			}
+			if playerLabel == "" {
+				playerLabel = "Player"
+			}
+
+			msg := fmt.Sprintf("%s got 13", playerLabel)
+			a.AddLogMsg(fmt.Sprintf("[13] announcing: %q", msg))
+			log.Printf("[13] announcing: %q", msg)
+			if !ChatIsDisabled {
+				waitForUnmute(90 * time.Second)
+				time.Sleep(800 * time.Millisecond)
+				sendMessageWithDelay(msg)
+			}
+
+			a.start13DealerTurn("player reached 13")
 			is13Rolling = false
 			is13Hitting = false
 			return
