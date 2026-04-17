@@ -982,8 +982,37 @@ func (a *App) loadGameHistory() {
 		return
 	}
 
+	// Normalize stored Winner fields so they contain either the player's
+	// name (when the player won) or the literal "Dealer". Historically the
+	// dealer's real username (e.g. "Gymbox") could be stored; convert those
+	// to the canonical "Dealer" value so frontends and exports are stable.
+	modified := 0
+	for i := range entries {
+		w := strings.TrimSpace(entries[i].Winner)
+		if w == "" {
+			continue
+		}
+		// Already normalized
+		if strings.EqualFold(w, "Dealer") {
+			continue
+		}
+		// If the winner string matches the recorded player name, keep it as
+		// the player's name (player win). Otherwise treat as dealer.
+		if entries[i].PlayerName != "" && strings.EqualFold(w, entries[i].PlayerName) {
+			entries[i].Winner = entries[i].PlayerName
+			continue
+		}
+		entries[i].Winner = "Dealer"
+		modified++
+	}
+
 	a.gameHistoryMu.Lock()
 	a.gameHistory = entries
+	if modified > 0 {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY] normalized %d winner fields to 'Dealer'", modified))
+		// Persist migrated history back to disk while we hold the lock.
+		a.saveGameHistoryLocked()
+	}
 	a.gameHistoryMu.Unlock()
 	a.emitGameHistoryUpdate()
 }
@@ -1177,7 +1206,18 @@ func (a *App) setCurrentGameHistoryResults(playerResult string, dealerResult str
 			entry.DealerResult = dealerResult
 		}
 		if strings.TrimSpace(winner) != "" {
-			entry.Winner = winner
+			norm := strings.TrimSpace(winner)
+			// If the supplied winner matches the recorded player name, store
+			// the player's name. Otherwise treat it as a dealer win and
+			// canonicalize to "Dealer" (this covers stored dealer usernames).
+			if entry.PlayerName != "" && strings.EqualFold(norm, entry.PlayerName) {
+				entry.Winner = entry.PlayerName
+			} else if strings.EqualFold(norm, "Dealer") || strings.EqualFold(norm, a.getCurrentDealerName()) {
+				entry.Winner = "Dealer"
+			} else {
+				// Unknown non-player name — assume dealer and normalize.
+				entry.Winner = "Dealer"
+			}
 		}
 		if strings.TrimSpace(status) != "" {
 			entry.Status = status
@@ -5432,11 +5472,20 @@ func (a *App) sendLiveDealerGames(last int) {
 			publicWinner := "Unknown"
 			dealerName := strings.TrimSpace(a.getCurrentDealerName())
 			if winner != "" {
-				if strings.EqualFold(winner, dealerName) {
+				// Treat configured dealer name or the literal "Dealer" as dealer win
+				if strings.EqualFold(winner, dealerName) || strings.EqualFold(winner, "Dealer") {
 					publicWinner = "Dealer"
 				} else {
 					publicWinner = "Player"
 				}
+			}
+
+			// If the dealer won, omit payout items (no payout to player)
+			var payoutItems []TradeItem
+			if publicWinner == "Dealer" {
+				payoutItems = nil
+			} else {
+				payoutItems = cloneTradeItems(entry.PayoutItems)
 			}
 
 			gs := GameSummary{
@@ -5447,7 +5496,7 @@ func (a *App) sendLiveDealerGames(last int) {
 				StartedAt:   entry.StartedAt,
 				CompletedAt: entry.CompletedAt,
 				BetItems:    cloneTradeItems(entry.BetItems),
-				PayoutItems: cloneTradeItems(entry.PayoutItems),
+				PayoutItems: payoutItems,
 			}
 			payload.Games = append(payload.Games, gs)
 			count++
