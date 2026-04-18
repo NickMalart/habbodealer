@@ -28,6 +28,18 @@ export namespace main {
 	        this.enabled = source["enabled"];
 	    }
 	}
+	export class BlockSlideObjectConfig {
+	    enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new BlockSlideObjectConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	    }
+	}
 	export class DailyStatsPoint {
 	    day: string;
 	    totalRounds: number;

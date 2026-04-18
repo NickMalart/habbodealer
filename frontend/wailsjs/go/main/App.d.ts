@@ -18,7 +18,21 @@ export function ClearTradeItems():Promise<void>;
 
 export function GetAutoShoutConfig():Promise<main.AutoShoutConfig>;
 
+export function GetBlockFriendListUpdateConfig():Promise<main.BlockSlideObjectConfig>;
+
+export function GetBlockPollEventEligibilityOutgoingConfig():Promise<main.BlockSlideObjectConfig>;
+
 export function GetBlockRecommendedRoomsConfig():Promise<main.BlockRecommendedConfig>;
+
+export function GetBlockRecommendedRoomsOutgoingConfig():Promise<main.BlockRecommendedConfig>;
+
+export function GetBlockRemoveBuddyConfig():Promise<main.BlockSlideObjectConfig>;
+
+export function GetBlockSlideObjectBundleConfig():Promise<main.BlockSlideObjectConfig>;
+
+export function GetBlockSlideObjectBundleOutgoingConfig():Promise<main.BlockSlideObjectConfig>;
+
+export function GetBlockStatusEffectsConfig():Promise<main.BlockSlideObjectConfig>;
 
 export function GetCasinoStatsJSON(arg1:string):Promise<string>;
 
@@ -64,4 +78,18 @@ export function StopCasinoSetup():Promise<void>;
 
 export function ToggleAutoShout(arg1:boolean):Promise<main.AutoShoutConfig>;
 
+export function ToggleBlockFriendListUpdate(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
+
+export function ToggleBlockPollEventEligibilityOutgoing(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
+
 export function ToggleBlockRecommendedRooms(arg1:boolean):Promise<main.BlockRecommendedConfig>;
+
+export function ToggleBlockRecommendedRoomsOutgoing(arg1:boolean):Promise<main.BlockRecommendedConfig>;
+
+export function ToggleBlockRemoveBuddy(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
+
+export function ToggleBlockSlideObjectBundle(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
+
+export function ToggleBlockSlideObjectBundleOutgoing(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
+
+export function ToggleBlockStatusEffects(arg1:boolean):Promise<main.BlockSlideObjectConfig>;

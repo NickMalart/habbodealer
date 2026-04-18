@@ -34,8 +34,36 @@ export function GetAutoShoutConfig() {
   return window['go']['main']['App']['GetAutoShoutConfig']();
 }
 
+export function GetBlockFriendListUpdateConfig() {
+  return window['go']['main']['App']['GetBlockFriendListUpdateConfig']();
+}
+
+export function GetBlockPollEventEligibilityOutgoingConfig() {
+  return window['go']['main']['App']['GetBlockPollEventEligibilityOutgoingConfig']();
+}
+
 export function GetBlockRecommendedRoomsConfig() {
   return window['go']['main']['App']['GetBlockRecommendedRoomsConfig']();
+}
+
+export function GetBlockRecommendedRoomsOutgoingConfig() {
+  return window['go']['main']['App']['GetBlockRecommendedRoomsOutgoingConfig']();
+}
+
+export function GetBlockRemoveBuddyConfig() {
+  return window['go']['main']['App']['GetBlockRemoveBuddyConfig']();
+}
+
+export function GetBlockSlideObjectBundleConfig() {
+  return window['go']['main']['App']['GetBlockSlideObjectBundleConfig']();
+}
+
+export function GetBlockSlideObjectBundleOutgoingConfig() {
+  return window['go']['main']['App']['GetBlockSlideObjectBundleOutgoingConfig']();
+}
+
+export function GetBlockStatusEffectsConfig() {
+  return window['go']['main']['App']['GetBlockStatusEffectsConfig']();
 }
 
 export function GetCasinoStatsJSON(arg1) {
@@ -126,6 +154,34 @@ export function ToggleAutoShout(arg1) {
   return window['go']['main']['App']['ToggleAutoShout'](arg1);
 }
 
+export function ToggleBlockFriendListUpdate(arg1) {
+  return window['go']['main']['App']['ToggleBlockFriendListUpdate'](arg1);
+}
+
+export function ToggleBlockPollEventEligibilityOutgoing(arg1) {
+  return window['go']['main']['App']['ToggleBlockPollEventEligibilityOutgoing'](arg1);
+}
+
 export function ToggleBlockRecommendedRooms(arg1) {
   return window['go']['main']['App']['ToggleBlockRecommendedRooms'](arg1);
+}
+
+export function ToggleBlockRecommendedRoomsOutgoing(arg1) {
+  return window['go']['main']['App']['ToggleBlockRecommendedRoomsOutgoing'](arg1);
+}
+
+export function ToggleBlockRemoveBuddy(arg1) {
+  return window['go']['main']['App']['ToggleBlockRemoveBuddy'](arg1);
+}
+
+export function ToggleBlockSlideObjectBundle(arg1) {
+  return window['go']['main']['App']['ToggleBlockSlideObjectBundle'](arg1);
+}
+
+export function ToggleBlockSlideObjectBundleOutgoing(arg1) {
+  return window['go']['main']['App']['ToggleBlockSlideObjectBundleOutgoing'](arg1);
+}
+
+export function ToggleBlockStatusEffects(arg1) {
+  return window['go']['main']['App']['ToggleBlockStatusEffects'](arg1);
 }

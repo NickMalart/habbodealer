@@ -253,6 +253,30 @@ var (
 	blockRecommendedRooms bool
 	blockRecommendedMu    sync.Mutex
 
+	// Block slide-object-bundle incoming packet configuration
+	blockSlideObjectBundle bool
+	blockSlideObjectMu     sync.Mutex
+
+	// Additional incoming packet block flags
+	blockStatusEffects      bool
+	blockStatusEffectsMu    sync.Mutex
+	blockRemoveBuddy        bool
+	blockRemoveBuddyMu      sync.Mutex
+	blockFriendListUpdate   bool
+	blockFriendListUpdateMu sync.Mutex
+
+	// Poll event eligibility outgoing block flag
+	blockPollEventEligibilityOutgoing   bool
+	blockPollEventEligibilityOutgoingMu sync.Mutex
+
+	// Block recommended-rooms outgoing packet configuration
+	blockOutgoingRecommendedRooms bool
+	blockOutgoingRecommendedMu    sync.Mutex
+
+	// Block slide-object-bundle outgoing packet configuration
+	blockSlideObjectOutgoing   bool
+	blockSlideObjectOutgoingMu sync.Mutex
+
 	// Incoming trade limits (configured at startup)
 	maxTradeUniqueItems     int = 5
 	maxTradeQuantityPerItem int = 50
@@ -776,6 +800,166 @@ func (a *App) ToggleBlockRecommendedRooms(enabled bool) BlockRecommendedConfig {
 	if a.ctx != nil {
 		b, _ := json.Marshal(cfg)
 		runtime.EventsEmit(a.ctx, "blockRecommendedUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// BlockSlideObjectConfig holds frontend-friendly block config for the
+// SLIDEOBJECTBUNDLE (header 230).
+type BlockSlideObjectConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
+// GetBlockSlideObjectBundleConfig returns current blockSlideObjectBundle setting.
+func (a *App) GetBlockSlideObjectBundleConfig() BlockSlideObjectConfig {
+	blockSlideObjectMu.Lock()
+	defer blockSlideObjectMu.Unlock()
+	return BlockSlideObjectConfig{Enabled: blockSlideObjectBundle}
+}
+
+// ToggleBlockSlideObjectBundle enables/disables blocking of slide-object-bundle packets.
+func (a *App) ToggleBlockSlideObjectBundle(enabled bool) BlockSlideObjectConfig {
+	blockSlideObjectMu.Lock()
+	blockSlideObjectBundle = enabled
+	blockSlideObjectMu.Unlock()
+
+	cfg := BlockSlideObjectConfig{Enabled: blockSlideObjectBundle}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "blockSlideObjectBundleUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// GetBlockStatusEffectsConfig returns current block setting for incoming STATUS_EFFECTS (1242).
+func (a *App) GetBlockStatusEffectsConfig() BlockSlideObjectConfig {
+	blockStatusEffectsMu.Lock()
+	defer blockStatusEffectsMu.Unlock()
+	return BlockSlideObjectConfig{Enabled: blockStatusEffects}
+}
+
+// ToggleBlockStatusEffects toggles blocking of incoming STATUS_EFFECTS packets.
+func (a *App) ToggleBlockStatusEffects(enabled bool) BlockSlideObjectConfig {
+	blockStatusEffectsMu.Lock()
+	blockStatusEffects = enabled
+	blockStatusEffectsMu.Unlock()
+
+	cfg := BlockSlideObjectConfig{Enabled: blockStatusEffects}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "blockStatusEffectsUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// GetBlockRemoveBuddyConfig returns current block setting for incoming REMOVE_BUDDY (138).
+func (a *App) GetBlockRemoveBuddyConfig() BlockSlideObjectConfig {
+	blockRemoveBuddyMu.Lock()
+	defer blockRemoveBuddyMu.Unlock()
+	return BlockSlideObjectConfig{Enabled: blockRemoveBuddy}
+}
+
+// ToggleBlockRemoveBuddy toggles blocking of incoming REMOVE_BUDDY packets.
+func (a *App) ToggleBlockRemoveBuddy(enabled bool) BlockSlideObjectConfig {
+	blockRemoveBuddyMu.Lock()
+	blockRemoveBuddy = enabled
+	blockRemoveBuddyMu.Unlock()
+
+	cfg := BlockSlideObjectConfig{Enabled: blockRemoveBuddy}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "blockRemoveBuddyUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// GetBlockFriendListUpdateConfig returns current block setting for incoming FRIEND_LIST_UPDATE (13).
+func (a *App) GetBlockFriendListUpdateConfig() BlockSlideObjectConfig {
+	blockFriendListUpdateMu.Lock()
+	defer blockFriendListUpdateMu.Unlock()
+	return BlockSlideObjectConfig{Enabled: blockFriendListUpdate}
+}
+
+// ToggleBlockFriendListUpdate toggles blocking of incoming FRIEND_LIST_UPDATE packets.
+func (a *App) ToggleBlockFriendListUpdate(enabled bool) BlockSlideObjectConfig {
+	blockFriendListUpdateMu.Lock()
+	blockFriendListUpdate = enabled
+	blockFriendListUpdateMu.Unlock()
+
+	cfg := BlockSlideObjectConfig{Enabled: blockFriendListUpdate}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "blockFriendListUpdateUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// GetBlockPollEventEligibilityOutgoingConfig returns current outgoing poll-event config (1120).
+func (a *App) GetBlockPollEventEligibilityOutgoingConfig() BlockSlideObjectConfig {
+	blockPollEventEligibilityOutgoingMu.Lock()
+	defer blockPollEventEligibilityOutgoingMu.Unlock()
+	return BlockSlideObjectConfig{Enabled: blockPollEventEligibilityOutgoing}
+}
+
+// ToggleBlockPollEventEligibilityOutgoing toggles blocking of outgoing POLL_EVENT_ELIGIBILITY (1120).
+func (a *App) ToggleBlockPollEventEligibilityOutgoing(enabled bool) BlockSlideObjectConfig {
+	blockPollEventEligibilityOutgoingMu.Lock()
+	blockPollEventEligibilityOutgoing = enabled
+	blockPollEventEligibilityOutgoingMu.Unlock()
+
+	cfg := BlockSlideObjectConfig{Enabled: blockPollEventEligibilityOutgoing}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "blockPollEventEligibilityOutgoingUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// GetBlockRecommendedRoomsOutgoingConfig returns current setting for outgoing recommended-rooms.
+func (a *App) GetBlockRecommendedRoomsOutgoingConfig() BlockRecommendedConfig {
+	blockOutgoingRecommendedMu.Lock()
+	defer blockOutgoingRecommendedMu.Unlock()
+	return BlockRecommendedConfig{Enabled: blockOutgoingRecommendedRooms}
+}
+
+// ToggleBlockRecommendedRoomsOutgoing toggles blocking of outgoing recommended-rooms requests.
+func (a *App) ToggleBlockRecommendedRoomsOutgoing(enabled bool) BlockRecommendedConfig {
+	blockOutgoingRecommendedMu.Lock()
+	blockOutgoingRecommendedRooms = enabled
+	blockOutgoingRecommendedMu.Unlock()
+
+	cfg := BlockRecommendedConfig{Enabled: blockOutgoingRecommendedRooms}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "blockRecommendedOutgoingUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// GetBlockSlideObjectBundleOutgoingConfig returns current setting for outgoing slide-object-bundle.
+func (a *App) GetBlockSlideObjectBundleOutgoingConfig() BlockSlideObjectConfig {
+	blockSlideObjectOutgoingMu.Lock()
+	defer blockSlideObjectOutgoingMu.Unlock()
+	return BlockSlideObjectConfig{Enabled: blockSlideObjectOutgoing}
+}
+
+// ToggleBlockSlideObjectBundleOutgoing toggles blocking of outgoing slide-object-bundle packets.
+func (a *App) ToggleBlockSlideObjectBundleOutgoing(enabled bool) BlockSlideObjectConfig {
+	blockSlideObjectOutgoingMu.Lock()
+	blockSlideObjectOutgoing = enabled
+	blockSlideObjectOutgoingMu.Unlock()
+
+	cfg := BlockSlideObjectConfig{Enabled: blockSlideObjectOutgoing}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "blockSlideObjectBundleOutgoingUpdate", string(b))
 	}
 
 	return cfg
@@ -1361,6 +1545,7 @@ func (a *App) setupExt() {
 		handleTradePacket(a, e)
 		handleUsers28Packet(a, e)
 		handleIncomingHeaderSniff(a, e)
+		handleOutgoingHeaderSniff(a, e)
 		handleStripPacket(a, e)
 	})
 }
@@ -6253,6 +6438,58 @@ func handleIncomingHeaderSniff(a *App, e *g.Intercept) {
 		}
 	}
 
+	// If configured, block incoming slide-object-bundle packets (header 230).
+	blockSlideObjectMu.Lock()
+	blockSlide := blockSlideObjectBundle
+	blockSlideObjectMu.Unlock()
+	if blockSlide {
+		name := ext.Headers().Name(e.Packet.Header)
+		if strings.Contains(strings.ToLower(name), "slideobjectbundle") || e.Packet.Header.Value == 230 {
+			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking incoming slide-object-bundle packet [%d:%s]", e.Packet.Header.Value, name))
+			e.Block()
+			return
+		}
+	}
+
+	// If configured, block incoming STATUS_EFFECTS (header 1242).
+	blockStatusEffectsMu.Lock()
+	blockStatus := blockStatusEffects
+	blockStatusEffectsMu.Unlock()
+	if blockStatus {
+		name := ext.Headers().Name(e.Packet.Header)
+		if strings.Contains(strings.ToLower(name), "status_effect") || e.Packet.Header.Value == 1242 {
+			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking incoming status-effects packet [%d:%s]", e.Packet.Header.Value, name))
+			e.Block()
+			return
+		}
+	}
+
+	// If configured, block incoming REMOVE_BUDDY (header 138).
+	blockRemoveBuddyMu.Lock()
+	blockRemove := blockRemoveBuddy
+	blockRemoveBuddyMu.Unlock()
+	if blockRemove {
+		name := ext.Headers().Name(e.Packet.Header)
+		if strings.Contains(strings.ToLower(name), "remove_buddy") || e.Packet.Header.Value == 138 {
+			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking incoming remove-buddy packet [%d:%s]", e.Packet.Header.Value, name))
+			e.Block()
+			return
+		}
+	}
+
+	// If configured, block incoming FRIEND_LIST_UPDATE (header 13).
+	blockFriendListUpdateMu.Lock()
+	blockFriend := blockFriendListUpdate
+	blockFriendListUpdateMu.Unlock()
+	if blockFriend {
+		name := ext.Headers().Name(e.Packet.Header)
+		if strings.Contains(strings.ToLower(name), "friend_list_update") || e.Packet.Header.Value == 13 {
+			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking incoming friend-list-update packet [%d:%s]", e.Packet.Header.Value, name))
+			e.Block()
+			return
+		}
+	}
+
 	headerSniffMu.Lock()
 	active := time.Now().Before(headerSniffUntil)
 	if !active {
@@ -6274,6 +6511,52 @@ func handleIncomingHeaderSniff(a *App, e *g.Intercept) {
 	}
 	name := ext.Headers().Name(e.Packet.Header)
 	a.AddLogMsg(fmt.Sprintf("[HEADER_SNIFF] incoming[%d:%s] len=%d preview=%q", header, name, len(e.Packet.Data), preview))
+}
+
+// handleOutgoingHeaderSniff inspects outgoing headers and blocks them when configured.
+func handleOutgoingHeaderSniff(a *App, e *g.Intercept) {
+	if e.Packet.Header.Dir != g.Out {
+		return
+	}
+
+	// Block outgoing recommended-rooms request (e.g., GET_RECOMMENDED_ROOMS header 264)
+	blockOutgoingRecommendedMu.Lock()
+	outBlock := blockOutgoingRecommendedRooms
+	blockOutgoingRecommendedMu.Unlock()
+	if outBlock {
+		name := ext.Headers().Name(e.Packet.Header)
+		if strings.Contains(strings.ToLower(name), "recommend") || e.Packet.Header.Value == 264 {
+			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking outgoing recommended rooms packet [%d:%s]", e.Packet.Header.Value, name))
+			e.Block()
+			return
+		}
+	}
+
+	// Block outgoing slide-object-bundle (header 230)
+	blockSlideObjectOutgoingMu.Lock()
+	outSlide := blockSlideObjectOutgoing
+	blockSlideObjectOutgoingMu.Unlock()
+	if outSlide {
+		name := ext.Headers().Name(e.Packet.Header)
+		if strings.Contains(strings.ToLower(name), "slideobjectbundle") || e.Packet.Header.Value == 230 {
+			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking outgoing slide-object-bundle packet [%d:%s]", e.Packet.Header.Value, name))
+			e.Block()
+			return
+		}
+	}
+
+	// If configured, block outgoing POLL_EVENT_ELIGIBILITY (header 1120).
+	blockPollEventEligibilityOutgoingMu.Lock()
+	outPoll := blockPollEventEligibilityOutgoing
+	blockPollEventEligibilityOutgoingMu.Unlock()
+	if outPoll {
+		name := ext.Headers().Name(e.Packet.Header)
+		if strings.Contains(strings.ToLower(name), "poll_event_eligibility") || e.Packet.Header.Value == 1120 {
+			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking outgoing poll-event-eligibility packet [%d:%s]", e.Packet.Header.Value, name))
+			e.Block()
+			return
+		}
+	}
 }
 
 func summarizeRoomUsers() []string {

@@ -146,13 +146,50 @@
           <fieldset style="border:1px solid rgba(255,255,255,0.08);padding:10px;border-radius:6px;">
             <legend style="font-weight:600;padding:0 6px;">Block Packets</legend>
             <div style="color:#bdbdbd;font-size:12px;margin-bottom:8px;">
-              Select incoming packet types to block
+              Select packet types to block (split by direction)
             </div>
 
-            <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;">
-              <input type="checkbox" v-model="blockRecommendedRooms" @change="toggleBlockRecommendedRooms" />
-              <span>Recommended rooms (header 351)</span>
-            </label>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;">
+              <div style="flex:1;min-width:200px;">
+                <div class="game-guide-label" style="margin-bottom:6px;">Incoming</div>
+                <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;">
+                  <input type="checkbox" v-model="blockRecommendedRooms" @change="toggleBlockRecommendedRooms" />
+                  <span>Recommended rooms (header 351)</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
+                  <input type="checkbox" v-model="blockSlideObjectBundle" @change="toggleBlockSlideObjectBundle" />
+                  <span>Slide object bundle (header 230)</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
+                  <input type="checkbox" v-model="blockStatusEffects" @change="toggleBlockStatusEffects" />
+                  <span>Status effects (header 1242)</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
+                  <input type="checkbox" v-model="blockRemoveBuddy" @change="toggleBlockRemoveBuddy" />
+                  <span>Remove buddy (header 138)</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
+                  <input type="checkbox" v-model="blockFriendListUpdate" @change="toggleBlockFriendListUpdate" />
+                  <span>Friend list update (header 13)</span>
+                </label>
+              </div>
+
+              <div style="flex:1;min-width:200px;">
+                <div class="game-guide-label" style="margin-bottom:6px;">Outgoing</div>
+                <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;">
+                  <input type="checkbox" v-model="blockRecommendedRoomsOutgoing" @change="toggleBlockRecommendedRoomsOutgoing" />
+                  <span>Get recommended rooms (header 264)</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
+                  <input type="checkbox" v-model="blockSlideObjectBundleOutgoing" @change="toggleBlockSlideObjectBundleOutgoing" />
+                  <span>Slide object bundle (header 230)</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
+                  <input type="checkbox" v-model="blockPollEventEligibilityOutgoing" @change="toggleBlockPollEventEligibilityOutgoing" />
+                  <span>Poll event eligibility (header 1120)</span>
+                </label>
+              </div>
+            </div>
           </fieldset>
         </div>
       </div>
@@ -578,6 +615,17 @@ export default {
       autoShoutEnabled: false,
       // Block recommended-rooms packet
       blockRecommendedRooms: false,
+      // Block slide-object-bundle packet
+      blockSlideObjectBundle: false,
+      // Outgoing block flags
+      blockRecommendedRoomsOutgoing: false,
+      blockSlideObjectBundleOutgoing: false,
+      // Additional incoming block flags
+      blockStatusEffects: false,
+      blockRemoveBuddy: false,
+      blockFriendListUpdate: false,
+      // Outgoing poll-event
+      blockPollEventEligibilityOutgoing: false,
       // Live UI indicators for partner activity
       currentTraderName: '',
       currentGamePlayerName: '',
@@ -1050,6 +1098,132 @@ export default {
         console.error(e);
       }
     },
+    async toggleBlockRecommendedRoomsOutgoing() {
+      try {
+        const next = !!this.blockRecommendedRoomsOutgoing;
+        const cfg = await window.go.main.App.ToggleBlockRecommendedRoomsOutgoing(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.blockRecommendedRoomsOutgoing = !!parsed.enabled;
+          } catch (e) {}
+        } else if (cfg) {
+          this.blockRecommendedRoomsOutgoing = !!cfg.enabled;
+        }
+        this.addLogMsg('[UI] Block recommended-rooms (outgoing) toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle block recommended-rooms (outgoing)');
+        console.error(e);
+      }
+    },
+    async toggleBlockSlideObjectBundle() {
+      try {
+        const next = !!this.blockSlideObjectBundle;
+        const cfg = await window.go.main.App.ToggleBlockSlideObjectBundle(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.blockSlideObjectBundle = !!parsed.enabled;
+          } catch (e) {}
+        } else if (cfg) {
+          this.blockSlideObjectBundle = !!cfg.enabled;
+        }
+        this.addLogMsg('[UI] Block slide-object-bundle toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle block slide-object-bundle');
+        console.error(e);
+      }
+    },
+    async toggleBlockSlideObjectBundleOutgoing() {
+      try {
+        const next = !!this.blockSlideObjectBundleOutgoing;
+        const cfg = await window.go.main.App.ToggleBlockSlideObjectBundleOutgoing(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.blockSlideObjectBundleOutgoing = !!parsed.enabled;
+          } catch (e) {}
+        } else if (cfg) {
+          this.blockSlideObjectBundleOutgoing = !!cfg.enabled;
+        }
+        this.addLogMsg('[UI] Block slide-object-bundle (outgoing) toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle block slide-object-bundle (outgoing)');
+        console.error(e);
+      }
+    },
+    async toggleBlockStatusEffects() {
+      try {
+        const next = !!this.blockStatusEffects;
+        const cfg = await window.go.main.App.ToggleBlockStatusEffects(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.blockStatusEffects = !!parsed.enabled;
+          } catch (e) {}
+        } else if (cfg) {
+          this.blockStatusEffects = !!cfg.enabled;
+        }
+        this.addLogMsg('[UI] Block status-effects toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle block status-effects');
+        console.error(e);
+      }
+    },
+    async toggleBlockRemoveBuddy() {
+      try {
+        const next = !!this.blockRemoveBuddy;
+        const cfg = await window.go.main.App.ToggleBlockRemoveBuddy(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.blockRemoveBuddy = !!parsed.enabled;
+          } catch (e) {}
+        } else if (cfg) {
+          this.blockRemoveBuddy = !!cfg.enabled;
+        }
+        this.addLogMsg('[UI] Block remove-buddy toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle block remove-buddy');
+        console.error(e);
+      }
+    },
+    async toggleBlockFriendListUpdate() {
+      try {
+        const next = !!this.blockFriendListUpdate;
+        const cfg = await window.go.main.App.ToggleBlockFriendListUpdate(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.blockFriendListUpdate = !!parsed.enabled;
+          } catch (e) {}
+        } else if (cfg) {
+          this.blockFriendListUpdate = !!cfg.enabled;
+        }
+        this.addLogMsg('[UI] Block friend-list-update toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle block friend-list-update');
+        console.error(e);
+      }
+    },
+    async toggleBlockPollEventEligibilityOutgoing() {
+      try {
+        const next = !!this.blockPollEventEligibilityOutgoing;
+        const cfg = await window.go.main.App.ToggleBlockPollEventEligibilityOutgoing(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.blockPollEventEligibilityOutgoing = !!parsed.enabled;
+          } catch (e) {}
+        } else if (cfg) {
+          this.blockPollEventEligibilityOutgoing = !!cfg.enabled;
+        }
+        this.addLogMsg('[UI] Block poll-event-eligibility (outgoing) toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle block poll-event-eligibility (outgoing)');
+        console.error(e);
+      }
+    },
   },
   async mounted() {
     await this.refreshGameHistory();
@@ -1258,10 +1432,164 @@ export default {
       console.error('blockRecommended init', e);
     }
 
+    // Block slide-object-bundle (incoming) initial fetch and subscription
+    try {
+      const cfg3 = await window.go.main.App.GetBlockSlideObjectBundleConfig();
+      if (typeof cfg3 === 'string') {
+        try {
+          const parsed = JSON.parse(cfg3 || '{}') || {};
+          this.blockSlideObjectBundle = !!parsed.enabled;
+        } catch (e) {}
+      } else if (cfg3) {
+        this.blockSlideObjectBundle = !!cfg3.enabled;
+      }
+    } catch (e) {
+      console.error('blockSlideObject init', e);
+    }
+
+    // Block STATUS_EFFECTS (incoming) initial fetch
+    try {
+      const cfgS = await window.go.main.App.GetBlockStatusEffectsConfig();
+      if (typeof cfgS === 'string') {
+        try {
+          const parsed = JSON.parse(cfgS || '{}') || {};
+          this.blockStatusEffects = !!parsed.enabled;
+        } catch (e) {}
+      } else if (cfgS) {
+        this.blockStatusEffects = !!cfgS.enabled;
+      }
+    } catch (e) {
+      console.error('blockStatusEffects init', e);
+    }
+
+    // Block REMOVE_BUDDY (incoming) initial fetch
+    try {
+      const cfgR = await window.go.main.App.GetBlockRemoveBuddyConfig();
+      if (typeof cfgR === 'string') {
+        try {
+          const parsed = JSON.parse(cfgR || '{}') || {};
+          this.blockRemoveBuddy = !!parsed.enabled;
+        } catch (e) {}
+      } else if (cfgR) {
+        this.blockRemoveBuddy = !!cfgR.enabled;
+      }
+    } catch (e) {
+      console.error('blockRemoveBuddy init', e);
+    }
+
+    // Block FRIEND_LIST_UPDATE (incoming) initial fetch
+    try {
+      const cfgF = await window.go.main.App.GetBlockFriendListUpdateConfig();
+      if (typeof cfgF === 'string') {
+        try {
+          const parsed = JSON.parse(cfgF || '{}') || {};
+          this.blockFriendListUpdate = !!parsed.enabled;
+        } catch (e) {}
+      } else if (cfgF) {
+        this.blockFriendListUpdate = !!cfgF.enabled;
+      }
+    } catch (e) {
+      console.error('blockFriendListUpdate init', e);
+    }
+
+    // Outgoing initial fetches
+    try {
+      const outRec = await window.go.main.App.GetBlockRecommendedRoomsOutgoingConfig();
+      if (typeof outRec === 'string') {
+        try {
+          const parsed = JSON.parse(outRec || '{}') || {};
+          this.blockRecommendedRoomsOutgoing = !!parsed.enabled;
+        } catch (e) {}
+      } else if (outRec) {
+        this.blockRecommendedRoomsOutgoing = !!outRec.enabled;
+      }
+    } catch (e) {
+      console.error('blockRecommendedOutgoing init', e);
+    }
+
+    try {
+      const outSlide = await window.go.main.App.GetBlockSlideObjectBundleOutgoingConfig();
+      if (typeof outSlide === 'string') {
+        try {
+          const parsed = JSON.parse(outSlide || '{}') || {};
+          this.blockSlideObjectBundleOutgoing = !!parsed.enabled;
+        } catch (e) {}
+      } else if (outSlide) {
+        this.blockSlideObjectBundleOutgoing = !!outSlide.enabled;
+      }
+    } catch (e) {
+      console.error('blockSlideObjectOutgoing init', e);
+    }
+
+    // Outgoing poll-event-eligibility initial fetch
+    try {
+      const outPoll = await window.go.main.App.GetBlockPollEventEligibilityOutgoingConfig();
+      if (typeof outPoll === 'string') {
+        try {
+          const parsed = JSON.parse(outPoll || '{}') || {};
+          this.blockPollEventEligibilityOutgoing = !!parsed.enabled;
+        } catch (e) {}
+      } else if (outPoll) {
+        this.blockPollEventEligibilityOutgoing = !!outPoll.enabled;
+      }
+    } catch (e) {
+      console.error('blockPollEventEligibilityOutgoing init', e);
+    }
+
+    window.runtime.EventsOn("blockSlideObjectBundleUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.blockSlideObjectBundle = !!parsed.enabled;
+      } catch (e) {}
+    });
+
+    window.runtime.EventsOn("blockStatusEffectsUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.blockStatusEffects = !!parsed.enabled;
+      } catch (e) {}
+    });
+
+    window.runtime.EventsOn("blockRemoveBuddyUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.blockRemoveBuddy = !!parsed.enabled;
+      } catch (e) {}
+    });
+
+    window.runtime.EventsOn("blockFriendListUpdateUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.blockFriendListUpdate = !!parsed.enabled;
+      } catch (e) {}
+    });
+
+    window.runtime.EventsOn("blockPollEventEligibilityOutgoingUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.blockPollEventEligibilityOutgoing = !!parsed.enabled;
+      } catch (e) {}
+    });
+
     window.runtime.EventsOn("blockRecommendedUpdate", (jsonStr) => {
       try {
         const parsed = JSON.parse(jsonStr || '{}') || {};
         this.blockRecommendedRooms = !!parsed.enabled;
+      } catch (e) {}
+    });
+
+    // Outgoing update subscriptions
+    window.runtime.EventsOn("blockRecommendedOutgoingUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.blockRecommendedRoomsOutgoing = !!parsed.enabled;
+      } catch (e) {}
+    });
+
+    window.runtime.EventsOn("blockSlideObjectBundleOutgoingUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.blockSlideObjectBundleOutgoing = !!parsed.enabled;
       } catch (e) {}
     });
 
