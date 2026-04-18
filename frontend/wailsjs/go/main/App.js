@@ -34,6 +34,10 @@ export function GetAutoShoutConfig() {
   return window['go']['main']['App']['GetAutoShoutConfig']();
 }
 
+export function GetBlockRecommendedRoomsConfig() {
+  return window['go']['main']['App']['GetBlockRecommendedRoomsConfig']();
+}
+
 export function GetCasinoStatsJSON(arg1) {
   return window['go']['main']['App']['GetCasinoStatsJSON'](arg1);
 }
@@ -120,4 +124,8 @@ export function StopCasinoSetup() {
 
 export function ToggleAutoShout(arg1) {
   return window['go']['main']['App']['ToggleAutoShout'](arg1);
+}
+
+export function ToggleBlockRecommendedRooms(arg1) {
+  return window['go']['main']['App']['ToggleBlockRecommendedRooms'](arg1);
 }

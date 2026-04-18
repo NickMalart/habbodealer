@@ -249,6 +249,10 @@ var (
 	autoShoutPhrase  string
 	autoShoutSeconds int = 30
 
+	// Block recommended-rooms incoming packet configuration
+	blockRecommendedRooms bool
+	blockRecommendedMu    sync.Mutex
+
 	// Incoming trade limits (configured at startup)
 	maxTradeUniqueItems     int = 5
 	maxTradeQuantityPerItem int = 50
@@ -745,6 +749,33 @@ func (a *App) SaveAutoShoutConfig(phrase string, seconds int) AutoShoutConfig {
 	if a.ctx != nil {
 		b, _ := json.Marshal(cfg)
 		runtime.EventsEmit(a.ctx, "autoShoutUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// BlockRecommendedConfig holds frontend-friendly block-recommend config.
+type BlockRecommendedConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
+// GetBlockRecommendedRoomsConfig returns current blockRecommendedRooms setting.
+func (a *App) GetBlockRecommendedRoomsConfig() BlockRecommendedConfig {
+	blockRecommendedMu.Lock()
+	defer blockRecommendedMu.Unlock()
+	return BlockRecommendedConfig{Enabled: blockRecommendedRooms}
+}
+
+// ToggleBlockRecommendedRooms enables/disables blocking of recommended-room packets.
+func (a *App) ToggleBlockRecommendedRooms(enabled bool) BlockRecommendedConfig {
+	blockRecommendedMu.Lock()
+	blockRecommendedRooms = enabled
+	blockRecommendedMu.Unlock()
+
+	cfg := BlockRecommendedConfig{Enabled: blockRecommendedRooms}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "blockRecommendedUpdate", string(b))
 	}
 
 	return cfg
@@ -6207,6 +6238,19 @@ func startIncomingHeaderSniff(duration time.Duration) {
 func handleIncomingHeaderSniff(a *App, e *g.Intercept) {
 	if e.Packet.Header.Dir != g.In {
 		return
+	}
+
+	// If configured, block incoming recommended-room list packets.
+	blockRecommendedMu.Lock()
+	block := blockRecommendedRooms
+	blockRecommendedMu.Unlock()
+	if block {
+		name := ext.Headers().Name(e.Packet.Header)
+		if strings.Contains(strings.ToLower(name), "recommend") || e.Packet.Header.Value == 351 {
+			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking incoming recommended rooms packet [%d:%s]", e.Packet.Header.Value, name))
+			e.Block()
+			return
+		}
 	}
 
 	headerSniffMu.Lock()

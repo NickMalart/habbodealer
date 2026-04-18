@@ -18,6 +18,8 @@ export function ClearTradeItems():Promise<void>;
 
 export function GetAutoShoutConfig():Promise<main.AutoShoutConfig>;
 
+export function GetBlockRecommendedRoomsConfig():Promise<main.BlockRecommendedConfig>;
+
 export function GetCasinoStatsJSON(arg1:string):Promise<string>;
 
 export function GetCatalogItemValue(arg1:string):Promise<number|boolean>;
@@ -61,3 +63,5 @@ export function StartCasinoSetup(arg1:string,arg2:string,arg3:number,arg4:number
 export function StopCasinoSetup():Promise<void>;
 
 export function ToggleAutoShout(arg1:boolean):Promise<main.AutoShoutConfig>;
+
+export function ToggleBlockRecommendedRooms(arg1:boolean):Promise<main.BlockRecommendedConfig>;

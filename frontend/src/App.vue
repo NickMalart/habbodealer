@@ -142,6 +142,19 @@
           <button class="save-button" @click="saveAutoShout">Save</button>
           <button class="save-button" @click="toggleAutoShout">{{ autoShoutEnabled ? 'Stop Auto Shout' : 'Start Auto Shout' }}</button>
         </div>
+        <div class="form-group" style="margin-top:12px;">
+          <fieldset style="border:1px solid rgba(255,255,255,0.08);padding:10px;border-radius:6px;">
+            <legend style="font-weight:600;padding:0 6px;">Block Packets</legend>
+            <div style="color:#bdbdbd;font-size:12px;margin-bottom:8px;">
+              Select incoming packet types to block
+            </div>
+
+            <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;">
+              <input type="checkbox" v-model="blockRecommendedRooms" @change="toggleBlockRecommendedRooms" />
+              <span>Recommended rooms (header 351)</span>
+            </label>
+          </fieldset>
+        </div>
       </div>
     </div>
 
@@ -563,6 +576,8 @@ export default {
       autoShoutPhrase: '',
       autoShoutSeconds: 30,
       autoShoutEnabled: false,
+      // Block recommended-rooms packet
+      blockRecommendedRooms: false,
       // Live UI indicators for partner activity
       currentTraderName: '',
       currentGamePlayerName: '',
@@ -1017,6 +1032,24 @@ export default {
         console.error(e);
       }
     },
+    async toggleBlockRecommendedRooms() {
+      try {
+        const next = !!this.blockRecommendedRooms;
+        const cfg = await window.go.main.App.ToggleBlockRecommendedRooms(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.blockRecommendedRooms = !!parsed.enabled;
+          } catch (e) {}
+        } else if (cfg) {
+          this.blockRecommendedRooms = !!cfg.enabled;
+        }
+        this.addLogMsg('[UI] Block recommended-rooms toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle block recommended-rooms');
+        console.error(e);
+      }
+    },
   },
   async mounted() {
     await this.refreshGameHistory();
@@ -1209,6 +1242,28 @@ export default {
     } catch (e) {
       console.error('autoShout init', e);
     }
+
+    // Block recommended-rooms initial fetch and subscription
+    try {
+      const cfg2 = await window.go.main.App.GetBlockRecommendedRoomsConfig();
+      if (typeof cfg2 === 'string') {
+        try {
+          const parsed = JSON.parse(cfg2 || '{}') || {};
+          this.blockRecommendedRooms = !!parsed.enabled;
+        } catch (e) {}
+      } else if (cfg2) {
+        this.blockRecommendedRooms = !!cfg2.enabled;
+      }
+    } catch (e) {
+      console.error('blockRecommended init', e);
+    }
+
+    window.runtime.EventsOn("blockRecommendedUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.blockRecommendedRooms = !!parsed.enabled;
+      } catch (e) {}
+    });
 
     window.runtime.EventsOn("autoShoutUpdate", (jsonStr) => {
       try {

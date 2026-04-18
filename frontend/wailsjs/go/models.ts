@@ -16,6 +16,18 @@ export namespace main {
 	        this.seconds = source["seconds"];
 	    }
 	}
+	export class BlockRecommendedConfig {
+	    enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new BlockRecommendedConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	    }
+	}
 	export class DailyStatsPoint {
 	    day: string;
 	    totalRounds: number;
