@@ -127,8 +127,13 @@ var (
 	tradeLimitMonitorID       int
 	tradeLimitMonitorActive   bool
 	tradeLimitMonitorDeadline time.Time
-	tradeLimitGracePeriod     = 30 * time.Second
-	lastTradeLimitNotice      string
+	// Unwanted-items monitor state: gives partner time to remove items
+	// that do not match the frozen dealer snapshot.
+	unwantedItemsMonitorID       int
+	unwantedItemsMonitorActive   bool
+	unwantedItemsMonitorDeadline time.Time
+	tradeLimitGracePeriod        = 30 * time.Second
+	lastTradeLimitNotice         string
 	// Rate-limiting for public shouts triggered by trade coverage/limit
 	lastTradeCoverageShoutAt time.Time
 	lastTradeLimitShoutAt    time.Time
@@ -2135,10 +2140,27 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 			handItemsMu.Lock()
 			ready := tradeHandSnapshotReady
+			snapshotCopy := make([]TradeItem, len(tradeHandSnapshot))
+			copy(snapshotCopy, tradeHandSnapshot)
 			handItemsMu.Unlock()
 
 			if !ready {
 				a.AddLogMsg("[TRADE_COVERAGE] snapshot not ready yet, skipping live trade check")
+				return
+			}
+
+			// Detect partner-offered items that are not present in the frozen
+			// dealer snapshot. If any are found, warn the partner and start a
+			// short grace monitor to allow removal before force-closing.
+			unwanted := getUnwantedTradeItems(itemsCopy, snapshotCopy)
+			if len(unwanted) > 0 {
+				names := make([]string, 0, len(unwanted))
+				for _, it := range unwanted {
+					names = append(names, formatTradeItemName(it.Name))
+				}
+				a.AddLogMsg(fmt.Sprintf("[TRADE_UNWANTED] partner offered items not in snapshot: %s", strings.Join(names, ", ")))
+				a.shoutSafe(fmt.Sprintf("Remove invalid items: %s within %ds", strings.Join(names, ", "), int(tradeLimitGracePeriod.Seconds())))
+				startUnwantedItemsMonitor(a, unwanted, tradeLimitGracePeriod)
 				return
 			}
 
@@ -3888,6 +3910,146 @@ func stopTradeLimitMonitor() {
 	tradeLimitMonitorID++
 	tradeLimitMonitorActive = false
 	tradeLimitMonitorDeadline = time.Time{}
+}
+
+// getUnwantedTradeItems returns partner items whose canonical key is not
+// present in the frozen trade-hand snapshot.
+func getUnwantedTradeItems(partnerItems, snapshot []TradeItem) []TradeItem {
+	snapSet := make(map[string]struct{}, len(snapshot))
+	for _, it := range snapshot {
+		key := strings.ToLower(strings.TrimSpace(it.Name))
+		if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+			key = k
+		}
+		snapSet[key] = struct{}{}
+	}
+
+	out := make([]TradeItem, 0)
+	for _, it := range partnerItems {
+		key := strings.ToLower(strings.TrimSpace(it.Name))
+		if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+			key = k
+		}
+		if _, ok := snapSet[key]; !ok {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// startUnwantedItemsMonitor begins a short-lived monitor that waits for the
+// partner to remove offending items that are not present in the frozen
+// dealer snapshot. If they remove them within the timeout we confirm; else
+// we force-close the trade.
+func startUnwantedItemsMonitor(a *App, offending []TradeItem, timeout time.Duration) {
+	unwantedItemsMonitorID++
+	id := unwantedItemsMonitorID
+	unwantedItemsMonitorActive = true
+	unwantedItemsMonitorDeadline = time.Now().Add(timeout)
+
+	// canonical key -> friendly display name for offending items
+	offendingMap := make(map[string]string, len(offending))
+	for _, it := range offending {
+		key := strings.ToLower(strings.TrimSpace(it.Name))
+		if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+			key = k
+		}
+		offendingMap[key] = formatTradeItemName(it.Name)
+	}
+
+	go func(monitor int, keys map[string]string) {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			if monitor != unwantedItemsMonitorID {
+				return
+			}
+			if !unwantedItemsMonitorActive {
+				return
+			}
+			if !tradeOpen {
+				stopUnwantedItemsMonitor()
+				return
+			}
+
+			// snapshot of current partner items
+			tradeItemsMu.Lock()
+			curr := make([]TradeItem, len(currentTradeItems))
+			copy(curr, currentTradeItems)
+			tradeItemsMu.Unlock()
+
+			stillPresent := false
+			for _, it := range curr {
+				key := strings.ToLower(strings.TrimSpace(it.Name))
+				if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+					key = k
+				}
+				if _, ok := keys[key]; ok {
+					stillPresent = true
+					break
+				}
+			}
+
+			if !stillPresent {
+				// Build snapshot key set and check which offending items are actually present
+				handItemsMu.Lock()
+				snap := make([]TradeItem, len(tradeHandSnapshot))
+				copy(snap, tradeHandSnapshot)
+				handItemsMu.Unlock()
+
+				snapSet := make(map[string]struct{}, len(snap))
+				for _, it := range snap {
+					k := strings.ToLower(strings.TrimSpace(it.Name))
+					if kk, ok := normalizeClassKeyWithVariant(it.Name); ok {
+						k = kk
+					}
+					snapSet[k] = struct{}{}
+				}
+
+				removed := make([]string, 0, len(keys))
+				confirmed := make([]string, 0)
+				for k, friendly := range keys {
+					removed = append(removed, friendly)
+					if _, ok := snapSet[k]; ok {
+						confirmed = append(confirmed, friendly)
+					}
+				}
+				sort.Strings(removed)
+				sort.Strings(confirmed)
+
+				stopUnwantedItemsMonitor()
+				a.AddLogMsg(fmt.Sprintf("[TRADE_UNWANTED] offending items removed: %s", strings.Join(removed, ", ")))
+				if len(confirmed) > 0 {
+					a.AddLogMsg(fmt.Sprintf("[TRADE_UNWANTED] confirming snapshot presence for: %s", strings.Join(confirmed, ", ")))
+					a.shoutSafe(fmt.Sprintf("We do have %s — see my live hand at rollorigins.club", strings.Join(confirmed, ", ")))
+				} else {
+					a.AddLogMsg("[TRADE_UNWANTED] removed offending items were not present in frozen snapshot; no confirmation shouted")
+				}
+				return
+			}
+
+			if time.Now().After(unwantedItemsMonitorDeadline) {
+				partner := strings.TrimSpace(lastTradePartnerName)
+				if partner == "" {
+					partner = "Player"
+				}
+				a.AddLogMsg(fmt.Sprintf("[TRADE_UNWANTED] unresolved; force-closing trade with %s", partner))
+				a.shoutSafe("Trade still contains invalid items; closing now.")
+				time.Sleep(800 * time.Millisecond)
+				ext.Send(out.TRADE_CLOSE)
+				lastTradeCloseAt = time.Now()
+				stopUnwantedItemsMonitor()
+				return
+			}
+		}
+	}(id, offendingMap)
+}
+
+func stopUnwantedItemsMonitor() {
+	unwantedItemsMonitorID++
+	unwantedItemsMonitorActive = false
+	unwantedItemsMonitorDeadline = time.Time{}
 }
 
 func startDealerOpenHeartbeat(a *App) {
