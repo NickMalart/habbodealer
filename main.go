@@ -721,7 +721,11 @@ func (a *App) startup(ctx context.Context) {
 		scanID := a.requestPlayerStrip(true)
 		if ok := waitForStripScanCompletion(scanID, 20*time.Second); ok {
 			a.AddLogMsg(fmt.Sprintf("[STRIP] initial hand sync complete (session=%d)", scanID))
-			if !strictTradeSnapshotLifecycle || !tradeHandSnapshotReady {
+			handItemsMu.Lock()
+			snapshotEmpty := len(tradeHandSnapshot) == 0
+			handItemsMu.Unlock()
+
+			if !strictTradeSnapshotLifecycle || !tradeHandSnapshotReady || snapshotEmpty {
 				a.captureTradeHandSnapshot()
 			} else {
 				a.AddLogMsg("[STRIP] strict snapshot lifecycle active and snapshot already ready; skipping initial capture")
@@ -5187,6 +5191,18 @@ func (a *App) extractTradeItemAndQuantity(field string) (string, int, bool) {
 					return name, qty, true
 				}
 				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] current failed to parse candidate=%q", cand))
+				// If normalization succeeds but verification failed, accept a
+				// reasonable-looking candidate as an unverified fallback.
+				// This helps parse items present in server payloads that aren't
+				// yet in the catalog or the frozen hand snapshot (e.g. plant_bonsai_w).
+				// Restrict acceptance to names that contain an underscore to avoid
+				// token-like false positives.
+				if normalized, ok2 := normalizeClassKeyWithVariant(cand); ok2 {
+					if strings.Contains(normalized, "_") {
+						a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] accepting unverified current candidate=%q", normalized))
+						return normalized, 1, true
+					}
+				}
 			}
 		}
 	}
@@ -5926,7 +5942,11 @@ func (a *App) finalizeStripScan(sessionID int, reason string) {
 	if tradeOpen {
 		// Under the strict lifecycle policy, avoid updating the frozen
 		// snapshot mid-trade — only update when no snapshot exists.
-		if !strictTradeSnapshotLifecycle || !tradeHandSnapshotReady {
+		handItemsMu.Lock()
+		snapshotEmpty := len(tradeHandSnapshot) == 0
+		handItemsMu.Unlock()
+
+		if !strictTradeSnapshotLifecycle || !tradeHandSnapshotReady || snapshotEmpty {
 			// captureTradeHandSnapshot will copy currentHandItems into tradeHandSnapshot
 			// and mark the snapshot ready for coverage comparisons.
 			go func() {
