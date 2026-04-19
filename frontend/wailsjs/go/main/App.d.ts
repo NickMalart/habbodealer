@@ -60,6 +60,8 @@ export function GetGameHistoryJSON():Promise<string>;
 
 export function GetLastTradePartnerName():Promise<string>;
 
+export function GetRiskOfferConfig():Promise<main.BlockSlideObjectConfig>;
+
 export function GetTradeItemsJSON():Promise<string>;
 
 export function LoadCatalog():Promise<Array<main.CatalogItem>>;
@@ -117,3 +119,5 @@ export function ToggleBlockSlideObjectBundle(arg1:boolean):Promise<main.BlockSli
 export function ToggleBlockSlideObjectBundleOutgoing(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
 
 export function ToggleBlockStatusEffects(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
+
+export function ToggleRiskOffer(arg1:boolean):Promise<main.BlockSlideObjectConfig>;

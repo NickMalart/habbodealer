@@ -211,24 +211,28 @@ var (
 	partnerAcceptedSnapshot []TradeItem
 	gameBetItems            []TradeItem
 	// Risk offer state
-	awaitingRiskDecision       bool
-	awaitingRiskPartnerID      int
-	awaitingRiskPartnerName    string
-	awaitingRiskMax            int
-	awaitingRiskSessionID      int
-	stripScanMu                sync.Mutex
-	stripScanActive            bool
-	stripScanSessionID         = 0
-	stripScanPageCount         = 0
-	stripScanLastPacketAt      time.Time
-	stripScanStartedAt         time.Time
-	stripScanSeenItemIDs       = map[int]struct{}{}
-	stripScanCounts            = map[string]int{}
-	stripScanItemIDs           = map[string][]int{}
-	knownDiceIDs               = map[int]struct{}{}
-	fakeDiceTestingMode        bool
-	dealerOpenHeartbeatID      int
-	dealerOpenHeartbeatActive  bool
+	awaitingRiskDecision      bool
+	awaitingRiskPartnerID     int
+	awaitingRiskPartnerName   string
+	awaitingRiskMax           int
+	awaitingRiskSessionID     int
+	stripScanMu               sync.Mutex
+	stripScanActive           bool
+	stripScanSessionID        = 0
+	stripScanPageCount        = 0
+	stripScanLastPacketAt     time.Time
+	stripScanStartedAt        time.Time
+	stripScanSeenItemIDs      = map[int]struct{}{}
+	stripScanCounts           = map[string]int{}
+	stripScanItemIDs          = map[string][]int{}
+	knownDiceIDs              = map[int]struct{}{}
+	fakeDiceTestingMode       bool
+	dealerOpenHeartbeatID     int
+	dealerOpenHeartbeatActive bool
+	// timestamp of the last time the dealer was opened (used to allow a short
+	// grace window accepting incoming TRADE_OPEN immediately after reopening)
+	lastDealerOpenAt           time.Time
+	lastDealerOpenAtMu         sync.Mutex
 	gameChoiceTimeoutMonitorID int
 	gameChoiceTimeoutActive    bool
 	gameChoiceUnreadableWarned bool
@@ -254,6 +258,10 @@ var (
 	autoShoutEnabled bool
 	autoShoutPhrase  string
 	autoShoutSeconds int = 30
+
+	// Risk offer toggle
+	riskOfferEnabled bool = true
+	riskOfferMu      sync.Mutex
 
 	// Block recommended-rooms incoming packet configuration
 	blockRecommendedRooms bool = true
@@ -1162,6 +1170,28 @@ func (a *App) ToggleAutoShout(enabled bool) AutoShoutConfig {
 }
 
 // runAutoShoutLoop runs the ticker that shouts the configured phrase.
+
+// GetRiskOfferConfig returns the current risk-offer enabled/disabled state.
+func (a *App) GetRiskOfferConfig() BlockSlideObjectConfig {
+	riskOfferMu.Lock()
+	defer riskOfferMu.Unlock()
+	return BlockSlideObjectConfig{Enabled: riskOfferEnabled}
+}
+
+// ToggleRiskOffer sets the risk-offer enabled state and emits an update event.
+func (a *App) ToggleRiskOffer(enabled bool) BlockSlideObjectConfig {
+	riskOfferMu.Lock()
+	riskOfferEnabled = enabled
+	riskOfferMu.Unlock()
+
+	cfg := BlockSlideObjectConfig{Enabled: riskOfferEnabled}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "riskOfferUpdate", string(b))
+	}
+	return cfg
+}
+
 func (a *App) runAutoShoutLoop(stopChan chan struct{}, phrase string, seconds int) {
 	ticker := time.NewTicker(time.Duration(seconds) * time.Second)
 	defer ticker.Stop()
@@ -1755,6 +1785,9 @@ func handleMuteEnd() {
 		if dealerOpenQueued {
 			awaitingTradeOpen = true
 			dealerAcceptingTrades = true
+			lastDealerOpenAtMu.Lock()
+			lastDealerOpenAt = time.Now()
+			lastDealerOpenAtMu.Unlock()
 			if shouldAnnounceDealerOpen() {
 				dealerTradeWindowOpen = true
 				startDealerOpenHeartbeat(nil)
@@ -2395,25 +2428,57 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		}
 
 		if !isPayoutTradeOpen && !dealerReadyForNewTrade() && !matchedRecentOutgoing {
-			reason := "dealer not open"
-			if dealerGameActive() {
-				reason = "dealer busy in active game"
-			} else if dealerResyncInProgress {
-				reason = "dealer syncing hand"
-			} else if !dealerAcceptingTrades {
-				reason = "dealer not accepting trades"
+			// Allow a short grace window immediately after the dealer was opened
+			// so clients that raced the reopen can still open a trade.
+			lastDealerOpenAtMu.Lock()
+			t := lastDealerOpenAt
+			lastDealerOpenAtMu.Unlock()
+
+			if !t.IsZero() {
+				elapsed := time.Since(t)
+				// Extend grace window to 5s and require a ready snapshot to accept
+				if elapsed < 5*time.Second && dealerSnapshotReady() {
+					a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] allowing incoming trade open during reopen grace window (elapsed=%s)", elapsed))
+				} else {
+					a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] reopen grace check failed (elapsed=%s snapshotReady=%t)", elapsed, dealerSnapshotReady()))
+					reason := "dealer not open"
+					if dealerGameActive() {
+						reason = "dealer busy in active game"
+					} else if dealerResyncInProgress {
+						reason = "dealer syncing hand"
+					} else if !dealerAcceptingTrades {
+						reason = "dealer not accepting trades"
+					}
+
+					a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] blocking incoming trade open: %s", reason))
+					a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] block reason=%s awaitingTradeOpen=%t dealerTradeWindowOpen=%t dealerGameActive=%t dealerResyncInProgress=%t", reason, awaitingTradeOpen, dealerTradeWindowOpen, dealerGameActive(), dealerResyncInProgress))
+					hiddenBlockedTradeCleanupPending = true
+					ignoreNextGuardCloseRecovery = true
+					suppressNextTradeCloseAnnouncement = true
+					e.Block()
+					ext.Send(out.TRADE_CLOSE)
+					return
+				}
+			} else {
+				// No recent open timestamp — block as usual
+				reason := "dealer not open"
+				if dealerGameActive() {
+					reason = "dealer busy in active game"
+				} else if dealerResyncInProgress {
+					reason = "dealer syncing hand"
+				} else if !dealerAcceptingTrades {
+					reason = "dealer not accepting trades"
+				}
+
+				a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] blocking incoming trade open: %s", reason))
+				a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] block reason=%s awaitingTradeOpen=%t dealerTradeWindowOpen=%t dealerGameActive=%t dealerResyncInProgress=%t", reason, awaitingTradeOpen, dealerTradeWindowOpen, dealerGameActive(), dealerResyncInProgress))
+				hiddenBlockedTradeCleanupPending = true
+				ignoreNextGuardCloseRecovery = true
+				suppressNextTradeCloseAnnouncement = true
+				e.Block()
+				ext.Send(out.TRADE_CLOSE)
+				return
 			}
-
-			a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] blocking incoming trade open: %s", reason))
-
-			// Detailed guard state for diagnostics
-			a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] block reason=%s awaitingTradeOpen=%t dealerTradeWindowOpen=%t dealerGameActive=%t dealerResyncInProgress=%t", reason, awaitingTradeOpen, dealerTradeWindowOpen, dealerGameActive(), dealerResyncInProgress))
-			hiddenBlockedTradeCleanupPending = true
-			ignoreNextGuardCloseRecovery = true
-			suppressNextTradeCloseAnnouncement = true
-			e.Block()
-			ext.Send(out.TRADE_CLOSE)
-			return
 		}
 
 		if matchedRecentOutgoing {
@@ -3049,6 +3114,9 @@ func startPayout(a *App, targetID int, targetName string) {
 			// Resume normal dealer-open cycle
 			awaitingTradeOpen = true
 			dealerAcceptingTrades = true
+			lastDealerOpenAtMu.Lock()
+			lastDealerOpenAt = time.Now()
+			lastDealerOpenAtMu.Unlock()
 			if shouldAnnounceDealerOpen() {
 				dealerTradeWindowOpen = true
 				go sendMessageWithDelay(a.dealerOpenMessage())
@@ -3322,6 +3390,16 @@ func (a *App) computeRiskLimits(betItems []TradeItem) map[string]int {
 // If accepted the bet quantities are increased and payout proceeds normally.
 func (a *App) offerRisk(targetID int, targetName string) {
 	if len(gameBetItems) == 0 {
+		startPayout(a, targetID, targetName)
+		return
+	}
+
+	// If risk offers are disabled via the Utility toggle, skip offering.
+	riskOfferMu.Lock()
+	enabled := riskOfferEnabled
+	riskOfferMu.Unlock()
+	if !enabled {
+		a.AddLogMsg("[RISK] risk offers disabled; proceeding to payout")
 		startPayout(a, targetID, targetName)
 		return
 	}
@@ -4017,6 +4095,9 @@ func handleTradeConfirmTimeout(a *App) {
 	}
 
 	awaitingTradeOpen = true
+	lastDealerOpenAtMu.Lock()
+	lastDealerOpenAt = time.Now()
+	lastDealerOpenAtMu.Unlock()
 	tradeAutoConfirmed = true
 }
 
@@ -5278,6 +5359,9 @@ func (a *App) resyncHandThenOpenDealer() {
 
 	awaitingTradeOpen = true
 	dealerAcceptingTrades = true
+	lastDealerOpenAtMu.Lock()
+	lastDealerOpenAt = time.Now()
+	lastDealerOpenAtMu.Unlock()
 	if shouldAnnounceDealerOpen() {
 		dealerTradeWindowOpen = true
 		openMsg := a.dealerOpenMessage()
@@ -5353,6 +5437,9 @@ func (a *App) reopenDealerIdle(reason string) {
 
 	awaitingTradeOpen = true
 	dealerAcceptingTrades = true
+	lastDealerOpenAtMu.Lock()
+	lastDealerOpenAt = time.Now()
+	lastDealerOpenAtMu.Unlock()
 	if shouldAnnounceDealerOpen() {
 		dealerTradeWindowOpen = true
 		openMsg := a.dealerOpenMessage()
@@ -5460,6 +5547,9 @@ func (a *App) openDealerAfterRound() {
 
 	awaitingTradeOpen = true
 	dealerAcceptingTrades = true
+	lastDealerOpenAtMu.Lock()
+	lastDealerOpenAt = time.Now()
+	lastDealerOpenAtMu.Unlock()
 	if shouldAnnounceDealerOpen() {
 		dealerTradeWindowOpen = true
 		openMsg := a.dealerOpenMessage()
@@ -7769,6 +7859,9 @@ func (a *App) openDealerAfterSetup(reason string) {
 
 	awaitingTradeOpen = true
 	dealerAcceptingTrades = true
+	lastDealerOpenAtMu.Lock()
+	lastDealerOpenAt = time.Now()
+	lastDealerOpenAtMu.Unlock()
 	if shouldAnnounceDealerOpen() {
 		dealerTradeWindowOpen = true
 		openMsg := a.dealerOpenMessage()

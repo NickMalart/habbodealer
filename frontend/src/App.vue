@@ -142,6 +142,20 @@
           <button class="save-button" @click="saveAutoShout">Save</button>
           <button class="save-button" @click="toggleAutoShout">{{ autoShoutEnabled ? 'Stop Auto Shout' : 'Start Auto Shout' }}</button>
         </div>
+
+        <div class="form-group" style="margin-top:12px;">
+          <label>Risk Offers</label>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;">
+              <input type="checkbox" v-model="riskOfferEnabled" @change="toggleRiskOffer" />
+              <span>Enable risk offers to players after wins</span>
+            </label>
+          </div>
+          <div style="font-size:12px;color:#bdbdbd;margin-top:6px;">
+            When enabled, winners are offered the chance to risk additional items before payout. If disabled, payouts proceed immediately.
+          </div>
+        </div>
+
         <div class="form-group" style="margin-top:12px;">
           <fieldset style="border:1px solid rgba(255,255,255,0.08);padding:10px;border-radius:6px;">
             <legend style="font-weight:600;padding:0 6px;">Block Packets</legend>
@@ -722,6 +736,8 @@ export default {
       autoShoutPhrase: '',
       autoShoutSeconds: 30,
       autoShoutEnabled: false,
+      // Risk offer toggle
+      riskOfferEnabled: true,
       // Block recommended-rooms packet
       blockRecommendedRooms: true,
       // Block slide-object-bundle packet
@@ -1203,6 +1219,24 @@ export default {
         console.error(e);
       }
     },
+    async toggleRiskOffer() {
+      try {
+        const next = !!this.riskOfferEnabled;
+        const cfg = await window.go.main.App.ToggleRiskOffer(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.riskOfferEnabled = !!parsed.enabled;
+          } catch (e) {}
+        } else if (cfg) {
+          this.riskOfferEnabled = !!cfg.enabled;
+        }
+        this.addLogMsg('[UI] Risk offer toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle risk offer');
+        console.error(e);
+      }
+    },
     async toggleBlockRecommendedRooms() {
       try {
         const next = !!this.blockRecommendedRooms;
@@ -1677,6 +1711,28 @@ export default {
     } catch (e) {
       console.error('autoShout init', e);
     }
+
+    // Risk offer initial fetch and subscription
+    try {
+      const rcfg = await window.go.main.App.GetRiskOfferConfig();
+      if (typeof rcfg === 'string') {
+        try {
+          const parsed = JSON.parse(rcfg || '{}') || {};
+          this.riskOfferEnabled = !!parsed.enabled;
+        } catch (e) {}
+      } else if (rcfg) {
+        this.riskOfferEnabled = !!rcfg.enabled;
+      }
+    } catch (e) {
+      console.error('riskOffer init', e);
+    }
+
+    window.runtime.EventsOn('riskOfferUpdate', (message) => {
+      try {
+        const parsed = JSON.parse(message || '{}') || {};
+        this.riskOfferEnabled = !!parsed.enabled;
+      } catch (e) {}
+    });
 
     // Block recommended-rooms initial fetch and subscription
     try {

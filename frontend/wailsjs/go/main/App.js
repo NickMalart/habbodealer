@@ -118,6 +118,10 @@ export function GetLastTradePartnerName() {
   return window['go']['main']['App']['GetLastTradePartnerName']();
 }
 
+export function GetRiskOfferConfig() {
+  return window['go']['main']['App']['GetRiskOfferConfig']();
+}
+
 export function GetTradeItemsJSON() {
   return window['go']['main']['App']['GetTradeItemsJSON']();
 }
@@ -232,4 +236,8 @@ export function ToggleBlockSlideObjectBundleOutgoing(arg1) {
 
 export function ToggleBlockStatusEffects(arg1) {
   return window['go']['main']['App']['ToggleBlockStatusEffects'](arg1);
+}
+
+export function ToggleRiskOffer(arg1) {
+  return window['go']['main']['App']['ToggleRiskOffer'](arg1);
 }
