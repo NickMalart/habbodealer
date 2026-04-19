@@ -187,12 +187,14 @@ var (
 	// lastAddItemByUsAt records when we observed an outgoing TRADE_ADDITEM
 	// packet. Use this timestamp in debugging to detect races between the
 	// outgoing add and the subsequent server TRADE_ITEMS update.
-	lastAddItemByUsAt      time.Time
-	addItemMu              sync.Mutex
-	currentHandItems       []TradeItem
-	currentHandItemIDs     map[string][]int
-	tradeHandSnapshot      []TradeItem
-	tradeHandSnapshotReady bool
+	lastAddItemByUsAt            time.Time
+	addItemMu                    sync.Mutex
+	currentHandItems             []TradeItem
+	currentHandItemIDs           map[string][]int
+	tradeHandSnapshot            []TradeItem
+	tradeHandSnapshotReady       bool
+	tradeHandSnapshotAt          time.Time
+	tradeHandSnapshotFreshWindow = 5 * time.Second
 	// When true, the dealer will only refresh the frozen trade-hand
 	// snapshot at controlled points: once before announcing Dealer Open
 	// and after a game completes. Mid-trade strip scans will not update
@@ -2674,22 +2676,46 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		}
 
 		handItemsMu.Lock()
-		// Under strict lifecycle we normally keep the snapshot captured before
-		// Dealer Open. However, once the trade actually opens we must stop using
-		// that old frozen view immediately so coverage checks cannot race against
-		// stale inventory while the forced strip refresh is starting.
+		// Under non-strict lifecycle we must clear any previous snapshot so
+		// mid-trade strip updates cannot be mistakenly used.
 		if !strictTradeSnapshotLifecycle {
 			tradeHandSnapshot = []TradeItem{}
 			tradeHandSnapshotReady = false
+			tradeHandSnapshotAt = time.Time{}
 			// Diagnostic: explicit log when non-strict lifecycle clears snapshot
 			a.AddLogMsg("[TRADE_HAND_SNAPSHOT] cleared snapshot due to non-strict lifecycle on TRADE_OPEN")
+			handItemsMu.Unlock()
+			// Proceed with forced refresh as before for non-strict lifecycle.
+			a.invalidateTradeHandSnapshot("incoming trade open: awaiting forced refresh")
+			go func() {
+				if ok := a.forceRefreshHandSnapshot("incoming trade open"); ok {
+					a.notifyTradeQuantityCoverage()
+				} else {
+					a.AddLogMsg("[TRADE_HAND_SNAPSHOT] forced refresh failed on incoming trade open")
+				}
+			}()
+			return
 		}
+		// For strict lifecycle, prefer to preserve a fresh frozen snapshot so
+		// TRADE_ITEMS can be validated immediately without a redundant refresh.
+		ready := tradeHandSnapshotReady
+		at := tradeHandSnapshotAt
 		handItemsMu.Unlock()
-
-		// Always invalidate immediately on incoming trade open before the async
-		// forced refresh goroutine starts. This prevents TRADE_ITEMS coverage
-		// checks from using the previous round snapshot for even a single packet.
-		a.invalidateTradeHandSnapshot("incoming trade open: awaiting forced refresh")
+		if ready && time.Since(at) < tradeHandSnapshotFreshWindow {
+			a.AddLogMsg(fmt.Sprintf("[TRADE_HAND_SNAPSHOT] preserved fresh snapshot (age=%s) on TRADE_OPEN", time.Since(at).String()))
+			// Snapshot is fresh — run coverage checks immediately and skip refresh.
+			go a.notifyTradeQuantityCoverage()
+		} else {
+			// Snapshot not present or stale — invalidate and refresh asynchronously.
+			a.invalidateTradeHandSnapshot("incoming trade open: awaiting forced refresh")
+			go func() {
+				if ok := a.forceRefreshHandSnapshot("incoming trade open"); ok {
+					a.notifyTradeQuantityCoverage()
+				} else {
+					a.AddLogMsg("[TRADE_HAND_SNAPSHOT] forced refresh failed on incoming trade open")
+				}
+			}()
+		}
 
 		// Mark trade as open so background hand rescans are skipped while
 		// a frozen trade snapshot is being prepared.
@@ -3988,16 +4014,25 @@ func scheduleAutoTradeAccept(a *App, payload string) {
 			}
 		}
 
+		// In payout mode, verify our own offer meets the required payout
+		// items before accepting. tryAcceptPayoutTrade will send the accept
+		// and set the appropriate flags if verification succeeds.
+		if payoutTradeActive {
+			required := payoutRequirementsFromBetItems(gameBetItems)
+			if a.tryAcceptPayoutTrade(required, "auto-accept") {
+				// tryAcceptPayoutTrade handled the accept and monitors.
+				return
+			}
+			// Verification failed or items not present; cancel pending accept.
+			tradeAutoAcceptPending = false
+			a.AddLogMsg("[TRADE_ACCEPT] canceled auto-accept: payout verification failed")
+			return
+		}
+
 		ext.Send(out.TRADE_ACCEPT)
 		tradeAutoAcceptPending = false
 		tradeAutoAccepted = true
 		a.AddLogMsg("[TRADE_ACCEPT] sent outgoing[69]")
-		// If this was a payout flow, start the payout response timeout monitor
-		// now that the dealer has accepted and we're waiting for the partner.
-		if payoutTradeActive && !payoutResponseTimeoutActive {
-			a.AddLogMsg("[PAYOUT] starting payout response timeout monitor after dealer accept")
-			a.startPayoutResponseTimeoutMonitor(payoutTargetName, payoutTargetID, payoutTargetName)
-		}
 	}(flowID)
 }
 
@@ -4962,8 +4997,14 @@ func (a *App) extractTradeItemAndQuantity(field string) (string, int, bool) {
 				a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS_PARSE_FALLBACK] matched %q inside %q (verified)", match, field))
 				return name, qty, true
 			}
-			// Verification failed: do not accept unverified normalized classes.
-			a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS_PARSE_FALLBACK] strict fallback found %q inside %q but verification failed; skipping", normalized, field))
+			// Verification failed: accept the normalized class name from the
+			// incoming TRADE_ITEMS payload anyway so the UI and coverage checks
+			// see the offered name immediately. The frozen hand snapshot (or
+			// later verification) will still determine whether the dealer can
+			// cover the item; this avoids silently dropping real items when the
+			// snapshot isn't ready yet.
+			a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS_PARSE_FALLBACK] strict fallback found %q inside %q but verification failed; accepting unverified fallback", normalized, field))
+			return normalized, 1, true
 		}
 		a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] fallback strict match %q rejected by normalisation/raw-check", match))
 	}
@@ -5045,11 +5086,23 @@ func isKnownTradeClassName(a *App, name string) bool {
 		return false
 	}
 
+	// If this is a star-variant (e.g. "chair_plasty*9"), also consider
+	// the base class name ("chair_plasty") when checking known classes.
+	baseName := name
+	if idx := strings.Index(name, "*"); idx >= 0 {
+		baseName = name[:idx]
+	}
+
 	// Prefer explicit catalog membership to avoid false-positives from
 	// protocol/header tokens that happen to match the furni-name pattern.
 	catalogSet := a.GetCatalogNameSet()
 	if _, ok := catalogSet[name]; ok {
 		return true
+	}
+	if baseName != name {
+		if _, ok := catalogSet[baseName]; ok {
+			return true
+		}
 	}
 
 	// Also accept items observed in the dealer's scanned hand (single-word
@@ -5062,7 +5115,8 @@ func isKnownTradeClassName(a *App, name string) bool {
 		itemsToCheck = tradeHandSnapshot
 	}
 	for _, item := range itemsToCheck {
-		if strings.ToLower(strings.TrimSpace(item.Name)) == name {
+		iname := strings.ToLower(strings.TrimSpace(item.Name))
+		if iname == name || iname == baseName {
 			handItemsMu.Unlock()
 			return true
 		}
@@ -6116,6 +6170,7 @@ func (a *App) captureTradeHandSnapshot() {
 	tradeHandSnapshot = make([]TradeItem, len(currentHandItems))
 	copy(tradeHandSnapshot, currentHandItems)
 	tradeHandSnapshotReady = true
+	tradeHandSnapshotAt = time.Now()
 	snapshot := make([]TradeItem, len(tradeHandSnapshot))
 	copy(snapshot, tradeHandSnapshot)
 	handItemsMu.Unlock()
@@ -6140,6 +6195,7 @@ func (a *App) invalidateTradeHandSnapshot(reason string) {
 	handItemsMu.Lock()
 	tradeHandSnapshot = nil
 	tradeHandSnapshotReady = false
+	tradeHandSnapshotAt = time.Time{}
 	handItemsMu.Unlock()
 
 	a.AddLogMsg(fmt.Sprintf("[TRADE_HAND_SNAPSHOT] invalidated: %s", reason))
@@ -6147,6 +6203,16 @@ func (a *App) invalidateTradeHandSnapshot(reason string) {
 }
 
 func (a *App) forceRefreshHandSnapshot(reason string) bool {
+	// If we already have a fresh snapshot, skip the forced refresh.
+	handItemsMu.Lock()
+	ready := tradeHandSnapshotReady
+	at := tradeHandSnapshotAt
+	handItemsMu.Unlock()
+	if ready && time.Since(at) < tradeHandSnapshotFreshWindow {
+		a.AddLogMsg(fmt.Sprintf("[TRADE_HAND_SNAPSHOT] skipping forced refresh; age=%s reason=%s", time.Since(at).String(), reason))
+		return true
+	}
+
 	a.invalidateTradeHandSnapshot(reason)
 
 	scanID := a.requestPlayerStrip(true)
@@ -6380,16 +6446,22 @@ func (a *App) maybeAutoAcceptOnSnapshotReady(context string) {
 	}
 
 	// All checks passed — accept the trade now and mark as auto-accepted.
+	if payoutTradeActive {
+		// Verify our own offer satisfies the required payout items before accepting.
+		required := payoutRequirementsFromBetItems(gameBetItems)
+		if a.tryAcceptPayoutTrade(required, "snapshot-ready") {
+			return
+		}
+		// Verification failed; do not accept.
+		tradeAutoAcceptPending = false
+		a.AddLogMsg("[TRADE_ACCEPT] not auto-accepting: payout verification failed on snapshot-ready")
+		return
+	}
+
 	ext.Send(out.TRADE_ACCEPT)
 	tradeAutoAccepted = true
 	tradeAutoAcceptPending = false
 	a.AddLogMsg(fmt.Sprintf("[TRADE_ACCEPT] sent outgoing[69] (snapshot-ready %s)", context))
-	// If this is a payout, start the payout response timeout monitor now that
-	// we've accepted and are waiting for the partner to confirm.
-	if payoutTradeActive && !payoutResponseTimeoutActive {
-		a.AddLogMsg("[PAYOUT] starting payout response timeout monitor after snapshot-ready accept")
-		a.startPayoutResponseTimeoutMonitor(payoutTargetName, payoutTargetID, payoutTargetName)
-	}
 }
 
 func formatTradeShortages(shortages []tradeShortage) string {

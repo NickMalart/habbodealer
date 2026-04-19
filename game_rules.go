@@ -93,12 +93,19 @@ func comparePokerHands(player PokerHandResult, dealer PokerHandResult) PokerWinn
 	if player.Category < dealer.Category {
 		return PokerWinnerDealer
 	}
-	// Same category: compare tiebreaks
+	if player.Category == PokerOnePair {
+		if len(player.Tiebreaks) > 0 && len(dealer.Tiebreaks) > 0 {
+			if player.Tiebreaks[0] > dealer.Tiebreaks[0] {
+				return PokerWinnerPlayer
+			}
+			return PokerWinnerDealer
+		}
+	}
+
 	cmp := comparePokerTiebreaks(player.Tiebreaks, dealer.Tiebreaks)
 	if cmp > 0 {
 		return PokerWinnerPlayer
 	}
-	// Dealer wins ties (exact tie) or when dealer tiebreaks are higher
 	return PokerWinnerDealer
 }
 
