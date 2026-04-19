@@ -250,17 +250,17 @@ var (
 	autoShoutSeconds int = 30
 
 	// Block recommended-rooms incoming packet configuration
-	blockRecommendedRooms bool
+	blockRecommendedRooms bool = true
 	blockRecommendedMu    sync.Mutex
 
 	// Block slide-object-bundle incoming packet configuration
-	blockSlideObjectBundle bool
+	blockSlideObjectBundle bool = true
 	blockSlideObjectMu     sync.Mutex
 
 	// Additional incoming packet block flags
-	blockStatusEffects      bool
+	blockStatusEffects      bool = true
 	blockStatusEffectsMu    sync.Mutex
-	blockRemoveBuddy        bool
+	blockRemoveBuddy        bool = true
 	blockRemoveBuddyMu      sync.Mutex
 	blockFriendListUpdate   bool = true
 	blockFriendListUpdateMu sync.Mutex
@@ -270,15 +270,15 @@ var (
 	blockFavouriteRoomResultsMu sync.Mutex
 
 	// Poll event eligibility outgoing block flag
-	blockPollEventEligibilityOutgoing   bool
+	blockPollEventEligibilityOutgoing   bool = true
 	blockPollEventEligibilityOutgoingMu sync.Mutex
 
 	// Block recommended-rooms outgoing packet configuration
-	blockOutgoingRecommendedRooms bool
+	blockOutgoingRecommendedRooms bool = true
 	blockOutgoingRecommendedMu    sync.Mutex
 
 	// Block slide-object-bundle outgoing packet configuration
-	blockSlideObjectOutgoing   bool
+	blockSlideObjectOutgoing   bool = true
 	blockSlideObjectOutgoingMu sync.Mutex
 
 	// New: Incoming ARTICLES_PAGE (681) and CALENDAR_EVENTS (683) block flags

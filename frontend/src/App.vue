@@ -723,15 +723,15 @@ export default {
       autoShoutSeconds: 30,
       autoShoutEnabled: false,
       // Block recommended-rooms packet
-      blockRecommendedRooms: false,
+      blockRecommendedRooms: true,
       // Block slide-object-bundle packet
-      blockSlideObjectBundle: false,
+      blockSlideObjectBundle: true,
       // Outgoing block flags
-      blockRecommendedRoomsOutgoing: false,
-      blockSlideObjectBundleOutgoing: false,
+      blockRecommendedRoomsOutgoing: true,
+      blockSlideObjectBundleOutgoing: true,
       // Additional incoming block flags
-      blockStatusEffects: false,
-      blockRemoveBuddy: false,
+      blockStatusEffects: true,
+      blockRemoveBuddy: true,
       blockFriendListUpdate: true,
       // Favourite room results (incoming) - default disabled
       blockFavouriteRoomResults: false,
@@ -739,7 +739,7 @@ export default {
       blockArticlesPage: true,
       blockCalendarEvents: true,
       // Outgoing poll-event
-      blockPollEventEligibilityOutgoing: false,
+      blockPollEventEligibilityOutgoing: true,
       // New outgoing packet blocks (enabled by default)
       blockGetPageArticlesOutgoing: true,
       blockGetCalendarEventsOutgoing: true,
