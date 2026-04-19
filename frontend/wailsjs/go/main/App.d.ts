@@ -18,7 +18,19 @@ export function ClearTradeItems():Promise<void>;
 
 export function GetAutoShoutConfig():Promise<main.AutoShoutConfig>;
 
+export function GetBlockArticlesPageConfig():Promise<main.BlockSlideObjectConfig>;
+
+export function GetBlockCalendarEventsConfig():Promise<main.BlockSlideObjectConfig>;
+
+export function GetBlockFavouriteRoomResultsConfig():Promise<main.BlockSlideObjectConfig>;
+
 export function GetBlockFriendListUpdateConfig():Promise<main.BlockSlideObjectConfig>;
+
+export function GetBlockFriendListUpdateOutgoingConfig():Promise<main.BlockSlideObjectConfig>;
+
+export function GetBlockGetCalendarEventsOutgoingConfig():Promise<main.BlockSlideObjectConfig>;
+
+export function GetBlockGetPageArticlesOutgoingConfig():Promise<main.BlockSlideObjectConfig>;
 
 export function GetBlockPollEventEligibilityOutgoingConfig():Promise<main.BlockSlideObjectConfig>;
 
@@ -78,7 +90,19 @@ export function StopCasinoSetup():Promise<void>;
 
 export function ToggleAutoShout(arg1:boolean):Promise<main.AutoShoutConfig>;
 
+export function ToggleBlockArticlesPage(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
+
+export function ToggleBlockCalendarEvents(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
+
+export function ToggleBlockFavouriteRoomResults(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
+
 export function ToggleBlockFriendListUpdate(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
+
+export function ToggleBlockFriendListUpdateOutgoing(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
+
+export function ToggleBlockGetCalendarEventsOutgoing(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
+
+export function ToggleBlockGetPageArticlesOutgoing(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
 
 export function ToggleBlockPollEventEligibilityOutgoing(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
 

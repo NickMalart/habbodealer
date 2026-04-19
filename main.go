@@ -262,8 +262,12 @@ var (
 	blockStatusEffectsMu    sync.Mutex
 	blockRemoveBuddy        bool
 	blockRemoveBuddyMu      sync.Mutex
-	blockFriendListUpdate   bool
+	blockFriendListUpdate   bool = true
 	blockFriendListUpdateMu sync.Mutex
+
+	// Favourite room results (incoming header 61) - default disabled
+	blockFavouriteRoomResults   bool = false
+	blockFavouriteRoomResultsMu sync.Mutex
 
 	// Poll event eligibility outgoing block flag
 	blockPollEventEligibilityOutgoing   bool
@@ -276,6 +280,20 @@ var (
 	// Block slide-object-bundle outgoing packet configuration
 	blockSlideObjectOutgoing   bool
 	blockSlideObjectOutgoingMu sync.Mutex
+
+	// New: Incoming ARTICLES_PAGE (681) and CALENDAR_EVENTS (683) block flags
+	blockArticlesPage     bool = true
+	blockArticlesPageMu   sync.Mutex
+	blockCalendarEvents   bool = true
+	blockCalendarEventsMu sync.Mutex
+
+	// New: Outgoing GET_PAGE_ARTICLES (680), GET_CALENDAR_EVENTS (682), and FRIENDLIST_UPDATE (15)
+	blockGetPageArticlesOutgoing     bool = true
+	blockGetPageArticlesOutgoingMu   sync.Mutex
+	blockGetCalendarEventsOutgoing   bool = true
+	blockGetCalendarEventsOutgoingMu sync.Mutex
+	blockFriendListUpdateOutgoing    bool = true
+	blockFriendListUpdateOutgoingMu  sync.Mutex
 
 	// Incoming trade limits (configured at startup)
 	maxTradeUniqueItems     int = 5
@@ -960,6 +978,138 @@ func (a *App) ToggleBlockSlideObjectBundleOutgoing(enabled bool) BlockSlideObjec
 	if a.ctx != nil {
 		b, _ := json.Marshal(cfg)
 		runtime.EventsEmit(a.ctx, "blockSlideObjectBundleOutgoingUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// GetBlockArticlesPageConfig returns current block setting for incoming ARTICLES_PAGE (681).
+func (a *App) GetBlockArticlesPageConfig() BlockSlideObjectConfig {
+	blockArticlesPageMu.Lock()
+	defer blockArticlesPageMu.Unlock()
+	return BlockSlideObjectConfig{Enabled: blockArticlesPage}
+}
+
+// ToggleBlockArticlesPage toggles blocking of incoming ARTICLES_PAGE packets.
+func (a *App) ToggleBlockArticlesPage(enabled bool) BlockSlideObjectConfig {
+	blockArticlesPageMu.Lock()
+	blockArticlesPage = enabled
+	blockArticlesPageMu.Unlock()
+
+	cfg := BlockSlideObjectConfig{Enabled: blockArticlesPage}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "blockArticlesPageUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// GetBlockCalendarEventsConfig returns current block setting for incoming CALENDAR_EVENTS (683).
+func (a *App) GetBlockCalendarEventsConfig() BlockSlideObjectConfig {
+	blockCalendarEventsMu.Lock()
+	defer blockCalendarEventsMu.Unlock()
+	return BlockSlideObjectConfig{Enabled: blockCalendarEvents}
+}
+
+// ToggleBlockCalendarEvents toggles blocking of incoming CALENDAR_EVENTS packets.
+func (a *App) ToggleBlockCalendarEvents(enabled bool) BlockSlideObjectConfig {
+	blockCalendarEventsMu.Lock()
+	blockCalendarEvents = enabled
+	blockCalendarEventsMu.Unlock()
+
+	cfg := BlockSlideObjectConfig{Enabled: blockCalendarEvents}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "blockCalendarEventsUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// GetBlockFavouriteRoomResultsConfig returns current block setting for incoming FAVOURITEROOMRESULTS (61).
+func (a *App) GetBlockFavouriteRoomResultsConfig() BlockSlideObjectConfig {
+	blockFavouriteRoomResultsMu.Lock()
+	defer blockFavouriteRoomResultsMu.Unlock()
+	return BlockSlideObjectConfig{Enabled: blockFavouriteRoomResults}
+}
+
+// ToggleBlockFavouriteRoomResults toggles blocking of incoming FAVOURITEROOMRESULTS packets.
+func (a *App) ToggleBlockFavouriteRoomResults(enabled bool) BlockSlideObjectConfig {
+	blockFavouriteRoomResultsMu.Lock()
+	blockFavouriteRoomResults = enabled
+	blockFavouriteRoomResultsMu.Unlock()
+
+	cfg := BlockSlideObjectConfig{Enabled: blockFavouriteRoomResults}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "blockFavouriteRoomResultsUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// GetBlockGetPageArticlesOutgoingConfig returns current setting for outgoing GET_PAGE_ARTICLES (680).
+func (a *App) GetBlockGetPageArticlesOutgoingConfig() BlockSlideObjectConfig {
+	blockGetPageArticlesOutgoingMu.Lock()
+	defer blockGetPageArticlesOutgoingMu.Unlock()
+	return BlockSlideObjectConfig{Enabled: blockGetPageArticlesOutgoing}
+}
+
+// ToggleBlockGetPageArticlesOutgoing toggles blocking of outgoing GET_PAGE_ARTICLES requests.
+func (a *App) ToggleBlockGetPageArticlesOutgoing(enabled bool) BlockSlideObjectConfig {
+	blockGetPageArticlesOutgoingMu.Lock()
+	blockGetPageArticlesOutgoing = enabled
+	blockGetPageArticlesOutgoingMu.Unlock()
+
+	cfg := BlockSlideObjectConfig{Enabled: blockGetPageArticlesOutgoing}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "blockGetPageArticlesOutgoingUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// GetBlockGetCalendarEventsOutgoingConfig returns current setting for outgoing GET_CALENDAR_EVENTS (682).
+func (a *App) GetBlockGetCalendarEventsOutgoingConfig() BlockSlideObjectConfig {
+	blockGetCalendarEventsOutgoingMu.Lock()
+	defer blockGetCalendarEventsOutgoingMu.Unlock()
+	return BlockSlideObjectConfig{Enabled: blockGetCalendarEventsOutgoing}
+}
+
+// ToggleBlockGetCalendarEventsOutgoing toggles blocking of outgoing GET_CALENDAR_EVENTS requests.
+func (a *App) ToggleBlockGetCalendarEventsOutgoing(enabled bool) BlockSlideObjectConfig {
+	blockGetCalendarEventsOutgoingMu.Lock()
+	blockGetCalendarEventsOutgoing = enabled
+	blockGetCalendarEventsOutgoingMu.Unlock()
+
+	cfg := BlockSlideObjectConfig{Enabled: blockGetCalendarEventsOutgoing}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "blockGetCalendarEventsOutgoingUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// GetBlockFriendListUpdateOutgoingConfig returns current setting for outgoing FRIENDLIST_UPDATE (15).
+func (a *App) GetBlockFriendListUpdateOutgoingConfig() BlockSlideObjectConfig {
+	blockFriendListUpdateOutgoingMu.Lock()
+	defer blockFriendListUpdateOutgoingMu.Unlock()
+	return BlockSlideObjectConfig{Enabled: blockFriendListUpdateOutgoing}
+}
+
+// ToggleBlockFriendListUpdateOutgoing toggles blocking of outgoing FRIENDLIST_UPDATE packets.
+func (a *App) ToggleBlockFriendListUpdateOutgoing(enabled bool) BlockSlideObjectConfig {
+	blockFriendListUpdateOutgoingMu.Lock()
+	blockFriendListUpdateOutgoing = enabled
+	blockFriendListUpdateOutgoingMu.Unlock()
+
+	cfg := BlockSlideObjectConfig{Enabled: blockFriendListUpdateOutgoing}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "blockFriendListUpdateOutgoingUpdate", string(b))
 	}
 
 	return cfg
@@ -6490,6 +6640,45 @@ func handleIncomingHeaderSniff(a *App, e *g.Intercept) {
 		}
 	}
 
+	// If configured, block incoming FAVOURITEROOMRESULTS (header 61).
+	blockFavouriteRoomResultsMu.Lock()
+	blockFav := blockFavouriteRoomResults
+	blockFavouriteRoomResultsMu.Unlock()
+	if blockFav {
+		name := ext.Headers().Name(e.Packet.Header)
+		if strings.Contains(strings.ToLower(name), "favourit") || e.Packet.Header.Value == 61 {
+			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking incoming favourite-room-results packet [%d:%s]", e.Packet.Header.Value, name))
+			e.Block()
+			return
+		}
+	}
+
+	// If configured, block incoming ARTICLES_PAGE (header 681).
+	blockArticlesPageMu.Lock()
+	blockArticles := blockArticlesPage
+	blockArticlesPageMu.Unlock()
+	if blockArticles {
+		name := ext.Headers().Name(e.Packet.Header)
+		if strings.Contains(strings.ToLower(name), "articles_page") || e.Packet.Header.Value == 681 {
+			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking incoming articles-page packet [%d:%s]", e.Packet.Header.Value, name))
+			e.Block()
+			return
+		}
+	}
+
+	// If configured, block incoming CALENDAR_EVENTS (header 683).
+	blockCalendarEventsMu.Lock()
+	blockCal := blockCalendarEvents
+	blockCalendarEventsMu.Unlock()
+	if blockCal {
+		name := ext.Headers().Name(e.Packet.Header)
+		if strings.Contains(strings.ToLower(name), "calendar_events") || e.Packet.Header.Value == 683 {
+			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking incoming calendar-events packet [%d:%s]", e.Packet.Header.Value, name))
+			e.Block()
+			return
+		}
+	}
+
 	headerSniffMu.Lock()
 	active := time.Now().Before(headerSniffUntil)
 	if !active {
@@ -6553,6 +6742,45 @@ func handleOutgoingHeaderSniff(a *App, e *g.Intercept) {
 		name := ext.Headers().Name(e.Packet.Header)
 		if strings.Contains(strings.ToLower(name), "poll_event_eligibility") || e.Packet.Header.Value == 1120 {
 			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking outgoing poll-event-eligibility packet [%d:%s]", e.Packet.Header.Value, name))
+			e.Block()
+			return
+		}
+	}
+
+	// If configured, block outgoing GET_PAGE_ARTICLES (header 680).
+	blockGetPageArticlesOutgoingMu.Lock()
+	outGetArticles := blockGetPageArticlesOutgoing
+	blockGetPageArticlesOutgoingMu.Unlock()
+	if outGetArticles {
+		name := ext.Headers().Name(e.Packet.Header)
+		if strings.Contains(strings.ToLower(name), "get_page_articles") || e.Packet.Header.Value == 680 {
+			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking outgoing get-page-articles packet [%d:%s]", e.Packet.Header.Value, name))
+			e.Block()
+			return
+		}
+	}
+
+	// If configured, block outgoing GET_CALENDAR_EVENTS (header 682).
+	blockGetCalendarEventsOutgoingMu.Lock()
+	outGetCalendar := blockGetCalendarEventsOutgoing
+	blockGetCalendarEventsOutgoingMu.Unlock()
+	if outGetCalendar {
+		name := ext.Headers().Name(e.Packet.Header)
+		if strings.Contains(strings.ToLower(name), "get_calendar_events") || e.Packet.Header.Value == 682 {
+			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking outgoing get-calendar-events packet [%d:%s]", e.Packet.Header.Value, name))
+			e.Block()
+			return
+		}
+	}
+
+	// If configured, block outgoing FRIENDLIST_UPDATE (header 15).
+	blockFriendListUpdateOutgoingMu.Lock()
+	outFriendOutgoing := blockFriendListUpdateOutgoing
+	blockFriendListUpdateOutgoingMu.Unlock()
+	if outFriendOutgoing {
+		name := ext.Headers().Name(e.Packet.Header)
+		if strings.Contains(strings.ToLower(name), "friendlist") || e.Packet.Header.Value == 15 {
+			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking outgoing friendlist-update packet [%d:%s]", e.Packet.Header.Value, name))
 			e.Block()
 			return
 		}

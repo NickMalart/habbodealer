@@ -152,41 +152,149 @@
             <div style="display:flex;gap:12px;flex-wrap:wrap;">
               <div style="flex:1;min-width:200px;">
                 <div class="game-guide-label" style="margin-bottom:6px;">Incoming</div>
+
                 <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;">
                   <input type="checkbox" v-model="blockRecommendedRooms" @change="toggleBlockRecommendedRooms" />
-                  <span>Recommended rooms (header 351)</span>
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span>Recommended rooms (header 351)</span>
+                    <span class="packet-info" tabindex="0" aria-label="Recommended rooms info" @mouseenter="showPacketTooltip($event)" @mouseleave="hidePacketTooltip" @focus="showPacketTooltip($event)" @blur="hidePacketTooltip">ℹ
+                      <span class="tooltip"><div class="tooltip-header">Recommended rooms — header 351</div><div class="tooltip-body">Server-sent list of recommended rooms and metadata.</div></span>
+                    </span>
+                  </span>
                 </label>
+
+                <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
+                  <input type="checkbox" v-model="blockFavouriteRoomResults" @change="toggleBlockFavouriteRoomResults" />
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span>Favourite room results (header 61)</span>
+                    <span class="packet-info" tabindex="0" aria-label="Favourite room results info" @mouseenter="showPacketTooltip($event)" @mouseleave="hidePacketTooltip" @focus="showPacketTooltip($event)" @blur="hidePacketTooltip">ℹ
+                      <span class="tooltip"><div class="tooltip-header">Favourite room results — header 61</div><div class="tooltip-body">Incoming list of favourite rooms for the user or room.</div></span>
+                    </span>
+                  </span>
+                </label>
+
                 <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
                   <input type="checkbox" v-model="blockSlideObjectBundle" @change="toggleBlockSlideObjectBundle" />
-                  <span>Slide object bundle (header 230)</span>
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span>Slide object bundle (header 230)</span>
+                    <span class="packet-info" tabindex="0" aria-label="Slide object bundle info" @mouseenter="showPacketTooltip($event)" @mouseleave="hidePacketTooltip" @focus="showPacketTooltip($event)" @blur="hidePacketTooltip">ℹ
+                      <span class="tooltip"><div class="tooltip-header">Slide object bundle — header 230</div><div class="tooltip-body">Bundles object slide/movement updates (furniture/object positions). May affect room object syncing and visuals.</div></span>
+                    </span>
+                  </span>
                 </label>
+
                 <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
                   <input type="checkbox" v-model="blockStatusEffects" @change="toggleBlockStatusEffects" />
-                  <span>Status effects (header 1242)</span>
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span>Status effects (header 1242)</span>
+                    <span class="packet-info" tabindex="0" aria-label="Status effects info" @mouseenter="showPacketTooltip($event)" @mouseleave="hidePacketTooltip" @focus="showPacketTooltip($event)" @blur="hidePacketTooltip">ℹ
+                      <span class="tooltip"><div class="tooltip-header">Status effects — header 1242</div><div class="tooltip-body">Carries status/effect updates (timers, mode changes, game-effect notifications).</div></span>
+                    </span>
+                  </span>
                 </label>
+
                 <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
                   <input type="checkbox" v-model="blockRemoveBuddy" @change="toggleBlockRemoveBuddy" />
-                  <span>Remove buddy (header 138)</span>
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span>Remove buddy (header 138)</span>
+                    <span class="packet-info" tabindex="0" aria-label="Remove buddy info" @mouseenter="showPacketTooltip($event)" @mouseleave="hidePacketTooltip" @focus="showPacketTooltip($event)" @blur="hidePacketTooltip">ℹ
+                      <span class="tooltip"><div class="tooltip-header">Remove buddy — header 138</div><div class="tooltip-body">Notifies the client that a friend was removed.</div></span>
+                    </span>
+                  </span>
                 </label>
+
                 <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
                   <input type="checkbox" v-model="blockFriendListUpdate" @change="toggleBlockFriendListUpdate" />
-                  <span>Friend list update (header 13)</span>
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span>Friend list update (header 13)</span>
+                    <span class="packet-info" tabindex="0" aria-label="Friend list update info" @mouseenter="showPacketTooltip($event)" @mouseleave="hidePacketTooltip" @focus="showPacketTooltip($event)" @blur="hidePacketTooltip">ℹ
+                      <span class="tooltip"><div class="tooltip-header">Friend list update — header 13</div><div class="tooltip-body">Contains friend-list changes (online status, adds/removes).</div></span>
+                    </span>
+                  </span>
+                </label>
+
+                <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
+                  <input type="checkbox" v-model="blockArticlesPage" @change="toggleBlockArticlesPage" />
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span>Articles page (header 681)</span>
+                    <span class="packet-info" tabindex="0" aria-label="Articles page info" @mouseenter="showPacketTooltip($event)" @mouseleave="hidePacketTooltip" @focus="showPacketTooltip($event)" @blur="hidePacketTooltip">ℹ
+                      <span class="tooltip"><div class="tooltip-header">Articles page — header 681</div><div class="tooltip-body">Incoming page containing article titles and snippets (news/articles listing).</div></span>
+                    </span>
+                  </span>
+                </label>
+
+                <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
+                  <input type="checkbox" v-model="blockCalendarEvents" @change="toggleBlockCalendarEvents" />
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span>Calendar events (header 683)</span>
+                    <span class="packet-info" tabindex="0" aria-label="Calendar events info" @mouseenter="showPacketTooltip($event)" @mouseleave="hidePacketTooltip" @focus="showPacketTooltip($event)" @blur="hidePacketTooltip">ℹ
+                      <span class="tooltip"><div class="tooltip-header">Calendar events — header 683</div><div class="tooltip-body">Incoming list of scheduled events, times, and brief descriptions.</div></span>
+                    </span>
+                  </span>
                 </label>
               </div>
 
               <div style="flex:1;min-width:200px;">
                 <div class="game-guide-label" style="margin-bottom:6px;">Outgoing</div>
+
                 <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;">
                   <input type="checkbox" v-model="blockRecommendedRoomsOutgoing" @change="toggleBlockRecommendedRoomsOutgoing" />
-                  <span>Get recommended rooms (header 264)</span>
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span>Get recommended rooms (header 264)</span>
+                    <span class="packet-info" tabindex="0" aria-label="Get recommended rooms outgoing info" @mouseenter="showPacketTooltip($event)" @mouseleave="hidePacketTooltip" @focus="showPacketTooltip($event)" @blur="hidePacketTooltip">ℹ
+                      <span class="tooltip"><div class="tooltip-header">Get recommended rooms (outgoing) — header 264</div><div class="tooltip-body">Outgoing request to fetch recommended rooms from the server.</div></span>
+                    </span>
+                  </span>
                 </label>
+
                 <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
                   <input type="checkbox" v-model="blockSlideObjectBundleOutgoing" @change="toggleBlockSlideObjectBundleOutgoing" />
-                  <span>Slide object bundle (header 230)</span>
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span>Slide object bundle (header 230)</span>
+                    <span class="packet-info" tabindex="0" aria-label="Slide object bundle outgoing info" @mouseenter="showPacketTooltip($event)" @mouseleave="hidePacketTooltip" @focus="showPacketTooltip($event)" @blur="hidePacketTooltip">ℹ
+                      <span class="tooltip"><div class="tooltip-header">Slide object bundle (outgoing) — header 230</div><div class="tooltip-body">Sends batched object movement/slide updates to the server.</div></span>
+                    </span>
+                  </span>
                 </label>
+
                 <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
                   <input type="checkbox" v-model="blockPollEventEligibilityOutgoing" @change="toggleBlockPollEventEligibilityOutgoing" />
-                  <span>Poll event eligibility (header 1120)</span>
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span>Poll event eligibility (header 1120)</span>
+                    <span class="packet-info" tabindex="0" aria-label="Poll event eligibility outgoing info" @mouseenter="showPacketTooltip($event)" @mouseleave="hidePacketTooltip" @focus="showPacketTooltip($event)" @blur="hidePacketTooltip">ℹ
+                      <span class="tooltip"><div class="tooltip-header">Poll event eligibility (outgoing) — header 1120</div><div class="tooltip-body">Outgoing request to check whether the user is eligible for polls/events.</div></span>
+                    </span>
+                  </span>
+                </label>
+
+                <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
+                  <input type="checkbox" v-model="blockGetPageArticlesOutgoing" @change="toggleBlockGetPageArticlesOutgoing" />
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span>Get page articles (header 680)</span>
+                    <span class="packet-info" tabindex="0" aria-label="Get page articles outgoing info" @mouseenter="showPacketTooltip($event)" @mouseleave="hidePacketTooltip" @focus="showPacketTooltip($event)" @blur="hidePacketTooltip">ℹ
+                      <span class="tooltip"><div class="tooltip-header">Get page articles (outgoing) — header 680</div><div class="tooltip-body">Outgoing request to fetch page articles/listings from the server.</div></span>
+                    </span>
+                  </span>
+                </label>
+
+                <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
+                  <input type="checkbox" v-model="blockGetCalendarEventsOutgoing" @change="toggleBlockGetCalendarEventsOutgoing" />
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span>Get calendar events (header 682)</span>
+                    <span class="packet-info" tabindex="0" aria-label="Get calendar events outgoing info" @mouseenter="showPacketTooltip($event)" @mouseleave="hidePacketTooltip" @focus="showPacketTooltip($event)" @blur="hidePacketTooltip">ℹ
+                      <span class="tooltip"><div class="tooltip-header">Get calendar events (outgoing) — header 682</div><div class="tooltip-body">Outgoing request to fetch calendar events from the server.</div></span>
+                    </span>
+                  </span>
+                </label>
+
+                <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
+                  <input type="checkbox" v-model="blockFriendListUpdateOutgoing" @change="toggleBlockFriendListUpdateOutgoing" />
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span>Friend list update (header 15)</span>
+                    <span class="packet-info" tabindex="0" aria-label="Friend list update outgoing info" @mouseenter="showPacketTooltip($event)" @mouseleave="hidePacketTooltip" @focus="showPacketTooltip($event)" @blur="hidePacketTooltip">ℹ
+                      <span class="tooltip"><div class="tooltip-header">Friend list update (outgoing) — header 15</div><div class="tooltip-body">Outgoing friend-list sync/update request.</div></span>
+                    </span>
+                  </span>
                 </label>
               </div>
             </div>
@@ -532,6 +640,7 @@
     </div>
   </div>
 
+  <div id="packet-tooltip" v-if="tooltipVisible" class="packet-tooltip" v-html="tooltipHtml" :style="{ left: tooltipLeft + 'px', top: tooltipTop + 'px' }"></div>
   </div>
 </template>
 
@@ -623,9 +732,23 @@ export default {
       // Additional incoming block flags
       blockStatusEffects: false,
       blockRemoveBuddy: false,
-      blockFriendListUpdate: false,
+      blockFriendListUpdate: true,
+      // Favourite room results (incoming) - default disabled
+      blockFavouriteRoomResults: false,
+      // New incoming packet blocks (enabled by default)
+      blockArticlesPage: true,
+      blockCalendarEvents: true,
       // Outgoing poll-event
       blockPollEventEligibilityOutgoing: false,
+      // New outgoing packet blocks (enabled by default)
+      blockGetPageArticlesOutgoing: true,
+      blockGetCalendarEventsOutgoing: true,
+      blockFriendListUpdateOutgoing: true,
+      // Tooltip state for packet info (fixed, rendered above everything)
+      tooltipVisible: false,
+      tooltipHtml: '',
+      tooltipLeft: 0,
+      tooltipTop: 0,
       // Live UI indicators for partner activity
       currentTraderName: '',
       currentGamePlayerName: '',
@@ -1224,6 +1347,144 @@ export default {
         console.error(e);
       }
     },
+    async toggleBlockArticlesPage() {
+      try {
+        const next = !!this.blockArticlesPage;
+        const cfg = await window.go.main.App.ToggleBlockArticlesPage(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.blockArticlesPage = !!parsed.enabled;
+          } catch (e) {}
+        } else if (cfg) {
+          this.blockArticlesPage = !!cfg.enabled;
+        }
+        this.addLogMsg('[UI] Block articles-page toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle block articles-page');
+        console.error(e);
+      }
+    },
+    async toggleBlockFavouriteRoomResults() {
+      try {
+        const next = !!this.blockFavouriteRoomResults;
+        const cfg = await window.go.main.App.ToggleBlockFavouriteRoomResults(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.blockFavouriteRoomResults = !!parsed.enabled;
+          } catch (e) {}
+        } else if (cfg) {
+          this.blockFavouriteRoomResults = !!cfg.enabled;
+        }
+        this.addLogMsg('[UI] Block favourite-room-results toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle block favourite-room-results');
+        console.error(e);
+      }
+    },
+    async toggleBlockCalendarEvents() {
+      try {
+        const next = !!this.blockCalendarEvents;
+        const cfg = await window.go.main.App.ToggleBlockCalendarEvents(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.blockCalendarEvents = !!parsed.enabled;
+          } catch (e) {}
+        } else if (cfg) {
+          this.blockCalendarEvents = !!cfg.enabled;
+        }
+        this.addLogMsg('[UI] Block calendar-events toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle block calendar-events');
+        console.error(e);
+      }
+    },
+    async toggleBlockGetPageArticlesOutgoing() {
+      try {
+        const next = !!this.blockGetPageArticlesOutgoing;
+        const cfg = await window.go.main.App.ToggleBlockGetPageArticlesOutgoing(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.blockGetPageArticlesOutgoing = !!parsed.enabled;
+          } catch (e) {}
+        } else if (cfg) {
+          this.blockGetPageArticlesOutgoing = !!cfg.enabled;
+        }
+        this.addLogMsg('[UI] Block get-page-articles (outgoing) toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle block get-page-articles (outgoing)');
+        console.error(e);
+      }
+    },
+    async toggleBlockGetCalendarEventsOutgoing() {
+      try {
+        const next = !!this.blockGetCalendarEventsOutgoing;
+        const cfg = await window.go.main.App.ToggleBlockGetCalendarEventsOutgoing(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.blockGetCalendarEventsOutgoing = !!parsed.enabled;
+          } catch (e) {}
+        } else if (cfg) {
+          this.blockGetCalendarEventsOutgoing = !!cfg.enabled;
+        }
+        this.addLogMsg('[UI] Block get-calendar-events (outgoing) toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle block get-calendar-events (outgoing)');
+        console.error(e);
+      }
+    },
+    async toggleBlockFriendListUpdateOutgoing() {
+      try {
+        const next = !!this.blockFriendListUpdateOutgoing;
+        const cfg = await window.go.main.App.ToggleBlockFriendListUpdateOutgoing(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.blockFriendListUpdateOutgoing = !!parsed.enabled;
+          } catch (e) {}
+        } else if (cfg) {
+          this.blockFriendListUpdateOutgoing = !!cfg.enabled;
+        }
+        this.addLogMsg('[UI] Block friendlist-update (outgoing) toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle block friendlist-update (outgoing)');
+        console.error(e);
+      }
+    },
+    showPacketTooltip(e) {
+      try {
+        const el = e.currentTarget || e.target;
+        const textEl = el.querySelector && el.querySelector('.tooltip');
+        const text = textEl ? textEl.innerHTML : (el.getAttribute && el.getAttribute('aria-label')) || '';
+        this.tooltipHtml = text || '';
+        this.tooltipVisible = true;
+        this.$nextTick(() => {
+          const tipEl = document.getElementById('packet-tooltip');
+          if (!tipEl) return;
+          const rect = el.getBoundingClientRect();
+          const tipRect = tipEl.getBoundingClientRect();
+          let left = rect.left + (rect.width / 2) - (tipRect.width / 2);
+          let top = rect.top - tipRect.height - 10;
+          if (top < 8) top = rect.bottom + 10;
+          const vw = window.innerWidth || document.documentElement.clientWidth;
+          if (left < 8) left = 8;
+          if (left + tipRect.width > vw - 8) left = vw - tipRect.width - 8;
+          this.tooltipLeft = Math.round(left);
+          this.tooltipTop = Math.round(top);
+        });
+      } catch (err) {
+        this.tooltipVisible = false;
+        this.tooltipHtml = '';
+      }
+    },
+    hidePacketTooltip() {
+      this.tooltipVisible = false;
+      this.tooltipHtml = '';
+    },
   },
   async mounted() {
     await this.refreshGameHistory();
@@ -1492,6 +1753,51 @@ export default {
       console.error('blockFriendListUpdate init', e);
     }
 
+    // New incoming: ARTICLES_PAGE (681) initial fetch
+    try {
+      const aCfg = await window.go.main.App.GetBlockArticlesPageConfig();
+      if (typeof aCfg === 'string') {
+        try {
+          const parsed = JSON.parse(aCfg || '{}') || {};
+          this.blockArticlesPage = !!parsed.enabled;
+        } catch (e) {}
+      } else if (aCfg) {
+        this.blockArticlesPage = !!aCfg.enabled;
+      }
+    } catch (e) {
+      console.error('blockArticlesPage init', e);
+    }
+
+    // New incoming: FAVOURITEROOMRESULTS (61) initial fetch
+    try {
+      const fCfg = await window.go.main.App.GetBlockFavouriteRoomResultsConfig();
+      if (typeof fCfg === 'string') {
+        try {
+          const parsed = JSON.parse(fCfg || '{}') || {};
+          this.blockFavouriteRoomResults = !!parsed.enabled;
+        } catch (e) {}
+      } else if (fCfg) {
+        this.blockFavouriteRoomResults = !!fCfg.enabled;
+      }
+    } catch (e) {
+      console.error('blockFavouriteRoomResults init', e);
+    }
+
+    // New incoming: CALENDAR_EVENTS (683) initial fetch
+    try {
+      const cCfg = await window.go.main.App.GetBlockCalendarEventsConfig();
+      if (typeof cCfg === 'string') {
+        try {
+          const parsed = JSON.parse(cCfg || '{}') || {};
+          this.blockCalendarEvents = !!parsed.enabled;
+        } catch (e) {}
+      } else if (cCfg) {
+        this.blockCalendarEvents = !!cCfg.enabled;
+      }
+    } catch (e) {
+      console.error('blockCalendarEvents init', e);
+    }
+
     // Outgoing initial fetches
     try {
       const outRec = await window.go.main.App.GetBlockRecommendedRoomsOutgoingConfig();
@@ -1536,6 +1842,51 @@ export default {
       console.error('blockPollEventEligibilityOutgoing init', e);
     }
 
+    // New outgoing: GET_PAGE_ARTICLES (680) initial fetch
+    try {
+      const outA = await window.go.main.App.GetBlockGetPageArticlesOutgoingConfig();
+      if (typeof outA === 'string') {
+        try {
+          const parsed = JSON.parse(outA || '{}') || {};
+          this.blockGetPageArticlesOutgoing = !!parsed.enabled;
+        } catch (e) {}
+      } else if (outA) {
+        this.blockGetPageArticlesOutgoing = !!outA.enabled;
+      }
+    } catch (e) {
+      console.error('blockGetPageArticlesOutgoing init', e);
+    }
+
+    // New outgoing: GET_CALENDAR_EVENTS (682) initial fetch
+    try {
+      const outC = await window.go.main.App.GetBlockGetCalendarEventsOutgoingConfig();
+      if (typeof outC === 'string') {
+        try {
+          const parsed = JSON.parse(outC || '{}') || {};
+          this.blockGetCalendarEventsOutgoing = !!parsed.enabled;
+        } catch (e) {}
+      } else if (outC) {
+        this.blockGetCalendarEventsOutgoing = !!outC.enabled;
+      }
+    } catch (e) {
+      console.error('blockGetCalendarEventsOutgoing init', e);
+    }
+
+    // New outgoing: FRIENDLIST_UPDATE (15) initial fetch
+    try {
+      const outF = await window.go.main.App.GetBlockFriendListUpdateOutgoingConfig();
+      if (typeof outF === 'string') {
+        try {
+          const parsed = JSON.parse(outF || '{}') || {};
+          this.blockFriendListUpdateOutgoing = !!parsed.enabled;
+        } catch (e) {}
+      } else if (outF) {
+        this.blockFriendListUpdateOutgoing = !!outF.enabled;
+      }
+    } catch (e) {
+      console.error('blockFriendListUpdateOutgoing init', e);
+    }
+
     window.runtime.EventsOn("blockSlideObjectBundleUpdate", (jsonStr) => {
       try {
         const parsed = JSON.parse(jsonStr || '{}') || {};
@@ -1547,6 +1898,27 @@ export default {
       try {
         const parsed = JSON.parse(jsonStr || '{}') || {};
         this.blockStatusEffects = !!parsed.enabled;
+      } catch (e) {}
+    });
+
+    window.runtime.EventsOn("blockArticlesPageUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.blockArticlesPage = !!parsed.enabled;
+      } catch (e) {}
+    });
+
+    window.runtime.EventsOn("blockFavouriteRoomResultsUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.blockFavouriteRoomResults = !!parsed.enabled;
+      } catch (e) {}
+    });
+
+    window.runtime.EventsOn("blockCalendarEventsUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.blockCalendarEvents = !!parsed.enabled;
       } catch (e) {}
     });
 
@@ -1583,6 +1955,27 @@ export default {
       try {
         const parsed = JSON.parse(jsonStr || '{}') || {};
         this.blockRecommendedRoomsOutgoing = !!parsed.enabled;
+      } catch (e) {}
+    });
+
+    window.runtime.EventsOn("blockGetPageArticlesOutgoingUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.blockGetPageArticlesOutgoing = !!parsed.enabled;
+      } catch (e) {}
+    });
+
+    window.runtime.EventsOn("blockGetCalendarEventsOutgoingUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.blockGetCalendarEventsOutgoing = !!parsed.enabled;
+      } catch (e) {}
+    });
+
+    window.runtime.EventsOn("blockFriendListUpdateOutgoingUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.blockFriendListUpdateOutgoing = !!parsed.enabled;
       } catch (e) {}
     });
 
@@ -1857,6 +2250,85 @@ input[type="text"]::placeholder {
 .casino-status.awaiting {
   background: #f1c40f;
   color: #111;
+}
+
+/* Packet info tooltip */
+.packet-info {
+  position: relative;
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  font-size: 12px;
+  color: #9ec5ff;
+  background: rgba(255,255,255,0.02);
+  border-radius: 50%;
+  text-align: center;
+  line-height: 18px;
+  cursor: default;
+}
+.packet-info .tooltip {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #111;
+  color: #fff;
+  padding: 8px;
+  border-radius: 6px;
+  width: 260px;
+  font-size: 12px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+  z-index: 9999;
+  text-align: left;
+}
+.packet-info .tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 6px;
+  border-style: solid;
+  border-color: #111 transparent transparent transparent;
+}
+
+/* Fixed tooltip element rendered at root and positioned via JS */
+.packet-tooltip {
+  position: fixed;
+  z-index: 2147483647;
+  background: #111;
+  color: #fff;
+  padding: 8px;
+  border-radius: 6px;
+  width: 320px;
+  font-size: 12px;
+  box-shadow: 0 8px 26px rgba(0,0,0,0.6);
+  pointer-events: none;
+  text-align: left;
+}
+
+.packet-tooltip::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 6px;
+  border-style: solid;
+  border-color: #111 transparent transparent transparent;
+  top: 100%;
+}
+
+.packet-tooltip .tooltip-header {
+  font-weight: 700;
+  margin-bottom: 6px;
+  color: #ffd700;
+  font-size: 13px;
+}
+.packet-tooltip .tooltip-body {
+  color: #e6e6e6;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .game-guide-header {

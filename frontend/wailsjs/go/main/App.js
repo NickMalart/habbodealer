@@ -34,8 +34,32 @@ export function GetAutoShoutConfig() {
   return window['go']['main']['App']['GetAutoShoutConfig']();
 }
 
+export function GetBlockArticlesPageConfig() {
+  return window['go']['main']['App']['GetBlockArticlesPageConfig']();
+}
+
+export function GetBlockCalendarEventsConfig() {
+  return window['go']['main']['App']['GetBlockCalendarEventsConfig']();
+}
+
+export function GetBlockFavouriteRoomResultsConfig() {
+  return window['go']['main']['App']['GetBlockFavouriteRoomResultsConfig']();
+}
+
 export function GetBlockFriendListUpdateConfig() {
   return window['go']['main']['App']['GetBlockFriendListUpdateConfig']();
+}
+
+export function GetBlockFriendListUpdateOutgoingConfig() {
+  return window['go']['main']['App']['GetBlockFriendListUpdateOutgoingConfig']();
+}
+
+export function GetBlockGetCalendarEventsOutgoingConfig() {
+  return window['go']['main']['App']['GetBlockGetCalendarEventsOutgoingConfig']();
+}
+
+export function GetBlockGetPageArticlesOutgoingConfig() {
+  return window['go']['main']['App']['GetBlockGetPageArticlesOutgoingConfig']();
 }
 
 export function GetBlockPollEventEligibilityOutgoingConfig() {
@@ -154,8 +178,32 @@ export function ToggleAutoShout(arg1) {
   return window['go']['main']['App']['ToggleAutoShout'](arg1);
 }
 
+export function ToggleBlockArticlesPage(arg1) {
+  return window['go']['main']['App']['ToggleBlockArticlesPage'](arg1);
+}
+
+export function ToggleBlockCalendarEvents(arg1) {
+  return window['go']['main']['App']['ToggleBlockCalendarEvents'](arg1);
+}
+
+export function ToggleBlockFavouriteRoomResults(arg1) {
+  return window['go']['main']['App']['ToggleBlockFavouriteRoomResults'](arg1);
+}
+
 export function ToggleBlockFriendListUpdate(arg1) {
   return window['go']['main']['App']['ToggleBlockFriendListUpdate'](arg1);
+}
+
+export function ToggleBlockFriendListUpdateOutgoing(arg1) {
+  return window['go']['main']['App']['ToggleBlockFriendListUpdateOutgoing'](arg1);
+}
+
+export function ToggleBlockGetCalendarEventsOutgoing(arg1) {
+  return window['go']['main']['App']['ToggleBlockGetCalendarEventsOutgoing'](arg1);
+}
+
+export function ToggleBlockGetPageArticlesOutgoing(arg1) {
+  return window['go']['main']['App']['ToggleBlockGetPageArticlesOutgoing'](arg1);
 }
 
 export function ToggleBlockPollEventEligibilityOutgoing(arg1) {
