@@ -105,7 +105,7 @@ func (a *App) evaluatePokerHand() {
 			a.AddLogMsg(fmt.Sprintf("[PAYOUT] player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
 			log.Printf("[PAYOUT] player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID)
 			resetPayoutRetryState()
-			startPayout(a, payoutTargetID, payoutTargetName)
+			a.offerRisk(payoutTargetID, payoutTargetName)
 		} else {
 			a.setCurrentGameHistoryResults(playerHand, hand, a.getCurrentDealerName(), "Completed", true)
 			a.noteCurrentGameHistory(winnerMsg)
@@ -339,7 +339,7 @@ func (a *App) finalizeBlackjackRound(playerWins bool, reason string) {
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT] 21 player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
 		log.Printf("[PAYOUT] 21 player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID)
 		resetPayoutRetryState()
-		startPayout(a, payoutTargetID, payoutTargetName)
+		a.offerRisk(payoutTargetID, payoutTargetName)
 		return
 	}
 

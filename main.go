@@ -208,8 +208,14 @@ var (
 	// whether a subsequent TRADE_ITEMS packet actually changes the accepted
 	// contents or merely restores them; allows re-arming auto-accept on
 	// invalid->valid transitions when appropriate.
-	partnerAcceptedSnapshot    []TradeItem
-	gameBetItems               []TradeItem
+	partnerAcceptedSnapshot []TradeItem
+	gameBetItems            []TradeItem
+	// Risk offer state
+	awaitingRiskDecision       bool
+	awaitingRiskPartnerID      int
+	awaitingRiskPartnerName    string
+	awaitingRiskMax            int
+	awaitingRiskSessionID      int
 	stripScanMu                sync.Mutex
 	stripScanActive            bool
 	stripScanSessionID         = 0
@@ -3268,6 +3274,104 @@ func payoutRequirementsFromBetItems(betItems []TradeItem) map[string]int {
 		required[item.Name] += item.Quantity * 2
 	}
 	return required
+}
+
+// computeRiskLimits returns the maximum additional units the dealer can allow
+// the player to risk for each bet item. It respects dealer inventory and the
+// configured per-item cap. It refreshes the hand snapshot to get fresh counts.
+func (a *App) computeRiskLimits(betItems []TradeItem) map[string]int {
+	limits := map[string]int{}
+	if len(betItems) == 0 {
+		return limits
+	}
+
+	if ok := a.forceRefreshHandSnapshot("risk offer"); !ok {
+		a.AddLogMsg("[RISK] failed to refresh hand snapshot; skipping risk limits")
+		return limits
+	}
+
+	snap := snapshotHandItemIDs()
+	for _, b := range betItems {
+		dealerCount := len(snap[b.Name])
+		initialRequired := b.Quantity * 2
+
+		extraCapacity := 0
+		if dealerCount > initialRequired {
+			extraCapacity = (dealerCount - initialRequired) / 2
+		}
+
+		configCap := maxTradeQuantityPerItem - b.Quantity
+		if configCap < 0 {
+			configCap = 0
+		}
+
+		maxRisk := extraCapacity
+		if configCap < maxRisk {
+			maxRisk = configCap
+		}
+		if maxRisk < 0 {
+			maxRisk = 0
+		}
+		limits[b.Name] = maxRisk
+	}
+
+	return limits
+}
+
+// offerRisk prompts the winning player allowing them to risk additional items.
+// If accepted the bet quantities are increased and payout proceeds normally.
+func (a *App) offerRisk(targetID int, targetName string) {
+	if len(gameBetItems) == 0 {
+		startPayout(a, targetID, targetName)
+		return
+	}
+
+	// compute per-item limits
+	limits := a.computeRiskLimits(gameBetItems)
+
+	// For now support single-item bet flow; fall back to immediate payout
+	if len(gameBetItems) != 1 {
+		a.AddLogMsg("[RISK] multiple bet items; skipping risk offer")
+		startPayout(a, targetID, targetName)
+		return
+	}
+
+	item := gameBetItems[0]
+	max := limits[item.Name]
+	if max <= 0 {
+		a.AddLogMsg(fmt.Sprintf("[RISK] no available risk for %s; continuing payout", item.Name))
+		startPayout(a, targetID, targetName)
+		return
+	}
+
+	// set awaiting state
+	awaitingRiskDecision = true
+	awaitingRiskPartnerID = targetID
+	awaitingRiskPartnerName = targetName
+	awaitingRiskMax = max
+	awaitingRiskSessionID++
+	session := awaitingRiskSessionID
+
+	a.noteCurrentGameHistory(fmt.Sprintf("Risk offered: max %d for %s", max, item.Name))
+
+	playerTotal := item.Quantity * 2
+	msg := fmt.Sprintf("%s Wins — %dx %s. Player total: %d. Max risk: %d. Reply 'risk3' or 'r 3' to risk, or 'keep' to finish.", targetName, item.Quantity, item.Name, playerTotal, max)
+	ext.Send(out.SHOUT, msg)
+	a.AddLogMsg(fmt.Sprintf("[RISK] offered to %s max=%d for %s", targetName, max, item.Name))
+
+	// timeout: wait for response, otherwise proceed to payout
+	go func(sess int, tID int, tName string) {
+		time.Sleep(12 * time.Second)
+		if sess != awaitingRiskSessionID {
+			return
+		}
+		if !awaitingRiskDecision {
+			return
+		}
+		awaitingRiskDecision = false
+		a.AddLogMsg("[RISK] no response to risk offer; proceeding to payout")
+		startPayout(a, tID, tName)
+	}(session, targetID, targetName)
 }
 
 func ownTradeOfferCounts() map[string]int {
@@ -8682,6 +8786,52 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		} else {
 			a.beginTriRound("low")
 		}
+		return
+	}
+
+	if awaitingRiskDecision {
+		// Only accept responses from the expected partner (by index or name)
+		indexMatch := awaitingRiskPartnerID > 0 && index == awaitingRiskPartnerID
+		nameMatch := awaitingRiskPartnerName != "" && strings.EqualFold(senderName, awaitingRiskPartnerName)
+		if !indexMatch && !nameMatch {
+			a.AddLogMsg(fmt.Sprintf("[RISK] ignoring %q from %q (index %d); awaiting %q (index %d)", msg, senderName, index, awaitingRiskPartnerName, awaitingRiskPartnerID))
+			return
+		}
+
+		clean := strings.ToLower(strings.TrimSpace(msg))
+
+		// Accept keep/trade (compat)
+		if clean == "keep" || clean == "trade" {
+			e.Block()
+			awaitingRiskDecision = false
+			a.noteCurrentGameHistory("Player chose keep (no additional risk)")
+			startPayout(a, payoutTargetID, payoutTargetName)
+			return
+		}
+
+		// Accept forms: r3, r 3, risk3, risk 3
+		riskRe := regexp.MustCompile(`^(?:r|risk)\s*(\d+)$`)
+		if m := riskRe.FindStringSubmatch(clean); len(m) == 2 {
+			n, _ := strconv.Atoi(m[1])
+			if n <= 0 {
+				ext.Send(out.SHOUT, fmt.Sprintf("%s Invalid risk amount; reply 'risk N' where N is 1..%d", senderName, awaitingRiskMax))
+				return
+			}
+			if n > awaitingRiskMax {
+				n = awaitingRiskMax
+			}
+			if len(gameBetItems) > 0 {
+				gameBetItems[0].Quantity += n
+				a.noteCurrentGameHistory(fmt.Sprintf("Player accepted risk: %d x %s", n, gameBetItems[0].Name))
+			}
+			e.Block()
+			awaitingRiskDecision = false
+			ext.Send(out.SHOUT, fmt.Sprintf("%s accepted risk %d (max %d)", senderName, n, awaitingRiskMax))
+			startPayout(a, payoutTargetID, payoutTargetName)
+			return
+		}
+
+		// Ignore other chat while awaiting risk
 		return
 	}
 
