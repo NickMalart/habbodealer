@@ -133,6 +133,9 @@ var (
 	lastTradeCoverageShoutAt time.Time
 	lastTradeLimitShoutAt    time.Time
 	tradeShoutCooldown       = 45 * time.Second
+	// Track recent forced-close to avoid immediate reopen announcements
+	lastTradeCloseAt       time.Time
+	reopenAnnounceCooldown = 15 * time.Second
 	// Whether the partner has accepted during the current open trade.
 	// Keep this sticky until the trade closes so we can re-arm auto-accept
 	// after temporary limit violations are corrected without forcing the
@@ -368,19 +371,29 @@ func getTradeLimitViolation(items []TradeItem) *tradeLimitViolation {
 	if len(items) == 0 {
 		return nil
 	}
+	// Build canonical quantity map so we count unique types consistently
+	qByCanon := make(map[string]int)
+	for _, it := range items {
+		if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+			qByCanon[k] += it.Quantity
+		} else {
+			qByCanon[strings.ToLower(strings.TrimSpace(it.Name))] += it.Quantity
+		}
+	}
 	v := &tradeLimitViolation{
-		UniqueCount: len(items),
+		UniqueCount: len(qByCanon),
 		MaxUnique:   maxTradeUniqueItems,
 		MaxPerItem:  maxTradeQuantityPerItem,
 	}
 	if v.UniqueCount > v.MaxUnique {
 		v.TooManyUniqueItems = true
 	}
-	for _, it := range items {
-		over := it.Quantity > v.MaxPerItem
-		log.Printf("[TRADE_LIMIT_DEBUG] check item=%q qty=%d max=%d over=%t", it.Name, it.Quantity, v.MaxPerItem, over)
+	// Detect any canonicalized entries exceeding per-item limit.
+	for name, qty := range qByCanon {
+		over := qty > v.MaxPerItem
+		log.Printf("[TRADE_LIMIT_DEBUG] check canon=%q qty=%d max=%d over=%t", name, qty, v.MaxPerItem, over)
 		if over {
-			v.OverLimitItems = append(v.OverLimitItems, it)
+			v.OverLimitItems = append(v.OverLimitItems, TradeItem{Name: name, Quantity: qty})
 		}
 	}
 	if len(v.OverLimitItems) > 0 {
@@ -438,6 +451,25 @@ func equalTradeItemLists(a, b []TradeItem) bool {
 		}
 	}
 	return true
+}
+
+// shoutSafe sends a public shout respecting local mute state and adds a small delay
+// to avoid immediate bursts when multiple callers attempt to shout at once.
+func (a *App) shoutSafe(msg string) {
+	a.AddLogMsg(fmt.Sprintf("[SHOUT_SAFE] %q", msg))
+	// Respect global chat-disabled flag first, then local mute state.
+	if ChatIsDisabled {
+		a.AddLogMsg("[SHOUT_SAFE] suppressed because chat is disabled")
+		return
+	}
+	if isMuted {
+		a.AddLogMsg("[SHOUT_SAFE] suppressed due to mute")
+		return
+	}
+	go func(m string) {
+		time.Sleep(350 * time.Millisecond)
+		ext.Send(out.SHOUT, m)
+	}(msg)
 }
 
 // rejectTradeForLimitViolation announces the reason, closes the trade and reopens the dealer.
@@ -2090,7 +2122,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				lastTradeLimitNotice = ""
 				tradeLimitWasActive = false
 				a.AddLogMsg("[TRADE_LIMIT] violation resolved; trade is valid again")
-				ext.Send(out.SHOUT, "Trade is back within limits, accept again if needed")
+				a.shoutSafe("Trade is back within limits, accept again if needed")
 			}
 
 			if !wasValid && isValid {
@@ -2249,7 +2281,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 			completeMsg := fmt.Sprintf("Trade Completed: \"%s\"", partnerName)
 			a.AddLogMsg(fmt.Sprintf("[TRADE_COMPLETED] shouting: %q", completeMsg))
-			ext.Send(out.SHOUT, completeMsg)
+			a.shoutSafe(completeMsg)
 		} else {
 			a.AddLogMsg("[TRADE_COMPLETED #112] trade completed, sending trade summary")
 
@@ -2659,7 +2691,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN] unresolved partner from strict parsed USERS28 state, cancelling trade: %s", notify))
 				e.Block()
 				ext.Send(out.TRADE_CLOSE)
-				ext.Send(out.SHOUT, notify)
+				a.shoutSafe(notify)
 				return
 			}
 		}
@@ -2670,7 +2702,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		}
 		if shouldAnnounceTradeOpen {
 			a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN] shouting: %q", openMsg))
-			ext.Send(out.SHOUT, openMsg)
+			a.shoutSafe(openMsg)
 		} else {
 			a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN] suppressed public shout during payout flow: %q", openMsg))
 		}
@@ -2786,7 +2818,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		if !tradeCompleted && !tradeCloseAnnounced && !suppressCloseAnnouncement {
 			closeMsg := fmt.Sprintf("Trade Closed: \"%s\"", partnerName)
 			a.AddLogMsg(fmt.Sprintf("[TRADE_CLOSE] shouting: %q", closeMsg))
-			ext.Send(out.SHOUT, closeMsg)
+			a.shoutSafe(closeMsg)
 			tradeCloseAnnounced = true
 		} else if suppressCloseAnnouncement {
 			a.AddLogMsg("[TRADE_GUARD] suppressed trade closed announcement for forced guard-close")
@@ -3695,7 +3727,7 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 
 		reminder := "Shout pkr, 21, 13, Tri"
 		a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] 30s no response, repeating prompt for %s", player))
-		ext.Send(out.SHOUT, reminder)
+		a.shoutSafe(reminder)
 
 		// Another 30 seconds
 		time.Sleep(30 * time.Second)
@@ -3716,10 +3748,10 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 
 		a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] final timeout for %s", player))
 
-		ext.Send(out.SHOUT, closeMsg)
+		a.shoutSafe(closeMsg)
 		time.Sleep(1200 * time.Millisecond)
 
-		ext.Send(out.SHOUT, flagMsg)
+		a.shoutSafe(flagMsg)
 
 		a.markCurrentGameHistoryIssue(
 			fmt.Sprintf("No game choice response from %s after 60 seconds", player),
@@ -3779,8 +3811,11 @@ func startShortageMonitor(a *App, timeout time.Duration) {
 					partnerName = "Player"
 				}
 				a.AddLogMsg(fmt.Sprintf("[TRADE_COVERAGE] shortage unresolved; force-closing trade with %s", partnerName))
-				ext.Send(out.SHOUT, "Sorry none avabile to see my hand - rollorigins.club")
+				a.shoutSafe("Sorry none avabile to see my hand - rollorigins.club")
+				// Give the shout a moment to be delivered before closing the trade.
+				time.Sleep(800 * time.Millisecond)
 				ext.Send(out.TRADE_CLOSE)
+				lastTradeCloseAt = time.Now()
 				stopShortageMonitor()
 				return
 			}
@@ -3837,8 +3872,11 @@ func startTradeLimitMonitor(a *App, timeout time.Duration) {
 					partnerName = "Player"
 				}
 				a.AddLogMsg(fmt.Sprintf("[TRADE_LIMIT] unresolved; force-closing trade with %s", partnerName))
-				ext.Send(out.SHOUT, "Trade still over limit; closing now.")
+				a.shoutSafe("Trade still over limit; closing now.")
+				// Allow the shout to go out before closing to avoid bursty sends.
+				time.Sleep(800 * time.Millisecond)
 				ext.Send(out.TRADE_CLOSE)
+				lastTradeCloseAt = time.Now()
 				stopTradeLimitMonitor()
 				return
 			}
@@ -4909,9 +4947,18 @@ func (a *App) parseTradeItemsPacket(data []byte) []TradeItem {
 		// Successful parse: record and log.
 		a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] parsed field=%q -> name=%q qty=%d", fieldStr, itemName, qty))
 
-		counts[itemName] += qty
-		if _, exists := rawByName[itemName]; !exists {
-			rawByName[itemName] = fieldStr
+		// Canonicalize parsed name to a stable class key before aggregating.
+		canon := itemName
+		if k, ok := normalizeClassKeyWithVariant(itemName); ok {
+			canon = k
+		} else {
+			canon = strings.ToLower(strings.TrimSpace(itemName))
+		}
+		a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] canonicalized %q -> %q", itemName, canon))
+
+		counts[canon] += qty
+		if _, exists := rawByName[canon]; !exists {
+			rawByName[canon] = fieldStr
 		}
 	}
 
@@ -4991,20 +5038,17 @@ func (a *App) extractTradeItemAndQuantity(field string) (string, int, bool) {
 		// known sources (catalog or frozen/live hand). This prevents accepting
 		// token-like headers that resemble class names but are not present in
 		// the snapshot we send to the API (the authoritative view).
-		if normalized, ok := normalizeClassKeyWithVariant(match); ok {
+		if _, ok := normalizeClassKeyWithVariant(match); ok {
 			// Prefer the verified path when available (catalog/hand/snapshot check).
 			if name, qty, ok2 := a.normalizeTradeFieldClassWithQty(match); ok2 {
 				a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS_PARSE_FALLBACK] matched %q inside %q (verified)", match, field))
 				return name, qty, true
 			}
-			// Verification failed: accept the normalized class name from the
-			// incoming TRADE_ITEMS payload anyway so the UI and coverage checks
-			// see the offered name immediately. The frozen hand snapshot (or
-			// later verification) will still determine whether the dealer can
-			// cover the item; this avoids silently dropping real items when the
-			// snapshot isn't ready yet.
-			a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS_PARSE_FALLBACK] strict fallback found %q inside %q but verification failed; accepting unverified fallback", normalized, field))
-			return normalized, 1, true
+			// Verification failed: do NOT accept unverified strict fallback.
+			// Rejecting here avoids false-positives from token-like headers
+			// that resemble class names but are not actually offered.
+			a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS_PARSE_FALLBACK] strict fallback matched %q inside %q but verification failed; rejecting unverified fallback", match, field))
+			// fallthrough to looser fallback candidates below
 		}
 		a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] fallback strict match %q rejected by normalisation/raw-check", match))
 	}
@@ -5497,8 +5541,14 @@ func (a *App) reopenDealerIdle(reason string) {
 	if shouldAnnounceDealerOpen() {
 		dealerTradeWindowOpen = true
 		openMsg := a.dealerOpenMessage()
-		a.AddLogMsg(fmt.Sprintf("[TRADE_REOPEN] shouting: %q (%s)", openMsg, reason))
-		go sendMessageWithDelay(openMsg)
+		// Suppress an immediate reopen announcement if we just forced a close.
+		if !lastTradeCloseAt.IsZero() && time.Since(lastTradeCloseAt) < reopenAnnounceCooldown {
+			a.AddLogMsg(fmt.Sprintf("[TRADE_REOPEN] suppressing open announcement due to recent forced close (%s)", reason))
+			dealerTradeWindowOpen = false
+		} else {
+			a.AddLogMsg(fmt.Sprintf("[TRADE_REOPEN] shouting: %q (%s)", openMsg, reason))
+			go sendMessageWithDelay(openMsg)
+		}
 	} else {
 		dealerTradeWindowOpen = false
 	}
@@ -6309,8 +6359,8 @@ func (a *App) notifyTradeQuantityCoverage() {
 
 	go func(m string, shout bool) {
 		if shout {
-			time.Sleep(350 * time.Millisecond)
-			ext.Send(out.SHOUT, m)
+			// Use centralized shout helper which respects mute state.
+			a.shoutSafe(m)
 		}
 
 		time.Sleep(1200 * time.Millisecond)
