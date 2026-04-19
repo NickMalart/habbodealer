@@ -14,14 +14,14 @@ import (
 var assets embed.FS
 
 var ext = g.NewExt(g.ExtInfo{
-	Title:       "[AIO] Gamba Suite",
-	Description: "Pkr, 13/21 and Tri dice automated rolling and resetting with in-chat hand evaluation. The all-in-one dice management plugin.",
-	Version:     "2.0.1",
-	Author:      "JTD",
+	Title:       "[RO] All In One Dealer",
+	Description: "A tool to assist with card games in RO, including poker and blackjack.",
+	Version:     "1.0.0",
+	Author:      "Dubbo",
 })
 
 var (
-	CurrentVersion = "2.0.1"
+	CurrentVersion = "1.0.0"
 )
 
 var app *App
@@ -34,7 +34,7 @@ func main() {
 	app = NewApp(ext, assets)
 	setupExt()
 	err := wails.Run(&options.App{
-		Title:  "[AIO] Gamba Suite by JTD",
+		Title:  "[RO] All In One Dealer by JTD",
 		Width:  500,
 		Height: 890,
 		AssetServer: &assetserver.Options{

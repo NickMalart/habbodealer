@@ -113,7 +113,7 @@ Gamba Suite is a powerful tool for managing, rolling, and resetting dice with au
 If the program encounters an issue or failure, please follow the steps below to reboot it effectively:
 
 - **Step 1:**
-Go to the G-Earth Extensions tab and find the `[AIO] Gamba Suite` extension in the list.
+Go to the G-Earth Extensions tab and find the `Dubbo` extension in the list.
 
 - **Step 2:**
 Locate and click the **red door icon** with the red arrow. This will close the program or extension.

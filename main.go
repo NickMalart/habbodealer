@@ -5752,6 +5752,15 @@ func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 // sendLiveDealerStatus posts a compact status update (dealer open, dealer name)
 // to the configured live-dealer webhook. Runs asynchronously and logs status.
 func (a *App) sendLiveDealerStatus(open bool, dealerName string) {
+	// Do not send live-dealer webhook until the casino/dice setup is fully ready.
+	mutex.Lock()
+	ready := casinoReady
+	mutex.Unlock()
+	if !ready {
+		a.AddLogMsg("[LIVE_DEALER_STATUS] skipped send: casino not ready")
+		return
+	}
+
 	go func(dealerOpen bool, name string) {
 		payload := LiveDealerStatusPayload{
 			LastSeenAt:         time.Now().UTC().Format(time.RFC3339),
