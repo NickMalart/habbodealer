@@ -3509,17 +3509,23 @@ func (a *App) offerRisk(targetID int, targetName string) {
 
 	// set awaiting state using the dealer-computed cap (reflects dealer stock)
 	playerTotal := item.Quantity * 2
+	// Cap displayed max by what the player actually owns so we don't offer more
+	// than they can risk. dealerMax already respects dealer stock and config cap.
+	displayMax := dealerMax
+	if playerTotal < displayMax {
+		displayMax = playerTotal
+	}
 	awaitingRiskDecision = true
 	awaitingRiskPartnerID = targetID
 	awaitingRiskPartnerName = targetName
-	awaitingRiskMax = dealerMax
+	awaitingRiskMax = displayMax
 	awaitingRiskSessionID++
 	session := awaitingRiskSessionID
-	a.noteCurrentGameHistory(fmt.Sprintf("Risk offered: dealerMax=%d qty=%d", dealerMax, item.Quantity))
+	a.noteCurrentGameHistory(fmt.Sprintf("Risk offered: dealerMax=%d playerTotal=%d qty=%d", dealerMax, playerTotal, item.Quantity))
 
-	msg := fmt.Sprintf("%s Wins — %dx. Total: %d. Max risk: %d. Reply 'rN' (e.g. r3) to risk or 'keep' to finish.", targetName, item.Quantity, playerTotal, dealerMax)
+	msg := fmt.Sprintf("%s Wins — %dx. Total: %d. Max risk: %d. Reply 'rN' (e.g. r3) to risk or 'keep' to finish.", targetName, item.Quantity, playerTotal, displayMax)
 	ext.Send(out.SHOUT, msg)
-	a.AddLogMsg(fmt.Sprintf("[RISK] offered to %s dealerMax=%d qty=%d", targetName, dealerMax, item.Quantity))
+	a.AddLogMsg(fmt.Sprintf("[RISK] offered to %s dealerMax=%d displayMax=%d qty=%d", targetName, dealerMax, displayMax, item.Quantity))
 
 	// timeout: wait for response, otherwise proceed to payout
 	go func(sess int, tID int, tName string) {
@@ -9239,49 +9245,50 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 				return
 			}
 
-			// Final availability check: ensure dealer has enough unique items
-			// to satisfy the payout for the increased bet (payout = qty * 2).
+			// Final availability check: ensure dealer and player can satisfy the
+			// requested risk. The accepted risk becomes the new bet (replace),
+			// and any leftover the player kept remains as carryover.
 			if len(gameBetItems) > 0 {
 				item := &gameBetItems[0]
+
+				// player's current total after last win (what they physically hold)
+				currentPlayerTotal := item.Quantity * 2
+				if n > currentPlayerTotal {
+					e.Block()
+					ext.Send(out.SHOUT, fmt.Sprintf("%s You only have %d to risk; reply 'r%d' or less.", senderName, currentPlayerTotal, currentPlayerTotal))
+					return
+				}
+
 				// Fresh snapshot of dealer hand IDs and unique count
 				handSnap := snapshotHandItemIDs()
 				candidates := uniqueInts(handSnap[item.Name])
 				dealerCount := len(candidates)
-				// Maximum desired quantity that dealer can pay = floor(dealerCount/2)
-				maxDesired := dealerCount / 2
-				// Max extra we can accept beyond current bet
-				maxExtraFromDealer := maxDesired - item.Quantity
-				if maxExtraFromDealer < 0 {
-					maxExtraFromDealer = 0
-				}
-				// Also respect configured per-item max
-				configCap := maxTradeQuantityPerItem - item.Quantity
-				if configCap < 0 {
-					configCap = 0
-				}
+				// Maximum items dealer can pay for a given risk = floor(dealerCount/2)
+				maxDealerAccept := dealerCount / 2
 
-				// If dealer stock has fallen below the requested n, inform the player
-				// so they can re-reply with a lower amount.
-				if n > maxExtraFromDealer {
-					a.AddLogMsg(fmt.Sprintf("[RISK] requested %d > dealer capacity %d (unique=%d)", n, maxExtraFromDealer, dealerCount))
+				if n > maxDealerAccept {
+					a.AddLogMsg(fmt.Sprintf("[RISK] requested %d > dealer capacity %d (unique=%d)", n, maxDealerAccept, dealerCount))
 					e.Block()
-					ext.Send(out.SHOUT, fmt.Sprintf("%s Sorry I can only accept up to %d due to limited hand stock; reply 'r%d' to accept.", senderName, maxExtraFromDealer, maxExtraFromDealer))
+					ext.Send(out.SHOUT, fmt.Sprintf("%s Sorry I can only accept up to %d due to limited hand stock; reply 'r%d' to accept.", senderName, maxDealerAccept, maxDealerAccept))
 					return
 				}
 
-				if n > configCap {
-					n = configCap
+				// respect configured absolute per-item cap
+				if n > maxTradeQuantityPerItem {
+					n = maxTradeQuantityPerItem
 				}
 				if n <= 0 {
-					// Nothing can be accepted; proceed to payout instead.
 					a.noteCurrentGameHistory("Player attempted to accept risk but dealer cannot cover additional items; proceeding to payout")
 					e.Block()
 					awaitingRiskDecision = false
 					startPayout(a, payoutTargetID, payoutTargetName)
 					return
 				}
-				item.Quantity += n
-				a.noteCurrentGameHistory(fmt.Sprintf("Player accepted risk: %d x %s", n, item.Name))
+
+				// compute carryover and set new bet = the risked amount (replace, not add)
+				carryover := currentPlayerTotal - n
+				item.Quantity = n
+				a.noteCurrentGameHistory(fmt.Sprintf("Player accepted risk: %d x %s (carry=%d)", n, item.Name, carryover))
 			}
 			e.Block()
 			awaitingRiskDecision = false
