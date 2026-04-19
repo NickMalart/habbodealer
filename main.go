@@ -6266,10 +6266,27 @@ func (a *App) notifyTradeQuantityCoverage() {
 		return
 	}
 
-	// No grace timer now — close immediately with fixed message.
+	// No grace timer now — close immediately with an item-specific message.
 	stopShortageMonitor()
 
-	msg := "Sorry none avabile to see my hand - rollorigins.club"
+	// Build a concise human-friendly list of offending item names.
+	names := make([]string, 0, len(shortages))
+	for _, s := range shortages {
+		// Present the canonical name and a friendly version (underscores -> spaces,
+		// strip variant suffixes like *9 for readability).
+		nm := s.Name
+		base := strings.SplitN(nm, "*", 2)[0]
+		friendly := strings.ReplaceAll(base, "_", " ")
+		names = append(names, friendly)
+	}
+
+	var msg string
+	if len(names) == 1 {
+		msg = fmt.Sprintf("I don't have enough %s to pay out — please remove it from the trade.", names[0])
+	} else {
+		msg = fmt.Sprintf("I don't have enough %s to pay out — please remove those items from the trade.", strings.Join(names, ", "))
+	}
+
 	changed := msg != lastTradeCoverageNotice
 	lastTradeCoverageNotice = msg
 	lastTradeBlockNotice = msg
