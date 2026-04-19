@@ -3477,9 +3477,7 @@ func (a *App) computeRiskLimits(betItems []TradeItem) map[string]int {
 			extraCapacity = available / 2
 		}
 
-		// Respect configured per-item maximums taking into account what's
-		// already part of the bet and any items we've already offered.
-		configCap := maxTradeQuantityPerItem - b.Quantity - offeredCount
+		configCap := maxTradeQuantityPerItem
 		if configCap < 0 {
 			configCap = 0
 		}
@@ -3505,10 +3503,12 @@ func (a *App) offerRisk(targetID int, targetName string) {
 	riskOfferMu.Lock()
 	enabled := riskOfferEnabled
 	riskOfferMu.Unlock()
-	a.AddLogMsg(fmt.Sprintf("[RISK_DBG] offerRisk called: targetID=%d targetName=%q len(gameBetItems)=%d riskOfferEnabled=%t ChatIsDisabled=%t gameBetItems=%+v",
-		targetID, targetName, len(gameBetItems), enabled, ChatIsDisabled, gameBetItems))
 
-	if len(gameBetItems) == 0 {
+	betItems := cloneGameBetItems()
+	a.AddLogMsg(fmt.Sprintf("[RISK_DBG] offerRisk called: targetID=%d targetName=%q len(gameBetItems)=%d riskOfferEnabled=%t ChatIsDisabled=%t gameBetItems=%+v",
+		targetID, targetName, len(betItems), enabled, ChatIsDisabled, betItems))
+
+	if len(betItems) == 0 {
 		a.AddLogMsg(fmt.Sprintf("[RISK_DBG] offerRisk abort: no bet items; calling startPayout target=%d name=%q", targetID, targetName))
 		startPayout(a, targetID, targetName)
 		return
@@ -3521,17 +3521,17 @@ func (a *App) offerRisk(targetID int, targetName string) {
 		return
 	}
 
-	// compute per-item limits
-	limits := a.computeRiskLimits(gameBetItems)
+	// compute per-item limits from a stable snapshot of the current bet
+	limits := a.computeRiskLimits(betItems)
 
 	// For now support single-item bet flow; fall back to immediate payout
-	if len(gameBetItems) != 1 {
+	if len(betItems) != 1 {
 		a.AddLogMsg("[RISK_DBG] multiple bet items; skipping risk offer")
 		startPayout(a, targetID, targetName)
 		return
 	}
 
-	item := gameBetItems[0]
+	item := betItems[0]
 	dealerMax := limits[item.Name]
 	if dealerMax <= 0 {
 		a.AddLogMsg(fmt.Sprintf("[RISK_DBG] no available risk for %s; continuing payout", item.Name))
@@ -3539,7 +3539,6 @@ func (a *App) offerRisk(targetID int, targetName string) {
 		return
 	}
 
-	// set awaiting state using the dealer-computed cap (reflects dealer stock)
 	// Compute player's current total including any carryover from previous
 	// accepted-risk rounds so the displayed max is accurate.
 	gameCarryoversMu.Lock()
@@ -3552,6 +3551,12 @@ func (a *App) offerRisk(targetID int, targetName string) {
 	if playerTotal < displayMax {
 		displayMax = playerTotal
 	}
+	if displayMax <= 0 {
+		a.AddLogMsg("[RISK_DBG] computed display max <= 0; proceeding to payout")
+		startPayout(a, targetID, targetName)
+		return
+	}
+
 	awaitingRiskDecision = true
 	awaitingRiskPartnerID = targetID
 	awaitingRiskPartnerName = targetName
@@ -3577,6 +3582,9 @@ func (a *App) offerRisk(targetID int, targetName string) {
 			return
 		}
 		awaitingRiskDecision = false
+		awaitingRiskPartnerID = 0
+		awaitingRiskPartnerName = ""
+		awaitingRiskMax = 0
 		a.AddLogMsg("[RISK] no response to risk offer; proceeding to payout")
 		startPayout(a, tID, tName)
 	}(session, targetID, targetName)
@@ -3590,6 +3598,30 @@ func ownTradeOfferCounts() map[string]int {
 		counts[item.Name] += item.Quantity
 	}
 	return counts
+}
+
+func cloneGameBetItems() []TradeItem {
+	tradeItemsMu.Lock()
+	defer tradeItemsMu.Unlock()
+	items := make([]TradeItem, len(gameBetItems))
+	copy(items, gameBetItems)
+	return items
+}
+
+func replaceSingleGameBetQuantity(itemName string, quantity int) []TradeItem {
+	tradeItemsMu.Lock()
+	defer tradeItemsMu.Unlock()
+	items := make([]TradeItem, len(gameBetItems))
+	copy(items, gameBetItems)
+	for i := range items {
+		if items[i].Name == itemName {
+			items[i].Quantity = quantity
+		}
+	}
+	gameBetItems = items
+	updated := make([]TradeItem, len(gameBetItems))
+	copy(updated, gameBetItems)
+	return updated
 }
 
 func (a *App) ownTradeHasRequiredPayoutOffer(required map[string]int) (bool, string) {
@@ -6854,7 +6886,7 @@ func (a *App) sendTradeCompletionMessage() {
 	}
 
 	a.AddLogMsg("[TRADE_FLOW] calling beginGameHistory")
-	a.beginGameHistory(partnerName, gameBetItems)
+	a.beginGameHistory(partnerName, cloneGameBetItems())
 	a.AddLogMsg("[TRADE_FLOW] beginGameHistory returned")
 
 	first := fmt.Sprintf("%s what game do you want to play?", partnerName)
@@ -9286,6 +9318,9 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		if clean == "keep" || clean == "trade" {
 			e.Block()
 			awaitingRiskDecision = false
+			awaitingRiskPartnerID = 0
+			awaitingRiskPartnerName = ""
+			awaitingRiskMax = 0
 			a.noteCurrentGameHistory("Player chose keep (no additional risk)")
 			a.AddLogMsg(fmt.Sprintf("[RISK_DBG] player chose keep/trade; calling startPayout target=%d name=%q sender=%q", payoutTargetID, payoutTargetName, senderName))
 			startPayout(a, payoutTargetID, payoutTargetName)
@@ -9311,8 +9346,9 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			// Final availability check: ensure dealer and player can satisfy the
 			// requested risk. The accepted risk becomes the new bet (replace),
 			// and any leftover the player kept remains as carryover.
-			if len(gameBetItems) > 0 {
-				item := &gameBetItems[0]
+			betItems := cloneGameBetItems()
+			if len(betItems) > 0 {
+				item := betItems[0]
 
 				// player's current total after last win (what they physically hold).
 				// Include any carryover left from a previous accepted risk.
@@ -9323,6 +9359,14 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 				if n > currentPlayerTotal {
 					e.Block()
 					ext.Send(out.SHOUT, fmt.Sprintf("%s You only have %d to risk; reply 'r%d' or less.", senderName, currentPlayerTotal, currentPlayerTotal))
+					return
+				}
+
+				// Refresh the hand snapshot again before final acceptance so we do not
+				// accept risk from stale dealer stock counts.
+				if ok := a.forceRefreshHandSnapshot("risk accept"); !ok {
+					e.Block()
+					ext.Send(out.SHOUT, fmt.Sprintf("%s I could not refresh my hand stock. Please reply again in a moment.", senderName))
 					return
 				}
 
@@ -9348,8 +9392,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 					maxDealerAccept = available / 2
 				}
 
-				// Respect configured per-item cap
-				configCap := maxTradeQuantityPerItem - item.Quantity - offeredCount
+				configCap := maxTradeQuantityPerItem
 				if configCap < 0 {
 					configCap = 0
 				}
@@ -9357,33 +9400,42 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 					maxDealerAccept = configCap
 				}
 
-				if n > maxDealerAccept {
-					a.AddLogMsg(fmt.Sprintf("[RISK] requested %d > dealer capacity %d (dealerUnique=%d offered=%d available=%d)", n, maxDealerAccept, dealerUnique, offeredCount, available))
+				finalMax := maxDealerAccept
+				if currentPlayerTotal < finalMax {
+					finalMax = currentPlayerTotal
+				}
+
+				if n > finalMax {
+					a.AddLogMsg(fmt.Sprintf("[RISK] requested %d > final max %d (dealerUnique=%d offered=%d available=%d playerTotal=%d)", n, finalMax, dealerUnique, offeredCount, available, currentPlayerTotal))
 					e.Block()
-					ext.Send(out.SHOUT, fmt.Sprintf("%s Sorry I can only accept up to %d due to limited hand stock; reply 'r%d' to accept.", senderName, maxDealerAccept, maxDealerAccept))
+					if finalMax <= 0 {
+						ext.Send(out.SHOUT, fmt.Sprintf("%s Sorry I cannot accept any more risk right now; say keep to finish.", senderName))
+					} else {
+						ext.Send(out.SHOUT, fmt.Sprintf("%s Sorry I can only accept up to %d right now; reply 'r%d' or less.", senderName, finalMax, finalMax))
+					}
 					return
 				}
 
-				// respect configured absolute per-item cap
-				if n > maxTradeQuantityPerItem {
-					n = maxTradeQuantityPerItem
-				}
-				if n <= 0 {
+				if finalMax <= 0 {
 					a.noteCurrentGameHistory("Player attempted to accept risk but dealer cannot cover additional items; proceeding to payout")
 					e.Block()
 					awaitingRiskDecision = false
-					a.AddLogMsg(fmt.Sprintf("[RISK_DBG] computed maxDealerAccept <=0; falling back to payout target=%d name=%q sender=%q", payoutTargetID, payoutTargetName, senderName))
+					awaitingRiskPartnerID = 0
+					awaitingRiskPartnerName = ""
+					awaitingRiskMax = 0
+					a.AddLogMsg(fmt.Sprintf("[RISK_DBG] computed finalMax <=0; falling back to payout target=%d name=%q sender=%q", payoutTargetID, payoutTargetName, senderName))
 					startPayout(a, payoutTargetID, payoutTargetName)
 					return
 				}
 
 				// compute carryover and set new bet = the risked amount (replace, not add)
 				carryover := currentPlayerTotal - n
-				item.Quantity = n
+				updatedBetItems := replaceSingleGameBetQuantity(item.Name, n)
 				gameCarryoversMu.Lock()
 				gameCarryovers[item.Name] = carryover
 				gameCarryoversMu.Unlock()
-				a.noteCurrentGameHistory(fmt.Sprintf("Player accepted risk: %d x %s (carry=%d)", n, item.Name, carryover))
+				a.noteCurrentGameHistory(fmt.Sprintf("Player accepted risk: %d x %s (carry=%d total=%d)", n, item.Name, carryover, currentPlayerTotal))
+				betItems = updatedBetItems
 			}
 			e.Block()
 			awaitingRiskDecision = false
@@ -9401,7 +9453,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 				partnerName = "Player"
 			}
 			a.AddLogMsg(fmt.Sprintf("[RISK] starting new round after accepted risk for %s", partnerName))
-			a.beginGameHistory(partnerName, gameBetItems)
+			a.beginGameHistory(partnerName, cloneGameBetItems())
 			first := fmt.Sprintf("%s what game do you want to play?", partnerName)
 			second := "Shout pkr, 21, 13, TriH, TriL"
 			awaitingGameChoice = true
