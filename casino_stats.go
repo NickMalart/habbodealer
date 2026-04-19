@@ -162,7 +162,7 @@ func normalizeGameName(game string) string {
 		return "Tri"
 	}
 	switch g {
-	case "poker":
+	case "poker", "pkr":
 		return "Poker"
 	case "21", "blackjack", "black jack":
 		return "21"
@@ -330,14 +330,17 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 		stats.ByGame[g] = gs
 	}
 
-	if stats.Overall.CompletedRounds > 0 {
-		stats.Overall.PlayerWinRate = float64(stats.Overall.PlayerWins) / float64(stats.Overall.CompletedRounds) * 100.0
-		stats.Overall.DealerWinRate = float64(stats.Overall.DealerWins) / float64(stats.Overall.CompletedRounds) * 100.0
+	// Compute win rates using only decided outcomes (player or dealer wins).
+	totalDecided := stats.Overall.PlayerWins + stats.Overall.DealerWins
+	if totalDecided > 0 {
+		stats.Overall.PlayerWinRate = float64(stats.Overall.PlayerWins) / float64(totalDecided) * 100.0
+		stats.Overall.DealerWinRate = float64(stats.Overall.DealerWins) / float64(totalDecided) * 100.0
 	}
 	for k, gs := range stats.ByGame {
-		if gs.CompletedRounds > 0 {
-			gs.PlayerWinRate = float64(gs.PlayerWins) / float64(gs.CompletedRounds) * 100.0
-			gs.DealerWinRate = float64(gs.DealerWins) / float64(gs.CompletedRounds) * 100.0
+		decided := gs.PlayerWins + gs.DealerWins
+		if decided > 0 {
+			gs.PlayerWinRate = float64(gs.PlayerWins) / float64(decided) * 100.0
+			gs.DealerWinRate = float64(gs.DealerWins) / float64(decided) * 100.0
 		}
 		stats.ByGame[k] = gs
 	}
