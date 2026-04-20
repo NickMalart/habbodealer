@@ -1484,41 +1484,38 @@ func setRiskRoundPlayerOutstanding(itemName string, qty int) {
 	if !riskRoundStateActive {
 		return
 	}
-	dealerOwned := riskRoundDealerOwned[itemName]
-	riskRoundPlayerOwned[itemName] = qty
-	riskRoundDealerQty[itemName] = dealerOwned + qty
-}
 
-func syncRiskRoundOwnershipFromLiveHand(a *App, itemName string) {
-	if a == nil || strings.TrimSpace(itemName) == "" || !riskRoundStateActive {
-		return
+	// Keep the round total fixed. The dealer hand total for this item should not
+	// grow when the player wins more during risk play; instead, dealer-owned must
+	// shrink as player-outstanding grows.
+	total := riskRoundDealerQty[itemName]
+	if total <= 0 {
+		total = riskRoundDealerOwned[itemName] + riskRoundPlayerOwned[itemName]
 	}
-	if ok := a.forceRefreshHandSnapshot("risk ownership sync"); !ok {
-		a.AddLogMsg(fmt.Sprintf("[RISK_STATE] live ownership sync failed for %s", itemName))
-		return
+	if total < 0 {
+		total = 0
 	}
-	handSnap := snapshotHandItemIDs()
-	liveTotal := len(uniqueInts(handSnap[itemName]))
-	riskRoundMu.Lock()
-	defer riskRoundMu.Unlock()
-	if !riskRoundStateActive {
-		return
+	if qty > total {
+		qty = total
 	}
-	playerOwned := riskRoundPlayerOwned[itemName]
-	if playerOwned < 0 {
-		playerOwned = 0
-	}
-	dealerOwned := liveTotal - playerOwned
+
+	dealerOwned := total - qty
 	if dealerOwned < 0 {
 		dealerOwned = 0
 	}
+
+	riskRoundPlayerOwned[itemName] = qty
 	riskRoundDealerOwned[itemName] = dealerOwned
-	riskRoundDealerQty[itemName] = dealerOwned + playerOwned
-	ids := uniqueInts(handSnap[itemName])
-	copyIDs := make([]int, len(ids))
-	copy(copyIDs, ids)
-	riskRoundDealerIDs[itemName] = copyIDs
-	a.AddLogMsg(fmt.Sprintf("[RISK_STATE] synced ownership for %s: dealerOwned=%d playerOwned=%d total=%d", itemName, dealerOwned, playerOwned, riskRoundDealerQty[itemName]))
+	riskRoundDealerQty[itemName] = total
+}
+
+func syncRiskRoundOwnershipFromLiveHand(a *App, itemName string) {
+	// Deprecated for risk replies. Ownership now stays on the stored round vars
+	// instead of forcing a live hand snapshot during rN / keep handling.
+	if a == nil || strings.TrimSpace(itemName) == "" || !riskRoundStateActive {
+		return
+	}
+	a.AddLogMsg(fmt.Sprintf("[RISK_STATE] live ownership sync skipped for %s; using stored round vars", itemName))
 }
 
 // getRecentGameSummaries returns the last n completed games as anonymized
@@ -3798,10 +3795,9 @@ func (a *App) offerRisk(targetID int, targetName string) {
 	}
 
 	// Freeze the player's current total as outstanding before computing max risk.
+	// Do not live-resync here. Risk flow should rely only on the stored round
+	// ownership vars captured at round start and updated as the round progresses.
 	setRiskRoundPlayerOutstanding(item.Name, playerTotal)
-	if riskRoundStateActive {
-		syncRiskRoundOwnershipFromLiveHand(a, item.Name)
-	}
 
 	dealerOwned := 0
 	dealerTotal := 0
@@ -3926,6 +3922,27 @@ func clearRiskRoundState(itemName string) {
 	riskRoundMu.Unlock()
 }
 
+func prepareCarryoverOnlyPayout(itemName string) int {
+	itemName = strings.TrimSpace(itemName)
+	if itemName == "" {
+		return 0
+	}
+
+	gameCarryoversMu.Lock()
+	carry := gameCarryovers[itemName]
+	gameCarryoversMu.Unlock()
+	if carry < 0 {
+		carry = 0
+	}
+
+	// The previous risk bet is lost at this point. Keep only the safe carryover
+	// for payout so payoutRequirementsFromBetItems returns the true remaining
+	// amount instead of 2x the old risk bet plus carry.
+	replaceSingleGameBetQuantity(itemName, 0)
+	setRiskRoundPlayerOutstanding(itemName, carry)
+	return carry
+}
+
 func (a *App) offerCarryoverRisk(targetID int, targetName string) bool {
 	riskOfferMu.Lock()
 	enabled := riskOfferEnabled
@@ -3947,10 +3964,9 @@ func (a *App) offerCarryoverRisk(targetID int, targetName string) bool {
 		return false
 	}
 
+	// Keep carryover risk fully on the stored round vars. Do not force a live
+	// hand snapshot here, or risk replies can stall waiting on strip sync.
 	setRiskRoundPlayerOutstanding(item.Name, carry)
-	if riskRoundStateActive {
-		syncRiskRoundOwnershipFromLiveHand(a, item.Name)
-	}
 	dealerOwned, tracked := riskRoundDealerOwnedCount(item.Name)
 	dealerTotal, _ := riskRoundDealerCount(item.Name)
 	if !tracked {
@@ -4005,7 +4021,7 @@ func (a *App) offerCarryoverRisk(targetID int, targetName string) bool {
 		a.shoutSafe(m)
 	}(msg)
 
-	go func(sess int) {
+	go func(sess int, tID int, tName string, riskItem string) {
 		time.Sleep(35 * time.Second)
 		if sess != awaitingRiskSessionID || !awaitingRiskDecision {
 			return
@@ -4013,12 +4029,11 @@ func (a *App) offerCarryoverRisk(targetID int, targetName string) bool {
 		if !awaitingRiskFromCarryover {
 			return
 		}
-		itemName := item.Name
-		a.AddLogMsg("[RISK] no response to carryover risk offer; reopening dealer")
+		carry := prepareCarryoverOnlyPayout(riskItem)
+		a.AddLogMsg(fmt.Sprintf("[RISK] no response to carryover risk offer; proceeding to payout carry=%d", carry))
 		clearAwaitingRiskState()
-		clearRiskRoundState(itemName)
-		go a.openDealerAfterRound()
-	}(session)
+		startPayout(a, tID, tName)
+	}(session, targetID, targetName, item.Name)
 
 	return true
 }
@@ -9783,17 +9798,16 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			}
 			clearAwaitingRiskState()
 			a.noteCurrentGameHistory("Player chose keep (no additional risk)")
-			if wasCarryover {
-				a.AddLogMsg(fmt.Sprintf("[RISK_DBG] player chose keep after dealer win; reopening dealer sender=%q partner=%q partnerID=%d", senderName, partnerName, partnerID))
-				clearRiskRoundState(itemName)
-				go a.openDealerAfterRound()
-			} else {
-				if partnerName == "" {
-					partnerName = strings.TrimSpace(payoutTargetName)
-				}
-				a.AddLogMsg(fmt.Sprintf("[RISK_DBG] player chose keep/trade; calling startPayout target=%d name=%q sender=%q", payoutTargetID, partnerName, senderName))
-				startPayout(a, payoutTargetID, partnerName)
+			if partnerName == "" {
+				partnerName = strings.TrimSpace(payoutTargetName)
 			}
+			if wasCarryover {
+				carry := prepareCarryoverOnlyPayout(itemName)
+				a.AddLogMsg(fmt.Sprintf("[RISK_DBG] player chose keep after dealer win; paying carryover sender=%q partner=%q partnerID=%d carry=%d", senderName, partnerName, partnerID, carry))
+			} else {
+				a.AddLogMsg(fmt.Sprintf("[RISK_DBG] player chose keep/trade; calling startPayout target=%d name=%q sender=%q", payoutTargetID, partnerName, senderName))
+			}
+			startPayout(a, payoutTargetID, partnerName)
 			return
 		}
 
@@ -9839,7 +9853,6 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 				// captured after the initial bet trade instead of re-snapshotting every
 				// risk reply. That keeps payout and risk using the same numbers.
 				usedFrozenFallback := false
-				syncRiskRoundOwnershipFromLiveHand(a, item.Name)
 				dealerTotal, tracked := riskRoundDealerCount(item.Name)
 				dealerOwned, ownedTracked := riskRoundDealerOwnedCount(item.Name)
 				playerOutstanding, outstandingTracked := riskRoundPlayerOutstandingCount(item.Name)
@@ -9920,12 +9933,12 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 					wasCarryover := awaitingRiskFromCarryover
 					clearAwaitingRiskState()
 					if wasCarryover {
-						clearRiskRoundState(item.Name)
-						go a.openDealerAfterRound()
+						carry := prepareCarryoverOnlyPayout(item.Name)
+						a.AddLogMsg(fmt.Sprintf("[RISK_DBG] computed finalMax <=0 during carryover; falling back to payout carry=%d target=%d name=%q sender=%q", carry, payoutTargetID, payoutTargetName, senderName))
 					} else {
 						a.AddLogMsg(fmt.Sprintf("[RISK_DBG] computed finalMax <=0; falling back to payout target=%d name=%q sender=%q", payoutTargetID, payoutTargetName, senderName))
-						startPayout(a, payoutTargetID, payoutTargetName)
 					}
+					startPayout(a, payoutTargetID, payoutTargetName)
 					return
 				}
 
