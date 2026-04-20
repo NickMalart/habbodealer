@@ -14,7 +14,7 @@ import (
 // Send message with a delay to simulate user typing/waiting
 func sendMessageWithDelay(message string) {
 	// sleep random between 250 and 500ms
-	time.Sleep(time.Duration(rand.Intn(250)+250) * time.Millisecond)
+	time.Sleep(time.Duration(rand.Intn(400)+450) * time.Millisecond)
 	// Ensure we have an up-to-date frozen hand snapshot before posting the
 	// canonical "dealer open" announcement. This avoids announcing that we're
 	// open before inventory is ready for coverage checks.
@@ -40,7 +40,7 @@ func (a *App) evaluatePokerHand() {
 	result := evaluatePokerRules(diceList)
 	hand := a.toPokerString(diceList)
 	logRollResult := fmt.Sprintf("Poker Result: %s\n", hand)
-	time.Sleep(time.Duration(rand.Intn(250)+250) * time.Millisecond)
+	time.Sleep(time.Duration(rand.Intn(400)+450) * time.Millisecond)
 	a.AddLogMsg(logRollResult)
 
 	if !ChatIsDisabled {
@@ -62,13 +62,13 @@ func (a *App) evaluatePokerHand() {
 		a.noteCurrentGameHistory("Player poker hand recorded")
 		pokerSequenceStage = 2
 		go func() {
-			time.Sleep(700 * time.Millisecond)
+			time.Sleep(1200 * time.Millisecond)
 			message := "Dealer Roll"
 			a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", message))
 			log.Printf("[GAME_SELECT] shouting: %q", message)
 			ext.Send(out.SHOUT, message)
 
-			time.Sleep(700 * time.Millisecond)
+			time.Sleep(1200 * time.Millisecond)
 			a.startPokerRoll()
 		}()
 	} else if pokerSequenceStage == 2 {
@@ -90,7 +90,7 @@ func (a *App) evaluatePokerHand() {
 		log.Printf("[GAME_SELECT] shouting: %q", winnerMsg)
 		if !ChatIsDisabled {
 			waitForUnmute(90 * time.Second)
-			time.Sleep(800 * time.Millisecond)
+			time.Sleep(1200 * time.Millisecond)
 			sendMessageWithDelay(winnerMsg)
 		}
 
@@ -108,9 +108,14 @@ func (a *App) evaluatePokerHand() {
 			a.AddLogMsg(fmt.Sprintf("[RISK_DBG] evaluatePokerHand offering risk to %s (%d) len(gameBetItems)=%d riskOfferEnabled=%t", payoutTargetName, payoutTargetID, len(gameBetItems), riskOfferEnabled))
 			a.offerRisk(payoutTargetID, payoutTargetName)
 		} else {
-			a.setCurrentGameHistoryResults(playerHand, hand, a.getCurrentDealerName(), "Completed", true)
-			a.noteCurrentGameHistory(winnerMsg)
-			go a.openDealerAfterRound()
+			if a.offerCarryoverRisk(payoutTargetID, payoutTargetName) {
+				a.setCurrentGameHistoryResults(playerHand, hand, a.getCurrentDealerName(), "Carryover Pending", false)
+				a.noteCurrentGameHistory(winnerMsg)
+			} else {
+				a.setCurrentGameHistoryResults(playerHand, hand, a.getCurrentDealerName(), "Completed", true)
+				a.noteCurrentGameHistory(winnerMsg)
+				go a.openDealerAfterRound()
+			}
 		}
 	}
 
@@ -175,7 +180,7 @@ func (a *App) evaluateBlackjackHand() {
 			log.Printf("[BJ] announcing: %q", msg)
 			if !ChatIsDisabled {
 				waitForUnmute(90 * time.Second)
-				time.Sleep(800 * time.Millisecond)
+				time.Sleep(1200 * time.Millisecond)
 				sendMessageWithDelay(msg)
 			}
 
@@ -297,7 +302,7 @@ func (a *App) startBlackjackDealerTurn(reason string) {
 	log.Printf("[GAME_SELECT] shouting: %q", message)
 	ext.Send(out.SHOUT, message)
 	go func() {
-		time.Sleep(700 * time.Millisecond)
+		time.Sleep(1200 * time.Millisecond)
 		isBJRolling = true
 		a.rollBjDice()
 	}()
@@ -326,7 +331,7 @@ func (a *App) finalizeBlackjackRound(playerWins bool, reason string) {
 	log.Printf("[GAME_SELECT] shouting: %q", winnerMsg)
 	if !ChatIsDisabled {
 		waitForUnmute(90 * time.Second)
-		time.Sleep(800 * time.Millisecond)
+		time.Sleep(1200 * time.Millisecond)
 		sendMessageWithDelay(winnerMsg)
 	}
 
@@ -342,6 +347,12 @@ func (a *App) finalizeBlackjackRound(playerWins bool, reason string) {
 		resetPayoutRetryState()
 		a.AddLogMsg(fmt.Sprintf("[RISK_DBG] finalizeBlackjackRound offering risk to %s (%d) len(gameBetItems)=%d riskOfferEnabled=%t", payoutTargetName, payoutTargetID, len(gameBetItems), riskOfferEnabled))
 		a.offerRisk(payoutTargetID, payoutTargetName)
+		return
+	}
+
+	if a.offerCarryoverRisk(payoutTargetID, payoutTargetName) {
+		a.setCurrentGameHistoryResults(playerHand, dealerHand, a.getCurrentDealerName(), "Carryover Pending", false)
+		a.noteCurrentGameHistory(winnerMsg)
 		return
 	}
 
@@ -408,7 +419,7 @@ func (a *App) evaluate13Hand() {
 			log.Printf("[13] announcing: %q", msg)
 			if !ChatIsDisabled {
 				waitForUnmute(90 * time.Second)
-				time.Sleep(800 * time.Millisecond)
+				time.Sleep(1200 * time.Millisecond)
 				sendMessageWithDelay(msg)
 			}
 
@@ -563,13 +574,13 @@ func (a *App) evaluateTriRound() {
 		triPlayerTurn = false
 
 		go func() {
-			time.Sleep(700 * time.Millisecond)
+			time.Sleep(1200 * time.Millisecond)
 			message := "Dealer Roll"
 			a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", message))
 			log.Printf("[GAME_SELECT] shouting: %q", message)
 			ext.Send(out.SHOUT, message)
 
-			time.Sleep(700 * time.Millisecond)
+			time.Sleep(1200 * time.Millisecond)
 			isTriRolling = true
 			a.rollTriDice()
 		}()
