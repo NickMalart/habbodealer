@@ -1385,6 +1385,12 @@ func (a *App) initialiseRiskRoundStateFromCurrentSnapshot() {
 
 	idsSnap := snapshotHandItemIDs()
 	betItems := cloneGameBetItems()
+	if len(idsSnap) == 0 {
+		a.AddLogMsg("[RISK_STATE] snapshot hand ids empty while initialising round state")
+	}
+	if len(betItems) == 0 {
+		a.AddLogMsg("[RISK_STATE] no game bet items while initialising round state")
+	}
 	initialPlayerOwned := map[string]int{}
 	for _, item := range betItems {
 		if item.Quantity > 0 {
@@ -1430,6 +1436,15 @@ func (a *App) initialiseRiskRoundStateFromCurrentSnapshot() {
 	}
 
 	riskRoundStateActive = true
+	for _, item := range betItems {
+		if strings.TrimSpace(item.Name) == "" {
+			continue
+		}
+		total := riskRoundDealerQty[item.Name]
+		dealerOwned := riskRoundDealerOwned[item.Name]
+		playerOwned := riskRoundPlayerOwned[item.Name]
+		a.AddLogMsg(fmt.Sprintf("[RISK_STATE] seeded %s total=%d dealerOwned=%d playerOwned=%d", item.Name, total, dealerOwned, playerOwned))
+	}
 	a.AddLogMsg(fmt.Sprintf("[RISK_STATE] initialised ownership state with %d item types", len(riskRoundDealerQty)))
 }
 
@@ -2503,6 +2518,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			}
 			go func() {
 				if ok := a.forceRefreshHandSnapshot("trade completed"); ok {
+					a.initialiseRiskRoundStateFromCurrentSnapshot()
 					a.AddLogMsg("[TRADE_COMPLETED] forced hand refresh complete after trade")
 				} else {
 					a.AddLogMsg("[TRADE_COMPLETED] forced hand refresh failed after trade")
@@ -3852,6 +3868,14 @@ func (a *App) offerRisk(targetID int, targetName string) {
 		}
 	}
 
+	// Safety floor: if the dealer can still genuinely cover at least one more
+	// item, never collapse the offer to zero. This is the exact case where the
+	// dealer has 1 left and the player should still be offered Max risk: 1.
+	if displayMax <= 0 && dealerSpare > 0 && playerTotal > 0 {
+		displayMax = 1
+		a.AddLogMsg(fmt.Sprintf("[RISK_DBG] forcing minimum risk offer of 1 item=%s dealerSpare=%d playerTotal=%d", item.Name, dealerSpare, playerTotal))
+	}
+
 	a.AddLogMsg(fmt.Sprintf("[RISK_DBG] direct risk calc item=%s dealerOwned=%d dealerTotal=%d playerTotal=%d offered=%d dealerSpare=%d computedDealerMax=%d displayMax=%d tracked=%t",
 		item.Name, dealerOwned, dealerTotal, playerTotal, offeredCount, dealerSpare, computedDealerMax, displayMax, tracked))
 	if displayMax <= 0 {
@@ -3998,6 +4022,13 @@ func (a *App) offerCarryoverRisk(targetID int, targetName string) bool {
 	displayMax := dealerMax
 	if carry < displayMax {
 		displayMax = carry
+	}
+	// Safety floor: if the dealer still has at least one real item left to
+	// cover and the player still has carryover, offer risk 1 instead of
+	// silently skipping straight to payout.
+	if displayMax <= 0 && available > 0 && carry > 0 {
+		displayMax = 1
+		a.AddLogMsg(fmt.Sprintf("[RISK_DBG] forcing minimum carryover risk offer of 1 item=%s available=%d carry=%d", item.Name, available, carry))
 	}
 	if displayMax <= 0 {
 		return false
@@ -7285,6 +7316,16 @@ func (a *App) sendTradeCompletionMessage() {
 	copy(gameBetItems, currentTradeItems)
 	tradeItemsMu.Unlock()
 
+	// Start each bet round with a clean risk-state seed. The round ownership
+	// must be rebuilt only after the fresh post-trade hand snapshot lands.
+	riskRoundMu.Lock()
+	riskRoundStateActive = false
+	riskRoundDealerIDs = map[string][]int{}
+	riskRoundDealerQty = map[string]int{}
+	riskRoundDealerOwned = map[string]int{}
+	riskRoundPlayerOwned = map[string]int{}
+	riskRoundMu.Unlock()
+
 	// Debug: record trade completion capture state to help diagnose missing risk offers
 	a.AddLogMsg(fmt.Sprintf("[TRADE_MESSAGE_DBG] sendTradeCompletionMessage: lastTradePartnerName=%q lastTradePartnerID=%d stableTradePartnerName=%q len(gameBetItems)=%d gameBetItems=%+v",
 		lastTradePartnerName, lastTradePartnerID, stableTradePartnerName, len(gameBetItems), gameBetItems))
@@ -7343,7 +7384,7 @@ func (a *App) sendTradeCompletionMessage() {
 		stableTradePartnerToken = partnerToken
 	}
 
-	a.initialiseRiskRoundStateFromCurrentSnapshot()
+	a.AddLogMsg("[TRADE_FLOW] waiting for refreshed hand snapshot before seeding risk state")
 	a.AddLogMsg("[TRADE_FLOW] calling beginGameHistory")
 	a.beginGameHistory(partnerName, cloneGameBetItems())
 	a.AddLogMsg("[TRADE_FLOW] beginGameHistory returned")
