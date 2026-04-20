@@ -1292,7 +1292,7 @@ func (a *App) runAutoShoutLoop(stopChan chan struct{}, phrase string, seconds in
 }
 
 func (a *App) dealerOpenMessage() string {
-	return "Dealer Open, See Whats in My Hand - rollorigins.club"
+	return fmt.Sprintf("Accepting %d unique items, max %d per bet", maxTradeUniqueItems, maxTradeQuantityPerItem)
 }
 
 func dealerGameActive() bool {
@@ -4627,7 +4627,7 @@ func startDealerOpenHeartbeat(a *App) {
 	dealerOpenHeartbeatID++
 	id := dealerOpenHeartbeatID
 	dealerOpenHeartbeatActive = true
-	dealerOpenMsg := "Dealer Open, See Whats in My Hand - rollorigins.club"
+	dealerOpenMsg := (&App{}).dealerOpenMessage()
 	if a != nil {
 		dealerOpenMsg = a.dealerOpenMessage()
 	}
@@ -4638,8 +4638,8 @@ func startDealerOpenHeartbeat(a *App) {
 	}
 
 	go func(id int, openMsg string) {
-		// Initial 15s delay for the first re-announcement.
-		timer := time.NewTimer(15 * time.Second)
+		// Initial 45s delay for the first re-announcement.
+		timer := time.NewTimer(45 * time.Second)
 		defer timer.Stop()
 
 		select {
@@ -4661,17 +4661,17 @@ func startDealerOpenHeartbeat(a *App) {
 			}
 			// First shout: only if not muted.
 			if isMuted {
-				addLog("[TRADE_REOPEN] initial 15s announcer skipped due to mute")
-				log.Printf("[TRADE_REOPEN] initial 15s announcer skipped due to mute")
+				addLog("[TRADE_REOPEN] initial 45s announcer skipped due to mute")
+				log.Printf("[TRADE_REOPEN] initial 45s announcer skipped due to mute")
 			} else {
-				addLog("[TRADE_REOPEN] initial 15s re-announcing dealer open")
-				log.Printf("[TRADE_REOPEN] initial 15s re-announcing dealer open")
+				addLog("[TRADE_REOPEN] initial 45s re-announcing dealer open")
+				log.Printf("[TRADE_REOPEN] initial 45s re-announcing dealer open")
 				sendMessageWithDelay(openMsg)
 			}
 		}
 
-		// After the first attempt, run a steady 30s announcer that fires for everyone.
-		ticker := time.NewTicker(30 * time.Second)
+		// After the first attempt, run a steady 45s announcer that fires for everyone.
+		ticker := time.NewTicker(45 * time.Second)
 		defer ticker.Stop()
 
 		for range ticker.C {
@@ -4691,8 +4691,8 @@ func startDealerOpenHeartbeat(a *App) {
 				return
 			}
 
-			addLog("[TRADE_REOPEN] 30s periodic dealer-open announcer firing")
-			log.Printf("[TRADE_REOPEN] 30s periodic dealer-open announcer firing")
+			addLog("[TRADE_REOPEN] 45s periodic dealer-open announcer firing")
+			log.Printf("[TRADE_REOPEN] 45s periodic dealer-open announcer firing")
 			sendMessageWithDelay(openMsg)
 		}
 	}(id, dealerOpenMsg)
