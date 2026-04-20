@@ -1292,7 +1292,7 @@ func (a *App) runAutoShoutLoop(stopChan chan struct{}, phrase string, seconds in
 }
 
 func (a *App) dealerOpenMessage() string {
-	return fmt.Sprintf("Accepting %d unique items, max %d per bet", maxTradeUniqueItems, maxTradeQuantityPerItem)
+	return fmt.Sprintf("Accepting %d unique items, max %d per bet - See My Live Hand - rollorigins.club", maxTradeUniqueItems, maxTradeQuantityPerItem)
 }
 
 func dealerGameActive() bool {
