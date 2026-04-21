@@ -5833,6 +5833,11 @@ func (a *App) parseTradeItemsPacket(data []byte) []TradeItem {
 }
 
 func (a *App) extractTradeItemAndQuantity(field string) (string, int, bool) {
+	// Ignore entire fields that start with "LL" or "ll" — not real items.
+	if len(field) >= 2 && strings.HasPrefix(strings.ToLower(field), "ll") {
+		a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] ignoring LL-prefixed field=%q", field))
+		return "", 0, false
+	}
 	// Try legacy format first (e.g. "itkoHP|club_sofa")
 	a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] try legacy branch field=%q", field))
 	if strings.Contains(field, "|") {
@@ -5924,6 +5929,11 @@ func (a *App) extractTradeItemAndQuantity(field string) (string, int, bool) {
 	if len(matches) > 0 {
 		a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] fallback candidates=%q", matches))
 		for _, cand := range matches {
+			// Skip candidates that themselves start with "LL" / "ll"
+			if strings.HasPrefix(strings.ToLower(cand), "ll") {
+				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] skipping LL-prefixed candidate=%q", cand))
+				continue
+			}
 			a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] fallback trying candidate=%q", cand))
 			if name, qty, ok := a.normalizeTradeFieldClassWithQty(cand); ok {
 				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] fallback accepted candidate=%q -> %q", cand, name))
@@ -10083,6 +10093,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 				partnerName = "Player"
 			}
 			a.AddLogMsg(fmt.Sprintf("[RISK] starting new round after accepted risk for %s", partnerName))
+			a.setCurrentGameHistoryResults("", "", "", "Completed", true)
 			a.beginGameHistory(partnerName, cloneGameBetItems())
 			first := fmt.Sprintf("%s what game do you want to play?", partnerName)
 			second := "Shout pkr, 21, 13, TriH, TriL"
