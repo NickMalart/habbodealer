@@ -643,10 +643,10 @@
   <!-- Users bottom bar (Home only) -->
   <div v-if="activeTab === 'Home'" class="users-bottom-bar" aria-hidden="false">
     <div class="users-bottom-inner">
-      <div v-if="roomIdentity.length === 0" class="users-empty">No users in room</div>
+      <div v-if="visibleActiveUsers.length === 0" class="users-empty">No active players or traders</div>
       <div v-else class="users-list">
-        <div v-for="(u, idx) in roomIdentity" :key="`user-pill-${idx}`" :class="['user-pill', { trading: isUserTrading(u), 'in-game': isUserInGame(u) }]">
-          <span class="user-name">{{ u.name || 'Unknown' }}</span>
+        <div v-for="(u, idx) in visibleActiveUsers" :key="`user-pill-${idx}`" :class="['user-pill', { trading: isUserTrading(u), 'in-game': isUserInGame(u) }]">
+          <span class="user-name">{{ (isUserTrading(u) || isUserInGame(u)) ? (u.name || 'Unknown') : '' }}</span>
           <span v-if="isUserTrading(u)" class="user-badge trading-badge">Trading</span>
           <span v-else-if="isUserInGame(u)" class="user-badge game-badge">In Game</span>
         </div>
@@ -872,6 +872,13 @@ export default {
       const presentPreferred = preferred.filter(k => keys.includes(k));
       const rest = keys.filter(k => !preferred.includes(k)).sort();
       return presentPreferred.concat(rest);
+    },
+    visibleActiveUsers() {
+      try {
+        return (this.roomIdentity || []).filter(u => this.isUserTrading(u) || this.isUserInGame(u));
+      } catch (e) {
+        return [];
+      }
     },
   },
   methods: {
@@ -1618,6 +1625,19 @@ export default {
       } catch (_) {
         this.roomIdentity = [];
       }
+      // Cleanup: ensure current trader/player names are cleared when no longer relevant
+      try {
+        const names = (this.roomIdentity || []).map(e => String((e && e.name) || '').trim().toLowerCase());
+        if (this.currentTraderName && !names.includes(String(this.currentTraderName).trim().toLowerCase())) {
+          this.currentTraderName = '';
+        }
+        if (this.currentGamePlayerName && !names.includes(String(this.currentGamePlayerName).trim().toLowerCase())) {
+          this.currentGamePlayerName = '';
+        }
+        // extra safeguard: clear when corresponding item lists are empty
+        if (!this.tradeItems || this.tradeItems.length === 0) this.currentTraderName = '';
+        if (!this.activeGameBetItems || this.activeGameBetItems.length === 0) this.currentGamePlayerName = '';
+      } catch (e) {}
     });
     window.runtime.EventsOn("gameHistoryUpdate", (jsonStr) => {
       try {

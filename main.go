@@ -3988,9 +3988,19 @@ func (a *App) offerRisk(targetID int, targetName string) {
 	a.AddLogMsg(fmt.Sprintf("[RISK_DBG] sending risk offer msg: item=%s qty=%d dealerOwned=%d dealerTotal=%d dealerSpare=%d playerTotal=%d displayMax=%d session=%d",
 		item.Name, item.Quantity, dealerOwned, dealerTotal, dealerSpare, playerTotal, displayMax, session))
 
-	msg := fmt.Sprintf("%s Wins — %dx. Total: %d. Max risk: %d. Reply 'rN' (e.g. r3) to risk or 'keep' to finish.", targetName, item.Quantity, playerTotal, displayMax)
+	// Announce the win succinctly, then offer risk in a separate shout so the
+	// risk text never appears on the same long line as the win announcement.
+	winMsg := fmt.Sprintf("%s Wins — %dx. Total: %d.", targetName, item.Quantity, playerTotal)
+	riskMsg := fmt.Sprintf("Max risk: %d. Reply 'rN' (e.g. r3) to risk or 'keep' to finish.", displayMax)
 	a.AddLogMsg(fmt.Sprintf("[RISK] offered to %s dealerOwned=%d dealerTotal=%d dealerSpare=%d displayMax=%d qty=%d", targetName, dealerOwned, dealerTotal, dealerSpare, displayMax, item.Quantity))
-	go a.shoutSafe(msg)
+	go a.shoutSafe(winMsg)
+	go func(m string) {
+		// Wait for the configured shout merge window plus a small margin so
+		// the risk prompt isn't merged into the same outgoing shout as the
+		// win announcement.
+		time.Sleep(a.shoutMergeWindow + 100*time.Millisecond)
+		a.shoutSafe(m)
+	}(riskMsg)
 
 	go func(sess int, tID int, tName string) {
 		time.Sleep(45 * time.Second)
@@ -4131,13 +4141,15 @@ func (a *App) offerCarryoverRisk(targetID int, targetName string) bool {
 	session := awaitingRiskSessionID
 	a.noteCurrentGameHistory(fmt.Sprintf("Dealer won risk round; carryover risk offered: playerTotal=%d dealerMax=%d", carry, displayMax))
 	a.AddLogMsg(fmt.Sprintf("[RISK] offered carryover risk to %s total=%d dealerMax=%d session=%d", targetName, carry, displayMax, session))
-	msg := fmt.Sprintf("%s Dealer won. You still have %d. Max risk: %d. Reply 'rN' (e.g. r3) to risk again or 'keep' to finish.", targetName, carry, displayMax)
-	a.AddLogMsg(fmt.Sprintf("[RISK_DBG] carryover risk prompt queued: %q", msg))
+	// Send carryover risk prompt separately so it doesn't get appended to the
+	// dealer-win announcement and create an overly long single line in chat.
+	riskMsg := fmt.Sprintf("Max risk: %d. Reply 'rN' (e.g. r3) to risk again or 'keep' to finish.", displayMax)
+	a.AddLogMsg(fmt.Sprintf("[RISK_DBG] carryover risk prompt queued: %q", riskMsg))
 	go func(m string) {
 		// Give the dealer-win shout time to land first so this prompt stays visible.
 		time.Sleep(1200 * time.Millisecond)
 		a.shoutSafe(m)
-	}(msg)
+	}(riskMsg)
 
 	go func(sess int, tID int, tName string, riskItem string) {
 		time.Sleep(35 * time.Second)
@@ -5869,8 +5881,13 @@ func (a *App) extractTradeItemAndQuantity(field string) (string, int, bool) {
 				// token-like false positives.
 				if normalized, ok2 := normalizeClassKeyWithVariant(cand); ok2 {
 					if strings.Contains(normalized, "_") {
-						a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] accepting unverified current candidate=%q", normalized))
-						return normalized, 1, true
+						// Only accept an unverified candidate if it is known
+						// (present in the catalog or observed in the frozen/live hand).
+						if isKnownTradeClassName(a, normalized) {
+							a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] accepting unverified current candidate=%q", normalized))
+							return normalized, 1, true
+						}
+						a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] unverified candidate %q not known; rejecting", normalized))
 					}
 				}
 			}
