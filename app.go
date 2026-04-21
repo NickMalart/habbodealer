@@ -31,6 +31,7 @@ func (a *App) GetCurrentVersion() string {
 }
 
 func main() {
+	InitLogging()
 	app = NewApp(ext, assets)
 	setupExt()
 	err := wails.Run(&options.App{

@@ -1,0 +1,135 @@
+2026/04/21 22:11:58.248803 Logging initialized; writing to logs\2026-04-21_22-11-58.log
+Converting type main.AutoShoutConfig
+- simple field AutoShoutConfig.Enabled
+- simple field AutoShoutConfig.Phrase
+- simple field AutoShoutConfig.Seconds
+Converting type main.BlockRecommendedConfig
+- simple field BlockRecommendedConfig.Enabled
+Converting type main.BlockSlideObjectConfig
+- simple field BlockSlideObjectConfig.Enabled
+Converting type main.CasinoStats
+- simple field CasinoStats.GeneratedAt
+- struct CasinoStats.Range (main.StatsRange)
+   Converting type main.StatsRange
+   - simple field StatsRange.Key
+   - simple field StatsRange.StartAt
+   - simple field StatsRange.EndAt
+- struct CasinoStats.Overall (main.CasinoStatsSummary)
+   Converting type main.CasinoStatsSummary
+   - simple field CasinoStatsSummary.TotalRounds
+   - simple field CasinoStatsSummary.CompletedRounds
+   - simple field CasinoStatsSummary.IssueRounds
+   - simple field CasinoStatsSummary.PlayerWins
+   - simple field CasinoStatsSummary.DealerWins
+   - simple field CasinoStatsSummary.PlayerWinRate
+   - simple field CasinoStatsSummary.DealerWinRate
+   - simple field CasinoStatsSummary.IssueRate
+   - simple field CasinoStatsSummary.TotalBetItemsIn
+   - simple field CasinoStatsSummary.TotalPayoutItemsOut
+   - simple field CasinoStatsSummary.NetItems
+   - simple field CasinoStatsSummary.RTPPercent
+   - simple field CasinoStatsSummary.ProfitMarginPercent
+   - simple field CasinoStatsSummary.CasinoEdgePercent
+   - simple field CasinoStatsSummary.AverageNetPerRound
+   - simple field CasinoStatsSummary.UniquePlayers
+   - simple field CasinoStatsSummary.BestGameByNet
+   - simple field CasinoStatsSummary.WorstGameByNet
+   - simple field CasinoStatsSummary.BestItemByNet
+   - simple field CasinoStatsSummary.WorstItemByNet
+   - simple field CasinoStatsSummary.MostProfitablePlayer
+   - simple field CasinoStatsSummary.LeastProfitablePlayer
+   - simple field CasinoStatsSummary.BestSingleWin
+   - simple field CasinoStatsSummary.WorstSingleLoss
+   - map field CasinoStatsSummary.BetItemCounts
+   - map field CasinoStatsSummary.PayoutItemCounts
+   - map field CasinoStatsSummary.NetItemCounts
+- map field CasinoStats.ByGame
+   Converting type main.GameStats
+   - simple field GameStats.Game
+   - simple field GameStats.TotalRounds
+   - simple field GameStats.CompletedRounds
+   - simple field GameStats.IssueRounds
+   - simple field GameStats.PlayerWins
+   - simple field GameStats.DealerWins
+   - simple field GameStats.PlayerWinRate
+   - simple field GameStats.DealerWinRate
+   - simple field GameStats.TotalBetItemsIn
+   - simple field GameStats.TotalPayoutItemsOut
+   - simple field GameStats.NetItems
+   - simple field GameStats.RTPPercent
+   - simple field GameStats.CasinoEdgePercent
+   - simple field GameStats.AverageNetPerRound
+   - simple field GameStats.LargestBet
+   - simple field GameStats.LargestPayout
+   - simple field GameStats.WorstCasinoLoss
+   - simple field GameStats.BestCasinoWin
+   - map field GameStats.BetItemCounts
+   - map field GameStats.PayoutItemCounts
+   - map field GameStats.NetItemCounts
+- struct slice CasinoStats.ByItem ([]main.ItemStats)
+   Converting type main.ItemStats
+   - simple field ItemStats.Name
+   - simple field ItemStats.BetIn
+   - simple field ItemStats.PayoutOut
+   - simple field ItemStats.Net
+   - simple field ItemStats.GamesPlayed
+   - simple field ItemStats.CasinoWins
+   - simple field ItemStats.CasinoLosses
+   - simple field ItemStats.CasinoWinRate
+   - simple field ItemStats.Status
+   - map field ItemStats.ByGameBetIn
+   - map field ItemStats.ByGamePayoutOut
+   - map field ItemStats.ByGameNet
+- struct slice CasinoStats.ByPlayer ([]main.PlayerStats)
+   Converting type main.PlayerStats
+   - simple field PlayerStats.PlayerName
+   - simple field PlayerStats.TotalRounds
+   - simple field PlayerStats.PlayerWins
+   - simple field PlayerStats.DealerWins
+   - simple field PlayerStats.PlayerWinRate
+   - simple field PlayerStats.BetItemsIn
+   - simple field PlayerStats.PayoutItemsOut
+   - simple field PlayerStats.NetAgainstCasino
+   - simple field PlayerStats.AverageNetPerGame
+   - simple field PlayerStats.IsProfitable
+   - map field PlayerStats.ByGameRounds
+   - map field PlayerStats.ByGameWins
+   - map field PlayerStats.ByGameLosses
+   - map field PlayerStats.ByGameWinRate
+- struct CasinoStats.Issues (main.IssueStats)
+   Converting type main.IssueStats
+   - simple field IssueStats.TotalIssues
+   - map field IssueStats.ByReason
+   - simple field IssueStats.GameChoiceTimeouts
+   - simple field IssueStats.PayoutTimeouts
+   - simple field IssueStats.PayoutCancelFlags
+   - simple field IssueStats.TradeConfirmTimeouts
+- struct CasinoStats.Trends (main.TrendStats)
+   Converting type main.TrendStats
+   - struct slice TrendStats.Daily ([]main.DailyStatsPoint)
+      Converting type main.DailyStatsPoint
+      - simple field DailyStatsPoint.Day
+      - simple field DailyStatsPoint.TotalRounds
+      - simple field DailyStatsPoint.NetItems
+      - simple field DailyStatsPoint.IssueRounds
+      - simple field DailyStatsPoint.BetItemsIn
+      - simple field DailyStatsPoint.PayoutItemsOut
+      - simple field DailyStatsPoint.RTPPercent
+Converting type main.CatalogItem
+- simple field CatalogItem.Name
+- simple field CatalogItem.DisplayName
+- simple field CatalogItem.Value
+Converting type main.PokerDisplayConfig
+- simple field PokerDisplayConfig.FiveOfAKind
+- simple field PokerDisplayConfig.FourOfAKind
+- simple field PokerDisplayConfig.FullHouse
+- simple field PokerDisplayConfig.HighStraight
+- simple field PokerDisplayConfig.LowStraight
+- simple field PokerDisplayConfig.ThreeOfAKind
+- simple field PokerDisplayConfig.TwoPair
+- simple field PokerDisplayConfig.OnePair
+- simple field PokerDisplayConfig.Nothing
+Converting type main.TradeItem
+- simple field TradeItem.Name
+- simple field TradeItem.Quantity
+- simple field TradeItem.RawData
