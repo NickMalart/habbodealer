@@ -30,6 +30,10 @@ export function ClearTradeItems() {
   return window['go']['main']['App']['ClearTradeItems']();
 }
 
+export function EnqueueShout(arg1) {
+  return window['go']['main']['App']['EnqueueShout'](arg1);
+}
+
 export function GetAutoShoutConfig() {
   return window['go']['main']['App']['GetAutoShoutConfig']();
 }

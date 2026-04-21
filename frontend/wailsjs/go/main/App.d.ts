@@ -16,6 +16,8 @@ export function ClearGameHistory():Promise<void>;
 
 export function ClearTradeItems():Promise<void>;
 
+export function EnqueueShout(arg1:string):Promise<void>;
+
 export function GetAutoShoutConfig():Promise<main.AutoShoutConfig>;
 
 export function GetBlockArticlesPageConfig():Promise<main.BlockSlideObjectConfig>;

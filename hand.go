@@ -31,7 +31,11 @@ func sendMessageWithDelay(message string) {
 		}
 	}
 
-	ext.Send(out.SHOUT, message)
+	if app != nil {
+		app.EnqueueShout(message)
+	} else {
+		ext.Send(out.SHOUT, message)
+	}
 	log.Printf("Sent message: %s", message)
 }
 

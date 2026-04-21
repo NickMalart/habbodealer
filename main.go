@@ -480,20 +480,13 @@ func equalTradeItemLists(a, b []TradeItem) bool {
 // shoutSafe sends a public shout respecting local mute state and adds a small delay
 // to avoid immediate bursts when multiple callers attempt to shout at once.
 func (a *App) shoutSafe(msg string) {
-	a.AddLogMsg(fmt.Sprintf("[SHOUT_SAFE] %q", msg))
+	a.AddLogMsg(fmt.Sprintf("[SHOUT_SAFE] enqueue: %q", msg))
 	// Respect global chat-disabled flag first, then local mute state.
 	if ChatIsDisabled {
 		a.AddLogMsg("[SHOUT_SAFE] suppressed because chat is disabled")
 		return
 	}
-	if isMuted {
-		a.AddLogMsg("[SHOUT_SAFE] suppressed due to mute")
-		return
-	}
-	go func(m string) {
-		time.Sleep(800 * time.Millisecond)
-		ext.Send(out.SHOUT, m)
-	}(msg)
+	a.EnqueueShout(msg)
 }
 
 // rejectTradeForLimitViolation announces the reason, closes the trade and reopens the dealer.
@@ -527,6 +520,83 @@ func (a *App) rejectTradeForLimitViolation(v *tradeLimitViolation) {
 	// transitions back to a valid state.
 	tradeLimitWasActive = true
 	startTradeLimitMonitor(a, tradeLimitGracePeriod)
+}
+
+// EnqueueShout adds a message to the shout queue for rate-limited delivery.
+func (a *App) EnqueueShout(msg string) {
+	if a == nil {
+		return
+	}
+	if ChatIsDisabled {
+		a.AddLogMsg("[ENQUEUE_SHOUT] suppressed (chat disabled)")
+		return
+	}
+	m := strings.TrimSpace(msg)
+	if m == "" {
+		return
+	}
+	select {
+	case a.shoutQueue <- m:
+	default:
+		a.AddLogMsg("[ENQUEUE_SHOUT] queue full; dropping message")
+	}
+}
+
+// runShoutWorker consumes the shout queue, merges nearby messages, enforces cooldowns and unmute waits.
+func (a *App) runShoutWorker() {
+	for {
+		select {
+		case <-a.shoutStop:
+			return
+		case first := <-a.shoutQueue:
+			a.shoutMu.Lock()
+			if t, ok := a.shoutDedup[first]; ok && time.Since(t) < 30*time.Second {
+				a.shoutMu.Unlock()
+				a.AddLogMsg("[SHOUT_WORKER] dedupe skip")
+				continue
+			}
+			a.shoutDedup[first] = time.Now()
+			a.shoutMu.Unlock()
+
+			merged := first
+			timer := time.NewTimer(a.shoutMergeWindow)
+		mergeLoop:
+			for {
+				select {
+				case m := <-a.shoutQueue:
+					if len(merged)+3+len(m) <= a.shoutMaxLength {
+						merged = merged + " | " + m
+					}
+				case <-timer.C:
+					break mergeLoop
+				}
+			}
+
+			// enforce cooldown
+			wait := a.shoutCooldown - time.Since(a.shoutLastSent)
+			if wait > 0 {
+				select {
+				case <-time.After(wait):
+				case <-a.shoutStop:
+					return
+				}
+			}
+
+			// brief wait-for-unmute before critical messages
+			if isMuted {
+				a.AddLogMsg("[SHOUT_WORKER] waiting for unmute")
+				waitForUnmute(10 * time.Second)
+			}
+			if isMuted {
+				a.AddLogMsg("[SHOUT_WORKER] still muted; skipping message")
+				continue
+			}
+
+			a.AddLogMsg(fmt.Sprintf("[SHOUT_WORKER] sending: %q", merged))
+			a.ext.Send(out.SHOUT, merged)
+			a.shoutLastSent = time.Now()
+		}
+	}
 }
 
 func normalizeUsers28Name(name string, tokenHex string) string {
@@ -623,6 +693,15 @@ type App struct {
 	currentRoomName      string
 	users28PythonExec    string
 	users28ParserScript  string
+	// shout queue (rate-limit + merge + dedupe)
+	shoutQueue       chan string
+	shoutStop        chan struct{}
+	shoutLastSent    time.Time
+	shoutCooldown    time.Duration
+	shoutMergeWindow time.Duration
+	shoutDedup       map[string]time.Time
+	shoutMaxLength   int
+	shoutMu          sync.Mutex
 }
 
 type PokerDisplayConfig struct {
@@ -650,6 +729,14 @@ func NewApp(ext *g.Ext, assets embed.FS) *App {
 		assets: assets,
 	}
 	a.initUsers28ParserCommand()
+	// shout queue init
+	a.shoutQueue = make(chan string, 64)
+	a.shoutStop = make(chan struct{})
+	a.shoutCooldown = 1500 * time.Millisecond
+	a.shoutMergeWindow = 500 * time.Millisecond
+	a.shoutDedup = make(map[string]time.Time)
+	a.shoutMaxLength = 450
+	go a.runShoutWorker()
 	return a
 }
 
@@ -7389,8 +7476,7 @@ func (a *App) sendTradeCompletionMessage() {
 	a.beginGameHistory(partnerName, cloneGameBetItems())
 	a.AddLogMsg("[TRADE_FLOW] beginGameHistory returned")
 
-	first := fmt.Sprintf("%s what game do you want to play?", partnerName)
-	second := "Shout pkr, 21, 13, TriH, TriL"
+	// Prompt will be enqueued below as a single concise shout.
 	awaitingGameChoice = true
 	gameChoiceUnreadableWarned = false
 	awaitingGameChoicePartnerName = normalizeUsername(strings.TrimSpace(tradeStarterName))
@@ -7421,14 +7507,10 @@ func (a *App) sendTradeCompletionMessage() {
 
 	a.startGameChoiceTimeoutMonitor()
 
-	a.AddLogMsg(fmt.Sprintf("[TRADE_MESSAGE] shouting: %q", first))
-	ext.Send(out.SHOUT, first)
-
-	go func(msg string) {
-		time.Sleep(2500 * time.Millisecond)
-		a.AddLogMsg(fmt.Sprintf("[TRADE_MESSAGE] shouting: %q", msg))
-		ext.Send(out.SHOUT, msg)
-	}(second)
+	// Combine prompts into a single concise shout to avoid double-messaging.
+	combined := fmt.Sprintf("%s: What game? Shout pkr, 21, 13, TriH, TriL", partnerName)
+	a.AddLogMsg(fmt.Sprintf("[TRADE_MESSAGE] enqueue: %q", combined))
+	a.EnqueueShout(combined)
 }
 
 func formatTradeItemName(name string) string {
@@ -8266,21 +8348,14 @@ func (a *App) beginPokerSequence() {
 	resetPokerSequence()
 	pokerSequenceStage = 1
 	pokerSequencePlayerName = playerName
+	msg := fmt.Sprintf("Poker — %s Roll", playerName)
+	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] enqueue: %q", msg))
+	a.EnqueueShout(msg)
 
-	first := "Lets Play!"
-	second := fmt.Sprintf("%s Roll", playerName)
-
-	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", first))
-	ext.Send(out.SHOUT, first)
-
-	go func(msg string) {
-		time.Sleep(700 * time.Millisecond)
-		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
-		ext.Send(out.SHOUT, msg)
-
+	go func() {
 		time.Sleep(700 * time.Millisecond)
 		a.startPokerRoll()
-	}(second)
+	}()
 }
 
 func (a *App) beginBlackjackSequence() {
@@ -8294,23 +8369,16 @@ func (a *App) beginBlackjackSequence() {
 	blackjackRoundActive = true
 	blackjackPlayerTurn = true
 	blackjackPlayerName = playerName
+	msg := fmt.Sprintf("Blackjack — %s Roll", playerName)
+	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] enqueue: %q", msg))
+	a.EnqueueShout(msg)
 
-	first := "Lets Play!"
-	second := fmt.Sprintf("%s Roll", playerName)
-
-	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", first))
-	ext.Send(out.SHOUT, first)
-
-	go func(msg string) {
-		time.Sleep(700 * time.Millisecond)
-		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
-		ext.Send(out.SHOUT, msg)
-
+	go func() {
 		time.Sleep(700 * time.Millisecond)
 		isBJRolling = true
 		a.AddLogMsg("21 Roll:\n")
 		go a.rollBjDice()
-	}(second)
+	}()
 }
 
 func (a *App) begin13Sequence() {
@@ -8325,23 +8393,16 @@ func (a *App) begin13Sequence() {
 	thirteenRoundActive = true
 	thirteenPlayerTurn = true
 	thirteenPlayerName = playerName
+	msg := fmt.Sprintf("13 — %s Roll", playerName)
+	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] enqueue: %q", msg))
+	a.EnqueueShout(msg)
 
-	first := "Lets Play!"
-	second := fmt.Sprintf("%s Roll", playerName)
-
-	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", first))
-	ext.Send(out.SHOUT, first)
-
-	go func(msg string) {
-		time.Sleep(700 * time.Millisecond)
-		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
-		ext.Send(out.SHOUT, msg)
-
+	go func() {
 		time.Sleep(700 * time.Millisecond)
 		is13Rolling = true
 		a.AddLogMsg("13 Roll:\n")
 		go a.roll13Dice()
-	}(second)
+	}()
 }
 
 func (a *App) beginTriChoiceSequence() {
@@ -8392,22 +8453,15 @@ func (a *App) beginTriRound(mode string) {
 		gameLabel = "TriL"
 	}
 	a.setCurrentGameHistoryGame(gameLabel)
+	msg := fmt.Sprintf("Tri (%s) — %s Roll", strings.Title(triMode), playerName)
+	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] enqueue: %q", msg))
+	a.EnqueueShout(msg)
 
-	first := "Lets Play!"
-	second := fmt.Sprintf("%s Roll", playerName)
-
-	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", first))
-	ext.Send(out.SHOUT, first)
-
-	go func(msg string) {
-		time.Sleep(700 * time.Millisecond)
-		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
-		ext.Send(out.SHOUT, msg)
-
+	go func() {
 		time.Sleep(700 * time.Millisecond)
 		isTriRolling = true
 		a.rollTriDice()
-	}(second)
+	}()
 }
 
 func (a *App) start13DealerTurn(reason string) {
@@ -10128,12 +10182,12 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 
 	// For Tri (two-step selection) we must first ask High or Low
 	if choice != "tri" {
-		ack := fmt.Sprintf("%s! Lets Play!", gameChoiceDisplay(choice))
+		// Do not spam chat with an extra "Lets Play"; the begin*Sequence
+		// functions will announce the concise start message.
 		a.setCurrentGameHistoryGame(gameChoiceDisplay(choice))
-		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", ack))
-		ext.Send(out.SHOUT, ack)
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] selected: %q", gameChoiceDisplay(choice)))
 	} else {
-		a.AddLogMsg("[GAME_SELECT] Tri selected; prompting for High/Low instead of immediate Lets Play")
+		a.AddLogMsg("[GAME_SELECT] Tri selected; prompting for High/Low instead of immediate start")
 	}
 
 	switch choice {
