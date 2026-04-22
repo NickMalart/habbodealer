@@ -184,12 +184,8 @@ func comparePokerTiebreaks(player []int, dealer []int) int {
 			return -1
 		}
 	}
-	if len(player) > len(dealer) {
-		return 1
-	}
-	if len(dealer) > len(player) {
-		return -1
-	}
+	// Ignore any additional kickers beyond the compared prefix.
+	// Treat equal prefixes as an exact tie (dealer wins ties).
 	return 0
 }
 

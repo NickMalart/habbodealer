@@ -626,19 +626,7 @@
       </table>
     </div>
 
-  <!-- Users bottom bar (Home only) -->
-  <div v-if="activeTab === 'Home'" class="users-bottom-bar" aria-hidden="false">
-    <div class="users-bottom-inner">
-      <div v-if="roomIdentity.length === 0" class="users-empty">No users in room</div>
-      <div v-else class="users-list">
-        <div v-for="(u, idx) in roomIdentity" :key="`user-pill-${idx}`" :class="['user-pill', { trading: isUserTrading(u), 'in-game': isUserInGame(u) }]">
-          <span class="user-name">{{ u.name || 'Unknown' }}</span>
-          <span v-if="isUserTrading(u)" class="user-badge trading-badge">Trading</span>
-          <span v-else-if="isUserInGame(u)" class="user-badge game-badge">In Game</span>
-        </div>
-      </div>
-    </div>
-  </div>
+  <!-- Users bottom bar removed per user request -->
 
   <div id="packet-tooltip" v-if="tooltipVisible" class="packet-tooltip" v-html="tooltipHtml" :style="{ left: tooltipLeft + 'px', top: tooltipTop + 'px' }"></div>
   </div>
@@ -846,6 +834,11 @@ export default {
         return names.slice(0, 10);
       }
       return names.filter(n => n.toLowerCase().includes(q)).slice(0, 10);
+    },
+    activeUsers() {
+      return (this.roomIdentity || []).filter((u) => {
+        return this.isUserTrading(u) || this.isUserInGame(u);
+      });
     },
     activeStats() {
       return this.casinoStatsMap[this.statsRangeKey] || {};
