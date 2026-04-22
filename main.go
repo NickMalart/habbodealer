@@ -3717,8 +3717,8 @@ func startDealerOpenHeartbeat(a *App) {
 	}
 
 	go func(id int, openMsg string) {
-		// Initial 15s delay for the first re-announcement.
-		timer := time.NewTimer(15 * time.Second)
+		// Initial 45s delay for the first re-announcement.
+		timer := time.NewTimer(45 * time.Second)
 		defer timer.Stop()
 
 		select {
@@ -3740,17 +3740,17 @@ func startDealerOpenHeartbeat(a *App) {
 			}
 			// First shout: only if not muted.
 			if isMuted {
-				addLog("[TRADE_REOPEN] initial 15s announcer skipped due to mute")
-				log.Printf("[TRADE_REOPEN] initial 15s announcer skipped due to mute")
+				addLog("[TRADE_REOPEN] initial 45s announcer skipped due to mute")
+				log.Printf("[TRADE_REOPEN] initial 45s announcer skipped due to mute")
 			} else {
-				addLog("[TRADE_REOPEN] initial 15s re-announcing dealer open")
-				log.Printf("[TRADE_REOPEN] initial 15s re-announcing dealer open")
+				addLog("[TRADE_REOPEN] initial 45s re-announcing dealer open")
+				log.Printf("[TRADE_REOPEN] initial 45s re-announcing dealer open")
 				sendMessageWithDelay(openMsg)
 			}
 		}
 
-		// After the first attempt, run a steady 30s announcer that fires for everyone.
-		ticker := time.NewTicker(30 * time.Second)
+		// After the first attempt, run a steady 45s announcer that fires for everyone.
+		ticker := time.NewTicker(45 * time.Second)
 		defer ticker.Stop()
 
 		for range ticker.C {
@@ -3770,8 +3770,8 @@ func startDealerOpenHeartbeat(a *App) {
 				return
 			}
 
-			addLog("[TRADE_REOPEN] 30s periodic dealer-open announcer firing")
-			log.Printf("[TRADE_REOPEN] 30s periodic dealer-open announcer firing")
+			addLog("[TRADE_REOPEN] 45s periodic dealer-open announcer firing")
+			log.Printf("[TRADE_REOPEN] 45s periodic dealer-open announcer firing")
 			sendMessageWithDelay(openMsg)
 		}
 	}(id, dealerOpenMsg)
@@ -7205,16 +7205,13 @@ func (a *App) beginPokerSequence() {
 	pokerSequenceStage = 1
 	pokerSequencePlayerName = playerName
 
-	second := "Player Roll"
-
-	go func(msg string) {
-		time.Sleep(700 * time.Millisecond)
-		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
-		sendShout(msg)
-
-		time.Sleep(700 * time.Millisecond)
+	go func() {
+		// Wait the same total delay previously used (700 + 700ms) before
+		// starting the player's roll; the public shout was already sent above.
+		time.Sleep(1400 * time.Millisecond)
+		a.AddLogMsg("[GAME_SELECT] starting player roll")
 		a.startPokerRoll()
-	}(second)
+	}()
 }
 
 func (a *App) beginBlackjackSequence() {
@@ -7229,18 +7226,13 @@ func (a *App) beginBlackjackSequence() {
 	blackjackPlayerTurn = true
 	blackjackPlayerName = playerName
 
-	second := "Player Roll"
-
-	go func(msg string) {
-		time.Sleep(700 * time.Millisecond)
-		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
-		sendShout(msg)
-
-		time.Sleep(700 * time.Millisecond)
+	go func() {
+		// Combined ack already announced; delay then start player's BJ roll
+		time.Sleep(1400 * time.Millisecond)
 		isBJRolling = true
 		a.AddLogMsg("21 Roll:\n")
 		go a.rollBjDice()
-	}(second)
+	}()
 }
 
 func (a *App) begin13Sequence() {
@@ -7256,18 +7248,13 @@ func (a *App) begin13Sequence() {
 	thirteenPlayerTurn = true
 	thirteenPlayerName = playerName
 
-	second := "Player Roll"
-
-	go func(msg string) {
-		time.Sleep(700 * time.Millisecond)
-		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
-		sendShout(msg)
-
-		time.Sleep(700 * time.Millisecond)
+	go func() {
+		// Combined ack already announced; delay then start player's 13 roll
+		time.Sleep(1400 * time.Millisecond)
 		is13Rolling = true
 		a.AddLogMsg("13 Roll:\n")
 		go a.roll13Dice()
-	}(second)
+	}()
 }
 
 func (a *App) beginTriChoiceSequence() {
@@ -7319,17 +7306,12 @@ func (a *App) beginTriRound(mode string) {
 	}
 	a.setCurrentGameHistoryGame(gameLabel)
 
-	second := "Player Roll"
-
-	go func(msg string) {
-		time.Sleep(700 * time.Millisecond)
-		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
-		sendShout(msg)
-
-		time.Sleep(700 * time.Millisecond)
+	go func() {
+		// Combined ack already announced; delay then start player's Tri roll
+		time.Sleep(1400 * time.Millisecond)
 		isTriRolling = true
 		a.rollTriDice()
-	}(second)
+	}()
 }
 
 func (a *App) start13DealerTurn(reason string) {
@@ -8794,7 +8776,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 
 	// For Tri (two-step selection) we must first ask High or Low
 	if choice != "tri" {
-		ack := fmt.Sprintf("%s! Starting", gameChoiceDisplay(choice))
+		// Combine the standard "Starting" ack with the player-roll prompt
+		ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay(choice))
 		a.setCurrentGameHistoryGame(gameChoiceDisplay(choice))
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", ack))
 		sendShout(ack)
