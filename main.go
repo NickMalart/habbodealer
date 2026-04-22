@@ -1194,7 +1194,12 @@ func (a *App) runAutoShoutLoop(stopChan chan struct{}, phrase string, seconds in
 }
 
 func (a *App) dealerOpenMessage() string {
-	return "Dealer Open, See Whats in My Hand - rollorigins.club"
+	u := maxTradeUniqueItems
+	q := maxTradeQuantityPerItem
+	if u <= 1 {
+		return fmt.Sprintf("You can bet 1 unique item, max %d each - see my live hand - rollorigins.club", q)
+	}
+	return fmt.Sprintf("You can bet up to %d unique items, max %d per item - see my live hand - rollorigins.club", u, q)
 }
 
 func dealerGameActive() bool {
@@ -3648,7 +3653,7 @@ func startDealerOpenHeartbeat(a *App) {
 	dealerOpenHeartbeatID++
 	id := dealerOpenHeartbeatID
 	dealerOpenHeartbeatActive = true
-	dealerOpenMsg := "Dealer Open, See Whats in My Hand - rollorigins.club"
+	dealerOpenMsg := (&App{}).dealerOpenMessage()
 	if a != nil {
 		dealerOpenMsg = a.dealerOpenMessage()
 	}
