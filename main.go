@@ -299,6 +299,12 @@ var (
 	maxTradeUniqueItems     int = 5
 	maxTradeQuantityPerItem int = 50
 
+	// Centralized shout worker/queue to avoid flood-control mutes
+	shoutQueue         chan string
+	shoutWorkerOnce    sync.Once
+	shoutSpacing       = 1500 * time.Millisecond
+	shoutReplaySpacing = 1 * time.Second
+
 	autoShoutStopChan chan struct{}
 	autoShoutMu       sync.Mutex
 )
@@ -443,7 +449,7 @@ func (a *App) rejectTradeForLimitViolation(v *tradeLimitViolation) {
 		lastTradeLimitShoutAt = now
 		go func(m string) {
 			time.Sleep(350 * time.Millisecond)
-			ext.Send(out.SHOUT, m)
+			sendShout(m)
 		}(msg)
 	} else {
 		a.AddLogMsg("[TRADE_LIMIT] shout suppressed by cooldown/suppression")
@@ -1703,6 +1709,53 @@ func (a *App) setupExt() {
 		handleOutgoingHeaderSniff(a, e)
 		handleStripPacket(a, e)
 	})
+
+	// Ensure shout worker is started so sendShout can be used safely.
+	startShoutWorker()
+}
+
+// startShoutWorker initializes the background worker that drains shoutQueue
+// and sends messages with spacing to avoid triggering flood-control mutes.
+func startShoutWorker() {
+	shoutWorkerOnce.Do(func() {
+		shoutQueue = make(chan string, 128)
+		go func() {
+			for m := range shoutQueue {
+				s := strings.TrimSpace(m)
+				if s == "" {
+					continue
+				}
+				if isMuted {
+					// If muted, keep it in the muted queue for later replay.
+					messageQueue = append(messageQueue, s)
+					continue
+				}
+				ext.Send(out.SHOUT, s)
+				time.Sleep(shoutSpacing + time.Duration(rand.Intn(600))*time.Millisecond)
+			}
+		}()
+	})
+}
+
+// sendShout is a mute-aware helper for sending public shouts. It enqueues
+// into the shout worker if possible, or falls back to a synchronous send.
+func sendShout(msg string) {
+	trimmed := strings.TrimSpace(msg)
+	if trimmed == "" {
+		return
+	}
+	if isMuted {
+		messageQueue = append(messageQueue, trimmed)
+		return
+	}
+	startShoutWorker()
+	select {
+	case shoutQueue <- trimmed:
+		// enqueued
+	default:
+		// channel full: fallback to async direct send so we don't drop important notices
+		go func(m string) { ext.Send(out.SHOUT, m) }(trimmed)
+	}
 }
 
 func registerCustomTradeHeaders(a *App) {
@@ -1760,10 +1813,10 @@ func handleMuteEnd() {
 			}
 		}
 
-		// Send queued messages with small spacing so Habbo's flood control is less likely to trigger.
+		// Send queued messages conservatively to avoid re-triggering flood-control.
 		for _, message := range messageQueue {
-			go sendMessageWithDelay(message)
-			time.Sleep(150 * time.Millisecond)
+			sendShout(message)
+			time.Sleep(shoutReplaySpacing + time.Duration(rand.Intn(400))*time.Millisecond)
 		}
 
 		// Clear the queue
@@ -2054,7 +2107,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				lastTradeLimitNotice = ""
 				tradeLimitWasActive = false
 				a.AddLogMsg("[TRADE_LIMIT] violation resolved; trade is valid again")
-				ext.Send(out.SHOUT, "Trade is back within limits, accept again if needed")
+				sendShout("Trade is back within limits, accept again if needed")
 			}
 
 			if !wasValid && isValid {
@@ -2213,7 +2266,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 			completeMsg := fmt.Sprintf("Trade Completed: \"%s\"", partnerName)
 			a.AddLogMsg(fmt.Sprintf("[TRADE_COMPLETED] shouting: %q", completeMsg))
-			ext.Send(out.SHOUT, completeMsg)
+			sendShout(completeMsg)
 		} else {
 			a.AddLogMsg("[TRADE_COMPLETED #112] trade completed, sending trade summary")
 
@@ -2591,7 +2644,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN] unresolved partner from strict parsed USERS28 state, cancelling trade: %s", notify))
 				e.Block()
 				ext.Send(out.TRADE_CLOSE)
-				ext.Send(out.SHOUT, notify)
+				sendShout(notify)
 				return
 			}
 		}
@@ -2602,7 +2655,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		}
 		if shouldAnnounceTradeOpen {
 			a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN] shouting: %q", openMsg))
-			ext.Send(out.SHOUT, openMsg)
+			sendShout(openMsg)
 		} else {
 			a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN] suppressed public shout during payout flow: %q", openMsg))
 		}
@@ -2694,7 +2747,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		if !tradeCompleted && !tradeCloseAnnounced && !suppressCloseAnnouncement {
 			closeMsg := fmt.Sprintf("Trade Closed: \"%s\"", partnerName)
 			a.AddLogMsg(fmt.Sprintf("[TRADE_CLOSE] shouting: %q", closeMsg))
-			ext.Send(out.SHOUT, closeMsg)
+			sendShout(closeMsg)
 			tradeCloseAnnounced = true
 		} else if suppressCloseAnnouncement {
 			a.AddLogMsg("[TRADE_GUARD] suppressed trade closed announcement for forced guard-close")
@@ -2747,7 +2800,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				// Public notice at most once every 45 seconds
 				if canAnnouncePayoutCancelNotice() {
 					msg := fmt.Sprintf("%q closed trade", playerName)
-					ext.Send(out.SHOUT, msg)
+					sendShout(msg)
 					markPayoutCancelNoticeSent()
 				}
 
@@ -2758,7 +2811,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 					resetTradeAutoFlow()
 
 					flagMsg := "User have cancelled trade too many times, flagged issue please go to rollorigins.club."
-					ext.Send(out.SHOUT, flagMsg)
+					sendShout(flagMsg)
 
 					a.markCurrentGameHistoryIssue(
 						fmt.Sprintf("Payout trade cancelled too many times by %s", retryTargetName),
@@ -2922,7 +2975,7 @@ func (a *App) startPayoutResponseTimeoutMonitor(playerName string, targetID int,
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT_TIMEOUT] payout response timeout %d/3 for %s", payoutResponseTimeoutAttempts, player))
 
 		timeoutMsg := fmt.Sprintf("%q did not accept trade", player)
-		ext.Send(out.SHOUT, timeoutMsg)
+		sendShout(timeoutMsg)
 
 		time.Sleep(1200 * time.Millisecond)
 		// Mark this as a forced/local close so incoming TRADE_CLOSE isn't
@@ -2936,7 +2989,7 @@ func (a *App) startPayoutResponseTimeoutMonitor(playerName string, targetID int,
 		if payoutResponseTimeoutAttempts >= 3 {
 			flagMsg := "We have flagged the issues, Please go to rollorigins.club to resolve."
 			time.Sleep(1200 * time.Millisecond)
-			ext.Send(out.SHOUT, flagMsg)
+			sendShout(flagMsg)
 
 			a.markCurrentGameHistoryIssue(
 				fmt.Sprintf("Payout trade timed out 3 times waiting for %s to accept", player),
@@ -3424,7 +3477,7 @@ func startTradeWindowTimeoutMonitor(a *App) {
 			msg := "closing trade window opened for too long"
 			a.AddLogMsg("[TRADE_TIMEOUT] " + msg)
 			a.markCurrentGameHistoryIssue("Trade window stayed open too long and was force closed", true)
-			ext.Send(out.SHOUT, msg)
+			sendShout(msg)
 			ext.Send(out.TRADE_CLOSE)
 			return
 		}
@@ -3490,9 +3543,9 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 			return
 		}
 
-		reminder := "Shout pkr, 21, 13, tri"
+		reminder := "Shout pkr, 21, 13, trih, tril"
 		a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] 30s no response, repeating prompt for %s", player))
-		ext.Send(out.SHOUT, reminder)
+		sendShout(reminder)
 
 		// Another 30 seconds
 		time.Sleep(30 * time.Second)
@@ -3513,10 +3566,10 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 
 		a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] final timeout for %s", player))
 
-		ext.Send(out.SHOUT, closeMsg)
+		sendShout(closeMsg)
 		time.Sleep(1200 * time.Millisecond)
 
-		ext.Send(out.SHOUT, flagMsg)
+		sendShout(flagMsg)
 
 		a.markCurrentGameHistoryIssue(
 			fmt.Sprintf("No game choice response from %s after 60 seconds", player),
@@ -3576,7 +3629,7 @@ func startShortageMonitor(a *App, timeout time.Duration) {
 					partnerName = "Player"
 				}
 				a.AddLogMsg(fmt.Sprintf("[TRADE_COVERAGE] shortage unresolved; force-closing trade with %s", partnerName))
-				ext.Send(out.SHOUT, "Sorry none avabile to see my hand - rollorigins.club")
+				sendShout("Sorry none avabile to see my hand - rollorigins.club")
 				ext.Send(out.TRADE_CLOSE)
 				stopShortageMonitor()
 				return
@@ -3634,7 +3687,7 @@ func startTradeLimitMonitor(a *App, timeout time.Duration) {
 					partnerName = "Player"
 				}
 				a.AddLogMsg(fmt.Sprintf("[TRADE_LIMIT] unresolved; force-closing trade with %s", partnerName))
-				ext.Send(out.SHOUT, "Trade still over limit; closing now.")
+				sendShout("Trade still over limit; closing now.")
 				ext.Send(out.TRADE_CLOSE)
 				stopTradeLimitMonitor()
 				return
@@ -6038,7 +6091,7 @@ func (a *App) notifyTradeQuantityCoverage() {
 	go func(m string, shout bool) {
 		if shout {
 			time.Sleep(350 * time.Millisecond)
-			ext.Send(out.SHOUT, m)
+			sendShout(m)
 		}
 
 		time.Sleep(1200 * time.Millisecond)
@@ -6281,8 +6334,7 @@ func (a *App) sendTradeCompletionMessage() {
 	a.beginGameHistory(partnerName, gameBetItems)
 	a.AddLogMsg("[TRADE_FLOW] beginGameHistory returned")
 
-	first := "Choose game: pkr, 21, 13, tri"
-	second := "Shout pkr, 21, 13, tri"
+	msg := "Shout pkr, 21, 13, trih, tril"
 	awaitingGameChoice = true
 	gameChoiceUnreadableWarned = false
 	awaitingGameChoicePartnerName = normalizeUsername(strings.TrimSpace(tradeStarterName))
@@ -6313,14 +6365,8 @@ func (a *App) sendTradeCompletionMessage() {
 
 	a.startGameChoiceTimeoutMonitor()
 
-	a.AddLogMsg(fmt.Sprintf("[TRADE_MESSAGE] shouting: %q", first))
-	ext.Send(out.SHOUT, first)
-
-	go func(msg string) {
-		time.Sleep(1750 * time.Millisecond)
-		a.AddLogMsg(fmt.Sprintf("[TRADE_MESSAGE] shouting: %q", msg))
-		ext.Send(out.SHOUT, msg)
-	}(second)
+	a.AddLogMsg(fmt.Sprintf("[TRADE_MESSAGE] shouting: %q", msg))
+	sendShout(msg)
 }
 
 func formatTradeItemName(name string) string {
@@ -7137,7 +7183,7 @@ func extractInlineCommand(msg string) string {
 func (a *App) evalAt(msg string) {
 	mutex.Lock()
 	at := "@" + msg
-	ext.Send(out.SHOUT, at)
+	sendShout(at)
 	a.AddLogMsg(at)
 	mutex.Unlock()
 }
@@ -7164,7 +7210,7 @@ func (a *App) beginPokerSequence() {
 	go func(msg string) {
 		time.Sleep(700 * time.Millisecond)
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
-		ext.Send(out.SHOUT, msg)
+		sendShout(msg)
 
 		time.Sleep(700 * time.Millisecond)
 		a.startPokerRoll()
@@ -7188,7 +7234,7 @@ func (a *App) beginBlackjackSequence() {
 	go func(msg string) {
 		time.Sleep(700 * time.Millisecond)
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
-		ext.Send(out.SHOUT, msg)
+		sendShout(msg)
 
 		time.Sleep(700 * time.Millisecond)
 		isBJRolling = true
@@ -7215,7 +7261,7 @@ func (a *App) begin13Sequence() {
 	go func(msg string) {
 		time.Sleep(700 * time.Millisecond)
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
-		ext.Send(out.SHOUT, msg)
+		sendShout(msg)
 
 		time.Sleep(700 * time.Millisecond)
 		is13Rolling = true
@@ -7248,7 +7294,7 @@ func (a *App) beginTriChoiceSequence() {
 
 	msg := "High or Low?"
 	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
-	ext.Send(out.SHOUT, msg)
+	sendShout(msg)
 }
 
 func (a *App) beginTriRound(mode string) {
@@ -7278,7 +7324,7 @@ func (a *App) beginTriRound(mode string) {
 	go func(msg string) {
 		time.Sleep(700 * time.Millisecond)
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
-		ext.Send(out.SHOUT, msg)
+		sendShout(msg)
 
 		time.Sleep(700 * time.Millisecond)
 		isTriRolling = true
@@ -7292,7 +7338,7 @@ func (a *App) start13DealerTurn(reason string) {
 	a.AddLogMsg(fmt.Sprintf("[13_DEBUG] dealer turn starting reason=%s playerTotal=%d dealerTotal=%d", reason, thirteenPlayerTotal, thirteenDealerTotal))
 	message := "Dealer Roll"
 	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", message))
-	ext.Send(out.SHOUT, message)
+	sendShout(message)
 	go func() {
 		time.Sleep(700 * time.Millisecond)
 		is13Rolling = true
@@ -8356,7 +8402,7 @@ func verifyResult() {
 	// Convert the currentSum to a string
 	sumStr := strconv.Itoa(currentSum)
 	mutex.Lock()
-	ext.Send(out.SHOUT, sumStr)
+	sendShout(sumStr)
 	mutex.Unlock()
 }
 
@@ -8697,7 +8743,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 				gameChoiceUnreadableWarned = true
 				warn := fmt.Sprintf("%q Please shout, I can not hear you.", playerName)
 				a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] unreadable game choice from %s: %q", playerName, msg))
-				ext.Send(out.SHOUT, warn)
+				sendShout(warn)
 			}
 		}
 		return
@@ -8753,7 +8799,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		ack := fmt.Sprintf("%s! Starting", gameChoiceDisplay(choice))
 		a.setCurrentGameHistoryGame(gameChoiceDisplay(choice))
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", ack))
-		ext.Send(out.SHOUT, ack)
+		sendShout(ack)
 	} else {
 		a.AddLogMsg("[GAME_SELECT] Tri selected; prompting for High/Low instead of immediate Lets Play")
 	}
