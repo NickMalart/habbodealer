@@ -1197,9 +1197,9 @@ func (a *App) dealerOpenMessage() string {
 	u := maxTradeUniqueItems
 	q := maxTradeQuantityPerItem
 	if u <= 1 {
-		return fmt.Sprintf("You can bet %d item, max %d each - see my live hand - rollorigins.club", q)
+		return fmt.Sprintf("You can bet 1 item, max %d per item - see my live hand - rollorigins.club", q)
 	}
-	return fmt.Sprintf("You can bet up to %d item, max %d per item - see my live hand - rollorigins.club", u, q)
+	return fmt.Sprintf("You can bet up to %d unique items, max %d per item - see my live hand - rollorigins.club", u, q)
 }
 
 func dealerGameActive() bool {
