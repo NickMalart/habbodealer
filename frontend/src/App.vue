@@ -607,6 +607,22 @@
 
       <hr class="trade-divider" />
 
+      <h2 class="section-title">Event Browser</h2>
+      <div class="history-actions">
+        <button class="copy-btn" @click="loadEventDates">Refresh Dates</button>
+      </div>
+      <div class="event-browser" style="margin-top:8px;">
+        <div style="display:flex;gap:8px;align-items:center;">
+          <div class="game-guide-label">Date</div>
+          <select v-model="selectedEventDate" @change="loadEventsForDate(selectedEventDate)">
+            <option value="">Select date</option>
+            <option v-for="d in eventDates" :key="d" :value="d">{{ d }}</option>
+          </select>
+          <button class="copy-btn" :disabled="!selectedEventDate" @click="downloadEventsForDate">Download</button>
+        </div>
+        <div class="trade-empty" style="margin-top:8px;">Click a date and press Download to open events in Notepad.</div>
+      </div>
+
       <h2 class="section-title">Room Identity Map (G_USERS)</h2>
       <div v-if="roomIdentity.length === 0" class="trade-empty">
         No room users decoded yet.<br />
@@ -740,6 +756,10 @@ export default {
       // Live UI indicators for partner activity
       currentTraderName: '',
       currentGamePlayerName: '',
+      // Event log browser state
+      eventDates: [],
+      selectedEventDate: '',
+      eventsForDate: [],
     };
   },
   computed: {
@@ -1102,6 +1122,42 @@ export default {
     async copyDebugLogs() {
       const text = this.debugLog.join('\n');
       await this.copyTextToClipboard(text, 'debug logs');
+    },
+    async loadEventDates() {
+      try {
+        const json = await window.go.main.App.ListEventDatesJSON();
+        this.eventDates = JSON.parse(json || '[]') || [];
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to load event dates');
+        console.error(e);
+      }
+    },
+    async loadEventsForDate(date) {
+      try {
+        if (!date) return;
+        const json = await window.go.main.App.ListEventsForDateJSON(date);
+        this.eventsForDate = JSON.parse(json || '[]') || [];
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to load events for date');
+        console.error(e);
+      }
+    },
+    async downloadEventsForDate() {
+      try {
+        if (!this.selectedEventDate) {
+          this.addLogMsg('[UI] No date selected');
+          return;
+        }
+        const path = await window.go.main.App.ExportEventsForDate(this.selectedEventDate);
+        if (path) {
+          this.addLogMsg(`[UI] Exported events to ${path}`);
+        } else {
+          this.addLogMsg('[UI] No events found or export failed');
+        }
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to export events');
+        console.error(e);
+      }
     },
     formatItemName(name) {
       return String(name || '')
@@ -1484,6 +1540,7 @@ export default {
       // Fetch minimal stats for ranges
       await this.loadStats('all_time');
       await this.loadStats('today');
+      await this.loadEventDates();
     window.runtime.EventsOn("logUpdate", (message) => {
       this.log = message.split('\n');
       this.scrollBox('logbox');

@@ -299,6 +299,12 @@ var (
 	maxTradeUniqueItems     int = 5
 	maxTradeQuantityPerItem int = 50
 
+	// When true, record every intercepted packet as a raw event for auditing
+	// and debugging. This writes a minimal per-packet JSON record including
+	// header, direction and hex payload. WARNING: this can generate a lot of
+	// files; enable only when needed.
+	captureAllPackets bool = true
+
 	// Centralized shout worker/queue to avoid flood-control mutes
 	shoutQueue         chan string
 	shoutWorkerOnce    sync.Once
@@ -1533,6 +1539,8 @@ func (a *App) beginGameHistory(playerName string, betItems []TradeItem) {
 	a.AddLogMsg("[GAME_HISTORY] beginGameHistory mutation complete")
 	a.gameHistoryMu.Unlock()
 	a.AddLogMsg("[GAME_HISTORY] beginGameHistory unlocked, syncing")
+	// Persist game-begin record
+	go LogEvent("game_begin", entry, "Game started", map[string]string{"player": entry.PlayerName})
 	a.syncGameHistory()
 }
 
@@ -1574,6 +1582,7 @@ func (a *App) setCurrentGameHistoryGame(game string) {
 func (a *App) setCurrentGameHistoryResults(playerResult string, dealerResult string, winner string, status string, complete bool) {
 	a.AddLogMsg("[GAME_HISTORY] setCurrentGameHistoryResults start")
 	a.gameHistoryMu.Lock()
+	var completedEntry GameHistoryEntry
 	if !a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
 		if strings.TrimSpace(playerResult) != "" {
 			entry.PlayerResult = playerResult
@@ -1600,6 +1609,8 @@ func (a *App) setCurrentGameHistoryResults(playerResult string, dealerResult str
 		}
 		if complete {
 			entry.CompletedAt = gameHistoryTimestamp()
+			// copy out the completed entry for persistent logging
+			completedEntry = *entry
 		}
 	}) {
 		a.gameHistoryMu.Unlock()
@@ -1614,6 +1625,8 @@ func (a *App) setCurrentGameHistoryResults(playerResult string, dealerResult str
 	a.syncGameHistory()
 	if complete {
 		a.sendLiveDealerGames(5)
+		// Persist completed game record for later review
+		go LogEvent("game_complete", completedEntry, "Game completed", map[string]string{"player": completedEntry.PlayerName})
 	}
 }
 
@@ -1701,6 +1714,18 @@ func (a *App) setupExt() {
 	a.ext.Intercept(out.CHAT).With(a.handleTalk)
 	a.ext.Intercept(out.SHOUT).With(a.handleTalk)
 	a.ext.InterceptAll(func(e *g.Intercept) {
+		if captureAllPackets {
+			dir := "in"
+			if e.Packet.Header.Dir == g.Out {
+				dir = "out"
+			}
+			go LogEvent("packet_raw", map[string]interface{}{
+				"header":      e.Packet.Header.Value,
+				"dir":         dir,
+				"len":         len(e.Packet.Data),
+				"payload_hex": fmt.Sprintf("% X", e.Packet.Data),
+			}, fmt.Sprintf("packet header=%d dir=%s len=%d", e.Packet.Header.Value, dir, len(e.Packet.Data)), nil)
+		}
 		handleMutePacket(e)
 		handleRoomResetPacket(a, e)
 		handleTradePacket(a, e)
@@ -1879,6 +1904,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		if targetID, ok := decodeLeadingVL64(e.Packet.Data); ok {
 			rememberOutgoingTradeOpenTarget(targetID)
 			a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN #71] remembered outgoing target id %d", targetID))
+			go LogEvent("trade_open", map[string]interface{}{"mode": "outgoing", "target_id": targetID, "payload": string(e.Packet.Data)}, fmt.Sprintf("Outgoing TRADE_OPEN target=%d", targetID), nil)
 		} else {
 			a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN #71] outgoing payload decode failed: %q", string(e.Packet.Data)))
 		}
@@ -1976,6 +2002,9 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			tradeItemsMu.Unlock()
 
 			a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS_DEBUG] incoming TRADE_ITEMS all=%d prevAll=%d wasOursFlag=%t lastAddAt=%s (non-payout)", len(allItems), prevAllLen, wasOurs, lastAddAt.Format(time.RFC3339Nano)))
+
+			// Persist incoming TRADE_ITEMS snapshot for audit
+			go LogEvent("trade_items", map[string]interface{}{"all_items": allItems, "partner_map": partnerMap, "own_map": ownMap}, fmt.Sprintf("TRADE_ITEMS all=%d", len(allItems)), map[string]string{"mode": "non-payout"})
 
 			if len(allItems) == 0 {
 				a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS_DEBUG] zero parsed items, raw=%q", string(e.Packet.Data)))
@@ -2264,11 +2293,17 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			a.AddLogMsg("[TRADE_COMPLETED #112] payout trade completed")
 			a.captureCurrentGameHistoryPayoutItems(payoutItems, "Payout trade completed successfully", true)
 
+			// Persist completed payout trade for audit
+			go LogEvent("trade_completed", map[string]interface{}{"mode": "payout", "partner": partnerName, "payout_items": payoutItems}, fmt.Sprintf("Payout trade completed to %s", partnerName), nil)
+
 			completeMsg := fmt.Sprintf("Trade Completed: \"%s\"", partnerName)
 			a.AddLogMsg(fmt.Sprintf("[TRADE_COMPLETED] shouting: %q", completeMsg))
 			sendShout(completeMsg)
 		} else {
 			a.AddLogMsg("[TRADE_COMPLETED #112] trade completed, sending trade summary")
+
+			// Persist completed bet trade summary for audit
+			go LogEvent("trade_completed", map[string]interface{}{"mode": "bet", "partner": normalizeUsername(strings.TrimSpace(lastTradePartnerName)), "bet_items": gameBetItems}, "Trade completed (bet)", nil)
 
 			// Send the trade items summary to chat
 			a.sendTradeCompletionMessage()
@@ -2527,6 +2562,8 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				lastTradePartnerToken = tradeToken
 				tradeStarterToken = tradeToken
 				a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN] extracted token=%q payload_hex=% X", tradeToken, e.Packet.Data))
+				// Record trade-open token discovery
+				go LogEvent("trade_open", map[string]interface{}{"token": tradeToken, "raw": fmt.Sprintf("% X", e.Packet.Data)}, "Trade open token extracted", nil)
 				if !isLikelyToken(tradeToken) {
 					a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN] extracted token looks suspicious: %q", tradeToken))
 				}
@@ -2558,6 +2595,8 @@ func handleTradePacket(a *App, e *g.Intercept) {
 					tradeStarterLocked = tradeStarterName != ""
 					resolved = tradeStarterLocked
 					a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN] resolved starter from trade token %q -> name=%q chat_id=%d trade_id=%d", tradeStarterToken, tradeStarterName, tradeStarterChatID, tradeStarterTradeID))
+					// Persist trade-open resolution
+					go LogEvent("trade_open", map[string]interface{}{"token": tradeStarterToken, "name": tradeStarterName, "chat_id": tradeStarterChatID, "trade_id": tradeStarterTradeID}, "Trade open resolved via users28 token", map[string]string{"resolved": "true"})
 				}
 			}
 
@@ -5517,6 +5556,9 @@ func (a *App) finalizeStripScan(sessionID int, reason string) {
 	for i, item := range items {
 		a.AddLogMsg(fmt.Sprintf("[STRIP] hand[%d] name=%q qty=%d", i, item.Name, item.Quantity))
 	}
+
+	// Persist completed strip scan for later inspection
+	go LogEvent("hand_scan", map[string]interface{}{"pages_scanned": pagesScanned, "reason": reason, "items": items}, fmt.Sprintf("Strip scan complete (pages=%d reason=%s)", pagesScanned, reason), nil)
 	a.emitHandItemsUpdate()
 
 	// If a trade is open, refresh the frozen hand snapshot so coverage
@@ -5992,6 +6034,8 @@ func (a *App) captureTradeHandSnapshot() {
 	joined := strings.Join(parts, ",")
 	a.AddLogMsg("[TRADE_HAND_SNAPSHOT] captured: " + joined)
 	a.AddLogMsg(fmt.Sprintf("[TRADE_HAND_SNAPSHOT] ready=true (items=%d)", len(snapshot)))
+	// Persist frozen hand snapshot for later inspection
+	go LogEvent("hand_snapshot", snapshot, fmt.Sprintf("[TRADE_HAND_SNAPSHOT] captured (items=%d)", len(snapshot)), nil)
 	// Send snapshot to configured live-dealer webhook (non-blocking)
 	a.sendLiveDealerSnapshot(snapshot)
 
@@ -7091,6 +7135,8 @@ func tryReadIntInt(pkt *g.Packet) (a int, b int, pos int, ok bool) {
 func (a *App) onChatMessage(e *g.Intercept) {
 	msg := e.Packet.ReadString()
 	a.AddChatLog("[OUT] " + msg)
+	// Persist outgoing chat for audit/analysis
+	go LogEvent("chat_outgoing", map[string]interface{}{"text": msg}, "Outgoing chat", nil)
 	commandMsg := extractInlineCommand(msg)
 
 	// Process commands based on the message prefix and suffix
@@ -7875,6 +7921,8 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 				log.Printf("Dice %d rolled: %d\n", diceID, adjustedDiceValue)
 				logRollResult := fmt.Sprintf("Dice %d rolled: %d\n", diceID, adjustedDiceValue)
 				a.AddLogMsg(logRollResult)
+				// Persist dice result for later inspection
+				go LogEvent("dice_result", map[string]interface{}{"dice_id": diceID, "value": adjustedDiceValue}, logRollResult, map[string]string{"source": "handleDiceResult"})
 			}
 			needEmit = true
 			break
@@ -8451,8 +8499,11 @@ func (a *App) AddErrorLog(msg string, err error) {
 		a.AddLogMsg(msg)
 		return
 	}
-	a.AddLogMsg(fmt.Sprintf("%s: %v", msg, err))
+	full := fmt.Sprintf("%s: %v", msg, err)
+	a.AddLogMsg(full)
 	log.Printf("[ERROR] %s: %v", msg, err)
+	// Record to persistent event log for later review
+	go LogEvent("error", map[string]interface{}{"message": msg, "error": err.Error()}, full, nil)
 }
 
 func (a *App) AddDebugLog(format string, args ...interface{}) {
@@ -8574,9 +8625,11 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	if senderOk {
 		log.Printf("[INCOMING %s] %s(%d) -> %s", chatType, senderName, index, msg)
 		a.AddChatLog(fmt.Sprintf("[IN %s] %s(%d) -> %s", chatType, senderName, index, msg))
+		go LogEvent("chat_incoming", map[string]interface{}{"type": chatType, "sender": senderName, "index": index, "text": msg}, fmt.Sprintf("Incoming %s from %s", chatType, senderName), nil)
 	} else {
 		log.Printf("[INCOMING %s] %d -> %s", chatType, index, msg)
 		a.AddChatLog(fmt.Sprintf("[IN %s] %d -> %s", chatType, index, msg))
+		go LogEvent("chat_incoming", map[string]interface{}{"type": chatType, "sender_index": index, "text": msg}, fmt.Sprintf("Incoming %s (index=%d)", chatType, index), nil)
 	}
 
 	if awaitingBlackjackDecision {

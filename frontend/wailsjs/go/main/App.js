@@ -30,6 +30,10 @@ export function ClearTradeItems() {
   return window['go']['main']['App']['ClearTradeItems']();
 }
 
+export function ExportEventsForDate(arg1) {
+  return window['go']['main']['App']['ExportEventsForDate'](arg1);
+}
+
 export function GetAutoShoutConfig() {
   return window['go']['main']['App']['GetAutoShoutConfig']();
 }
@@ -122,6 +126,14 @@ export function GetTradeItemsJSON() {
   return window['go']['main']['App']['GetTradeItemsJSON']();
 }
 
+export function ListEventDatesJSON() {
+  return window['go']['main']['App']['ListEventDatesJSON']();
+}
+
+export function ListEventsForDateJSON(arg1) {
+  return window['go']['main']['App']['ListEventsForDateJSON'](arg1);
+}
+
 export function LoadCatalog() {
   return window['go']['main']['App']['LoadCatalog']();
 }
@@ -136,6 +148,10 @@ export function OpenLastTrade() {
 
 export function PauseCasinoSetup() {
   return window['go']['main']['App']['PauseCasinoSetup']();
+}
+
+export function ReadEventFileJSON(arg1, arg2) {
+  return window['go']['main']['App']['ReadEventFileJSON'](arg1, arg2);
 }
 
 export function ResumeCasinoSetup() {

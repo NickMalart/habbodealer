@@ -16,6 +16,8 @@ export function ClearGameHistory():Promise<void>;
 
 export function ClearTradeItems():Promise<void>;
 
+export function ExportEventsForDate(arg1:string):Promise<string>;
+
 export function GetAutoShoutConfig():Promise<main.AutoShoutConfig>;
 
 export function GetBlockArticlesPageConfig():Promise<main.BlockSlideObjectConfig>;
@@ -62,6 +64,10 @@ export function GetLastTradePartnerName():Promise<string>;
 
 export function GetTradeItemsJSON():Promise<string>;
 
+export function ListEventDatesJSON():Promise<string>;
+
+export function ListEventsForDateJSON(arg1:string):Promise<string>;
+
 export function LoadCatalog():Promise<Array<main.CatalogItem>>;
 
 export function LoadConfig():Promise<main.PokerDisplayConfig>;
@@ -69,6 +75,8 @@ export function LoadConfig():Promise<main.PokerDisplayConfig>;
 export function OpenLastTrade():Promise<void>;
 
 export function PauseCasinoSetup():Promise<void>;
+
+export function ReadEventFileJSON(arg1:string,arg2:string):Promise<string>;
 
 export function ResumeCasinoSetup():Promise<void>;
 
