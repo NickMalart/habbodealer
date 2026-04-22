@@ -130,6 +130,15 @@
           <div class="game-guide-label" style="display:inline-block;margin-right:8px;margin-bottom:4px;">Presets</div>
           <div style="display:inline-flex;gap:8px;flex-wrap:wrap;align-items:center;">
             <button type="button" class="copy-btn preset-btn" @click="setAutoShoutPreset('See My Hand - rollorigins.club')">See My Hand - rollorigins.club</button>
+            <button type="button" class="copy-btn" @click="addAutoShoutPreset" title="Save current phrase as preset">Add Preset</button>
+          </div>
+          <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
+            <template v-for="(p, idx) in autoShoutPresets" :key="'preset-'+idx">
+              <div style="display:inline-flex;align-items:center;gap:6px;">
+                <button type="button" class="copy-btn preset-btn" @click="setAutoShoutPreset(p)">{{ p }}</button>
+                <button type="button" class="copy-btn delete-preset" @click="deleteAutoShoutPreset(idx)" title="Delete preset">×</button>
+              </div>
+            </template>
           </div>
         </div>
 
@@ -719,6 +728,7 @@ export default {
       autoShoutPhrase: '',
       autoShoutSeconds: 30,
       autoShoutEnabled: false,
+      autoShoutPresets: [],
       // Block recommended-rooms packet
       blockRecommendedRooms: true,
       // Block slide-object-bundle packet
@@ -1212,6 +1222,57 @@ export default {
           if (el && typeof el.focus === 'function') el.focus();
         });
       } catch (e) {}
+    },
+
+    loadAutoShoutPresets() {
+      try {
+        const raw = localStorage.getItem('autoShoutPresets') || '[]';
+        const arr = JSON.parse(raw || '[]') || [];
+        if (Array.isArray(arr)) {
+          this.autoShoutPresets = arr.filter(p => typeof p === 'string');
+        } else {
+          this.autoShoutPresets = [];
+        }
+      } catch (e) {
+        this.autoShoutPresets = [];
+      }
+    },
+
+    saveAutoShoutPresets() {
+      try {
+        localStorage.setItem('autoShoutPresets', JSON.stringify(this.autoShoutPresets || []));
+      } catch (e) {}
+    },
+
+    addAutoShoutPreset() {
+      try {
+        const phrase = String(this.autoShoutPhrase || '').trim();
+        if (!phrase) {
+          this.addLogMsg('[UI] Cannot add empty preset');
+          return;
+        }
+        if (!Array.isArray(this.autoShoutPresets)) this.autoShoutPresets = [];
+        if (this.autoShoutPresets.includes(phrase)) {
+          this.addLogMsg('[UI] Preset already exists');
+          return;
+        }
+        this.autoShoutPresets.push(phrase);
+        this.saveAutoShoutPresets();
+        this.addLogMsg('[UI] Preset added');
+      } catch (e) {
+        console.error('addAutoShoutPreset', e);
+      }
+    },
+
+    deleteAutoShoutPreset(idx) {
+      try {
+        if (!Array.isArray(this.autoShoutPresets)) return;
+        const removed = this.autoShoutPresets.splice(idx, 1);
+        this.saveAutoShoutPresets();
+        this.addLogMsg(`[UI] Removed preset: ${removed && removed[0] ? removed[0] : ''}`);
+      } catch (e) {
+        console.error('deleteAutoShoutPreset', e);
+      }
     },
 
     async saveAutoShout() {
@@ -1715,6 +1776,11 @@ export default {
     } catch (e) {
       console.error('autoShout init', e);
     }
+
+    // Load user-defined auto shout presets from localStorage
+    try {
+      this.loadAutoShoutPresets();
+    } catch (e) {}
 
     // Block recommended-rooms initial fetch and subscription
     try {
@@ -2967,5 +3033,27 @@ input[type="text"]::placeholder {
 .users-empty {
   color: #bdbdbd;
   font-size: 13px;
+}
+/* Auto shout preset button styles */
+.preset-btn {
+  padding: 6px 10px;
+  background-color: #2f2f2f;
+  color: #fff;
+  border: 1px solid #444;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.delete-preset {
+  padding: 6px 8px;
+  background: #3a1f1f;
+  color: #ffd0d0;
+  border: 1px solid #5a2b2b;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 700;
+}
+.delete-preset:hover {
+  background: #5a2323;
 }
 </style>
