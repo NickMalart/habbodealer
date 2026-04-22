@@ -1197,9 +1197,9 @@ func (a *App) dealerOpenMessage() string {
 	u := maxTradeUniqueItems
 	q := maxTradeQuantityPerItem
 	if u <= 1 {
-		return fmt.Sprintf("You can bet 1 unique item, max %d each - see my live hand - rollorigins.club", q)
+		return fmt.Sprintf("You can bet %d item, max %d each - see my live hand - rollorigins.club", q)
 	}
-	return fmt.Sprintf("You can bet up to %d unique items, max %d per item - see my live hand - rollorigins.club", u, q)
+	return fmt.Sprintf("You can bet up to %d item, max %d per item - see my live hand - rollorigins.club", u, q)
 }
 
 func dealerGameActive() bool {
@@ -3490,7 +3490,7 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 			return
 		}
 
-		reminder := "Shout pkr, 21, 13, Tri"
+		reminder := "Shout pkr, 21, 13, tri"
 		a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] 30s no response, repeating prompt for %s", player))
 		ext.Send(out.SHOUT, reminder)
 
@@ -6281,8 +6281,8 @@ func (a *App) sendTradeCompletionMessage() {
 	a.beginGameHistory(partnerName, gameBetItems)
 	a.AddLogMsg("[TRADE_FLOW] beginGameHistory returned")
 
-	first := fmt.Sprintf("%s what game do you want to play?", partnerName)
-	second := "Shout pkr, 21, 13, TriH, TriL"
+	first := "Choose game: pkr, 21, 13, tri"
+	second := "Shout pkr, 21, 13, tri"
 	awaitingGameChoice = true
 	gameChoiceUnreadableWarned = false
 	awaitingGameChoicePartnerName = normalizeUsername(strings.TrimSpace(tradeStarterName))
@@ -7159,11 +7159,7 @@ func (a *App) beginPokerSequence() {
 	pokerSequenceStage = 1
 	pokerSequencePlayerName = playerName
 
-	first := "Lets Play!"
 	second := fmt.Sprintf("%s Roll", playerName)
-
-	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", first))
-	ext.Send(out.SHOUT, first)
 
 	go func(msg string) {
 		time.Sleep(700 * time.Millisecond)
@@ -7187,11 +7183,7 @@ func (a *App) beginBlackjackSequence() {
 	blackjackPlayerTurn = true
 	blackjackPlayerName = playerName
 
-	first := "Lets Play!"
 	second := fmt.Sprintf("%s Roll", playerName)
-
-	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", first))
-	ext.Send(out.SHOUT, first)
 
 	go func(msg string) {
 		time.Sleep(700 * time.Millisecond)
@@ -7218,11 +7210,7 @@ func (a *App) begin13Sequence() {
 	thirteenPlayerTurn = true
 	thirteenPlayerName = playerName
 
-	first := "Lets Play!"
 	second := fmt.Sprintf("%s Roll", playerName)
-
-	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", first))
-	ext.Send(out.SHOUT, first)
 
 	go func(msg string) {
 		time.Sleep(700 * time.Millisecond)
@@ -7285,11 +7273,7 @@ func (a *App) beginTriRound(mode string) {
 	}
 	a.setCurrentGameHistoryGame(gameLabel)
 
-	first := "Lets Play!"
 	second := fmt.Sprintf("%s Roll", playerName)
-
-	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", first))
-	ext.Send(out.SHOUT, first)
 
 	go func(msg string) {
 		time.Sleep(700 * time.Millisecond)
@@ -8766,7 +8750,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 
 	// For Tri (two-step selection) we must first ask High or Low
 	if choice != "tri" {
-		ack := fmt.Sprintf("%s! Lets Play!", gameChoiceDisplay(choice))
+		ack := fmt.Sprintf("%s! Starting", gameChoiceDisplay(choice))
 		a.setCurrentGameHistoryGame(gameChoiceDisplay(choice))
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", ack))
 		ext.Send(out.SHOUT, ack)
