@@ -4174,6 +4174,62 @@ func handleUsers28Packet(a *App, e *g.Intercept) {
 
 		oldUser, exists := users28Canonical[canonical]
 		if !exists {
+			// Try to find an existing canonical entry using authoritative IDs
+			// (token_hex, chat_id, trade_id) to avoid creating duplicate
+			// canonical keys when the parser sometimes includes a 4-byte
+			// token prefix and sometimes does not.
+			foundKey := ""
+			// Prefer exact token_hex match
+			tok := strings.TrimSpace(u.TokenHex)
+			if tok != "" {
+				for k, v := range users28Canonical {
+					if strings.TrimSpace(v.TokenHex) != "" && strings.TrimSpace(v.TokenHex) == tok {
+						foundKey = k
+						oldUser = v
+						break
+					}
+				}
+			}
+			// Fallback: match by chat id
+			if foundKey == "" && u.ChatID > 0 {
+				for k, v := range users28Canonical {
+					if v.ChatID > 0 && v.ChatID == u.ChatID {
+						foundKey = k
+						oldUser = v
+						break
+					}
+				}
+			}
+			// Fallback: match by trade id
+			if foundKey == "" && u.TradeID > 0 {
+				for k, v := range users28Canonical {
+					if v.TradeID > 0 && v.TradeID == u.TradeID {
+						foundKey = k
+						oldUser = v
+						break
+					}
+				}
+			}
+
+			if foundKey != "" {
+				// Merge into the existing canonical entry we found.
+				users28Canonical[foundKey] = u
+				if token := strings.TrimSpace(u.TokenHex); token != "" {
+					users28ByToken[token] = u
+				}
+				if u.ChatID > 0 {
+					users28ByIndex[u.ChatID] = u
+				}
+				if u.TradeID > 0 {
+					users28ByTradeID[u.TradeID] = u
+				}
+				changed = append(changed, fmt.Sprintf("%s(chat:%d->%d trade:%s->%s)",
+					u.Username, oldUser.ChatID, u.ChatID, oldUser.TradeIDRaw, u.TradeIDRaw))
+				a.AddLogMsg(fmt.Sprintf("[ROOM_USERS_DEBUG] merged user=%s canonical=%s raw=%s chat_id=%d chat_raw=%s trade_id=%d trade_raw=%s",
+					u.Username, foundKey, u.RawNameBlock, u.ChatID, u.ChatIDRaw, u.TradeID, u.TradeIDRaw))
+				continue
+			}
+
 			// New canonical entry
 			users28Canonical[canonical] = u
 			if token := strings.TrimSpace(u.TokenHex); token != "" {

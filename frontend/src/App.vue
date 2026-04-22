@@ -596,12 +596,7 @@
           <div ref="debuglogbox" class="log-section debug-log-section">
             <div v-for="(msg, index) in debugLog" :key="`debug-${index}`">{{ msg }}</div>
           </div>
-            <div style="margin-top:8px">
-              <div class="game-guide-label">Python Parser (stdout)</div>
-              <pre class="monospace-wrap small py-stdout">{{ pyStdout }}</pre>
-              <div class="game-guide-label" style="margin-top:6px">Python Parser (stderr)</div>
-              <pre class="monospace-wrap small py-stderr">{{ pyStderr }}</pre>
-            </div>
+            <!-- Python parser debug output removed -->
         </div>
       </div>
 
@@ -718,8 +713,6 @@ export default {
       log: [],
       debugLog: [],
       chatLog: [],
-      pyStdout: '',
-      pyStderr: '',
       showNameSuggestions: false,
       showFlaggedOnly: false,
       // Auto shout UI state
@@ -1549,12 +1542,7 @@ export default {
       this.debugLog = message.split('\n');
       this.scrollBox('debuglogbox');
     });
-    window.runtime.EventsOn("pyParserStdout", (message) => {
-      this.pyStdout = message || '';
-    });
-    window.runtime.EventsOn("pyParserStderr", (message) => {
-      this.pyStderr = message || '';
-    });
+    // Python parser debug events removed
     window.runtime.EventsOn("chatLogUpdate", (message) => {
       this.chatLog = message.split('\n');
       this.scrollBox('chatlogbox');
@@ -2912,8 +2900,6 @@ input[type="text"]::placeholder {
   box-sizing: border-box;
 }
 .monospace-wrap.small { max-height: 120px; }
-.py-stderr { background: #300; color: #f8d7da; }
-.py-stdout { background: #111; color: #dcdcdc; }
 
 /* Users bottom bar */
 .users-bottom-bar {
