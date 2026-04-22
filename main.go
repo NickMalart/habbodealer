@@ -7205,7 +7205,7 @@ func (a *App) beginPokerSequence() {
 	pokerSequenceStage = 1
 	pokerSequencePlayerName = playerName
 
-	second := fmt.Sprintf("%s Roll", playerName)
+	second := "Player Roll"
 
 	go func(msg string) {
 		time.Sleep(700 * time.Millisecond)
@@ -7229,7 +7229,7 @@ func (a *App) beginBlackjackSequence() {
 	blackjackPlayerTurn = true
 	blackjackPlayerName = playerName
 
-	second := fmt.Sprintf("%s Roll", playerName)
+	second := "Player Roll"
 
 	go func(msg string) {
 		time.Sleep(700 * time.Millisecond)
@@ -7256,7 +7256,7 @@ func (a *App) begin13Sequence() {
 	thirteenPlayerTurn = true
 	thirteenPlayerName = playerName
 
-	second := fmt.Sprintf("%s Roll", playerName)
+	second := "Player Roll"
 
 	go func(msg string) {
 		time.Sleep(700 * time.Millisecond)
@@ -7319,7 +7319,7 @@ func (a *App) beginTriRound(mode string) {
 	}
 	a.setCurrentGameHistoryGame(gameLabel)
 
-	second := fmt.Sprintf("%s Roll", playerName)
+	second := "Player Roll"
 
 	go func(msg string) {
 		time.Sleep(700 * time.Millisecond)
@@ -7336,9 +7336,7 @@ func (a *App) start13DealerTurn(reason string) {
 	awaiting13Decision = false
 	thirteenPlayerTurn = false
 	a.AddLogMsg(fmt.Sprintf("[13_DEBUG] dealer turn starting reason=%s playerTotal=%d dealerTotal=%d", reason, thirteenPlayerTotal, thirteenDealerTotal))
-	message := "Dealer Roll"
-	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", message))
-	sendShout(message)
+	a.AddLogMsg("[GAME_SELECT] starting dealer roll")
 	go func() {
 		time.Sleep(700 * time.Millisecond)
 		is13Rolling = true

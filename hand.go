@@ -45,13 +45,26 @@ func (a *App) evaluatePokerHand() {
 
 	if !ChatIsDisabled {
 		if !isMuted {
-			// If the user is not muted, send the message
-			sendMessageWithDelay(hand)
+			if pokerSequenceStage == 1 {
+				// Send the player's result and immediately indicate dealer will roll
+				sendMessageWithDelay(fmt.Sprintf("%s, Now dealer Roll", hand))
+			} else if pokerSequenceStage == 2 {
+				// Suppress separate dealer-hand announcement; final winner message will include dealer result
+			} else {
+				// Fallback: send the raw hand text
+				sendMessageWithDelay(hand)
+			}
 		} else {
-			// If the user is muted, queue the message to send later
-			log.Printf("User is muted. Queuing message: %s", hand)
-			// ToDo:
-			// messageQueue = append(messageQueue, hand)
+			// If the user is muted, log/queue appropriately
+			if pokerSequenceStage == 1 {
+				log.Printf("User is muted. Queuing message: %s", fmt.Sprintf("%s, Now dealer Roll", hand))
+				// ToDo: messageQueue = append(messageQueue, fmt.Sprintf("%s, Now dealer Roll", hand))
+			} else if pokerSequenceStage == 2 {
+				log.Printf("User is muted. Suppressing dealer-hand announcement (winner will be posted)")
+			} else {
+				log.Printf("User is muted. Queuing message: %s", hand)
+				// ToDo: messageQueue = append(messageQueue, hand)
+			}
 		}
 	}
 
@@ -63,11 +76,8 @@ func (a *App) evaluatePokerHand() {
 		pokerSequenceStage = 2
 		go func() {
 			time.Sleep(700 * time.Millisecond)
-			message := "Dealer Roll"
-			a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", message))
-			log.Printf("[GAME_SELECT] shouting: %q", message)
-			ext.Send(out.SHOUT, message)
-
+			// Start dealer roll without an extra shout (we already indicated it)
+			a.AddLogMsg("[GAME_SELECT] starting dealer roll")
 			time.Sleep(700 * time.Millisecond)
 			a.startPokerRoll()
 		}()
@@ -169,7 +179,8 @@ func (a *App) evaluateBlackjackHand() {
 				playerLabel = "Player"
 			}
 
-			msg := fmt.Sprintf("%s got 21", playerLabel)
+			// Announce player result and indicate dealer roll in one message
+			msg := fmt.Sprintf("%s got 21, Now dealer Roll", playerLabel)
 			a.AddLogMsg(fmt.Sprintf("[BJ] announcing: %q", msg))
 			log.Printf("[BJ] announcing: %q", msg)
 			if !ChatIsDisabled {
@@ -291,10 +302,7 @@ func (a *App) startBlackjackDealerTurn(reason string) {
 	blackjackPlayerTurn = false
 	a.AddLogMsg(fmt.Sprintf("[BJ_DEBUG] dealer turn starting reason=%s playerTotal=%d dealerTotal=%d", reason, blackjackPlayerTotal, blackjackDealerTotal))
 	log.Printf("[BJ_DEBUG] dealer turn starting reason=%s playerTotal=%d dealerTotal=%d", reason, blackjackPlayerTotal, blackjackDealerTotal)
-	message := "Dealer Roll"
-	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", message))
-	log.Printf("[GAME_SELECT] shouting: %q", message)
-	ext.Send(out.SHOUT, message)
+	a.AddLogMsg("[GAME_SELECT] starting dealer roll")
 	go func() {
 		time.Sleep(700 * time.Millisecond)
 		isBJRolling = true
@@ -401,7 +409,8 @@ func (a *App) evaluate13Hand() {
 				playerLabel = "Player"
 			}
 
-			msg := fmt.Sprintf("%s got 13", playerLabel)
+			// Announce player result and indicate dealer roll in one message
+			msg := fmt.Sprintf("%s got 13, Now dealer Roll", playerLabel)
 			a.AddLogMsg(fmt.Sprintf("[13] announcing: %q", msg))
 			log.Printf("[13] announcing: %q", msg)
 			if !ChatIsDisabled {
@@ -549,7 +558,17 @@ func (a *App) evaluateTriRound() {
 
 	if !ChatIsDisabled {
 		if !isMuted {
-			sendMessageWithDelay(totalText)
+			if triPlayerTurn {
+				// Send player total and indicate dealer will roll
+				sendMessageWithDelay(fmt.Sprintf("%s, Now dealer Roll", totalText))
+			} else {
+				// Suppress separate dealer total announcement; final winner message will include dealer result
+			}
+		} else {
+			if triPlayerTurn {
+				log.Printf("User is muted. Queuing message: %s", fmt.Sprintf("%s, Now dealer Roll", totalText))
+				// ToDo: messageQueue = append(messageQueue, fmt.Sprintf("%s, Now dealer Roll", totalText))
+			}
 		}
 	}
 
@@ -562,11 +581,8 @@ func (a *App) evaluateTriRound() {
 
 		go func() {
 			time.Sleep(700 * time.Millisecond)
-			message := "Dealer Roll"
-			a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", message))
-			log.Printf("[GAME_SELECT] shouting: %q", message)
-			ext.Send(out.SHOUT, message)
-
+			// Start dealer roll without an extra shout (we already indicated it)
+			a.AddLogMsg("[GAME_SELECT] starting dealer roll")
 			time.Sleep(700 * time.Millisecond)
 			isTriRolling = true
 			a.rollTriDice()
