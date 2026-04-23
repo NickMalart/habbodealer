@@ -292,6 +292,21 @@ func (a *App) evaluateBlackjackHand() {
 		return
 	}
 
+	if blackjackDealerTotal == blackjackPlayerTotal {
+		a.AddLogMsg("[BJ_RULES] tie detected; replaying 21 round")
+		if !ChatIsDisabled {
+			waitForUnmute(90 * time.Second)
+			time.Sleep(800 * time.Millisecond)
+			sendMessageWithDelay("Tie — replaying 21 round")
+		}
+		go func() {
+			time.Sleep(700 * time.Millisecond)
+			a.beginBlackjackSequence()
+		}()
+		isBJRolling = false
+		isHitting = false
+		return
+	}
 	a.finalizeBlackjackRound(false, "dealer beat-or-tie")
 	isBJRolling = false
 	isHitting = false
@@ -523,6 +538,21 @@ func (a *App) evaluate13Hand() {
 		return
 	}
 
+	if thirteenDealerTotal == thirteenPlayerTotal {
+		a.AddLogMsg("[13_RULES] tie detected; replaying 13 round")
+		if !ChatIsDisabled {
+			waitForUnmute(90 * time.Second)
+			time.Sleep(800 * time.Millisecond)
+			sendMessageWithDelay("Tie — replaying 13 round")
+		}
+		go func() {
+			time.Sleep(700 * time.Millisecond)
+			a.begin13Sequence()
+		}()
+		is13Rolling = false
+		is13Hitting = false
+		return
+	}
 	a.finalize13Round(false, "dealer beat-or-tie")
 	is13Rolling = false
 	is13Hitting = false
