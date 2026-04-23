@@ -384,7 +384,8 @@ export namespace main {
 	
 	export class DealerOpenConfig {
 	    enabled: boolean;
-	    seconds: number;
+	    tradeSeconds: number;
+	    announceSeconds: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new DealerOpenConfig(source);
@@ -393,7 +394,8 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
-	        this.seconds = source["seconds"];
+	        this.tradeSeconds = source["tradeSeconds"];
+	        this.announceSeconds = source["announceSeconds"];
 	    }
 	}
 	

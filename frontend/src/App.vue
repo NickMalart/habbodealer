@@ -159,7 +159,11 @@
           </div>
           <div class="form-group">
             <label>Trade window timeout (seconds)</label>
-            <input type="number" min="1" v-model.number="dealerOpenSeconds" />
+            <input type="number" min="1" v-model.number="dealerTradeSeconds" />
+          </div>
+          <div class="form-group">
+            <label>Dealer announce interval (seconds)</label>
+            <input type="number" min="1" v-model.number="dealerAnnounceSeconds" />
           </div>
           <div style="display:flex;gap:8px;justify-content:center;align-items:center;">
             <button class="save-button" @click="saveDealerOpen">Save</button>
@@ -765,7 +769,8 @@ export default {
       autoShoutPresets: [],
       // Dealer open UI state
       dealerOpenEnabled: true,
-      dealerOpenSeconds: 45,
+      dealerTradeSeconds: 45,
+      dealerAnnounceSeconds: 45,
       // Block recommended-rooms packet
       blockRecommendedRooms: true,
       // Block slide-object-bundle packet
@@ -1327,16 +1332,23 @@ export default {
     },
     async saveDealerOpen() {
       try {
-        const cfg = await window.go.main.App.SaveDealerOpenConfig(!!this.dealerOpenEnabled, Number(this.dealerOpenSeconds || 45));
+        const cfg = await window.go.main.App.SaveDealerOpenConfig(
+          !!this.dealerOpenEnabled,
+          Number(this.dealerTradeSeconds || 45),
+          Number(this.dealerAnnounceSeconds || 45)
+        );
+
         if (typeof cfg === 'string') {
           try {
             const parsed = JSON.parse(cfg || '{}') || {};
             this.dealerOpenEnabled = !!parsed.enabled;
-            this.dealerOpenSeconds = parsed.seconds || 45;
+            this.dealerTradeSeconds = parsed.tradeSeconds || parsed.seconds || 45;
+            this.dealerAnnounceSeconds = parsed.announceSeconds || parsed.seconds || 45;
           } catch (e) {}
         } else if (cfg) {
           this.dealerOpenEnabled = !!cfg.enabled;
-          this.dealerOpenSeconds = cfg.seconds || 45;
+          this.dealerTradeSeconds = cfg.tradeSeconds || cfg.seconds || 45;
+          this.dealerAnnounceSeconds = cfg.announceSeconds || cfg.seconds || 45;
         }
         this.addLogMsg('[UI] Dealer Open config saved');
       } catch (e) {
@@ -1880,11 +1892,13 @@ export default {
         try {
           const parsed = JSON.parse(cfg2 || '{}') || {};
           this.dealerOpenEnabled = !!parsed.enabled;
-          this.dealerOpenSeconds = parsed.seconds || 45;
+          this.dealerTradeSeconds = parsed.tradeSeconds || parsed.seconds || 45;
+          this.dealerAnnounceSeconds = parsed.announceSeconds || parsed.seconds || 45;
         } catch (e) {}
       } else if (cfg2) {
         this.dealerOpenEnabled = !!cfg2.enabled;
-        this.dealerOpenSeconds = cfg2.seconds || 45;
+        this.dealerTradeSeconds = cfg2.tradeSeconds || cfg2.seconds || 45;
+        this.dealerAnnounceSeconds = cfg2.announceSeconds || cfg2.seconds || 45;
       }
     } catch (e) {
       console.error('dealerOpen init', e);
@@ -2259,7 +2273,8 @@ export default {
       try {
         const parsed = JSON.parse(jsonStr || '{}') || {};
         this.dealerOpenEnabled = !!parsed.enabled;
-        this.dealerOpenSeconds = parsed.seconds || 45;
+        this.dealerTradeSeconds = parsed.tradeSeconds || parsed.seconds || 45;
+        this.dealerAnnounceSeconds = parsed.announceSeconds || parsed.seconds || 45;
       } catch (e) {}
     });
   },

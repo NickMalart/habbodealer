@@ -92,7 +92,7 @@ export function SaveCatalog(arg1:Array<main.CatalogItem>):Promise<void>;
 
 export function SaveConfig(arg1:main.PokerDisplayConfig):Promise<void>;
 
-export function SaveDealerOpenConfig(arg1:boolean,arg2:number):Promise<main.DealerOpenConfig>;
+export function SaveDealerOpenConfig(arg1:boolean,arg2:number,arg3:number):Promise<main.DealerOpenConfig>;
 
 export function ShowCommands():Promise<void>;
 

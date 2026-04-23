@@ -249,8 +249,9 @@ var (
 	autoShoutPhrase  string
 	autoShoutSeconds int = 30
 	// Dealer open announcement config
-	dealerOpenMu       sync.Mutex
-	tradeWindowSeconds int = 45
+	dealerOpenMu          sync.Mutex
+	tradeWindowSeconds    int = 45
+	dealerAnnounceSeconds int = 45
 
 	// Block recommended-rooms incoming packet configuration
 	blockRecommendedRooms bool = true
@@ -597,8 +598,9 @@ type AutoShoutConfig struct {
 
 // DealerOpenConfig holds frontend-friendly dealer-open settings.
 type DealerOpenConfig struct {
-	Enabled bool `json:"enabled"`
-	Seconds int  `json:"seconds"`
+	Enabled         bool `json:"enabled"`
+	TradeSeconds    int  `json:"tradeSeconds"`
+	AnnounceSeconds int  `json:"announceSeconds"`
 }
 
 func NewApp(ext *g.Ext, assets embed.FS) *App {
@@ -831,25 +833,34 @@ func (a *App) GetDealerOpenConfig() DealerOpenConfig {
 	defer dealerOpenMu.Unlock()
 
 	return DealerOpenConfig{
-		Enabled: dealerAnnouncementsEnabled,
-		Seconds: tradeWindowSeconds,
+		Enabled:         dealerAnnouncementsEnabled,
+		TradeSeconds:    tradeWindowSeconds,
+		AnnounceSeconds: dealerAnnounceSeconds,
 	}
 }
 
 // SaveDealerOpenConfig updates dealer-open announcement settings and emits an event.
-func (a *App) SaveDealerOpenConfig(enabled bool, seconds int) DealerOpenConfig {
-	if seconds < 1 {
-		seconds = 1
+// SaveDealerOpenConfig updates dealer-open announcement settings and emits an event.
+func (a *App) SaveDealerOpenConfig(enabled bool, tradeSeconds int, announceSeconds int) DealerOpenConfig {
+	if tradeSeconds < 1 {
+		tradeSeconds = 1
 	}
+	if announceSeconds < 1 {
+		announceSeconds = 1
+	}
+
 	dealerOpenMu.Lock()
 	dealerAnnouncementsEnabled = enabled
-	tradeWindowSeconds = seconds
+	tradeWindowSeconds = tradeSeconds
+	dealerAnnounceSeconds = announceSeconds
+	// If a trade-window monitor is active, update its deadline.
 	if tradeWindowTimeoutActive {
 		tradeWindowDeadline = tradeWindowOpenedAt.Add(time.Duration(tradeWindowSeconds) * time.Second)
 	}
 	cfg := DealerOpenConfig{
-		Enabled: dealerAnnouncementsEnabled,
-		Seconds: tradeWindowSeconds,
+		Enabled:         dealerAnnouncementsEnabled,
+		TradeSeconds:    tradeWindowSeconds,
+		AnnounceSeconds: dealerAnnounceSeconds,
 	}
 	dealerOpenMu.Unlock()
 
@@ -857,6 +868,16 @@ func (a *App) SaveDealerOpenConfig(enabled bool, seconds int) DealerOpenConfig {
 		b, _ := json.Marshal(cfg)
 		runtime.EventsEmit(a.ctx, "dealerOpenUpdate", string(b))
 	}
+
+	// Restart heartbeat to apply announce-interval changes immediately.
+	if dealerOpenHeartbeatActive {
+		stopDealerOpenHeartbeat()
+	}
+	if dealerAnnouncementsEnabled && awaitingTradeOpen && dealerTradeWindowOpen {
+		startDealerOpenHeartbeat(a)
+	}
+
+	return cfg
 
 	return cfg
 }
@@ -3874,9 +3895,16 @@ func startDealerOpenHeartbeat(a *App) {
 		}
 	}
 
-	go func(id int, openMsg string) {
-		// Initial 45s delay for the first re-announcement.
-		timer := time.NewTimer(45 * time.Second)
+	// Capture configured announce interval at start.
+	dealerOpenMu.Lock()
+	announceSecs := dealerAnnounceSeconds
+	dealerOpenMu.Unlock()
+
+	go func(id int, openMsg string, secs int) {
+		// Initial delay equal to announce interval (the immediate announce
+		// is performed elsewhere when reopening dealer). The heartbeat waits
+		// this interval before the first replay.
+		timer := time.NewTimer(time.Duration(secs) * time.Second)
 		defer timer.Stop()
 
 		select {
@@ -3890,25 +3918,25 @@ func startDealerOpenHeartbeat(a *App) {
 				return
 			}
 			if !dealerDiceReady() {
-				addLog("[TRADE_REOPEN] dice not ready; stopping reopen heartbeat (initial)")
-				log.Printf("[TRADE_REOPEN] dice not ready; stopping reopen heartbeat (initial)")
+				addLog(fmt.Sprintf("[TRADE_REOPEN] dice not ready; stopping reopen heartbeat (initial, %ds)", secs))
+				log.Printf("[TRADE_REOPEN] dice not ready; stopping reopen heartbeat (initial, %ds)", secs)
 				dealerTradeWindowOpen = false
 				dealerOpenHeartbeatActive = false
 				return
 			}
-			// First shout: only if not muted.
+			// First scheduled shout: only if not muted.
 			if isMuted {
-				addLog("[TRADE_REOPEN] initial 45s announcer skipped due to mute")
-				log.Printf("[TRADE_REOPEN] initial 45s announcer skipped due to mute")
+				addLog(fmt.Sprintf("[TRADE_REOPEN] initial %ds announcer skipped due to mute", secs))
+				log.Printf("[TRADE_REOPEN] initial %ds announcer skipped due to mute", secs)
 			} else {
-				addLog("[TRADE_REOPEN] initial 45s re-announcing dealer open")
-				log.Printf("[TRADE_REOPEN] initial 45s re-announcing dealer open")
+				addLog(fmt.Sprintf("[TRADE_REOPEN] initial %ds re-announcing dealer open", secs))
+				log.Printf("[TRADE_REOPEN] initial %ds re-announcing dealer open", secs)
 				sendMessageWithDelay(openMsg)
 			}
 		}
 
-		// After the first attempt, run a steady 45s announcer that fires for everyone.
-		ticker := time.NewTicker(45 * time.Second)
+		// Periodic announcer using configured interval.
+		ticker := time.NewTicker(time.Duration(secs) * time.Second)
 		defer ticker.Stop()
 
 		for range ticker.C {
@@ -3921,18 +3949,18 @@ func startDealerOpenHeartbeat(a *App) {
 				return
 			}
 			if !dealerDiceReady() {
-				addLog("[TRADE_REOPEN] dice not ready; stopping 45s announcer")
-				log.Printf("[TRADE_REOPEN] dice not ready; stopping 45s announcer")
+				addLog(fmt.Sprintf("[TRADE_REOPEN] dice not ready; stopping %ds announcer", secs))
+				log.Printf("[TRADE_REOPEN] dice not ready; stopping %ds announcer", secs)
 				dealerTradeWindowOpen = false
 				dealerOpenHeartbeatActive = false
 				return
 			}
 
-			addLog("[TRADE_REOPEN] 45s periodic dealer-open announcer firing")
-			log.Printf("[TRADE_REOPEN] 45s periodic dealer-open announcer firing")
+			addLog(fmt.Sprintf("[TRADE_REOPEN] %ds periodic dealer-open announcer firing", secs))
+			log.Printf("[TRADE_REOPEN] %ds periodic dealer-open announcer firing", secs)
 			sendMessageWithDelay(openMsg)
 		}
-	}(id, dealerOpenMsg)
+	}(id, dealerOpenMsg, announceSecs)
 }
 
 func stopDealerOpenHeartbeat() {
