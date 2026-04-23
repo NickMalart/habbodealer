@@ -248,6 +248,9 @@ var (
 	autoShoutEnabled bool
 	autoShoutPhrase  string
 	autoShoutSeconds int = 30
+	// Dealer open announcement config
+	dealerOpenMu       sync.Mutex
+	tradeWindowSeconds int = 45
 
 	// Block recommended-rooms incoming packet configuration
 	blockRecommendedRooms bool = true
@@ -592,6 +595,12 @@ type AutoShoutConfig struct {
 	Seconds int    `json:"seconds"`
 }
 
+// DealerOpenConfig holds frontend-friendly dealer-open settings.
+type DealerOpenConfig struct {
+	Enabled bool `json:"enabled"`
+	Seconds int  `json:"seconds"`
+}
+
 func NewApp(ext *g.Ext, assets embed.FS) *App {
 	a := &App{
 		ext:    ext,
@@ -811,6 +820,42 @@ func (a *App) SaveAutoShoutConfig(phrase string, seconds int) AutoShoutConfig {
 	if a.ctx != nil {
 		b, _ := json.Marshal(cfg)
 		runtime.EventsEmit(a.ctx, "autoShoutUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// GetDealerOpenConfig returns the current dealer-open configuration.
+func (a *App) GetDealerOpenConfig() DealerOpenConfig {
+	dealerOpenMu.Lock()
+	defer dealerOpenMu.Unlock()
+
+	return DealerOpenConfig{
+		Enabled: dealerAnnouncementsEnabled,
+		Seconds: tradeWindowSeconds,
+	}
+}
+
+// SaveDealerOpenConfig updates dealer-open announcement settings and emits an event.
+func (a *App) SaveDealerOpenConfig(enabled bool, seconds int) DealerOpenConfig {
+	if seconds < 1 {
+		seconds = 1
+	}
+	dealerOpenMu.Lock()
+	dealerAnnouncementsEnabled = enabled
+	tradeWindowSeconds = seconds
+	if tradeWindowTimeoutActive {
+		tradeWindowDeadline = tradeWindowOpenedAt.Add(time.Duration(tradeWindowSeconds) * time.Second)
+	}
+	cfg := DealerOpenConfig{
+		Enabled: dealerAnnouncementsEnabled,
+		Seconds: tradeWindowSeconds,
+	}
+	dealerOpenMu.Unlock()
+
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "dealerOpenUpdate", string(b))
 	}
 
 	return cfg
@@ -3554,7 +3599,13 @@ func startTradeWindowTimeoutMonitor(a *App) {
 	tradeWindowTimeoutMonitorID++
 	monitorID := tradeWindowTimeoutMonitorID
 	tradeWindowOpenedAt = time.Now()
-	tradeWindowDeadline = tradeWindowOpenedAt.Add(45 * time.Second)
+	dealerOpenMu.Lock()
+	seconds := tradeWindowSeconds
+	dealerOpenMu.Unlock()
+	if seconds < 1 {
+		seconds = 1
+	}
+	tradeWindowDeadline = tradeWindowOpenedAt.Add(time.Duration(seconds) * time.Second)
 	tradeWindowTimeoutActive = true
 
 	go func(id int) {
@@ -3591,7 +3642,13 @@ func extendTradeWindowTimeoutForPartnerActivity(a *App) {
 	}
 
 	now := time.Now()
-	maxDeadline := tradeWindowOpenedAt.Add(90 * time.Second)
+	dealerOpenMu.Lock()
+	base := tradeWindowSeconds
+	dealerOpenMu.Unlock()
+	if base < 1 {
+		base = 1
+	}
+	maxDeadline := tradeWindowOpenedAt.Add(time.Duration(base*2) * time.Second)
 	if now.After(maxDeadline) {
 		return
 	}

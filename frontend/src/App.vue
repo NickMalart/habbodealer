@@ -151,6 +151,20 @@
           <button class="save-button" @click="saveAutoShout">Save</button>
           <button class="save-button" @click="toggleAutoShout">{{ autoShoutEnabled ? 'Stop Auto Shout' : 'Start Auto Shout' }}</button>
         </div>
+        <div style="margin-top:18px;border-top:1px solid rgba(255,255,255,0.04);padding-top:12px;">
+          <h3 class="section-subtitle">Dealer Open</h3>
+          <p class="config-intro">Control automatic "Dealer open" announcements and trade-window timeout.</p>
+          <div class="form-group">
+            <label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" v-model="dealerOpenEnabled" /> Enable Dealer Open announcement</label>
+          </div>
+          <div class="form-group">
+            <label>Trade window timeout (seconds)</label>
+            <input type="number" min="1" v-model.number="dealerOpenSeconds" />
+          </div>
+          <div style="display:flex;gap:8px;justify-content:center;align-items:center;">
+            <button class="save-button" @click="saveDealerOpen">Save</button>
+          </div>
+        </div>
         <div class="form-group" style="margin-top:12px;">
           <fieldset style="border:1px solid rgba(255,255,255,0.08);padding:10px;border-radius:6px;">
             <legend style="font-weight:600;padding:0 6px;">Block Packets</legend>
@@ -749,6 +763,9 @@ export default {
       autoShoutSeconds: 30,
       autoShoutEnabled: false,
       autoShoutPresets: [],
+      // Dealer open UI state
+      dealerOpenEnabled: true,
+      dealerOpenSeconds: 45,
       // Block recommended-rooms packet
       blockRecommendedRooms: true,
       // Block slide-object-bundle packet
@@ -1308,6 +1325,25 @@ export default {
         console.error(e);
       }
     },
+    async saveDealerOpen() {
+      try {
+        const cfg = await window.go.main.App.SaveDealerOpenConfig(!!this.dealerOpenEnabled, Number(this.dealerOpenSeconds || 45));
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.dealerOpenEnabled = !!parsed.enabled;
+            this.dealerOpenSeconds = parsed.seconds || 45;
+          } catch (e) {}
+        } else if (cfg) {
+          this.dealerOpenEnabled = !!cfg.enabled;
+          this.dealerOpenSeconds = cfg.seconds || 45;
+        }
+        this.addLogMsg('[UI] Dealer Open config saved');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to save Dealer Open config');
+        console.error(e);
+      }
+    },
     async toggleAutoShout() {
       try {
         const next = !this.autoShoutEnabled;
@@ -1837,6 +1873,23 @@ export default {
       console.error('autoShout init', e);
     }
 
+    // DealerOpen initial fetch
+    try {
+      const cfg2 = await window.go.main.App.GetDealerOpenConfig();
+      if (typeof cfg2 === 'string') {
+        try {
+          const parsed = JSON.parse(cfg2 || '{}') || {};
+          this.dealerOpenEnabled = !!parsed.enabled;
+          this.dealerOpenSeconds = parsed.seconds || 45;
+        } catch (e) {}
+      } else if (cfg2) {
+        this.dealerOpenEnabled = !!cfg2.enabled;
+        this.dealerOpenSeconds = cfg2.seconds || 45;
+      }
+    } catch (e) {
+      console.error('dealerOpen init', e);
+    }
+
     // Load user-defined auto shout presets from localStorage
     try {
       this.loadAutoShoutPresets();
@@ -2200,6 +2253,13 @@ export default {
         this.autoShoutEnabled = !!parsed.enabled;
         this.autoShoutPhrase = parsed.phrase || '';
         this.autoShoutSeconds = parsed.seconds || 30;
+      } catch (e) {}
+    });
+    window.runtime.EventsOn("dealerOpenUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.dealerOpenEnabled = !!parsed.enabled;
+        this.dealerOpenSeconds = parsed.seconds || 45;
       } catch (e) {}
     });
   },

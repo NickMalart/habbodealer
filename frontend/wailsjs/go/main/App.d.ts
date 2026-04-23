@@ -62,6 +62,8 @@ export function GetCurrentTradeItems():Promise<Array<main.TradeItem>>;
 
 export function GetCurrentVersion():Promise<string>;
 
+export function GetDealerOpenConfig():Promise<main.DealerOpenConfig>;
+
 export function GetGameHistoryJSON():Promise<string>;
 
 export function GetLastTradePartnerName():Promise<string>;
@@ -89,6 +91,8 @@ export function SaveAutoShoutConfig(arg1:string,arg2:number):Promise<main.AutoSh
 export function SaveCatalog(arg1:Array<main.CatalogItem>):Promise<void>;
 
 export function SaveConfig(arg1:main.PokerDisplayConfig):Promise<void>;
+
+export function SaveDealerOpenConfig(arg1:boolean,arg2:number):Promise<main.DealerOpenConfig>;
 
 export function ShowCommands():Promise<void>;
 

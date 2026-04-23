@@ -382,6 +382,20 @@ export namespace main {
 	    }
 	}
 	
+	export class DealerOpenConfig {
+	    enabled: boolean;
+	    seconds: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DealerOpenConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.seconds = source["seconds"];
+	    }
+	}
 	
 	
 	

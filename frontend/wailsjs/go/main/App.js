@@ -122,6 +122,10 @@ export function GetCurrentVersion() {
   return window['go']['main']['App']['GetCurrentVersion']();
 }
 
+export function GetDealerOpenConfig() {
+  return window['go']['main']['App']['GetDealerOpenConfig']();
+}
+
 export function GetGameHistoryJSON() {
   return window['go']['main']['App']['GetGameHistoryJSON']();
 }
@@ -176,6 +180,10 @@ export function SaveCatalog(arg1) {
 
 export function SaveConfig(arg1) {
   return window['go']['main']['App']['SaveConfig'](arg1);
+}
+
+export function SaveDealerOpenConfig(arg1, arg2) {
+  return window['go']['main']['App']['SaveDealerOpenConfig'](arg1, arg2);
 }
 
 export function ShowCommands() {
