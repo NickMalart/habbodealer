@@ -20,39 +20,39 @@
         {
           "inline": true,
           "name": "Player Result",
-          "value": "12"
+          "value": "13"
         },
         {
           "inline": true,
           "name": "Dealer Result",
-          "value": "8"
+          "value": "12"
         },
         {
           "inline": false,
           "name": "Bet Items",
-          "value": "club_sofa x1"
+          "value": "club_sofa x2"
         },
         {
           "inline": false,
           "name": "Payout Items",
-          "value": "club_sofa x2"
+          "value": "club_sofa x4"
         },
         {
           "inline": true,
           "name": "Started At",
-          "value": "2026-04-23T15:57:02+10:00"
+          "value": "2026-04-23T16:00:56+10:00"
         },
         {
           "inline": true,
           "name": "Completed At",
-          "value": "2026-04-23T15:57:32+10:00"
+          "value": "2026-04-23T16:01:13+10:00"
         }
       ],
       "footer": {
-        "text": "Game ID: 1776923822149763600"
+        "text": "Game ID: 1776924056400816300"
       },
-      "timestamp": "2026-04-23T15:57:32+10:00",
-      "title": "TriH — Completed"
+      "timestamp": "2026-04-23T16:01:13+10:00",
+      "title": "TriL — Completed"
     }
   ],
   "username": "Gamba-Suite"

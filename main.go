@@ -287,6 +287,14 @@ var (
 	blockCalendarEvents   bool = true
 	blockCalendarEventsMu sync.Mutex
 
+	// Block USER_BANNED (incoming header 35)
+	blockUserBanned   bool = true
+	blockUserBannedMu sync.Mutex
+
+	// Block incoming raw packets with header 4095 (e.g., 0x7f7f 'RB')
+	blockIncoming4095   bool = true
+	blockIncoming4095Mu sync.Mutex
+
 	// New: Outgoing GET_PAGE_ARTICLES (680), GET_CALENDAR_EVENTS (682), and FRIENDLIST_UPDATE (15)
 	blockGetPageArticlesOutgoing     bool = true
 	blockGetPageArticlesOutgoingMu   sync.Mutex
@@ -1056,6 +1064,50 @@ func (a *App) ToggleBlockFavouriteRoomResults(enabled bool) BlockSlideObjectConf
 	if a.ctx != nil {
 		b, _ := json.Marshal(cfg)
 		runtime.EventsEmit(a.ctx, "blockFavouriteRoomResultsUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// GetBlockUserBannedConfig returns current block setting for incoming USER_BANNED (35).
+func (a *App) GetBlockUserBannedConfig() BlockSlideObjectConfig {
+	blockUserBannedMu.Lock()
+	defer blockUserBannedMu.Unlock()
+	return BlockSlideObjectConfig{Enabled: blockUserBanned}
+}
+
+// ToggleBlockUserBanned toggles blocking of incoming USER_BANNED packets.
+func (a *App) ToggleBlockUserBanned(enabled bool) BlockSlideObjectConfig {
+	blockUserBannedMu.Lock()
+	blockUserBanned = enabled
+	blockUserBannedMu.Unlock()
+
+	cfg := BlockSlideObjectConfig{Enabled: blockUserBanned}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "blockUserBannedUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// GetBlockIncoming4095Config returns current block setting for incoming header 4095.
+func (a *App) GetBlockIncoming4095Config() BlockSlideObjectConfig {
+	blockIncoming4095Mu.Lock()
+	defer blockIncoming4095Mu.Unlock()
+	return BlockSlideObjectConfig{Enabled: blockIncoming4095}
+}
+
+// ToggleBlockIncoming4095 toggles blocking of incoming header 4095 packets.
+func (a *App) ToggleBlockIncoming4095(enabled bool) BlockSlideObjectConfig {
+	blockIncoming4095Mu.Lock()
+	blockIncoming4095 = enabled
+	blockIncoming4095Mu.Unlock()
+
+	cfg := BlockSlideObjectConfig{Enabled: blockIncoming4095}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "blockIncoming4095Update", string(b))
 	}
 
 	return cfg
@@ -6788,6 +6840,32 @@ func handleIncomingHeaderSniff(a *App, e *g.Intercept) {
 		name := ext.Headers().Name(e.Packet.Header)
 		if strings.Contains(strings.ToLower(name), "calendar_events") || e.Packet.Header.Value == 683 {
 			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking incoming calendar-events packet [%d:%s]", e.Packet.Header.Value, name))
+			e.Block()
+			return
+		}
+	}
+
+	// If configured, block incoming USER_BANNED (header 35).
+	blockUserBannedMu.Lock()
+	blockUserB := blockUserBanned
+	blockUserBannedMu.Unlock()
+	if blockUserB {
+		name := ext.Headers().Name(e.Packet.Header)
+		if strings.Contains(strings.ToLower(name), "user_banned") || e.Packet.Header.Value == 35 {
+			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking incoming user-banned packet [%d:%s]", e.Packet.Header.Value, name))
+			e.Block()
+			return
+		}
+	}
+
+	// If configured, block incoming raw 4095 packet (header 4095).
+	blockIncoming4095Mu.Lock()
+	block4095 := blockIncoming4095
+	blockIncoming4095Mu.Unlock()
+	if block4095 {
+		name := ext.Headers().Name(e.Packet.Header)
+		if strings.Contains(strings.ToLower(name), "rb") || e.Packet.Header.Value == 4095 {
+			a.AddLogMsg(fmt.Sprintf("[BLOCK] blocking incoming 4095 packet [%d:%s]", e.Packet.Header.Value, name))
 			e.Block()
 			return
 		}

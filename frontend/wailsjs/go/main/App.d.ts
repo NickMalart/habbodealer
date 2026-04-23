@@ -34,6 +34,8 @@ export function GetBlockGetCalendarEventsOutgoingConfig():Promise<main.BlockSlid
 
 export function GetBlockGetPageArticlesOutgoingConfig():Promise<main.BlockSlideObjectConfig>;
 
+export function GetBlockIncoming4095Config():Promise<main.BlockSlideObjectConfig>;
+
 export function GetBlockPollEventEligibilityOutgoingConfig():Promise<main.BlockSlideObjectConfig>;
 
 export function GetBlockRecommendedRoomsConfig():Promise<main.BlockRecommendedConfig>;
@@ -47,6 +49,8 @@ export function GetBlockSlideObjectBundleConfig():Promise<main.BlockSlideObjectC
 export function GetBlockSlideObjectBundleOutgoingConfig():Promise<main.BlockSlideObjectConfig>;
 
 export function GetBlockStatusEffectsConfig():Promise<main.BlockSlideObjectConfig>;
+
+export function GetBlockUserBannedConfig():Promise<main.BlockSlideObjectConfig>;
 
 export function GetCasinoStatsJSON(arg1:string):Promise<string>;
 
@@ -112,6 +116,8 @@ export function ToggleBlockGetCalendarEventsOutgoing(arg1:boolean):Promise<main.
 
 export function ToggleBlockGetPageArticlesOutgoing(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
 
+export function ToggleBlockIncoming4095(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
+
 export function ToggleBlockPollEventEligibilityOutgoing(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
 
 export function ToggleBlockRecommendedRooms(arg1:boolean):Promise<main.BlockRecommendedConfig>;
@@ -125,3 +131,5 @@ export function ToggleBlockSlideObjectBundle(arg1:boolean):Promise<main.BlockSli
 export function ToggleBlockSlideObjectBundleOutgoing(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
 
 export function ToggleBlockStatusEffects(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
+
+export function ToggleBlockUserBanned(arg1:boolean):Promise<main.BlockSlideObjectConfig>;

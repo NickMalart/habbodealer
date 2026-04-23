@@ -241,6 +241,26 @@
                     </span>
                   </span>
                 </label>
+                
+                <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
+                  <input type="checkbox" v-model="blockUserBanned" @change="toggleBlockUserBanned" />
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span>User banned (header 35)</span>
+                    <span class="packet-info" tabindex="0" aria-label="User banned info" @mouseenter="showPacketTooltip($event)" @mouseleave="hidePacketTooltip" @focus="showPacketTooltip($event)" @blur="hidePacketTooltip">ℹ
+                      <span class="tooltip"><div class="tooltip-header">User banned — header 35</div><div class="tooltip-body">Server notification that a user was banned or restricted. Blocking may suppress ban notices.</div></span>
+                    </span>
+                  </span>
+                </label>
+
+                <label style="display:flex;align-items:center;gap:8px;color:#e0e0e0;margin-top:6px;">
+                  <input type="checkbox" v-model="blockIncoming4095" @change="toggleBlockIncoming4095" />
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span>Raw 4095 packets (header 4095)</span>
+                    <span class="packet-info" tabindex="0" aria-label="Raw 4095 info" @mouseenter="showPacketTooltip($event)" @mouseleave="hidePacketTooltip" @focus="showPacketTooltip($event)" @blur="hidePacketTooltip">ℹ
+                      <span class="tooltip"><div class="tooltip-header">Raw 4095 — header 4095</div><div class="tooltip-body">Low-level/unknown raw packets such as 0x7f7f 'RB'. Block if you want to suppress them.</div></span>
+                    </span>
+                  </span>
+                </label>
               </div>
 
               <div style="flex:1;min-width:200px;">
@@ -745,6 +765,10 @@ export default {
       // New incoming packet blocks (enabled by default)
       blockArticlesPage: true,
       blockCalendarEvents: true,
+      // Block USER_BANNED (header 35)
+      blockUserBanned: true,
+      // Block raw 4095 packets (header 4095)
+      blockIncoming4095: true,
       // Outgoing poll-event
       blockPollEventEligibilityOutgoing: true,
       // New outgoing packet blocks (enabled by default)
@@ -1504,6 +1528,42 @@ export default {
         console.error(e);
       }
     },
+    async toggleBlockUserBanned() {
+      try {
+        const next = !!this.blockUserBanned;
+        const cfg = await window.go.main.App.ToggleBlockUserBanned(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.blockUserBanned = !!parsed.enabled;
+          } catch (e) {}
+        } else if (cfg) {
+          this.blockUserBanned = !!cfg.enabled;
+        }
+        this.addLogMsg('[UI] Block user-banned toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle block user-banned');
+        console.error(e);
+      }
+    },
+    async toggleBlockIncoming4095() {
+      try {
+        const next = !!this.blockIncoming4095;
+        const cfg = await window.go.main.App.ToggleBlockIncoming4095(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.blockIncoming4095 = !!parsed.enabled;
+          } catch (e) {}
+        } else if (cfg) {
+          this.blockIncoming4095 = !!cfg.enabled;
+        }
+        this.addLogMsg('[UI] Block incoming 4095 toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle block incoming 4095');
+        console.error(e);
+      }
+    },
     async toggleBlockGetPageArticlesOutgoing() {
       try {
         const next = !!this.blockGetPageArticlesOutgoing;
@@ -1902,6 +1962,36 @@ export default {
       console.error('blockCalendarEvents init', e);
     }
 
+    // New incoming: USER_BANNED (35) initial fetch
+    try {
+      const ubCfg = await window.go.main.App.GetBlockUserBannedConfig();
+      if (typeof ubCfg === 'string') {
+        try {
+          const parsed = JSON.parse(ubCfg || '{}') || {};
+          this.blockUserBanned = !!parsed.enabled;
+        } catch (e) {}
+      } else if (ubCfg) {
+        this.blockUserBanned = !!ubCfg.enabled;
+      }
+    } catch (e) {
+      console.error('blockUserBanned init', e);
+    }
+
+    // New incoming: 4095 (raw) initial fetch
+    try {
+      const rCfg = await window.go.main.App.GetBlockIncoming4095Config();
+      if (typeof rCfg === 'string') {
+        try {
+          const parsed = JSON.parse(rCfg || '{}') || {};
+          this.blockIncoming4095 = !!parsed.enabled;
+        } catch (e) {}
+      } else if (rCfg) {
+        this.blockIncoming4095 = !!rCfg.enabled;
+      }
+    } catch (e) {
+      console.error('blockIncoming4095 init', e);
+    }
+
     // Outgoing initial fetches
     try {
       const outRec = await window.go.main.App.GetBlockRecommendedRoomsOutgoingConfig();
@@ -2023,6 +2113,20 @@ export default {
       try {
         const parsed = JSON.parse(jsonStr || '{}') || {};
         this.blockCalendarEvents = !!parsed.enabled;
+      } catch (e) {}
+    });
+
+    window.runtime.EventsOn("blockUserBannedUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.blockUserBanned = !!parsed.enabled;
+      } catch (e) {}
+    });
+
+    window.runtime.EventsOn("blockIncoming4095Update", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.blockIncoming4095 = !!parsed.enabled;
       } catch (e) {}
     });
 

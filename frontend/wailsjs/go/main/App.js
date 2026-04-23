@@ -66,6 +66,10 @@ export function GetBlockGetPageArticlesOutgoingConfig() {
   return window['go']['main']['App']['GetBlockGetPageArticlesOutgoingConfig']();
 }
 
+export function GetBlockIncoming4095Config() {
+  return window['go']['main']['App']['GetBlockIncoming4095Config']();
+}
+
 export function GetBlockPollEventEligibilityOutgoingConfig() {
   return window['go']['main']['App']['GetBlockPollEventEligibilityOutgoingConfig']();
 }
@@ -92,6 +96,10 @@ export function GetBlockSlideObjectBundleOutgoingConfig() {
 
 export function GetBlockStatusEffectsConfig() {
   return window['go']['main']['App']['GetBlockStatusEffectsConfig']();
+}
+
+export function GetBlockUserBannedConfig() {
+  return window['go']['main']['App']['GetBlockUserBannedConfig']();
 }
 
 export function GetCasinoStatsJSON(arg1) {
@@ -222,6 +230,10 @@ export function ToggleBlockGetPageArticlesOutgoing(arg1) {
   return window['go']['main']['App']['ToggleBlockGetPageArticlesOutgoing'](arg1);
 }
 
+export function ToggleBlockIncoming4095(arg1) {
+  return window['go']['main']['App']['ToggleBlockIncoming4095'](arg1);
+}
+
 export function ToggleBlockPollEventEligibilityOutgoing(arg1) {
   return window['go']['main']['App']['ToggleBlockPollEventEligibilityOutgoing'](arg1);
 }
@@ -248,4 +260,8 @@ export function ToggleBlockSlideObjectBundleOutgoing(arg1) {
 
 export function ToggleBlockStatusEffects(arg1) {
   return window['go']['main']['App']['ToggleBlockStatusEffects'](arg1);
+}
+
+export function ToggleBlockUserBanned(arg1) {
+  return window['go']['main']['App']['ToggleBlockUserBanned'](arg1);
 }
