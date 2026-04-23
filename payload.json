@@ -1,0 +1,59 @@
+{
+  "allowed_mentions": {
+    "parse": []
+  },
+  "embeds": [
+    {
+      "color": 3447003,
+      "description": "Player: Arab",
+      "fields": [
+        {
+          "inline": true,
+          "name": "Winner",
+          "value": "Dealer"
+        },
+        {
+          "inline": true,
+          "name": "Outcome",
+          "value": "Completed"
+        },
+        {
+          "inline": true,
+          "name": "Player Result",
+          "value": "12"
+        },
+        {
+          "inline": true,
+          "name": "Dealer Result",
+          "value": "8"
+        },
+        {
+          "inline": false,
+          "name": "Bet Items",
+          "value": "club_sofa x1"
+        },
+        {
+          "inline": false,
+          "name": "Payout Items",
+          "value": "club_sofa x2"
+        },
+        {
+          "inline": true,
+          "name": "Started At",
+          "value": "2026-04-23T15:57:02+10:00"
+        },
+        {
+          "inline": true,
+          "name": "Completed At",
+          "value": "2026-04-23T15:57:32+10:00"
+        }
+      ],
+      "footer": {
+        "text": "Game ID: 1776923822149763600"
+      },
+      "timestamp": "2026-04-23T15:57:32+10:00",
+      "title": "TriH — Completed"
+    }
+  ],
+  "username": "Gamba-Suite"
+}

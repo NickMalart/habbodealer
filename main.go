@@ -1627,6 +1627,8 @@ func (a *App) setCurrentGameHistoryResults(playerResult string, dealerResult str
 		a.sendLiveDealerGames(5)
 		// Persist completed game record for later review
 		go LogEvent("game_complete", completedEntry, "Game completed", map[string]string{"player": completedEntry.PlayerName})
+		// Notify Discord webhook (if configured)
+		go a.sendDiscordWebhookForGame(completedEntry)
 	}
 }
 
@@ -1657,6 +1659,7 @@ func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
 func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note string, complete bool) {
 	a.AddLogMsg("[GAME_HISTORY] captureCurrentGameHistoryPayoutItems start")
 	a.gameHistoryMu.Lock()
+	var completedEntry *GameHistoryEntry
 	if !a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
 		// If explicit payout items provided, use them. Otherwise, attempt
 		// to infer payout from the recorded bet items (2x each) so history
@@ -1685,6 +1688,9 @@ func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note strin
 		if complete {
 			entry.Status = "Completed"
 			entry.CompletedAt = gameHistoryTimestamp()
+			// copy out the completed entry for async webhook/send
+			e := *entry
+			completedEntry = &e
 		}
 	}) {
 		a.gameHistoryMu.Unlock()
@@ -1697,6 +1703,10 @@ func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note strin
 	a.gameHistoryMu.Unlock()
 	a.AddLogMsg("[GAME_HISTORY] captureCurrentGameHistoryPayoutItems unlocked, syncing")
 	a.syncGameHistory()
+	// If this call marked the entry complete, send that single entry to Discord.
+	if complete && completedEntry != nil {
+		go a.sendDiscordWebhookForGame(*completedEntry)
+	}
 }
 
 func (a *App) setupExt() {
