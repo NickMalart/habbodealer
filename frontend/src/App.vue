@@ -4,7 +4,7 @@
     <!-- Tab bar -->
       <div class="tab-bar">
       <button
-        v-for="tab in ['Home', 'Trade', 'Game History', 'Stats', 'Logs', 'Utility']"
+        v-for="tab in ['Home', 'Game History', 'Stats', 'Logs', 'Utility']"
         :key="tab"
         :class="['tab-btn', { active: activeTab === tab }]"
         @click="activeTab = tab"
@@ -350,90 +350,7 @@
       </div>
     </div>
 
-    <!-- Trade tab -->
-    <div v-if="activeTab === 'Trade'">
-
-      <h2 class="section-title">Double Payout Check</h2>
-      <p class="trade-hint" v-if="activeBetSourceLabel">
-        Showing {{ activeBetSourceLabel }} data until the round is fully complete.
-      </p>
-      <div class="trade-empty" v-if="activeBetItems.length === 0">
-        No live or saved round bet data yet.
-      </div>
-      <table v-else class="catalog-table">
-        <thead><tr><th>Item</th><th>Bet</th><th>Need Stock</th><th>Payout</th><th>Have</th><th>Status</th></tr></thead>
-        <tbody>
-          <tr v-for="(row, index) in payoutRows" :key="`payout-${index}`">
-            <td><span class="catalog-label">{{ row.displayName }}</span></td>
-            <td><span class="catalog-label">{{ row.betQty }}</span></td>
-            <td><span class="catalog-label">{{ row.required }}</span></td>
-            <td><span class="catalog-label">{{ row.payoutTotal }}</span></td>
-            <td><span class="catalog-label">{{ row.have }}</span></td>
-            <td><span class="catalog-label" :class="{ 'unlisted-value': row.short > 0 }">{{ row.short > 0 ? `Short ${row.short}` : 'OK' }}</span></td>
-          </tr>
-        </tbody>
-      </table>
-      <p class="trade-hint" v-if="activeBetItems.length > 0 && !canCoverPayout">
-        You do not have enough stock to return double payout (bet + match).
-      </p>
-      <p class="trade-hint" v-if="activeBetItems.length > 0 && canCoverPayout">
-        Your hand can return double payout (bet + match).
-      </p>
-
-      <hr class="trade-divider" />
-
-      <!-- Your Hand -->
-      <h2 class="section-title">Your Hand</h2>
-      <div v-if="handItems.length === 0" class="trade-empty">
-        No hand data yet.
-        <span style="font-size:12px;color:#666;">Refreshes every 30s and when a trade opens.</span>
-      </div>
-      <table v-else class="catalog-table">
-        <thead><tr><th>Item</th><th>Qty</th></tr></thead>
-        <tbody>
-          <tr v-for="(item, index) in handItems" :key="`hand-${index}`">
-            <td><span class="catalog-label">{{ item.displayName }}</span></td>
-            <td><span class="catalog-label">{{ item.Quantity }}</span></td>
-          </tr>
-        </tbody>
-      </table>
-      <hr class="trade-divider" />
-
-      <!-- Player's Offer -->
-      <div v-if="casinoStatusKey !== 'stopped'" class="trade-hint">Trade limits: max {{ maxUniqueItemsInput }} unique items, max {{ maxQuantityPerItemInput }} per item</div>
-      <h2 class="section-title">Player Offer</h2>
-      <div v-if="tradeItems.length === 0" class="trade-empty">
-        No active trade items detected.<br />
-        <span style="font-size:12px;color:#666">Items appear here when the partner places furniture in the trade.</span>
-      </div>
-      <table v-else class="catalog-table">
-        <thead><tr><th>Item</th><th>Qty</th></tr></thead>
-        <tbody>
-          <tr v-for="(item, index) in tradeItems" :key="`trade-${index}`">
-            <td><span class="catalog-label">{{ item.displayName }}</span></td>
-            <td><span class="catalog-label">{{ item.Quantity }}</span></td>
-          </tr>
-        </tbody>
-      </table>
-
-      <hr class="trade-divider" />
-
-      <!-- Your Offer -->
-      <h2 class="section-title">Your Offer To Them</h2>
-      <div v-if="ownTradeItems.length === 0" class="trade-empty">
-        Nothing added by you yet.
-      </div>
-      <table v-else class="catalog-table">
-        <thead><tr><th>Item</th><th>Qty</th></tr></thead>
-        <tbody>
-          <tr v-for="(item, index) in ownTradeItems" :key="`own-trade-${index}`">
-            <td><span class="catalog-label">{{ item.displayName }}</span></td>
-            <td><span class="catalog-label">{{ item.Quantity }}</span></td>
-          </tr>
-        </tbody>
-      </table>
-
-    </div>
+    <!-- Trade tab removed -->
 
     <div v-if="activeTab === 'Game History'">
       <h2 class="section-title">Game History</h2>
