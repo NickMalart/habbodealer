@@ -202,8 +202,16 @@ export function StartCasinoSetup(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['StartCasinoSetup'](arg1, arg2, arg3, arg4);
 }
 
+export function StartPingPong() {
+  return window['go']['main']['App']['StartPingPong']();
+}
+
 export function StopCasinoSetup() {
   return window['go']['main']['App']['StopCasinoSetup']();
+}
+
+export function StopPingPong() {
+  return window['go']['main']['App']['StopPingPong']();
 }
 
 export function ToggleAutoShout(arg1) {

@@ -138,6 +138,11 @@ var (
 	// after temporary limit violations are corrected without forcing the
 	// player to toggle accept again.
 	partnerTradeAccepted bool
+
+	// Debug capture of the most recent incoming TRADE_* raw payloads
+	lastIncomingTradeItemsRaw []byte
+	lastIncomingTradeOpenRaw  []byte
+	lastIncomingTradeMu       sync.Mutex
 	// Whether a trade-limit warning was previously active (used to detect
 	// transitions from invalid -> valid and to shout a one-time "now valid"
 	// message).
@@ -325,6 +330,10 @@ var (
 
 	autoShoutStopChan chan struct{}
 	autoShoutMu       sync.Mutex
+
+	// Ping-pong test mode: bypass all trade rules, auto-accept and auto-return.
+	pingPongMode       bool = false
+	pingPongAutoReturn bool = true
 )
 
 type TradeItem struct {
@@ -1285,6 +1294,18 @@ func (a *App) ToggleAutoShout(enabled bool) AutoShoutConfig {
 	return cfg
 }
 
+// StartPingPong enables ping-pong test mode.
+func (a *App) StartPingPong() {
+	pingPongMode = true
+	a.AddLogMsg("[PINGPONG] started")
+}
+
+// StopPingPong disables ping-pong test mode.
+func (a *App) StopPingPong() {
+	pingPongMode = false
+	a.AddLogMsg("[PINGPONG] stopped")
+}
+
 // runAutoShoutLoop runs the ticker that shouts the configured phrase.
 func (a *App) runAutoShoutLoop(stopChan chan struct{}, phrase string, seconds int) {
 	ticker := time.NewTicker(time.Duration(seconds) * time.Second)
@@ -2020,8 +2041,10 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		}
 	}()
 
-	// Only process trade-related logic when casino setup is complete.
-	if !casinoReady {
+	// Only process trade-related logic when casino setup is complete
+	// unless ping-pong test mode is enabled (ping-pong intentionally
+	// bypasses normal dealer readiness checks for testing purposes).
+	if !casinoReady && !pingPongMode {
 		return
 	}
 
@@ -2057,9 +2080,12 @@ func handleTradePacket(a *App, e *g.Intercept) {
 	if e.Packet.Header.Dir == g.In && hiddenBlockedTradeCleanupPending {
 		switch e.Packet.Header.Value {
 		case 105, 108, 109, 111, 112:
-			a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] suppressing incoming trade packet %d during blocked-trade cleanup", e.Packet.Header.Value))
-			e.Block()
-			return
+			if !pingPongMode {
+				a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] suppressing incoming trade packet %d during blocked-trade cleanup", e.Packet.Header.Value))
+				e.Block()
+				return
+			}
+			a.AddLogMsg(fmt.Sprintf("[PINGPONG] allowed incoming trade packet %d despite blocked-trade cleanup", e.Packet.Header.Value))
 		}
 	}
 
@@ -2098,6 +2124,12 @@ func handleTradePacket(a *App, e *g.Intercept) {
 	// - Payout mode: keep delta attribution so automated payout adds by the
 	//   dealer are assigned to our own offer correctly.
 	if e.Packet.Header.Value == 108 {
+		// Capture raw incoming TRADE_ITEMS for debugging (ping-pong auto-return)
+		lastIncomingTradeMu.Lock()
+		lastIncomingTradeItemsRaw = make([]byte, len(e.Packet.Data))
+		copy(lastIncomingTradeItemsRaw, e.Packet.Data)
+		lastIncomingTradeMu.Unlock()
+
 		allItems := a.parseTradeItemsPacket(e.Packet.Data)
 
 		if !payoutTradeActive {
@@ -2433,30 +2465,45 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			// Persist completed bet trade summary for audit
 			go LogEvent("trade_completed", map[string]interface{}{"mode": "bet", "partner": normalizeUsername(strings.TrimSpace(lastTradePartnerName)), "bet_items": gameBetItems}, "Trade completed (bet)", nil)
 
-			// Send the trade items summary to chat
-			a.sendTradeCompletionMessage()
-
-			// Record predicted payout items for history as 2x the bet items
-			// This ensures the frontend shows a sensible payout count even when
-			// an explicit payout trade flow was not used.
-			payoutPred := make([]TradeItem, 0, len(gameBetItems))
-			for _, it := range gameBetItems {
-				if it.Quantity <= 0 {
-					continue
-				}
-				payoutPred = append(payoutPred, TradeItem{Name: it.Name, Quantity: it.Quantity * 2, RawData: it.RawData})
-			}
-			if len(payoutPred) > 0 {
-				// Keep the round open after the bet trade completes. At this point the
-				// player still has to choose a game and the app still needs to record the
-				// actual game, winner and results. We only persist a predicted payout so
-				// the history modal can show the expected return while the round is live.
-				a.captureCurrentGameHistoryPayoutItems(payoutPred, "Predicted payout (2x bet)", false)
+			// In ping-pong mode we do NOT enter dealer/game flows. Record the
+			// bet items locally for UI/audit but skip `sendTradeCompletionMessage`
+			// which begins the game-choice flow.
+			if pingPongMode {
+				a.AddLogMsg("[PINGPONG] trade completed: skipping dealer/game flows")
+				tradeItemsMu.Lock()
+				gameBetItems = make([]TradeItem, len(currentTradeItems))
+				copy(gameBetItems, currentTradeItems)
+				tradeItemsMu.Unlock()
+				a.emitActiveGameBetItemsUpdate()
 			} else {
-				// Do not complete the round here. A missing prediction should not clear
-				// currentGameHistoryID before the game result is recorded.
-				a.captureCurrentGameHistoryPayoutItems([]TradeItem{}, "No payout items recorded yet", false)
+				// Send the trade items summary to chat and start normal dealer flow
+				a.sendTradeCompletionMessage()
+
+				// Record predicted payout items for history as 2x the bet items
+				// This ensures the frontend shows a sensible payout count even when
+				// an explicit payout trade flow was not used.
+				payoutPred := make([]TradeItem, 0, len(gameBetItems))
+				for _, it := range gameBetItems {
+					if it.Quantity <= 0 {
+						continue
+					}
+					payoutPred = append(payoutPred, TradeItem{Name: it.Name, Quantity: it.Quantity * 2, RawData: it.RawData})
+				}
+				if len(payoutPred) > 0 {
+					// Keep the round open after the bet trade completes. At this point the
+					// player still has to choose a game and the app still needs to record the
+					// actual game, winner and results. We only persist a predicted payout so
+					// the history modal can show the expected return while the round is live.
+					a.captureCurrentGameHistoryPayoutItems(payoutPred, "Predicted payout (2x bet)", false)
+				} else {
+					// Do not complete the round here. A missing prediction should not clear
+					// currentGameHistoryID before the game result is recorded.
+					a.captureCurrentGameHistoryPayoutItems([]TradeItem{}, "No payout items recorded yet", false)
+				}
 			}
+
+			// Always refresh our hand snapshot after a completed trade — ping-pong
+			// still relies on an up-to-date hand for auto-return.
 			go func() {
 				if ok := a.forceRefreshHandSnapshot("trade completed"); ok {
 					a.AddLogMsg("[TRADE_COMPLETED] forced hand refresh complete after trade")
@@ -2464,98 +2511,226 @@ func handleTradePacket(a *App, e *g.Intercept) {
 					a.AddLogMsg("[TRADE_COMPLETED] forced hand refresh failed after trade")
 				}
 			}()
+
+			if pingPongMode && pingPongAutoReturn {
+				go func() {
+					time.Sleep(600 * time.Millisecond)
+					if !a.forceRefreshHandSnapshot("pingpong auto-return") {
+						a.AddLogMsg("[PINGPONG] hand refresh failed; abort auto-return")
+						return
+					}
+					hand := snapshotHandItemIDs()
+					if len(hand) == 0 {
+						a.AddLogMsg("[PINGPONG] no hand items available to return")
+						return
+					}
+					var returnID int
+					for _, ids := range hand {
+						if len(ids) > 0 {
+							returnID = ids[0]
+							break
+						}
+					}
+					if returnID == 0 {
+						a.AddLogMsg("[PINGPONG] could not pick an id to return")
+						return
+					}
+					target := lastTradePartnerID
+					if target == 0 {
+						if id, ok := lookupUsers28TradeIDByName(lastTradePartnerName); ok {
+							target = id
+						}
+					}
+					if target == 0 {
+						a.AddLogMsg("[PINGPONG] cannot resolve return target")
+						return
+					}
+					a.AddLogMsg(fmt.Sprintf("[PINGPONG] opening return trade to %d", target))
+					// Clear any previously captured TRADE_ITEMS raw to avoid stale correlation
+					lastIncomingTradeMu.Lock()
+					lastIncomingTradeItemsRaw = nil
+					lastIncomingTradeMu.Unlock()
+					// Log raw outgoing TRADE_OPEN packet for correlation debugging
+					if pkt := ext.NewPacket(out.TRADE_OPEN, target); pkt != nil {
+						a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing TRADE_OPEN payload=% X", pkt.Data))
+					}
+					ext.Send(out.TRADE_OPEN, target)
+					rawOpen := []byte(encodeVL64(target))
+					a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing raw TRADE_OPEN fallback payload=% X", rawOpen))
+					ext.Send(g.Out.Id("TRADE_OPEN"), rawOpen)
+					time.Sleep(700 * time.Millisecond)
+
+					// Send negative-id add first (some servers expect negative ids)
+					if pkt := ext.NewPacket(out.TRADE_ADDITEM, -returnID); pkt != nil {
+						a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing TRADE_ADDITEM (neg) payload=% X string=%q", pkt.Data, string(pkt.Data)))
+					}
+					a.AddLogMsg(fmt.Sprintf("[PINGPONG] sending TRADE_ADDITEM -%d", returnID))
+					ext.Send(out.TRADE_ADDITEM, -returnID)
+
+					// Wait for the server to echo our offered item in TRADE_ITEMS.
+					// Poll ownTradeOfferTotal() and log the value for debugging.
+					accepted := false
+					waitUntil := time.Now().Add(2500 * time.Millisecond)
+					for time.Now().Before(waitUntil) {
+						total := ownTradeOfferTotal()
+						a.AddLogMsg(fmt.Sprintf("[PINGPONG] waiting for own offer... ownTotal=%d", total))
+						// Also log the last incoming TRADE_ITEMS raw payload for correlation
+						lastIncomingTradeMu.Lock()
+						raw := make([]byte, len(lastIncomingTradeItemsRaw))
+						copy(raw, lastIncomingTradeItemsRaw)
+						lastIncomingTradeMu.Unlock()
+						if len(raw) > 0 {
+							a.AddLogMsg(fmt.Sprintf("[PINGPONG] last incoming TRADE_ITEMS raw=% X", raw))
+						}
+						if total > 0 {
+							accepted = true
+							break
+						}
+						time.Sleep(150 * time.Millisecond)
+					}
+
+					if !accepted {
+						a.AddLogMsg("[PINGPONG] no own offer seen after negative-add, retrying with positive id")
+						if pkt := ext.NewPacket(out.TRADE_ADDITEM, returnID); pkt != nil {
+							a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing TRADE_ADDITEM (pos) payload=% X string=%q", pkt.Data, string(pkt.Data)))
+						}
+						ext.Send(out.TRADE_ADDITEM, returnID)
+						waitUntil = time.Now().Add(2500 * time.Millisecond)
+						for time.Now().Before(waitUntil) {
+							total := ownTradeOfferTotal()
+							a.AddLogMsg(fmt.Sprintf("[PINGPONG] waiting for own offer after pos-retry... ownTotal=%d", total))
+							// Also log the last incoming TRADE_ITEMS raw payload for correlation
+							lastIncomingTradeMu.Lock()
+							raw := make([]byte, len(lastIncomingTradeItemsRaw))
+							copy(raw, lastIncomingTradeItemsRaw)
+							lastIncomingTradeMu.Unlock()
+							if len(raw) > 0 {
+								a.AddLogMsg(fmt.Sprintf("[PINGPONG] last incoming TRADE_ITEMS raw=% X", raw))
+							}
+							if total > 0 {
+								accepted = true
+								break
+							}
+							time.Sleep(150 * time.Millisecond)
+						}
+					}
+
+					if accepted {
+						time.Sleep(200 * time.Millisecond)
+						if pkt := ext.NewPacket(out.TRADE_ACCEPT); pkt != nil {
+							a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing TRADE_ACCEPT payload=% X", pkt.Data))
+						} else {
+							a.AddLogMsg("[PINGPONG] sending TRADE_ACCEPT (no-payload)")
+						}
+						ext.Send(out.TRADE_ACCEPT)
+						a.AddLogMsg("[PINGPONG] return trade offered and accepted (item echoed)")
+					} else {
+						a.AddLogMsg("[PINGPONG] failed to observe offered item; sending accept anyway")
+						ext.Send(out.TRADE_ACCEPT)
+					}
+				}()
+			}
 		}
 		return
 	}
 
 	if e.Packet.Header.Value == 104 {
-		// Manual block-all-trades toggle — skip if we just sent our own payout trade open
-		if blockAllTrades && !payoutTradeSent && !matchesRecentOutgoingFunc(e.Packet.Data) {
-			activeRound := awaitingGameChoice || dealerGameActive() || payoutActive || payoutTradeActive
-			allowed := false
+		// Capture raw incoming TRADE_OPEN for debugging
+		lastIncomingTradeMu.Lock()
+		lastIncomingTradeOpenRaw = make([]byte, len(e.Packet.Data))
+		copy(lastIncomingTradeOpenRaw, e.Packet.Data)
+		lastIncomingTradeMu.Unlock()
+		if !pingPongMode {
+			// Manual block-all-trades toggle — skip if we just sent our own payout trade open
+			if blockAllTrades && !payoutTradeSent && !matchesRecentOutgoingFunc(e.Packet.Data) {
+				activeRound := awaitingGameChoice || dealerGameActive() || payoutActive || payoutTradeActive
+				allowed := false
 
-			if activeRound {
-				// Strict trade-id validation: build a set of expected trade IDs
-				// derived from the current game state (starter, stable copy,
-				// last partner, payout target and any resolved awaiting partner).
-				incomingTraderID := 0
-				if id, ok := decodeLeadingVL64(e.Packet.Data); ok {
-					incomingTraderID = id
-				}
-
-				expectedIDs := map[int]struct{}{}
-				if tradeStarterTradeID > 0 {
-					expectedIDs[tradeStarterTradeID] = struct{}{}
-				}
-				if stableTradePartnerID > 0 {
-					expectedIDs[stableTradePartnerID] = struct{}{}
-				}
-				if lastTradePartnerID > 0 {
-					expectedIDs[lastTradePartnerID] = struct{}{}
-				}
-				if payoutTargetID > 0 {
-					expectedIDs[payoutTargetID] = struct{}{}
-				}
-
-				// If we have an awaiting partner name for the current choice,
-				// try to resolve its trade_id too.
-				awaitingName := strings.TrimSpace(awaitingGameChoicePartnerName)
-				if awaitingName != "" {
-					if id, ok := lookupUsers28TradeIDByName(awaitingName); ok {
-						expectedIDs[id] = struct{}{}
+				if activeRound {
+					// Strict trade-id validation: build a set of expected trade IDs
+					// derived from the current game state (starter, stable copy,
+					// last partner, payout target and any resolved awaiting partner).
+					incomingTraderID := 0
+					if id, ok := decodeLeadingVL64(e.Packet.Data); ok {
+						incomingTraderID = id
 					}
-				}
 
-				partnerName := strings.TrimSpace(lastTradePartnerName)
-				// Also include partnerName-derived id for backwards compatibility
-				if partnerName != "" && !strings.EqualFold(partnerName, "Unknown") {
-					if id, ok := lookupUsers28TradeIDByName(partnerName); ok {
-						expectedIDs[id] = struct{}{}
+					expectedIDs := map[int]struct{}{}
+					if tradeStarterTradeID > 0 {
+						expectedIDs[tradeStarterTradeID] = struct{}{}
 					}
-				}
+					if stableTradePartnerID > 0 {
+						expectedIDs[stableTradePartnerID] = struct{}{}
+					}
+					if lastTradePartnerID > 0 {
+						expectedIDs[lastTradePartnerID] = struct{}{}
+					}
+					if payoutTargetID > 0 {
+						expectedIDs[payoutTargetID] = struct{}{}
+					}
 
-				// Diagnostic log of the check
-				a.AddLogMsg(fmt.Sprintf("[TRADE_BLOCK_DEBUG] incomingChatID=%d expectedIDs=%v partner=%q activeRound=%t", incomingTraderID, expectedIDs, partnerName, activeRound))
-
-				// If we resolved any expected IDs, require an exact match.
-				matched := false
-				if len(expectedIDs) > 0 {
-					if incomingTraderID > 0 {
-						if _, ok := expectedIDs[incomingTraderID]; ok {
-							matched = true
-							a.AddLogMsg(fmt.Sprintf("[TRADE_BLOCK] allowing trade by exact trade_id match (%d)", incomingTraderID))
-							allowed = true
+					// If we have an awaiting partner name for the current choice,
+					// try to resolve its trade_id too.
+					awaitingName := strings.TrimSpace(awaitingGameChoicePartnerName)
+					if awaitingName != "" {
+						if id, ok := lookupUsers28TradeIDByName(awaitingName); ok {
+							expectedIDs[id] = struct{}{}
 						}
 					}
-				}
 
-				// Fallback: keep previous behavior when no expected IDs were
-				// resolvable (best-effort name->trade_id match).
-				if !matched && len(expectedIDs) == 0 {
+					partnerName := strings.TrimSpace(lastTradePartnerName)
+					// Also include partnerName-derived id for backwards compatibility
 					if partnerName != "" && !strings.EqualFold(partnerName, "Unknown") {
-						if expectedID, ok := lookupUsers28TradeIDByName(partnerName); ok {
-							a.AddLogMsg(fmt.Sprintf("[TRADE_BLOCK_DEBUG] fallback active partner=%q expectedChatID=%d incomingChatID=%d", partnerName, expectedID, incomingTraderID))
-							if incomingTraderID > 0 && incomingTraderID == expectedID {
-								a.AddLogMsg(fmt.Sprintf("[TRADE_BLOCK] allowing trade from active partner %q by fallback parsed chat_id match", partnerName))
+						if id, ok := lookupUsers28TradeIDByName(partnerName); ok {
+							expectedIDs[id] = struct{}{}
+						}
+					}
+
+					// Diagnostic log of the check
+					a.AddLogMsg(fmt.Sprintf("[TRADE_BLOCK_DEBUG] incomingChatID=%d expectedIDs=%v partner=%q activeRound=%t", incomingTraderID, expectedIDs, partnerName, activeRound))
+
+					// If we resolved any expected IDs, require an exact match.
+					matched := false
+					if len(expectedIDs) > 0 {
+						if incomingTraderID > 0 {
+							if _, ok := expectedIDs[incomingTraderID]; ok {
+								matched = true
+								a.AddLogMsg(fmt.Sprintf("[TRADE_BLOCK] allowing trade by exact trade_id match (%d)", incomingTraderID))
 								allowed = true
 							}
 						}
 					}
-				}
 
-				if !allowed {
-					a.AddLogMsg("[TRADE_BLOCK] incoming trade blocked during active round (trade_id mismatch)")
+					// Fallback: keep previous behavior when no expected IDs were
+					// resolvable (best-effort name->trade_id match).
+					if !matched && len(expectedIDs) == 0 {
+						if partnerName != "" && !strings.EqualFold(partnerName, "Unknown") {
+							if expectedID, ok := lookupUsers28TradeIDByName(partnerName); ok {
+								a.AddLogMsg(fmt.Sprintf("[TRADE_BLOCK_DEBUG] fallback active partner=%q expectedChatID=%d incomingChatID=%d", partnerName, expectedID, incomingTraderID))
+								if incomingTraderID > 0 && incomingTraderID == expectedID {
+									a.AddLogMsg(fmt.Sprintf("[TRADE_BLOCK] allowing trade from active partner %q by fallback parsed chat_id match", partnerName))
+									allowed = true
+								}
+							}
+						}
+					}
 
-					// Detailed guard state for diagnostics
-					a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] block reason=%s awaitingTradeOpen=%t dealerTradeWindowOpen=%t dealerGameActive=%t dealerResyncInProgress=%t", "incoming blocked during active round", awaitingTradeOpen, dealerTradeWindowOpen, dealerGameActive(), dealerResyncInProgress))
-					hiddenBlockedTradeCleanupPending = true
-					ignoreNextGuardCloseRecovery = true
-					suppressNextTradeCloseAnnouncement = true
-					e.Block()
-					ext.Send(out.TRADE_CLOSE)
-					return
+					if !allowed {
+						a.AddLogMsg("[TRADE_BLOCK] incoming trade blocked during active round (trade_id mismatch)")
+
+						// Detailed guard state for diagnostics
+						a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] block reason=%s awaitingTradeOpen=%t dealerTradeWindowOpen=%t dealerGameActive=%t dealerResyncInProgress=%t", "incoming blocked during active round", awaitingTradeOpen, dealerTradeWindowOpen, dealerGameActive(), dealerResyncInProgress))
+						hiddenBlockedTradeCleanupPending = true
+						ignoreNextGuardCloseRecovery = true
+						suppressNextTradeCloseAnnouncement = true
+						e.Block()
+						ext.Send(out.TRADE_CLOSE)
+						return
+					}
 				}
 			}
+		} else {
+			a.AddLogMsg("[PINGPONG] bypassing trade-open guards (ping-pong mode)")
 		}
 
 		a.ShowWindow()
@@ -2610,25 +2785,28 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		}
 
 		if !isPayoutTradeOpen && !dealerReadyForNewTrade() && !matchedRecentOutgoing {
-			reason := "dealer not open"
-			if dealerGameActive() {
-				reason = "dealer busy in active game"
-			} else if dealerResyncInProgress {
-				reason = "dealer syncing hand"
-			} else if !dealerAcceptingTrades {
-				reason = "dealer not accepting trades"
+			if !pingPongMode {
+				reason := "dealer not open"
+				if dealerGameActive() {
+					reason = "dealer busy in active game"
+				} else if dealerResyncInProgress {
+					reason = "dealer syncing hand"
+				} else if !dealerAcceptingTrades {
+					reason = "dealer not accepting trades"
+				}
+
+				a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] blocking incoming trade open: %s", reason))
+
+				// Detailed guard state for diagnostics
+				a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] block reason=%s awaitingTradeOpen=%t dealerTradeWindowOpen=%t dealerGameActive=%t dealerResyncInProgress=%t", reason, awaitingTradeOpen, dealerTradeWindowOpen, dealerGameActive(), dealerResyncInProgress))
+				hiddenBlockedTradeCleanupPending = true
+				ignoreNextGuardCloseRecovery = true
+				suppressNextTradeCloseAnnouncement = true
+				e.Block()
+				ext.Send(out.TRADE_CLOSE)
+				return
 			}
-
-			a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] blocking incoming trade open: %s", reason))
-
-			// Detailed guard state for diagnostics
-			a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] block reason=%s awaitingTradeOpen=%t dealerTradeWindowOpen=%t dealerGameActive=%t dealerResyncInProgress=%t", reason, awaitingTradeOpen, dealerTradeWindowOpen, dealerGameActive(), dealerResyncInProgress))
-			hiddenBlockedTradeCleanupPending = true
-			ignoreNextGuardCloseRecovery = true
-			suppressNextTradeCloseAnnouncement = true
-			e.Block()
-			ext.Send(out.TRADE_CLOSE)
-			return
+			a.AddLogMsg("[PINGPONG] bypassing dealer-ready guard for incoming TRADE_OPEN")
 		}
 
 		if matchedRecentOutgoing {
@@ -2639,13 +2817,16 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		// yet have a ready frozen hand snapshot. This prevents the race where
 		// ClearTradeItems() wiped the snapshot and the dealer reopens immediately.
 		if !isPayoutTradeOpen && !matchedRecentOutgoing && !dealerSnapshotReady() {
-			a.AddLogMsg("[TRADE_GUARD] blocking incoming trade open: hand snapshot not ready")
-			hiddenBlockedTradeCleanupPending = true
-			ignoreNextGuardCloseRecovery = true
-			suppressNextTradeCloseAnnouncement = true
-			e.Block()
-			ext.Send(out.TRADE_CLOSE)
-			return
+			if !pingPongMode {
+				a.AddLogMsg("[TRADE_GUARD] blocking incoming trade open: hand snapshot not ready")
+				hiddenBlockedTradeCleanupPending = true
+				ignoreNextGuardCloseRecovery = true
+				suppressNextTradeCloseAnnouncement = true
+				e.Block()
+				ext.Send(out.TRADE_CLOSE)
+				return
+			}
+			a.AddLogMsg("[PINGPONG] bypassing hand-snapshot guard for incoming TRADE_OPEN")
 		}
 
 		awaitingGameChoice = false
@@ -2787,6 +2968,14 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		dealerTradeWindowOpen = false
 		log.Printf("[TRADE_OPEN #%d] %s", tradeOpenCount, lastTradeOpen)
 		a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN #%d] %s", tradeOpenCount, lastTradeOpen))
+		if pingPongMode {
+			a.AddLogMsg("[PINGPONG] ping-pong mode: waiting for partner accept before auto-accept")
+			// Intentionally do not auto-accept here. Wait for the partner's
+			// incoming TRADE_ACCEPT (109) which will call
+			// scheduleAutoTradeAccept(a, ...) and perform the accept. This
+			// ensures we see the partner's final TRADE_ITEMS before accepting
+			// so returned/offered items are known.
+		}
 		stableTradePartnerID = tradeStarterTradeID
 		if stableTradePartnerID <= 0 {
 			stableTradePartnerID = lastTradePartnerID
@@ -2805,7 +2994,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		if partnerName == "" {
 			partnerName = "Unknown"
 		}
-		if !isPayoutTradeOpen && !matchedRecentOutgoing {
+		if !isPayoutTradeOpen && !matchedRecentOutgoing && !pingPongMode {
 			if partnerName == "" || strings.EqualFold(partnerName, "Unknown") {
 				notify := "Sorry can't identify you from the current room-user state, please rejoin room and try again"
 				a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN] unresolved partner from strict parsed USERS28 state, cancelling trade: %s", notify))
@@ -3972,6 +4161,30 @@ func stopDealerOpenHeartbeat() {
 }
 
 func scheduleAutoTradeAccept(a *App, payload string) {
+	if pingPongMode {
+		if tradeAutoAccepted || tradeAutoAcceptPending {
+			return
+		}
+		tradeAutoAcceptPending = true
+		flowID := tradeAutoFlowID
+		a.AddLogMsg(fmt.Sprintf("[PINGPONG] scheduleAutoTradeAccept detected (%q), sending quick accept", payload))
+		go func(flow int) {
+			time.Sleep(150 * time.Millisecond)
+			if flow != tradeAutoFlowID {
+				tradeAutoAcceptPending = false
+				return
+			}
+			ext.Send(out.TRADE_ACCEPT)
+			tradeAutoAcceptPending = false
+			tradeAutoAccepted = true
+			a.AddLogMsg("[PINGPONG] auto-accept sent (ping-pong mode)")
+			if payoutTradeActive && !payoutResponseTimeoutActive {
+				a.AddLogMsg("[PAYOUT] starting payout response timeout monitor after dealer accept")
+				a.startPayoutResponseTimeoutMonitor(payoutTargetName, payoutTargetID, payoutTargetName)
+			}
+		}(flowID)
+		return
+	}
 	if strings.TrimSpace(lastTradePartnerToken) == "" {
 		return
 	}
@@ -4064,6 +4277,26 @@ func scheduleAutoTradeAccept(a *App, payload string) {
 }
 
 func scheduleAutoTradeConfirm(a *App, payload string) {
+	if pingPongMode {
+		if tradeAutoConfirmed || tradeAutoConfirmPending {
+			return
+		}
+		tradeAutoConfirmPending = true
+		flowID := tradeAutoFlowID
+		a.AddLogMsg(fmt.Sprintf("[PINGPONG] scheduleAutoTradeConfirm detected (%q), auto-confirm in 250ms", payload))
+		go func(flow int) {
+			time.Sleep(250 * time.Millisecond)
+			if flow != tradeAutoFlowID || tradeAutoConfirmed {
+				tradeAutoConfirmPending = false
+				return
+			}
+			ext.Send(g.Out.Id("TRADE_CONFIRM_ACCEPT"))
+			tradeAutoConfirmPending = false
+			tradeAutoConfirmed = true
+			a.AddLogMsg("[PINGPONG] auto-confirm sent (ping-pong mode)")
+		}(flowID)
+		return
+	}
 	if tradeAutoConfirmed || tradeAutoConfirmPending {
 		return
 	}

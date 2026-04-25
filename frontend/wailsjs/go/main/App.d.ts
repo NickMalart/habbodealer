@@ -102,7 +102,11 @@ export function SkipDiceSetupForTesting():Promise<void>;
 
 export function StartCasinoSetup(arg1:string,arg2:string,arg3:number,arg4:number):Promise<void>;
 
+export function StartPingPong():Promise<void>;
+
 export function StopCasinoSetup():Promise<void>;
+
+export function StopPingPong():Promise<void>;
 
 export function ToggleAutoShout(arg1:boolean):Promise<main.AutoShoutConfig>;
 

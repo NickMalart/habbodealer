@@ -31,6 +31,7 @@
           <div class="casino-actions">
             <button v-if="casinoStatusKey === 'stopped'" type="button" class="copy-btn start-casino-btn" @click="startCasino">Start Casino</button>
             <button v-if="casinoStatusKey !== 'stopped'" type="button" class="copy-btn history-danger-btn" @click="stopCasino">Stop</button>
+            <button type="button" class="copy-btn" @click="togglePingPong">{{ pingPongEnabled ? 'Stop Ping-Pong' : 'Start Ping-Pong' }}</button>
           </div>
         </div>
         <div v-if="casinoStatusKey !== 'stopped'" class="trade-limits-home">Trade limits: max {{ maxUniqueItemsInput }} unique items, max {{ maxQuantityPerItemInput }} per item</div>
@@ -719,6 +720,8 @@ export default {
       tooltipHtml: '',
       tooltipLeft: 0,
       tooltipTop: 0,
+      // Ping-pong test mode UI flag
+      pingPongEnabled: false,
       // Live UI indicators for partner activity
       currentTraderName: '',
       currentGamePlayerName: '',
@@ -921,6 +924,22 @@ export default {
           this.addLogMsg('[UI] Casino stopped');
         } catch (err) {
           this.addLogMsg('[UI] Failed to stop casino');
+          console.error(err);
+        }
+      },
+      async togglePingPong() {
+        try {
+          if (!this.pingPongEnabled) {
+            await window.go.main.App.StartPingPong();
+            this.pingPongEnabled = true;
+            this.addLogMsg('[UI] Ping-Pong started');
+          } else {
+            await window.go.main.App.StopPingPong();
+            this.pingPongEnabled = false;
+            this.addLogMsg('[UI] Ping-Pong stopped');
+          }
+        } catch (err) {
+          this.addLogMsg('[UI] Failed to toggle Ping-Pong');
           console.error(err);
         }
       },
