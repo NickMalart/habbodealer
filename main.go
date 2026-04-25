@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bytes"
@@ -1385,7 +1385,7 @@ func dealerSnapshotReady() bool {
 }
 
 func dealerDiceReadyLocked() bool {
-	return fakeDiceTestingMode || len(diceList) >= 5
+	return fakeDiceTestingMode || len(diceList) >= getExpectedDiceCount()
 }
 
 func dealerDiceReady() bool {
@@ -7616,16 +7616,23 @@ func (a *App) beginUnderOverRound(mode string) {
 
 // rollUnderOverDice rolls the two configured dice (slots 1 and 5 -> indices 0 and 4).
 func (a *App) rollUnderOverDice() {
+	// choose indices: prefer [0,4] when a full 5-dice setup exists,
+	// otherwise use the first two slots [0,1] when only 2 dice are configured.
 	if fakeDiceTestingMode {
 		mutex.Lock()
-		if len(diceList) < 5 {
+		// determine indices based on current diceList length
+		if len(diceList) < 2 {
 			mutex.Unlock()
 			a.AddLogMsg("[UO] Not enough dice to roll")
 			isUORolling = false
 			return
 		}
 		currentSum = 0
-		for _, index := range []int{0, 4} {
+		indices := []int{0, 1}
+		if len(diceList) >= 5 {
+			indices = []int{0, 4}
+		}
+		for _, index := range indices {
 			diceList[index].Value = rand.Intn(6) + 1
 			diceList[index].IsClosed = false
 			currentSum += diceList[index].Value
@@ -7638,16 +7645,23 @@ func (a *App) rollUnderOverDice() {
 	}
 
 	mutex.Lock()
-	if len(diceList) < 5 {
+	// pick indices depending on how many dice are available
+	var indices []int
+	if len(diceList) >= 5 {
+		indices = []int{0, 4}
+	} else if len(diceList) >= 2 {
+		indices = []int{0, 1}
+	}
+	if len(indices) < 2 {
 		mutex.Unlock()
 		a.AddLogMsg("[UO] Not enough dice to roll")
 		isUORolling = false
 		return
 	}
-	resultsWaitGroup.Add(2)
+	resultsWaitGroup.Add(len(indices))
 	mutex.Unlock()
 
-	for _, index := range []int{0, 4} {
+	for _, index := range indices {
 		diceList[index].Roll()
 		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
 	}
@@ -7671,6 +7685,8 @@ func (a *App) evaluateUnderOverRound() {
 	total := 0
 	if len(diceList) >= 5 {
 		total = diceList[0].Value + diceList[4].Value
+	} else if len(diceList) >= 2 {
+		total = diceList[0].Value + diceList[1].Value
 	}
 	totalText := strconv.Itoa(total)
 	a.AddLogMsg(fmt.Sprintf("[UO] evaluating total=%d playerChoice=%s", total, uoPlayerChoice))
@@ -7910,6 +7926,16 @@ func resetDiceState() {
 	partnerAcceptedSnapshot = nil
 }
 
+// getExpectedDiceCount returns the number of dice required for setup based on
+// the current dealer mode. Under/Over-7 mode requires only 2 dice; otherwise
+// the default is 5.
+func getExpectedDiceCount() int {
+	if onlyUnderOver7Mode {
+		return 2
+	}
+	return 5
+}
+
 // StartCasinoSetup enables dice setup recording. This must be called from the frontend
 // when the user clicks the "Start Casino" button. It resets any existing dice and
 // enables recording of incoming dice IDs. It also receives trade-limit configuration
@@ -7951,7 +7977,7 @@ func (a *App) StartCasinoSetup(dealerName string, roomName string, maxUniqueItem
 	a.AddLogMsg(fmt.Sprintf("[CONFIG] max trade unique items = %d", maxTradeUniqueItems))
 	a.AddLogMsg(fmt.Sprintf("[CONFIG] max trade quantity per item = %d", maxTradeQuantityPerItem))
 
-	a.AddLogMsg("[DICE_SETUP] Dice setup mode enabled - roll all 5 dice now")
+	a.AddLogMsg(fmt.Sprintf("[DICE_SETUP] Dice setup mode enabled - roll all %d dice now", getExpectedDiceCount()))
 	a.emitDiceSetupUpdate()
 	// Dealer is not open yet here. It only becomes open after setup completes
 	// and a fresh hand snapshot has been captured.
@@ -8031,7 +8057,7 @@ func (a *App) emitDiceSetupUpdate() {
 		}
 		diceCopy[i] = *d
 	}
-	complete := len(diceList) >= 5
+	complete := len(diceList) >= getExpectedDiceCount()
 	ready := casinoReady
 	active := casinoActive
 	setupActive := diceSetupActive
@@ -8116,15 +8142,16 @@ func (a *App) openDealerAfterSetup(reason string) {
 
 func (a *App) SkipDiceSetupForTesting() {
 	mutex.Lock()
-	diceList = make([]*Dice, 0, 5)
-	for i := 1; i <= 5; i++ {
+	expected := getExpectedDiceCount()
+	diceList = make([]*Dice, 0, expected)
+	for i := 1; i <= expected; i++ {
 		diceList = append(diceList, &Dice{ID: 100000 + i, Value: rand.Intn(6) + 1, IsRolling: false, IsClosed: false})
 	}
 	fakeDiceTestingMode = true
 	casinoReady = true
 	mutex.Unlock()
 
-	a.AddLogMsg("Dice setup bypass enabled for testing. Using 5 fake dice values.")
+	a.AddLogMsg(fmt.Sprintf("Dice setup bypass enabled for testing. Using %d fake dice values.", expected))
 	go a.openDealerAfterSetup("skip dice setup")
 }
 
@@ -8159,8 +8186,9 @@ func (a *App) handleThrowDice(e *g.Intercept) {
 	needEmit := false
 	setupCompletedNow := false
 
-	// If not found and the list has fewer than 5 dice, create and add a new one
-	if existingDice == nil && len(diceList) < 5 {
+	// If not found and the list has fewer than the expected dice, create and add a new one
+	expected := getExpectedDiceCount()
+	if existingDice == nil && len(diceList) < expected {
 		if !diceSetupActive {
 			// Not in setup mode - ignore new dice for setup purposes
 			mutex.Unlock()
@@ -8172,7 +8200,7 @@ func (a *App) handleThrowDice(e *g.Intercept) {
 		log.Printf("Dice %d added\n", diceID)
 		needEmit = true
 
-		if len(diceList) == 5 {
+		if len(diceList) == expected {
 			message := "Dice setup sucessful! Run :roll to confirm"
 			a.AddLogMsg(message)
 			// Turn off setup mode once complete and mark the casino ready.
@@ -8218,7 +8246,8 @@ func (a *App) handleDiceOff(e *g.Intercept) {
 
 	needEmit := false
 	setupCompletedNow := false
-	if existingDice == nil && len(diceList) < 5 {
+	expected := getExpectedDiceCount()
+	if existingDice == nil && len(diceList) < expected {
 		if !diceSetupActive {
 			mutex.Unlock()
 			return
@@ -8227,7 +8256,7 @@ func (a *App) handleDiceOff(e *g.Intercept) {
 		diceList = append(diceList, newDice)
 		log.Printf("Dice %d added\n", diceID)
 		needEmit = true
-		if len(diceList) == 5 {
+		if len(diceList) == expected {
 			message := "Dice setup sucessful! Run :roll to confirm"
 			a.AddLogMsg(message)
 			diceSetupActive = false
@@ -8307,11 +8336,17 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 	if needEmit {
 		a.emitDiceSetupUpdate()
 
-		// Update readiness: when we have 5 recorded dice with non-zero values
+		// Update readiness: when we have the expected recorded dice with non-zero values
 		mutex.Lock()
-		ready := len(diceList) >= 5
+		expected := getExpectedDiceCount()
+		ready := len(diceList) >= expected
 		if ready {
-			for _, d := range diceList {
+			for i := 0; i < expected; i++ {
+				if i >= len(diceList) {
+					ready = false
+					break
+				}
+				d := diceList[i]
 				if d == nil || d.Value <= 0 {
 					ready = false
 					break
@@ -8331,7 +8366,8 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 func (a *App) closeAllDice() {
 	if fakeDiceTestingMode {
 		mutex.Lock()
-		if len(diceList) < 5 {
+		expected := getExpectedDiceCount()
+		if len(diceList) < expected {
 			mutex.Unlock()
 			log.Println("Not enough dice to roll")
 			isClosing = false

@@ -41,16 +41,16 @@
       <div class="dice-setup-modal-backdrop" v-if="showDiceSetupModal" @click="showDiceSetupModal = false">
         <div class="dice-setup-modal" @click.stop>
           <div class="game-guide-header">
-            <h3 class="section-title game-guide-title">Roll all 5 dice</h3>
+            <h3 class="section-title game-guide-title">Roll all {{ onlyUnderOverMode ? 2 : 5 }} dice</h3>
             <button type="button" class="copy-btn" @click="showDiceSetupModal = false">Close</button>
           </div>
-          <p class="game-guide-text">Please roll all 5 dice in the game. Circles will turn green as each dice is recorded.</p>
+          <p class="game-guide-text">Please roll all {{ onlyUnderOverMode ? 2 : 5 }} dice in the game. Circles will turn green as each dice is recorded.</p>
           <div class="dice-circles">
-            <div v-for="(slot, idx) in 5" :key="idx" :class="['dice-circle', { rolled: diceSetup[idx] && diceSetup[idx].rolled }]">{{ idx + 1 }}</div>
+            <div v-for="(slot, idx) in diceSetup" :key="idx" :class="['dice-circle', { rolled: diceSetup[idx] && diceSetup[idx].rolled }]">{{ idx + 1 }}</div>
           </div>
           <div class="game-guide-block">
             <div class="game-guide-label">Status</div>
-            <div class="game-guide-text">{{ (diceSetup.filter(d => d.rolled).length) || 0 }} / 5 rolled</div>
+            <div class="game-guide-text">{{ (diceSetup.filter(d => d.rolled).length) || 0 }} / {{ diceSetup.length || (onlyUnderOverMode ? 2 : 5) }} rolled</div>
           </div>
         </div>
       </div>
@@ -986,11 +986,12 @@ export default {
           await window.go.main.App.StartCasinoSetup(name, roomName, maxUnique, maxPer);
 
           this.showDealerNameModal = false;
-          this.diceSetup = Array.from({ length: 5 }).map(() => ({ rolled: false, id: 0, value: 0 }));
+          const expected = this.onlyUnderOverMode ? 2 : 5;
+          this.diceSetup = Array.from({ length: expected }).map(() => ({ rolled: false, id: 0, value: 0 }));
           this.showDiceSetupModal = true;
           this.casinoStatus = 'Awaiting dice rolls';
           this.casinoStatusKey = 'awaiting';
-          this.addLogMsg('[UI] Dice setup started; roll all 5 dice');
+          this.addLogMsg(`[UI] Dice setup started; roll all ${expected} dice`);
         } catch (err) {
           this.addLogMsg('[UI] Failed to start dice setup');
           console.error(err);
@@ -1838,8 +1839,9 @@ export default {
       try {
         const payload = JSON.parse(jsonStr || '{}') || {};
         const dice = (payload.dice || []).map(d => ({ id: d.ID, value: d.Value, rolled: d.Value && d.Value > 0 }));
-        // ensure five slots
-        this.diceSetup = Array.from({ length: 5 }).map((_, i) => dice[i] || { id: 0, value: 0, rolled: false });
+        // ensure correct number of slots based on selected dealer mode
+        const expected = this.onlyUnderOverMode ? 2 : 5;
+        this.diceSetup = Array.from({ length: expected }).map((_, i) => dice[i] || { id: 0, value: 0, rolled: false });
 
         const active = !!payload.active;
         const setupActive = !!payload.diceSetupActive;
@@ -1851,7 +1853,8 @@ export default {
           this.casinoStatus = 'Stopped';
           this.casinoStatusKey = 'stopped';
           this.showDiceSetupModal = false;
-          this.diceSetup = Array.from({ length: 5 }).map(() => ({ id: 0, value: 0, rolled: false }));
+          const expected = this.onlyUnderOverMode ? 2 : 5;
+          this.diceSetup = Array.from({ length: expected }).map(() => ({ id: 0, value: 0, rolled: false }));
           return;
         }
 
