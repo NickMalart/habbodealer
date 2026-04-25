@@ -94,6 +94,8 @@ export function SaveConfig(arg1:main.PokerDisplayConfig):Promise<void>;
 
 export function SaveDealerOpenConfig(arg1:boolean,arg2:number,arg3:number):Promise<main.DealerOpenConfig>;
 
+export function SetOnlyUnderOver(arg1:boolean):Promise<void>;
+
 export function ShowCommands():Promise<void>;
 
 export function ShowWindow():Promise<void>;

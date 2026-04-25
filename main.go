@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"bytes"
@@ -93,25 +93,34 @@ var (
 	awaitingTriChoice            bool
 	awaitingTriChoicePartnerID   int
 	awaitingTriChoicePartnerName string
-	triRoundActive               bool
-	triPlayerTurn                bool
-	triMode                      string // "high" or "low"
-	triPlayerTotal               int
-	triDealerTotal               int
-	triPlayerName                string
-	pokerSequencePlayerName      string
-	pokerSequencePlayerResult    PokerHandResult
-	pokerSequencePlayerHand      string
-	payoutActive                 bool
-	payoutTradeActive            bool
-	payoutTargetID               int
-	payoutTargetName             string
-	payoutAttempts               int
-	payoutSessionID              int
-	payoutTradeSent              bool
-	payoutExpectedAddCount       int
-	payoutActualAddCount         int
-	lastPayoutCancelNoticeAt     time.Time
+	// Under/Over (Over/Under 7) choice state
+	awaitingUOChoice            bool
+	awaitingUOChoicePartnerID   int
+	awaitingUOChoicePartnerName string
+	triRoundActive              bool
+	triPlayerTurn               bool
+	triMode                     string // "high" or "low"
+	triPlayerTotal              int
+	triDealerTotal              int
+	triPlayerName               string
+	// Under/Over-7 state
+	isUORolling               bool
+	uoRoundActive             bool
+	uoPlayerChoice            string // "over" or "under"
+	onlyUnderOver7Mode        bool   // when true, dealer prompts only Under/Over-7
+	pokerSequencePlayerName   string
+	pokerSequencePlayerResult PokerHandResult
+	pokerSequencePlayerHand   string
+	payoutActive              bool
+	payoutTradeActive         bool
+	payoutTargetID            int
+	payoutTargetName          string
+	payoutAttempts            int
+	payoutSessionID           int
+	payoutTradeSent           bool
+	payoutExpectedAddCount    int
+	payoutActualAddCount      int
+	lastPayoutCancelNoticeAt  time.Time
 
 	// Payout retry/monitor state
 	payoutResponseTimeoutMonitorID int
@@ -1283,6 +1292,15 @@ func (a *App) ToggleAutoShout(enabled bool) AutoShoutConfig {
 	}
 
 	return cfg
+}
+
+// SetOnlyUnderOver enables/disables "Only Under/Over-7" dealer mode.
+func (a *App) SetOnlyUnderOver(enabled bool) {
+	onlyUnderOver7Mode = enabled
+	a.AddLogMsg(fmt.Sprintf("[CONFIG] Under/Over-7 only mode = %t", enabled))
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "dealerModeChanged", enabled)
+	}
 }
 
 // runAutoShoutLoop runs the ticker that shouts the configured phrase.
@@ -3722,7 +3740,12 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 			return
 		}
 
-		reminder := "Shout pkr, 21, 13, trih, tril"
+		var reminder string
+		if onlyUnderOver7Mode {
+			reminder = "Shout over or under"
+		} else {
+			reminder = "Shout pkr, 21, 13, trih, tril, uo"
+		}
 		a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] 30s no response, repeating prompt for %s", player))
 		sendShout(reminder)
 
@@ -6525,7 +6548,12 @@ func (a *App) sendTradeCompletionMessage() {
 	a.beginGameHistory(partnerName, gameBetItems)
 	a.AddLogMsg("[TRADE_FLOW] beginGameHistory returned")
 
-	msg := "Shout pkr, 21, 13, trih, tril"
+	var msg string
+	if onlyUnderOver7Mode {
+		msg = "Shout over or under"
+	} else {
+		msg = "Shout pkr, 21, 13, trih, tril, uo"
+	}
 	awaitingGameChoice = true
 	gameChoiceUnreadableWarned = false
 	awaitingGameChoicePartnerName = normalizeUsername(strings.TrimSpace(tradeStarterName))
@@ -7315,7 +7343,7 @@ func (a *App) onChatMessage(e *g.Intercept) {
 	// Process commands based on the message prefix and suffix
 	if strings.HasPrefix(commandMsg, ":") {
 		// Check if already rolling or closing
-		if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isHitting || is13Hitting || isClosing {
+		if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isUORolling || isHitting || is13Hitting || isClosing {
 			log.Println("Already rolling or closing...")
 			e.Block()
 			return
@@ -7530,6 +7558,179 @@ func (a *App) beginTriRound(mode string) {
 		time.Sleep(1400 * time.Millisecond)
 		isTriRolling = true
 		a.rollTriDice()
+	}()
+}
+
+// beginUOChoiceSequence prompts the player to choose Over or Under for the Under/Over-7 game.
+func (a *App) beginUOChoiceSequence() {
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	resetPokerSequence()
+	resetBlackjackSequence()
+	reset13Sequence()
+	resetTriSequence()
+
+	awaitingUOChoice = true
+	awaitingUOChoicePartnerName = playerName
+
+	if chatIdx, ok := lookupRoomEntityIndexByName(playerName); ok && chatIdx > 0 {
+		awaitingUOChoicePartnerID = chatIdx
+	} else if chatIdx, ok := waitForUsers28RoomIndexByName(playerName, 900*time.Millisecond); ok && chatIdx > 0 {
+		awaitingUOChoicePartnerID = chatIdx
+	} else if chatIdx, ok := lookupUsers28RoomIndexByName(playerName); ok && chatIdx > 0 {
+		awaitingUOChoicePartnerID = chatIdx
+	} else {
+		awaitingUOChoicePartnerID = lastTradePartnerID
+	}
+
+	msg := "Over or Under?"
+	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
+	sendShout(msg)
+}
+
+// beginUnderOverRound starts the Under/Over-7 round with the given player choice: "over" or "under".
+func (a *App) beginUnderOverRound(mode string) {
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	resetPokerSequence()
+	resetBlackjackSequence()
+	reset13Sequence()
+	resetTriSequence()
+
+	uoRoundActive = true
+	uoPlayerChoice = strings.ToLower(strings.TrimSpace(mode))
+	a.setCurrentGameHistoryGame("UO7")
+
+	go func() {
+		time.Sleep(1400 * time.Millisecond)
+		isUORolling = true
+		a.rollUnderOverDice()
+	}()
+}
+
+// rollUnderOverDice rolls the two configured dice (slots 1 and 5 -> indices 0 and 4).
+func (a *App) rollUnderOverDice() {
+	if fakeDiceTestingMode {
+		mutex.Lock()
+		if len(diceList) < 5 {
+			mutex.Unlock()
+			a.AddLogMsg("[UO] Not enough dice to roll")
+			isUORolling = false
+			return
+		}
+		currentSum = 0
+		for _, index := range []int{0, 4} {
+			diceList[index].Value = rand.Intn(6) + 1
+			diceList[index].IsClosed = false
+			currentSum += diceList[index].Value
+			a.AddLogMsg(fmt.Sprintf("Dice %d rolled: %d", diceList[index].ID, diceList[index].Value))
+		}
+		mutex.Unlock()
+		a.evaluateUnderOverRound()
+		isUORolling = false
+		return
+	}
+
+	mutex.Lock()
+	if len(diceList) < 5 {
+		mutex.Unlock()
+		a.AddLogMsg("[UO] Not enough dice to roll")
+		isUORolling = false
+		return
+	}
+	resultsWaitGroup.Add(2)
+	mutex.Unlock()
+
+	for _, index := range []int{0, 4} {
+		diceList[index].Roll()
+		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
+	}
+
+	time.Sleep(1000 * time.Millisecond)
+	resultsWaitGroup.Wait()
+
+	a.evaluateUnderOverRound()
+	isUORolling = false
+}
+
+// evaluateUnderOverRound computes the result of the Under/Over-7 roll and resolves payout.
+func (a *App) evaluateUnderOverRound() {
+	mutex.Lock()
+	mutex.Unlock()
+	if !uoRoundActive {
+		isUORolling = false
+		return
+	}
+
+	total := 0
+	if len(diceList) >= 5 {
+		total = diceList[0].Value + diceList[4].Value
+	}
+	totalText := strconv.Itoa(total)
+	a.AddLogMsg(fmt.Sprintf("[UO] evaluating total=%d playerChoice=%s", total, uoPlayerChoice))
+
+	if !ChatIsDisabled {
+		waitForUnmute(90 * time.Second)
+		time.Sleep(800 * time.Millisecond)
+		sendMessageWithDelay(fmt.Sprintf("%s", totalText))
+	}
+
+	playerWins := false
+	if total == 7 {
+		playerWins = false // dealer always wins on a 7
+	} else if total < 7 {
+		playerWins = (uoPlayerChoice == "under")
+	} else {
+		playerWins = (uoPlayerChoice == "over")
+	}
+
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+	winnerName := "Dealer"
+	if playerWins {
+		winnerName = playerName
+	}
+	winnerMsg := fmt.Sprintf("%s Wins - %s: %d", winnerName, playerName, total)
+
+	a.AddLogMsg(fmt.Sprintf("[UO_RULES] winner=%s total=%d choice=%s", winnerName, total, uoPlayerChoice))
+	if !ChatIsDisabled {
+		waitForUnmute(90 * time.Second)
+		time.Sleep(800 * time.Millisecond)
+		sendMessageWithDelay(winnerMsg)
+	}
+
+	payoutTargetID := lastTradePartnerID
+	payoutTargetName := playerName
+	uoRoundActive = false
+
+	// clear any awaiting choice state and mark the UO round finished
+	awaitingUOChoice = false
+	awaitingUOChoicePartnerID = 0
+	awaitingUOChoicePartnerName = ""
+
+	if playerWins && payoutTargetID > 0 {
+		a.setCurrentGameHistoryResults(strconv.Itoa(total), "", playerName, "Payout Pending", false)
+		a.noteCurrentGameHistory(winnerMsg)
+		resetPayoutRetryState()
+		startPayout(a, payoutTargetID, payoutTargetName)
+		return
+	}
+
+	a.setCurrentGameHistoryResults(strconv.Itoa(total), "", a.getCurrentDealerName(), "Completed", true)
+	a.noteCurrentGameHistory(winnerMsg)
+
+	// Ensure the winner message is delivered before reopening the dealer
+	go func() {
+		time.Sleep(1200 * time.Millisecond)
+		a.openDealerAfterRound()
 	}()
 }
 
@@ -8888,6 +9089,44 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		return
 	}
 
+	if awaitingUOChoice {
+		cleaned := strings.ToLower(strings.TrimSpace(msg))
+		cleaned = gameChoiceCleanupRe.ReplaceAllString(cleaned, "")
+		if cleaned != "over" && cleaned != "under" {
+			a.AddLogMsg(fmt.Sprintf("[UO_DEBUG] awaiting UO choice from %q(index=%d), ignored non-choice message=%q", awaitingUOChoicePartnerName, awaitingUOChoicePartnerID, msg))
+			return
+		}
+
+		indexMatch := awaitingUOChoicePartnerID > 0 && index == awaitingUOChoicePartnerID
+		nameMatch := awaitingUOChoicePartnerName != "" && strings.EqualFold(senderName, awaitingUOChoicePartnerName)
+		if !indexMatch && !nameMatch && awaitingUOChoicePartnerName != "" {
+			if expectedIdx, ok := lookupRoomEntityIndexByName(awaitingUOChoicePartnerName); ok && expectedIdx > 0 && expectedIdx == index {
+				indexMatch = true
+			}
+		}
+		if !indexMatch && !nameMatch && awaitingUOChoicePartnerName != "" {
+			if expectedIdx, ok := lookupUsers28RoomIndexByName(awaitingUOChoicePartnerName); ok && expectedIdx > 0 && expectedIdx == index {
+				indexMatch = true
+			}
+		}
+
+		if !indexMatch && !nameMatch {
+			a.AddLogMsg(fmt.Sprintf("[UO] ignoring choice %q from %q (index %d); waiting for %q (index %d)", cleaned, senderName, index, awaitingUOChoicePartnerName, awaitingUOChoicePartnerID))
+			return
+		}
+
+		e.Block()
+		awaitingUOChoice = false
+		a.AddLogMsg(fmt.Sprintf("[UO_DEBUG] accepted choice=%q from sender=%q index=%d (expectedName=%q expectedIndex=%d)", cleaned, senderName, index, awaitingUOChoicePartnerName, awaitingUOChoicePartnerID))
+
+		if cleaned == "over" {
+			a.beginUnderOverRound("over")
+		} else {
+			a.beginUnderOverRound("under")
+		}
+		return
+	}
+
 	if awaitingTriChoice {
 		cleaned := strings.ToLower(strings.TrimSpace(msg))
 		cleaned = gameChoiceCleanupRe.ReplaceAllString(cleaned, "")
@@ -9000,15 +9239,19 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	awaitingGameChoicePartnerID = 0
 	awaitingGameChoicePartnerName = ""
 
-	// For Tri (two-step selection) we must first ask High or Low
-	if choice != "tri" {
+	// For Tri and Under/Over (two-step selection) we must first ask High/Low or Over/Under
+	if choice != "tri" && choice != "uo" {
 		// Combine the standard "Starting" ack with the player-roll prompt
 		ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay(choice))
 		a.setCurrentGameHistoryGame(gameChoiceDisplay(choice))
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", ack))
 		sendShout(ack)
 	} else {
-		a.AddLogMsg("[GAME_SELECT] Tri selected; prompting for High/Low instead of immediate Lets Play")
+		if choice == "tri" {
+			a.AddLogMsg("[GAME_SELECT] Tri selected; prompting for High/Low instead of immediate Lets Play")
+		} else {
+			a.AddLogMsg("[GAME_SELECT] Under/Over selected; prompting for Over/Under instead of immediate Lets Play")
+		}
 	}
 
 	switch choice {
@@ -9027,6 +9270,18 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		// Two-step Tri selection: prompt player for High or Low
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Tri; prompting for High/Low", index))
 		a.beginTriChoiceSequence()
+	case "uo":
+		// Two-step Under/Over selection: prompt player for Over or Under
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Under/Over; prompting for Over/Under", index))
+		a.beginUOChoiceSequence()
+	case "uo_over":
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Under/Over -> Over; starting round", index))
+		a.setCurrentGameHistoryGame("UO7")
+		a.beginUnderOverRound("over")
+	case "uo_under":
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Under/Over -> Under; starting round", index))
+		a.setCurrentGameHistoryGame("UO7")
+		a.beginUnderOverRound("under")
 	case "trihigh":
 		// Direct Tri High selection
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected TriH; starting round", index))
@@ -9050,6 +9305,12 @@ func normalizeIncomingGameChoice(msg string) (string, bool) {
 		return "13", true
 	case "tri":
 		return "tri", true
+	case "uo", "uo7", "underover", "underover7":
+		return "uo", true
+	case "over", "o", "over7", "o7":
+		return "uo_over", true
+	case "under", "u", "under7", "u7":
+		return "uo_under", true
 	case "trih":
 		return "trihigh", true
 	case "trihigh":
@@ -9087,6 +9348,12 @@ func normalizeLooseGameChoice(msg string) (string, bool) {
 		return "13", true
 	case "tri":
 		return "tri", true
+	case "uo", "uo7", "underover", "underover7":
+		return "uo", true
+	case "over", "o", "over7", "o7":
+		return "uo_over", true
+	case "under", "u", "under7", "u7":
+		return "uo_under", true
 	case "trih":
 		return "trihigh", true
 	case "trihigh":
@@ -9169,6 +9436,8 @@ func gameChoiceDisplay(choice string) string {
 		return "13"
 	case "tri":
 		return "Tri"
+	case "uo", "uo_over", "uo_under":
+		return "UO7"
 	case "trih":
 		return "TriH"
 	case "trihigh":

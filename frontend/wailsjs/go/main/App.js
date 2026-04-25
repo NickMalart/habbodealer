@@ -186,6 +186,10 @@ export function SaveDealerOpenConfig(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveDealerOpenConfig'](arg1, arg2, arg3);
 }
 
+export function SetOnlyUnderOver(arg1) {
+  return window['go']['main']['App']['SetOnlyUnderOver'](arg1);
+}
+
 export function ShowCommands() {
   return window['go']['main']['App']['ShowCommands']();
 }

@@ -5,7 +5,7 @@
   "embeds": [
     {
       "color": 3447003,
-      "description": "Player: Mikka",
+      "description": "Player: fosk",
       "fields": [
         {
           "inline": true,
@@ -20,39 +20,39 @@
         {
           "inline": true,
           "name": "Player Result",
-          "value": "Two Pair: 42s"
+          "value": "10"
         },
         {
           "inline": true,
           "name": "Dealer Result",
-          "value": "Three of a kind: 6"
+          "value": "8"
         },
         {
           "inline": false,
           "name": "Bet Items",
-          "value": "md_limukaappi_liq x1"
+          "value": "spyro x4"
         },
         {
           "inline": false,
           "name": "Payout Items",
-          "value": "md_limukaappi_liq x2"
+          "value": "spyro x8"
         },
         {
           "inline": true,
           "name": "Started At",
-          "value": "2026-04-23T17:56:46+10:00"
+          "value": "2026-04-25T20:47:47+10:00"
         },
         {
           "inline": true,
           "name": "Completed At",
-          "value": "2026-04-23T17:57:04+10:00"
+          "value": "2026-04-25T20:48:00+10:00"
         }
       ],
       "footer": {
-        "text": "Game ID: 1776931006506515900"
+        "text": "Game ID: 1777114067927158000"
       },
-      "timestamp": "2026-04-23T17:57:04+10:00",
-      "title": "Pkr — Completed"
+      "timestamp": "2026-04-25T20:48:00+10:00",
+      "title": "TriL — Completed"
     }
   ],
   "username": "Gamba-Suite"

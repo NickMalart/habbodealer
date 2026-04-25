@@ -87,6 +87,13 @@
             <div style="font-size:12px;color:#bdbdbd;margin-top:8px;">
               Max Unique Items = how many different item types the player may offer. Max Quantity Per Item = max allowed amount for any one item type.
             </div>
+            <div class="game-guide-block" style="margin-top:8px;">
+              <div class="game-guide-label">Dealer Mode</div>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;">
+                <input type="checkbox" v-model="onlyUnderOverMode" />
+                Only Under/Over 7 (only show Over/Under to players)
+              </label>
+            </div>
             <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
               <button class="copy-btn" @click="cancelDealerName">Cancel</button>
               <button class="copy-btn" @click="confirmDealerName">Start</button>
@@ -771,6 +778,8 @@ export default {
       dealerOpenEnabled: true,
       dealerTradeSeconds: 45,
       dealerAnnounceSeconds: 45,
+      // Dealer mode: when true, only Under/Over-7 is presented to players
+      onlyUnderOverMode: false,
       // Block recommended-rooms packet
       blockRecommendedRooms: true,
       // Block slide-object-bundle packet
@@ -972,6 +981,8 @@ export default {
             return;
           }
 
+          // send dealer mode to backend before starting setup
+          await window.go.main.App.SetOnlyUnderOver(this.onlyUnderOverMode);
           await window.go.main.App.StartCasinoSetup(name, roomName, maxUnique, maxPer);
 
           this.showDealerNameModal = false;
