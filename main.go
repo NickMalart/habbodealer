@@ -106,6 +106,7 @@ var (
 	payoutTradeActive            bool
 	payoutTargetID               int
 	payoutTargetName             string
+	payoutSuppressHistory        bool
 	payoutAttempts               int
 	payoutSessionID              int
 	payoutTradeSent              bool
@@ -2270,6 +2271,17 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS #108] partner=%d own=%d all=%d wasOurs=%t (non-payout)", len(currentPartnerItems), len(currentOwnItems), len(allItems), wasOurs))
 			a.emitTradeItemsUpdate("both")
 
+			// In ping-pong test mode, when we receive the first non-empty
+			// TRADE_ITEMS packet for a trade, immediately initiate the
+			// ping-pong return/payout to the partner. We only trigger once
+			// per-trade (when prevAllLen==0) to avoid duplicates.
+			if pingPongMode && pingPongAutoReturn && prevAllLen == 0 && len(currentPartnerItems) > 0 {
+				a.AddLogMsg(fmt.Sprintf("[PINGPONG] immediate auto-return triggered for partner=%d items=%d", lastTradePartnerID, len(currentPartnerItems)))
+				returnItems := make([]TradeItem, len(currentPartnerItems))
+				copy(returnItems, currentPartnerItems)
+				go a.startPingPongReturn(lastTradePartnerID, returnItems)
+			}
+
 			wasValid := true
 			if len(prevAllCopy) > 0 {
 				wasValid = getTradeLimitViolation(prevAllCopy) == nil
@@ -2416,6 +2428,15 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 		a.emitTradeItemsUpdate("both")
 
+		// In ping-pong test mode, immediately trigger an auto-return on first
+		// incoming TRADE_ITEMS for a payout-style trade as well.
+		if pingPongMode && pingPongAutoReturn && prevAllLen == 0 && len(currentTradeItems) > 0 {
+			a.AddLogMsg(fmt.Sprintf("[PINGPONG] immediate auto-return (payout branch) triggered for partner=%d items=%d", lastTradePartnerID, len(currentTradeItems)))
+			returnItems := make([]TradeItem, len(currentTradeItems))
+			copy(returnItems, currentTradeItems)
+			go a.startPingPongReturn(lastTradePartnerID, returnItems)
+		}
+
 		// Extend timeout on any incoming TRADE_ITEMS payload (debug-safe)
 		if len(e.Packet.Data) > 0 {
 			extendTradeWindowTimeoutForPartnerActivity(a)
@@ -2451,14 +2472,18 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			}
 
 			a.AddLogMsg("[TRADE_COMPLETED #112] payout trade completed")
-			a.captureCurrentGameHistoryPayoutItems(payoutItems, "Payout trade completed successfully", true)
+			if !payoutSuppressHistory {
+				a.captureCurrentGameHistoryPayoutItems(payoutItems, "Payout trade completed successfully", true)
 
-			// Persist completed payout trade for audit
-			go LogEvent("trade_completed", map[string]interface{}{"mode": "payout", "partner": partnerName, "payout_items": payoutItems}, fmt.Sprintf("Payout trade completed to %s", partnerName), nil)
+				// Persist completed payout trade for audit
+				go LogEvent("trade_completed", map[string]interface{}{"mode": "payout", "partner": partnerName, "payout_items": payoutItems}, fmt.Sprintf("Payout trade completed to %s", partnerName), nil)
 
-			completeMsg := fmt.Sprintf("Trade Completed: \"%s\"", partnerName)
-			a.AddLogMsg(fmt.Sprintf("[TRADE_COMPLETED] shouting: %q", completeMsg))
-			sendShout(completeMsg)
+				completeMsg := fmt.Sprintf("Trade Completed: \"%s\"", partnerName)
+				a.AddLogMsg(fmt.Sprintf("[TRADE_COMPLETED] shouting: %q", completeMsg))
+				sendShout(completeMsg)
+			} else {
+				a.AddLogMsg("[PAYOUT_DEBUG] suppressed game-history capture for ping-pong payout")
+			}
 		} else {
 			a.AddLogMsg("[TRADE_COMPLETED #112] trade completed, sending trade summary")
 
@@ -2513,122 +2538,67 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			}()
 
 			if pingPongMode && pingPongAutoReturn {
-				go func() {
-					time.Sleep(600 * time.Millisecond)
-					if !a.forceRefreshHandSnapshot("pingpong auto-return") {
-						a.AddLogMsg("[PINGPONG] hand refresh failed; abort auto-return")
-						return
-					}
-					hand := snapshotHandItemIDs()
-					if len(hand) == 0 {
-						a.AddLogMsg("[PINGPONG] no hand items available to return")
-						return
-					}
-					var returnID int
-					for _, ids := range hand {
-						if len(ids) > 0 {
-							returnID = ids[0]
-							break
-						}
-					}
-					if returnID == 0 {
-						a.AddLogMsg("[PINGPONG] could not pick an id to return")
-						return
-					}
-					target := lastTradePartnerID
-					if target == 0 {
-						if id, ok := lookupUsers28TradeIDByName(lastTradePartnerName); ok {
-							target = id
-						}
-					}
-					if target == 0 {
-						a.AddLogMsg("[PINGPONG] cannot resolve return target")
-						return
-					}
-					a.AddLogMsg(fmt.Sprintf("[PINGPONG] opening return trade to %d", target))
-					// Clear any previously captured TRADE_ITEMS raw to avoid stale correlation
+				// Ensure we have recorded bet items to use for the payout.
+				// If the strict parser produced no items, try a fallback
+				// reparse of the captured raw TRADE_ITEMS payload.
+				tradeItemsMu.Lock()
+				if len(gameBetItems) == 0 {
 					lastIncomingTradeMu.Lock()
-					lastIncomingTradeItemsRaw = nil
+					raw := make([]byte, len(lastIncomingTradeItemsRaw))
+					copy(raw, lastIncomingTradeItemsRaw)
 					lastIncomingTradeMu.Unlock()
-					// Log raw outgoing TRADE_OPEN packet for correlation debugging
-					if pkt := ext.NewPacket(out.TRADE_OPEN, target); pkt != nil {
-						a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing TRADE_OPEN payload=% X", pkt.Data))
-					}
-					ext.Send(out.TRADE_OPEN, target)
-					rawOpen := []byte(encodeVL64(target))
-					a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing raw TRADE_OPEN fallback payload=% X", rawOpen))
-					ext.Send(g.Out.Id("TRADE_OPEN"), rawOpen)
-					time.Sleep(700 * time.Millisecond)
 
-					// Send negative-id add first (some servers expect negative ids)
-					if pkt := ext.NewPacket(out.TRADE_ADDITEM, -returnID); pkt != nil {
-						a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing TRADE_ADDITEM (neg) payload=% X string=%q", pkt.Data, string(pkt.Data)))
-					}
-					a.AddLogMsg(fmt.Sprintf("[PINGPONG] sending TRADE_ADDITEM -%d", returnID))
-					ext.Send(out.TRADE_ADDITEM, -returnID)
-
-					// Wait for the server to echo our offered item in TRADE_ITEMS.
-					// Poll ownTradeOfferTotal() and log the value for debugging.
-					accepted := false
-					waitUntil := time.Now().Add(2500 * time.Millisecond)
-					for time.Now().Before(waitUntil) {
-						total := ownTradeOfferTotal()
-						a.AddLogMsg(fmt.Sprintf("[PINGPONG] waiting for own offer... ownTotal=%d", total))
-						// Also log the last incoming TRADE_ITEMS raw payload for correlation
-						lastIncomingTradeMu.Lock()
-						raw := make([]byte, len(lastIncomingTradeItemsRaw))
-						copy(raw, lastIncomingTradeItemsRaw)
-						lastIncomingTradeMu.Unlock()
-						if len(raw) > 0 {
-							a.AddLogMsg(fmt.Sprintf("[PINGPONG] last incoming TRADE_ITEMS raw=% X", raw))
-						}
-						if total > 0 {
-							accepted = true
-							break
-						}
-						time.Sleep(150 * time.Millisecond)
-					}
-
-					if !accepted {
-						a.AddLogMsg("[PINGPONG] no own offer seen after negative-add, retrying with positive id")
-						if pkt := ext.NewPacket(out.TRADE_ADDITEM, returnID); pkt != nil {
-							a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing TRADE_ADDITEM (pos) payload=% X string=%q", pkt.Data, string(pkt.Data)))
-						}
-						ext.Send(out.TRADE_ADDITEM, returnID)
-						waitUntil = time.Now().Add(2500 * time.Millisecond)
-						for time.Now().Before(waitUntil) {
-							total := ownTradeOfferTotal()
-							a.AddLogMsg(fmt.Sprintf("[PINGPONG] waiting for own offer after pos-retry... ownTotal=%d", total))
-							// Also log the last incoming TRADE_ITEMS raw payload for correlation
-							lastIncomingTradeMu.Lock()
-							raw := make([]byte, len(lastIncomingTradeItemsRaw))
-							copy(raw, lastIncomingTradeItemsRaw)
-							lastIncomingTradeMu.Unlock()
-							if len(raw) > 0 {
-								a.AddLogMsg(fmt.Sprintf("[PINGPONG] last incoming TRADE_ITEMS raw=% X", raw))
-							}
-							if total > 0 {
-								accepted = true
-								break
-							}
-							time.Sleep(150 * time.Millisecond)
-						}
-					}
-
-					if accepted {
-						time.Sleep(200 * time.Millisecond)
-						if pkt := ext.NewPacket(out.TRADE_ACCEPT); pkt != nil {
-							a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing TRADE_ACCEPT payload=% X", pkt.Data))
+					if len(raw) > 0 {
+						parsed := a.parseTradeItemsPacket(raw)
+						if len(parsed) > 0 {
+							gameBetItems = make([]TradeItem, len(parsed))
+							copy(gameBetItems, parsed)
+							a.AddLogMsg(fmt.Sprintf("[PINGPONG] re-parsed %d bet items for payout", len(parsed)))
 						} else {
-							a.AddLogMsg("[PINGPONG] sending TRADE_ACCEPT (no-payload)")
+							candidateRe := regexp.MustCompile(`[A-Za-z][A-Za-z0-9_]*(?:\*\d+)?`)
+							candMatches := candidateRe.FindAllString(string(raw), -1)
+							if len(candMatches) > 0 {
+								counts := map[string]int{}
+								rawByName := map[string]string{}
+								for _, m := range candMatches {
+									if name, qty, ok := a.normalizeTradeFieldClassWithQty(m); ok {
+										counts[name] += qty
+										if _, exists := rawByName[name]; !exists {
+											rawByName[name] = m
+										}
+									} else if normalized, ok := normalizeClassKeyWithVariant(m); ok {
+										counts[normalized] += 1
+										if _, exists := rawByName[normalized]; !exists {
+											rawByName[normalized] = m
+										}
+									}
+								}
+								if len(counts) > 0 {
+									for name, q := range counts {
+										gameBetItems = append(gameBetItems, TradeItem{Name: name, Quantity: q, RawData: rawByName[name]})
+									}
+									a.AddLogMsg(fmt.Sprintf("[PINGPONG] fallback-extracted %d bet items from raw payload for payout", len(gameBetItems)))
+								}
+							}
 						}
-						ext.Send(out.TRADE_ACCEPT)
-						a.AddLogMsg("[PINGPONG] return trade offered and accepted (item echoed)")
-					} else {
-						a.AddLogMsg("[PINGPONG] failed to observe offered item; sending accept anyway")
-						ext.Send(out.TRADE_ACCEPT)
 					}
-				}()
+				}
+				tradeItemsMu.Unlock()
+
+				// Announce win and start payout flow regardless of whether
+				// auto-add will find items. startPayout will handle retries.
+				playerName := strings.TrimSpace(lastTradePartnerName)
+				if playerName == "" || strings.EqualFold(playerName, "Unknown") {
+					playerName = "Player"
+				}
+				shout := fmt.Sprintf("%s wins! Starting payout.", playerName)
+				sendShout(shout)
+				a.AddLogMsg(fmt.Sprintf("[PINGPONG] trade completed — treating as win for %s, starting payout", playerName))
+				if len(gameBetItems) > 0 {
+					a.emitActiveGameBetItemsUpdate()
+				}
+				// Start payout in ping-pong test mode and suppress history recording.
+				go startPayout(a, lastTradePartnerID, lastTradePartnerName, true)
 			}
 		}
 		return
@@ -3181,7 +3151,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				// Reset the "sent" flag so the retry loop will resend the open
 				// cleanly, then start a fresh payout attempt.
 				payoutTradeSent = false
-				startPayout(a, retryTargetID, retryTargetName)
+				startPayout(a, retryTargetID, retryTargetName, false)
 				return
 			} else {
 				a.AddLogMsg("[TRADE_REOPEN] trade closed before completion, reopening dealer (idle recovery)")
@@ -3193,7 +3163,13 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			a.AddLogMsg("[PAYOUT] payout trade completed successfully")
 			stopPayoutResponseTimeoutMonitor()
 			resetPayoutRetryState()
-			a.noteCurrentGameHistory("Dealer payout flow finished successfully")
+			if !payoutSuppressHistory {
+				a.noteCurrentGameHistory("Dealer payout flow finished successfully")
+			} else {
+				a.AddLogMsg("[PAYOUT_DEBUG] suppressed final payout history note (ping-pong)")
+			}
+			// Clear any ping-pong suppress flag after payout finishes
+			payoutSuppressHistory = false
 
 			// Resync hand before reopening dealer trades.
 			go a.resyncHandThenOpenDealer()
@@ -3275,6 +3251,8 @@ func stopPayout() {
 	payoutTradeSent = false
 	payoutExpectedAddCount = 0
 	payoutActualAddCount = 0
+	// Clear any ping-pong suppress flag when stopping payout state
+	payoutSuppressHistory = false
 }
 
 func stopPayoutResponseTimeoutMonitor() {
@@ -3359,7 +3337,7 @@ func (a *App) startPayoutResponseTimeoutMonitor(playerName string, targetID int,
 		// Retry payout open again
 		time.Sleep(1500 * time.Millisecond)
 		payoutTradeActive = false
-		startPayout(a, retryTargetID, retryTargetName)
+		startPayout(a, retryTargetID, retryTargetName, false)
 	}(monitorID, playerName, targetID, targetName)
 }
 
@@ -3374,14 +3352,20 @@ func waitForHiddenBlockedTradeCleanup(timeout time.Duration) bool {
 	return !hiddenBlockedTradeCleanupPending
 }
 
-func startPayout(a *App, targetID int, targetName string) {
+func startPayout(a *App, targetID int, targetName string, suppressHistory bool) {
 	stopPayout()
 	payoutActive = true
 	payoutTargetID = targetID
 	payoutTargetName = targetName
 	payoutSessionID++
 	sessionID := payoutSessionID
-	a.noteCurrentGameHistory(fmt.Sprintf("Payout started for %s", targetName))
+	// Respect suppressHistory for ping-pong test payouts
+	payoutSuppressHistory = suppressHistory
+	if !suppressHistory {
+		a.noteCurrentGameHistory(fmt.Sprintf("Payout started for %s", targetName))
+	} else {
+		a.AddLogMsg("[PAYOUT_DEBUG] suppressing initial payout history note (ping-pong)")
+	}
 
 	go func() {
 		// Small delay so the winner shout clears Habbo's rate limiter first
@@ -3779,6 +3763,21 @@ func (a *App) verifyAndRetryPayoutAdds(plannedIDs []int) {
 		return
 	}
 
+	// If this is a ping-pong/test payout flow (history suppressed), force
+	// dealer acceptance even when server echoes are unreliable. This ensures
+	// ping-pong runs do not stall waiting for partner echoes.
+	if payoutSuppressHistory {
+		a.AddLogMsg("[PAYOUT_DEBUG] payoutSuppressHistory active — forcing dealer accept for ping-pong flow")
+		ext.Send(out.TRADE_ACCEPT)
+		tradeAutoAccepted = true
+		tradeAutoAcceptPending = false
+		if payoutTradeActive && !payoutResponseTimeoutActive {
+			a.AddLogMsg("[PAYOUT] starting payout response timeout monitor after forced dealer accept (ping-pong)")
+			a.startPayoutResponseTimeoutMonitor(payoutTargetName, payoutTargetID, payoutTargetName)
+		}
+		return
+	}
+
 	if payoutTradeActive && !tradeAutoAccepted && len(plannedIDs) >= requiredTotal && payoutActualAddCount >= requiredTotal {
 		// Attribution can be unreliable in this direction; once full payout has been queued,
 		// accept without waiting for the player to accept first.
@@ -3797,6 +3796,421 @@ func (a *App) verifyAndRetryPayoutAdds(plannedIDs []int) {
 
 	a.AddLogMsg("[PAYOUT_DEBUG] payout items still not fully reflected in own trade offer; waiting for manual intervention")
 	a.noteCurrentGameHistory("Payout items did not fully reflect in trade offer; manual review may be needed")
+}
+
+// startPingPongReturn opens a trade to target and returns exactly the
+// items listed in `items` (one-to-one). It forces a hand refresh, maps
+// names->ids, opens the trade, places the items and accepts immediately.
+func (a *App) startPingPongReturn(target int, items []TradeItem) {
+	// Resolve missing target if possible
+	if target <= 0 {
+		if lastTradePartnerName != "" {
+			if id, ok := lookupUsers28TradeIDByName(lastTradePartnerName); ok {
+				target = id
+			} else if idx, ok := lookupRoomEntityIndexByName(lastTradePartnerName); ok {
+				target = idx
+			}
+		}
+	}
+
+	if target <= 0 {
+		a.AddLogMsg(fmt.Sprintf("[PINGPONG] nothing to return (invalid target=%d)", target))
+		return
+	}
+
+	// If no parsed items were provided, try to re-parse the last captured
+	// incoming TRADE_ITEMS raw payload. This helps when the main parser
+	// rejected fields due to strict verification (common with obfuscated
+	// or tokenized trade payloads). We also attempt a word-like fallback
+	// extraction similar to the auto-return logic.
+	if len(items) == 0 {
+		lastIncomingTradeMu.Lock()
+		raw := make([]byte, len(lastIncomingTradeItemsRaw))
+		copy(raw, lastIncomingTradeItemsRaw)
+		lastIncomingTradeMu.Unlock()
+
+		if len(raw) > 0 {
+			parsed := a.parseTradeItemsPacket(raw)
+			if len(parsed) > 0 {
+				a.AddLogMsg(fmt.Sprintf("[PINGPONG] re-parsed %d items from lastIncomingTradeItemsRaw", len(parsed)))
+				items = parsed
+			} else {
+				candidateRe := regexp.MustCompile(`[A-Za-z][A-Za-z0-9_]*(?:\*\d+)?`)
+				candMatches := candidateRe.FindAllString(string(raw), -1)
+				if len(candMatches) > 0 {
+					counts := map[string]int{}
+					rawByName := map[string]string{}
+					for _, m := range candMatches {
+						if name, qty, ok := a.normalizeTradeFieldClassWithQty(m); ok {
+							counts[name] += qty
+							if _, exists := rawByName[name]; !exists {
+								rawByName[name] = m
+							}
+						} else if normalized, ok := normalizeClassKeyWithVariant(m); ok {
+							counts[normalized] += 1
+							if _, exists := rawByName[normalized]; !exists {
+								rawByName[normalized] = m
+							}
+						}
+					}
+					if len(counts) > 0 {
+						for name, q := range counts {
+							items = append(items, TradeItem{Name: name, Quantity: q, RawData: rawByName[name]})
+						}
+						a.AddLogMsg(fmt.Sprintf("[PINGPONG] fallback-extracted %d items from raw payload", len(items)))
+					}
+				}
+			}
+		}
+	}
+
+	if !a.forceRefreshHandSnapshot("pingpong-return") {
+		a.AddLogMsg("[PINGPONG] hand refresh failed; abort")
+		return
+	}
+
+	hand := snapshotHandItemIDs()
+	planned := make([]int, 0)
+	for _, it := range items {
+		name := strings.TrimSpace(it.Name)
+		ids := hand[name]
+		if len(ids) == 0 {
+			if norm, ok := normalizeClassKeyWithVariant(name); ok {
+				ids = hand[norm]
+			}
+		}
+		if len(ids) == 0 {
+			a.AddLogMsg(fmt.Sprintf("[PINGPONG] no ids found for %q", name))
+			continue
+		}
+		qty := it.Quantity
+		if qty <= 0 {
+			qty = 1
+		}
+		for i := 0; i < qty && i < len(ids); i++ {
+			planned = append(planned, ids[i])
+		}
+	}
+
+	if len(planned) == 0 {
+		a.AddLogMsg("[PINGPONG] no item ids selected to return")
+		return
+	}
+
+	a.AddLogMsg(fmt.Sprintf("[PINGPONG] opening trade to %d (items=%d)", target, len(planned)))
+
+	lastIncomingTradeMu.Lock()
+	lastIncomingTradeItemsRaw = nil
+	lastIncomingTradeOpenRaw = nil
+	lastIncomingTradeMu.Unlock()
+
+	if pkt := ext.NewPacket(out.TRADE_OPEN, target); pkt != nil {
+		a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing TRADE_OPEN payload=% X", pkt.Data))
+	}
+	ext.Send(out.TRADE_OPEN, target)
+	rawOpen := []byte(encodeVL64(target))
+	a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing raw TRADE_OPEN fallback payload=% X", rawOpen))
+	ext.Send(g.Out.Id("TRADE_OPEN"), rawOpen)
+	rememberOutgoingTradeOpenTarget(target)
+
+	// Wait briefly for server to echo incoming TRADE_OPEN for correlation.
+	// Adding items before the server acknowledges the open can cause
+	// the adds to be ignored; wait up to ~1.5s for an incoming ack.
+	opened := false
+	waitUntil := time.Now().Add(1500 * time.Millisecond)
+	for time.Now().Before(waitUntil) {
+		lastIncomingTradeMu.Lock()
+		raw := make([]byte, len(lastIncomingTradeOpenRaw))
+		copy(raw, lastIncomingTradeOpenRaw)
+		lastIncomingTradeMu.Unlock()
+		if len(raw) > 0 && packetContainsVL64Value(raw, target) {
+			a.AddLogMsg(fmt.Sprintf("[PINGPONG] incoming TRADE_OPEN ack seen payload=% X", raw))
+			opened = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !opened {
+		a.AddLogMsg("[PINGPONG] no incoming TRADE_OPEN ack seen; proceeding after small delay")
+		time.Sleep(700 * time.Millisecond)
+	}
+
+	for _, id := range planned {
+		// Mark the next add as ours for attribution logic and debugging.
+		addItemMu.Lock()
+		lastAddItemWasOurs = true
+		lastAddItemByUsAt = time.Now()
+		addItemMu.Unlock()
+
+		// Try negative add first for robustness.
+		if pkt := ext.NewPacket(out.TRADE_ADDITEM, -id); pkt != nil {
+			a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing TRADE_ADDITEM (neg) payload=% X", pkt.Data))
+		}
+		ext.Send(out.TRADE_ADDITEM, -id)
+
+		// Poll for server echo of our own offer. If it doesn't appear, retry
+		// using a positive id add. This mirrors the retry logic used by the
+		// fuller `startAutoReturnExact` flow.
+		accepted := false
+		waitUntil := time.Now().Add(2000 * time.Millisecond)
+		for time.Now().Before(waitUntil) {
+			total := ownTradeOfferTotal()
+			a.AddLogMsg(fmt.Sprintf("[PINGPONG] waiting for own offer... ownTotal=%d", total))
+			lastIncomingTradeMu.Lock()
+			raw := make([]byte, len(lastIncomingTradeItemsRaw))
+			copy(raw, lastIncomingTradeItemsRaw)
+			lastIncomingTradeMu.Unlock()
+			if len(raw) > 0 {
+				a.AddLogMsg(fmt.Sprintf("[PINGPONG] last incoming TRADE_ITEMS raw=% X", raw))
+			}
+			if total > 0 {
+				accepted = true
+				break
+			}
+			time.Sleep(150 * time.Millisecond)
+		}
+
+		if !accepted {
+			a.AddLogMsg(fmt.Sprintf("[PINGPONG] negative add did not echo for id %d; retrying pos", id))
+			if pkt := ext.NewPacket(out.TRADE_ADDITEM, id); pkt != nil {
+				a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing TRADE_ADDITEM (pos) payload=% X", pkt.Data))
+			}
+			ext.Send(out.TRADE_ADDITEM, id)
+
+			waitUntil = time.Now().Add(2000 * time.Millisecond)
+			for time.Now().Before(waitUntil) {
+				total := ownTradeOfferTotal()
+				a.AddLogMsg(fmt.Sprintf("[PINGPONG] waiting for own offer after pos-retry... ownTotal=%d", total))
+				lastIncomingTradeMu.Lock()
+				raw := make([]byte, len(lastIncomingTradeItemsRaw))
+				copy(raw, lastIncomingTradeItemsRaw)
+				lastIncomingTradeMu.Unlock()
+				if len(raw) > 0 {
+					a.AddLogMsg(fmt.Sprintf("[PINGPONG] last incoming TRADE_ITEMS raw=% X", raw))
+				}
+				if total > 0 {
+					accepted = true
+					break
+				}
+				time.Sleep(150 * time.Millisecond)
+			}
+		}
+
+		time.Sleep(150 * time.Millisecond)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	if pkt := ext.NewPacket(out.TRADE_ACCEPT); pkt != nil {
+		a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing TRADE_ACCEPT payload=% X", pkt.Data))
+	}
+	ext.Send(out.TRADE_ACCEPT)
+	a.AddLogMsg("[PINGPONG] return offered and accepted")
+}
+
+// startAutoReturnExact opens a trade back to the target and attempts to add
+// the exact items the partner offered (by name->id mapping from our hand).
+func (a *App) startAutoReturnExact(target int, items []TradeItem) {
+	// Resolve missing target if possible
+	if target <= 0 {
+		if lastTradePartnerName != "" {
+			if id, ok := lookupUsers28TradeIDByName(lastTradePartnerName); ok {
+				target = id
+			} else if idx, ok := lookupRoomEntityIndexByName(lastTradePartnerName); ok {
+				target = idx
+			}
+		}
+	}
+
+	// Ensure we have a fresh hand snapshot to pick IDs from
+	if !a.forceRefreshHandSnapshot("auto-return-exact") {
+		a.AddLogMsg("[RETURN] hand refresh failed; abort")
+		return
+	}
+
+	// If no parsed items were provided, try to re-parse the last incoming
+	// TRADE_ITEMS raw payload which may have been captured earlier.
+	if len(items) == 0 {
+		lastIncomingTradeMu.Lock()
+		raw := make([]byte, len(lastIncomingTradeItemsRaw))
+		copy(raw, lastIncomingTradeItemsRaw)
+		lastIncomingTradeMu.Unlock()
+
+		if len(raw) > 0 {
+			parsed := a.parseTradeItemsPacket(raw)
+			if len(parsed) > 0 {
+				a.AddLogMsg(fmt.Sprintf("[RETURN] re-parsed %d items from lastIncomingTradeItemsRaw", len(parsed)))
+				items = parsed
+			} else {
+				// Fallback: extract word-like candidates and accept anything
+				candidateRe := regexp.MustCompile(`[A-Za-z][A-Za-z0-9_]*(?:\*\d+)?`)
+				candMatches := candidateRe.FindAllString(string(raw), -1)
+				if len(candMatches) > 0 {
+					counts := map[string]int{}
+					rawByName := map[string]string{}
+					for _, m := range candMatches {
+						if name, qty, ok := a.normalizeTradeFieldClassWithQty(m); ok {
+							counts[name] += qty
+							if _, exists := rawByName[name]; !exists {
+								rawByName[name] = m
+							}
+						} else if normalized, ok := normalizeClassKeyWithVariant(m); ok {
+							counts[normalized] += 1
+							if _, exists := rawByName[normalized]; !exists {
+								rawByName[normalized] = m
+							}
+						}
+					}
+					if len(counts) > 0 {
+						for name, q := range counts {
+							items = append(items, TradeItem{Name: name, Quantity: q, RawData: rawByName[name]})
+						}
+						a.AddLogMsg(fmt.Sprintf("[RETURN] fallback-extracted %d items from raw payload", len(items)))
+					}
+				}
+			}
+		}
+	}
+
+	if target <= 0 || len(items) == 0 {
+		a.AddLogMsg(fmt.Sprintf("[RETURN] nothing to return or invalid target (target=%d items=%d)", target, len(items)))
+		return
+	}
+
+	hand := snapshotHandItemIDs()
+	planned := make([]int, 0)
+	for _, it := range items {
+		name := strings.TrimSpace(it.Name)
+		ids := hand[name]
+		if len(ids) == 0 {
+			if norm, ok := normalizeClassKeyWithVariant(name); ok {
+				ids = hand[norm]
+			}
+		}
+		if len(ids) == 0 {
+			a.AddLogMsg(fmt.Sprintf("[RETURN] no ids in hand for %q", name))
+			continue
+		}
+		qty := it.Quantity
+		if qty <= 0 {
+			qty = 1
+		}
+		for i := 0; i < qty && i < len(ids); i++ {
+			planned = append(planned, ids[i])
+		}
+	}
+
+	if len(planned) == 0 {
+		a.AddLogMsg("[RETURN] no item ids selected to return")
+		return
+	}
+
+	a.AddLogMsg(fmt.Sprintf("[RETURN] opening trade to %d (items=%d)", target, len(planned)))
+
+	// Clear any previous incoming captures to avoid stale correlation
+	lastIncomingTradeMu.Lock()
+	lastIncomingTradeItemsRaw = nil
+	lastIncomingTradeOpenRaw = nil
+	lastIncomingTradeMu.Unlock()
+
+	// Send TRADE_OPEN (two ways for robustness)
+	if pkt := ext.NewPacket(out.TRADE_OPEN, target); pkt != nil {
+		a.AddLogMsg(fmt.Sprintf("[RETURN] outgoing TRADE_OPEN payload=% X", pkt.Data))
+	}
+	ext.Send(out.TRADE_OPEN, target)
+	rawOpen := []byte(encodeVL64(target))
+	a.AddLogMsg(fmt.Sprintf("[RETURN] outgoing raw TRADE_OPEN fallback payload=% X", rawOpen))
+	ext.Send(g.Out.Id("TRADE_OPEN"), rawOpen)
+	rememberOutgoingTradeOpenTarget(target)
+
+	// Wait briefly for server to echo incoming TRADE_OPEN for correlation
+	opened := false
+	waitUntil := time.Now().Add(1500 * time.Millisecond)
+	for time.Now().Before(waitUntil) {
+		lastIncomingTradeMu.Lock()
+		raw := make([]byte, len(lastIncomingTradeOpenRaw))
+		copy(raw, lastIncomingTradeOpenRaw)
+		lastIncomingTradeMu.Unlock()
+		if len(raw) > 0 && packetContainsVL64Value(raw, target) {
+			opened = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !opened {
+		a.AddLogMsg("[RETURN] no incoming TRADE_OPEN ack seen; proceeding after small delay")
+		time.Sleep(700 * time.Millisecond)
+	}
+
+	// Add planned ids, marking each add as ours just before sending to avoid attribution races.
+	for _, id := range planned {
+		addItemMu.Lock()
+		lastAddItemWasOurs = true
+		lastAddItemByUsAt = time.Now()
+		addItemMu.Unlock()
+
+		if pkt := ext.NewPacket(out.TRADE_ADDITEM, -id); pkt != nil {
+			a.AddLogMsg(fmt.Sprintf("[RETURN] outgoing TRADE_ADDITEM (neg) payload=% X", pkt.Data))
+		}
+		ext.Send(out.TRADE_ADDITEM, -id)
+
+		// Small settle to allow server to echo; poll for own offer/echo
+		accepted := false
+		waitUntil := time.Now().Add(2000 * time.Millisecond)
+		for time.Now().Before(waitUntil) {
+			total := ownTradeOfferTotal()
+			a.AddLogMsg(fmt.Sprintf("[RETURN] waiting for own offer... ownTotal=%d", total))
+			lastIncomingTradeMu.Lock()
+			raw := make([]byte, len(lastIncomingTradeItemsRaw))
+			copy(raw, lastIncomingTradeItemsRaw)
+			lastIncomingTradeMu.Unlock()
+			if len(raw) > 0 {
+				a.AddLogMsg(fmt.Sprintf("[RETURN] last incoming TRADE_ITEMS raw=% X", raw))
+			}
+			if total > 0 {
+				accepted = true
+				break
+			}
+			time.Sleep(150 * time.Millisecond)
+		}
+
+		if !accepted {
+			// Retry with positive id if negative-add wasn't accepted
+			a.AddLogMsg(fmt.Sprintf("[RETURN] negative add did not echo for id %d; retrying pos", id))
+			if pkt := ext.NewPacket(out.TRADE_ADDITEM, id); pkt != nil {
+				a.AddLogMsg(fmt.Sprintf("[RETURN] outgoing TRADE_ADDITEM (pos) payload=% X", pkt.Data))
+			}
+			ext.Send(out.TRADE_ADDITEM, id)
+			waitUntil = time.Now().Add(2000 * time.Millisecond)
+			for time.Now().Before(waitUntil) {
+				total := ownTradeOfferTotal()
+				a.AddLogMsg(fmt.Sprintf("[RETURN] waiting for own offer after pos-retry... ownTotal=%d", total))
+				lastIncomingTradeMu.Lock()
+				raw := make([]byte, len(lastIncomingTradeItemsRaw))
+				copy(raw, lastIncomingTradeItemsRaw)
+				lastIncomingTradeMu.Unlock()
+				if len(raw) > 0 {
+					a.AddLogMsg(fmt.Sprintf("[RETURN] last incoming TRADE_ITEMS raw=% X", raw))
+				}
+				if total > 0 {
+					accepted = true
+					break
+				}
+				time.Sleep(150 * time.Millisecond)
+			}
+		}
+
+		time.Sleep(150 * time.Millisecond)
+	}
+
+	// Accept the return trade regardless (server may not echo reliably)
+	time.Sleep(200 * time.Millisecond)
+	if pkt := ext.NewPacket(out.TRADE_ACCEPT); pkt != nil {
+		a.AddLogMsg(fmt.Sprintf("[RETURN] outgoing TRADE_ACCEPT payload=% X", pkt.Data))
+	} else {
+		a.AddLogMsg("[RETURN] sending TRADE_ACCEPT (no-payload)")
+	}
+	ext.Send(out.TRADE_ACCEPT)
+	a.AddLogMsg("[RETURN] return trade offered and accepted")
 }
 
 func stopUnderfundedTradeMonitor() {
@@ -7812,7 +8226,7 @@ func (a *App) finalize13Round(playerWins bool, reason string) {
 		a.noteCurrentGameHistory(winnerMsg)
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT] 13 player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
 		resetPayoutRetryState()
-		startPayout(a, payoutTargetID, payoutTargetName)
+		startPayout(a, payoutTargetID, payoutTargetName, false)
 		return
 	}
 
@@ -7891,7 +8305,7 @@ func (a *App) finalizeTriRound() {
 		a.noteCurrentGameHistory(winnerMsg)
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT] tri player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
 		resetPayoutRetryState()
-		startPayout(a, payoutTargetID, payoutTargetName)
+		startPayout(a, payoutTargetID, payoutTargetName, false)
 		return
 	}
 
