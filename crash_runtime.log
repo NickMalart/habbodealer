@@ -1,0 +1,810 @@
+Converting type main.AutoShoutConfig
+- simple field AutoShoutConfig.Enabled
+- simple field AutoShoutConfig.Phrase
+- simple field AutoShoutConfig.Seconds
+Converting type main.BlockRecommendedConfig
+- simple field BlockRecommendedConfig.Enabled
+Converting type main.BlockSlideObjectConfig
+- simple field BlockSlideObjectConfig.Enabled
+Converting type main.CasinoStats
+- simple field CasinoStats.GeneratedAt
+- struct CasinoStats.Range (main.StatsRange)
+   Converting type main.StatsRange
+   - simple field StatsRange.Key
+   - simple field StatsRange.StartAt
+   - simple field StatsRange.EndAt
+- struct CasinoStats.Overall (main.CasinoStatsSummary)
+   Converting type main.CasinoStatsSummary
+   - simple field CasinoStatsSummary.TotalRounds
+   - simple field CasinoStatsSummary.CompletedRounds
+   - simple field CasinoStatsSummary.IssueRounds
+   - simple field CasinoStatsSummary.PlayerWins
+   - simple field CasinoStatsSummary.DealerWins
+   - simple field CasinoStatsSummary.PlayerWinRate
+   - simple field CasinoStatsSummary.DealerWinRate
+   - simple field CasinoStatsSummary.IssueRate
+   - simple field CasinoStatsSummary.TotalBetItemsIn
+   - simple field CasinoStatsSummary.TotalPayoutItemsOut
+   - simple field CasinoStatsSummary.NetItems
+   - simple field CasinoStatsSummary.RTPPercent
+   - simple field CasinoStatsSummary.ProfitMarginPercent
+   - simple field CasinoStatsSummary.CasinoEdgePercent
+   - simple field CasinoStatsSummary.AverageNetPerRound
+   - simple field CasinoStatsSummary.UniquePlayers
+   - simple field CasinoStatsSummary.BestGameByNet
+   - simple field CasinoStatsSummary.WorstGameByNet
+   - simple field CasinoStatsSummary.BestItemByNet
+   - simple field CasinoStatsSummary.WorstItemByNet
+   - simple field CasinoStatsSummary.MostProfitablePlayer
+   - simple field CasinoStatsSummary.LeastProfitablePlayer
+   - simple field CasinoStatsSummary.BestSingleWin
+   - simple field CasinoStatsSummary.WorstSingleLoss
+   - map field CasinoStatsSummary.BetItemCounts
+   - map field CasinoStatsSummary.PayoutItemCounts
+   - map field CasinoStatsSummary.NetItemCounts
+- map field CasinoStats.ByGame
+   Converting type main.GameStats
+   - simple field GameStats.Game
+   - simple field GameStats.TotalRounds
+   - simple field GameStats.CompletedRounds
+   - simple field GameStats.IssueRounds
+   - simple field GameStats.PlayerWins
+   - simple field GameStats.DealerWins
+   - simple field GameStats.PlayerWinRate
+   - simple field GameStats.DealerWinRate
+   - simple field GameStats.TotalBetItemsIn
+   - simple field GameStats.TotalPayoutItemsOut
+   - simple field GameStats.NetItems
+   - simple field GameStats.RTPPercent
+   - simple field GameStats.CasinoEdgePercent
+   - simple field GameStats.AverageNetPerRound
+   - simple field GameStats.LargestBet
+   - simple field GameStats.LargestPayout
+   - simple field GameStats.WorstCasinoLoss
+   - simple field GameStats.BestCasinoWin
+   - map field GameStats.BetItemCounts
+   - map field GameStats.PayoutItemCounts
+   - map field GameStats.NetItemCounts
+- struct slice CasinoStats.ByItem ([]main.ItemStats)
+   Converting type main.ItemStats
+   - simple field ItemStats.Name
+   - simple field ItemStats.BetIn
+   - simple field ItemStats.PayoutOut
+   - simple field ItemStats.Net
+   - simple field ItemStats.GamesPlayed
+   - simple field ItemStats.CasinoWins
+   - simple field ItemStats.CasinoLosses
+   - simple field ItemStats.CasinoWinRate
+   - simple field ItemStats.Status
+   - map field ItemStats.ByGameBetIn
+   - map field ItemStats.ByGamePayoutOut
+   - map field ItemStats.ByGameNet
+- struct slice CasinoStats.ByPlayer ([]main.PlayerStats)
+   Converting type main.PlayerStats
+   - simple field PlayerStats.PlayerName
+   - simple field PlayerStats.TotalRounds
+   - simple field PlayerStats.PlayerWins
+   - simple field PlayerStats.DealerWins
+   - simple field PlayerStats.PlayerWinRate
+   - simple field PlayerStats.BetItemsIn
+   - simple field PlayerStats.PayoutItemsOut
+   - simple field PlayerStats.NetAgainstCasino
+   - simple field PlayerStats.AverageNetPerGame
+   - simple field PlayerStats.IsProfitable
+   - map field PlayerStats.ByGameRounds
+   - map field PlayerStats.ByGameWins
+   - map field PlayerStats.ByGameLosses
+   - map field PlayerStats.ByGameWinRate
+- struct CasinoStats.Issues (main.IssueStats)
+   Converting type main.IssueStats
+   - simple field IssueStats.TotalIssues
+   - map field IssueStats.ByReason
+   - simple field IssueStats.GameChoiceTimeouts
+   - simple field IssueStats.PayoutTimeouts
+   - simple field IssueStats.PayoutCancelFlags
+   - simple field IssueStats.TradeConfirmTimeouts
+- struct CasinoStats.Trends (main.TrendStats)
+   Converting type main.TrendStats
+   - struct slice TrendStats.Daily ([]main.DailyStatsPoint)
+      Converting type main.DailyStatsPoint
+      - simple field DailyStatsPoint.Day
+      - simple field DailyStatsPoint.TotalRounds
+      - simple field DailyStatsPoint.NetItems
+      - simple field DailyStatsPoint.IssueRounds
+      - simple field DailyStatsPoint.BetItemsIn
+      - simple field DailyStatsPoint.PayoutItemsOut
+      - simple field DailyStatsPoint.RTPPercent
+Converting type main.CatalogItem
+- simple field CatalogItem.Name
+- simple field CatalogItem.DisplayName
+- simple field CatalogItem.Value
+Converting type main.DealerOpenConfig
+- simple field DealerOpenConfig.Enabled
+- simple field DealerOpenConfig.TradeSeconds
+- simple field DealerOpenConfig.AnnounceSeconds
+Converting type main.PokerDisplayConfig
+- simple field PokerDisplayConfig.FiveOfAKind
+- simple field PokerDisplayConfig.FourOfAKind
+- simple field PokerDisplayConfig.FullHouse
+- simple field PokerDisplayConfig.HighStraight
+- simple field PokerDisplayConfig.LowStraight
+- simple field PokerDisplayConfig.ThreeOfAKind
+- simple field PokerDisplayConfig.TwoPair
+- simple field PokerDisplayConfig.OnePair
+- simple field PokerDisplayConfig.Nothing
+Converting type main.TradeItem
+- simple field TradeItem.Name
+- simple field TradeItem.Quantity
+- simple field TradeItem.RawData
+2026/04/25 13:05:06 [WebView2] Environment created successfully
+2026/04/25 13:05:06 initialized (connected=true)
+2026/04/25 13:05:06 connected (game-ous.habbo.com:40001)
+2026/04/25 13:05:06 client SHOCKWAVE (297)
+2026/04/25 13:05:11 [WebView2] Environment created successfully
+2026/04/25 13:05:11 initialized (connected=true)
+2026/04/25 13:05:11 connected (game-ous.habbo.com:40001)
+2026/04/25 13:05:11 client SHOCKWAVE (297)
+2026/04/25 13:05:14 activated
+2026/04/25 13:05:18 [STRIP_WAIT] waiting for strip scan completion session=1 timeout=20s
+2026/04/25 13:05:19 activated
+2026/04/25 13:05:19 Sent message: dino/petal/oil/cola
+2026/04/25 13:05:20 [INCOMING SHOUT] 9 -> dino/petal/oil/cola
+2026/04/25 13:05:23 [STRIP_WAIT] waiting for strip scan completion session=1 timeout=20s
+2026/04/25 13:05:24 [TRADE_OPEN #1] Incoming[104] -> `{MIaW}MI
+2026/04/25 13:05:24 [STRIP_WAIT] waiting for strip scan completion session=2 timeout=20s
+[WebView2 Error] The parameter is incorrect.
+
+Stack trace:
+2026/04/25 13:05:24 1: github.com/wailsapp/go-webview2/pkg/edge.(*Chromium).errorCallback
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/go-webview2@v1.0.22/pkg/edge/chromium.go:151
+2026/04/25 13:05:24 2: github.com/wailsapp/go-webview2/pkg/edge.(*Chromium).Focus
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/go-webview2@v1.0.22/pkg/edge/chromium.go:575
+2026/04/25 13:05:24 3: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows.(*Frontend).onFocus
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/frontend.go:994
+2026/04/25 13:05:24 4: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc.(*EventManager).Fire
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/eventmanager.go:18
+2026/04/25 13:05:24 5: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc.generalWndProc
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/wndproc.go:92
+2026/04/25 13:05:24 6: runtime.callbackWrap
+	C:/Program Files/Go/src/runtime/syscall_windows.go:388
+2026/04/25 13:05:24 7: runtime.cgocallbackg1
+	C:/Program Files/Go/src/runtime/cgocall.go:466
+2026/04/25 13:05:24 8: runtime.cgocallbackg
+	C:/Program Files/Go/src/runtime/cgocall.go:362
+2026/04/25 13:05:24 9: runtime.cgocallback
+	C:/Program Files/Go/src/runtime/asm_amd64.s:1160
+2026/04/25 13:05:24 10: runtime.systemstack_switch
+	C:/Program Files/Go/src/runtime/asm_amd64.s:516
+2026/04/25 13:05:24 11: runtime.cgocall
+	C:/Program Files/Go/src/runtime/cgocall.go:185
+2026/04/25 13:05:24 12: syscall.syscalln
+	C:/Program Files/Go/src/runtime/syscall_windows.go:431
+2026/04/25 13:05:24 13: syscall.SyscallN
+	C:/Program Files/Go/src/syscall/dll_windows.go:99
+2026/04/25 13:05:24 14: syscall.(*Proc).Call
+	C:/Program Files/Go/src/syscall/dll_windows.go:256
+2026/04/25 13:05:24 15: syscall.(*LazyProc).Call
+	C:/Program Files/Go/src/syscall/dll_windows.go:376
+2026/04/25 13:05:24 16: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc/w32.DefWindowProc
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/w32/user32.go:321
+2026/04/25 13:05:24 17: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc.(*Form).WndProc
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/form.go:316
+2026/04/25 13:05:24 18: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows.(*Window).WndProc
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/window.go:317
+2026/04/25 13:05:24 19: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc.generalWndProc
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/wndproc.go:64
+2026/04/25 13:05:24 20: runtime.callbackWrap
+	C:/Program Files/Go/src/runtime/syscall_windows.go:388
+2026/04/25 13:05:24 21: runtime.cgocallbackg1
+	C:/Program Files/Go/src/runtime/cgocall.go:466
+2026/04/25 13:05:24 22: runtime.cgocallbackg
+	C:/Program Files/Go/src/runtime/cgocall.go:362
+2026/04/25 13:05:24 23: runtime.cgocallback
+	C:/Program Files/Go/src/runtime/asm_amd64.s:1160
+2026/04/25 13:05:24 24: runtime.systemstack_switch
+	C:/Program Files/Go/src/runtime/asm_amd64.s:516
+2026/04/25 13:05:24 25: runtime.cgocall
+	C:/Program Files/Go/src/runtime/cgocall.go:185
+2026/04/25 13:05:24 26: syscall.syscalln
+	C:/Program Files/Go/src/runtime/syscall_windows.go:431
+2026/04/25 13:05:24 27: syscall.SyscallN
+	C:/Program Files/Go/src/syscall/dll_windows.go:99
+2026/04/25 13:05:24 28: syscall.(*Proc).Call
+	C:/Program Files/Go/src/syscall/dll_windows.go:256
+2026/04/25 13:05:24 29: syscall.(*LazyProc).Call
+	C:/Program Files/Go/src/syscall/dll_windows.go:376
+2026/04/25 13:05:24 30: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc/w32.SetForegroundWindow
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/w32/user32.go:546
+2026/04/25 13:05:24 31: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows.(*Frontend).WindowShow.(*Frontend).ShowWindow.func1
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/frontend.go:987
+2026/04/25 13:05:24 32: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc.(*ControlBase).invokeCallbacks
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/controlbase.go:558
+2026/04/25 13:05:24 33: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc.generalWndProc
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/wndproc.go:148
+2026/04/25 13:05:24 34: runtime.callbackWrap
+	C:/Program Files/Go/src/runtime/syscall_windows.go:388
+2026/04/25 13:05:24 35: runtime.cgocallbackg1
+	C:/Program Files/Go/src/runtime/cgocall.go:466
+2026/04/25 13:05:24 36: runtime.cgocallbackg
+	C:/Program Files/Go/src/runtime/cgocall.go:362
+2026/04/25 13:05:24 37: runtime.cgocallback
+	C:/Program Files/Go/src/runtime/asm_amd64.s:1160
+2026/04/25 13:05:24 38: runtime.systemstack_switch
+	C:/Program Files/Go/src/runtime/asm_amd64.s:516
+2026/04/25 13:05:24 39: runtime.cgocall
+	C:/Program Files/Go/src/runtime/cgocall.go:185
+2026/04/25 13:05:24 40: syscall.syscalln
+	C:/Program Files/Go/src/runtime/syscall_windows.go:431
+2026/04/25 13:05:24 41: syscall.SyscallN
+	C:/Program Files/Go/src/syscall/dll_windows.go:99
+2026/04/25 13:05:24 42: syscall.(*Proc).Call
+	C:/Program Files/Go/src/syscall/dll_windows.go:256
+2026/04/25 13:05:24 43: syscall.(*LazyProc).Call
+	C:/Program Files/Go/src/syscall/dll_windows.go:376
+2026/04/25 13:05:24 44: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc/w32.DispatchMessage
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/w32/user32.go:364
+2026/04/25 13:05:24 45: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc.RunMainLoop
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/app.go:84
+2026/04/25 13:05:24 46: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows.(*Frontend).RunMainLoop
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/frontend.go:238
+2026/04/25 13:05:24 47: github.com/wailsapp/wails/v2/internal/app.(*App).Run
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/app/app_production.go:19
+2026/04/25 13:05:24 48: github.com/wailsapp/wails/v2/pkg/application.(*Application).Run
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/pkg/application/application.go:73
+2026/04/25 13:05:24 49: github.com/wailsapp/wails/v2.Run
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/wails.go:14
+2026/04/25 13:05:24 50: main.main
+	C:/Users/Dubbo/habbodealer/habbodealer/app.go:65
+2026/04/25 13:05:24 51: runtime.main
+	C:/Program Files/Go/src/runtime/proc.go:290
+2026/04/25 13:05:25 [TRADE_OPEN #1] Incoming[104] -> `{MIaW}MI
+2026/04/25 13:05:25 [STRIP_WAIT] waiting for strip scan completion session=2 timeout=20s
+2026/04/25 13:05:25 [STRIP_WAIT] session=1 complete: scan advanced current=2
+2026/04/25 13:05:25 [INCOMING SHOUT] Mikka(2) -> Trade Opened: "Tomadachi"
+2026/04/25 13:05:25 [INCOMING SHOUT] 5 -> Trade Opened: "Unknown"
+2026/04/25 13:05:26 [STRIP_WAIT] session=2 complete: scan finished (active=false)
+2026/04/25 13:06:19 Sent message: dino/petal/oil/cola
+2026/04/25 13:06:20 [INCOMING SHOUT] 9 -> dino/petal/oil/cola
+2026/04/25 13:07:19 Sent message: dino/petal/oil/cola
+2026/04/25 13:07:20 [INCOMING SHOUT] 9 -> dino/petal/oil/cola
+Converting type main.AutoShoutConfig
+- simple field AutoShoutConfig.Enabled
+- simple field AutoShoutConfig.Phrase
+- simple field AutoShoutConfig.Seconds
+Converting type main.BlockRecommendedConfig
+- simple field BlockRecommendedConfig.Enabled
+Converting type main.BlockSlideObjectConfig
+- simple field BlockSlideObjectConfig.Enabled
+Converting type main.CasinoStats
+- simple field CasinoStats.GeneratedAt
+- struct CasinoStats.Range (main.StatsRange)
+   Converting type main.StatsRange
+   - simple field StatsRange.Key
+   - simple field StatsRange.StartAt
+   - simple field StatsRange.EndAt
+- struct CasinoStats.Overall (main.CasinoStatsSummary)
+   Converting type main.CasinoStatsSummary
+   - simple field CasinoStatsSummary.TotalRounds
+   - simple field CasinoStatsSummary.CompletedRounds
+   - simple field CasinoStatsSummary.IssueRounds
+   - simple field CasinoStatsSummary.PlayerWins
+   - simple field CasinoStatsSummary.DealerWins
+   - simple field CasinoStatsSummary.PlayerWinRate
+   - simple field CasinoStatsSummary.DealerWinRate
+   - simple field CasinoStatsSummary.IssueRate
+   - simple field CasinoStatsSummary.TotalBetItemsIn
+   - simple field CasinoStatsSummary.TotalPayoutItemsOut
+   - simple field CasinoStatsSummary.NetItems
+   - simple field CasinoStatsSummary.RTPPercent
+   - simple field CasinoStatsSummary.ProfitMarginPercent
+   - simple field CasinoStatsSummary.CasinoEdgePercent
+   - simple field CasinoStatsSummary.AverageNetPerRound
+   - simple field CasinoStatsSummary.UniquePlayers
+   - simple field CasinoStatsSummary.BestGameByNet
+   - simple field CasinoStatsSummary.WorstGameByNet
+   - simple field CasinoStatsSummary.BestItemByNet
+   - simple field CasinoStatsSummary.WorstItemByNet
+   - simple field CasinoStatsSummary.MostProfitablePlayer
+   - simple field CasinoStatsSummary.LeastProfitablePlayer
+   - simple field CasinoStatsSummary.BestSingleWin
+   - simple field CasinoStatsSummary.WorstSingleLoss
+   - map field CasinoStatsSummary.BetItemCounts
+   - map field CasinoStatsSummary.PayoutItemCounts
+   - map field CasinoStatsSummary.NetItemCounts
+- map field CasinoStats.ByGame
+   Converting type main.GameStats
+   - simple field GameStats.Game
+   - simple field GameStats.TotalRounds
+   - simple field GameStats.CompletedRounds
+   - simple field GameStats.IssueRounds
+   - simple field GameStats.PlayerWins
+   - simple field GameStats.DealerWins
+   - simple field GameStats.PlayerWinRate
+   - simple field GameStats.DealerWinRate
+   - simple field GameStats.TotalBetItemsIn
+   - simple field GameStats.TotalPayoutItemsOut
+   - simple field GameStats.NetItems
+   - simple field GameStats.RTPPercent
+   - simple field GameStats.CasinoEdgePercent
+   - simple field GameStats.AverageNetPerRound
+   - simple field GameStats.LargestBet
+   - simple field GameStats.LargestPayout
+   - simple field GameStats.WorstCasinoLoss
+   - simple field GameStats.BestCasinoWin
+   - map field GameStats.BetItemCounts
+   - map field GameStats.PayoutItemCounts
+   - map field GameStats.NetItemCounts
+- struct slice CasinoStats.ByItem ([]main.ItemStats)
+   Converting type main.ItemStats
+   - simple field ItemStats.Name
+   - simple field ItemStats.BetIn
+   - simple field ItemStats.PayoutOut
+   - simple field ItemStats.Net
+   - simple field ItemStats.GamesPlayed
+   - simple field ItemStats.CasinoWins
+   - simple field ItemStats.CasinoLosses
+   - simple field ItemStats.CasinoWinRate
+   - simple field ItemStats.Status
+   - map field ItemStats.ByGameBetIn
+   - map field ItemStats.ByGamePayoutOut
+   - map field ItemStats.ByGameNet
+- struct slice CasinoStats.ByPlayer ([]main.PlayerStats)
+   Converting type main.PlayerStats
+   - simple field PlayerStats.PlayerName
+   - simple field PlayerStats.TotalRounds
+   - simple field PlayerStats.PlayerWins
+   - simple field PlayerStats.DealerWins
+   - simple field PlayerStats.PlayerWinRate
+   - simple field PlayerStats.BetItemsIn
+   - simple field PlayerStats.PayoutItemsOut
+   - simple field PlayerStats.NetAgainstCasino
+   - simple field PlayerStats.AverageNetPerGame
+   - simple field PlayerStats.IsProfitable
+   - map field PlayerStats.ByGameRounds
+   - map field PlayerStats.ByGameWins
+   - map field PlayerStats.ByGameLosses
+   - map field PlayerStats.ByGameWinRate
+- struct CasinoStats.Issues (main.IssueStats)
+   Converting type main.IssueStats
+   - simple field IssueStats.TotalIssues
+   - map field IssueStats.ByReason
+   - simple field IssueStats.GameChoiceTimeouts
+   - simple field IssueStats.PayoutTimeouts
+   - simple field IssueStats.PayoutCancelFlags
+   - simple field IssueStats.TradeConfirmTimeouts
+- struct CasinoStats.Trends (main.TrendStats)
+   Converting type main.TrendStats
+   - struct slice TrendStats.Daily ([]main.DailyStatsPoint)
+      Converting type main.DailyStatsPoint
+      - simple field DailyStatsPoint.Day
+      - simple field DailyStatsPoint.TotalRounds
+      - simple field DailyStatsPoint.NetItems
+      - simple field DailyStatsPoint.IssueRounds
+      - simple field DailyStatsPoint.BetItemsIn
+      - simple field DailyStatsPoint.PayoutItemsOut
+      - simple field DailyStatsPoint.RTPPercent
+Converting type main.CatalogItem
+- simple field CatalogItem.Name
+- simple field CatalogItem.DisplayName
+- simple field CatalogItem.Value
+Converting type main.DealerOpenConfig
+- simple field DealerOpenConfig.Enabled
+- simple field DealerOpenConfig.TradeSeconds
+- simple field DealerOpenConfig.AnnounceSeconds
+Converting type main.PokerDisplayConfig
+- simple field PokerDisplayConfig.FiveOfAKind
+- simple field PokerDisplayConfig.FourOfAKind
+- simple field PokerDisplayConfig.FullHouse
+- simple field PokerDisplayConfig.HighStraight
+- simple field PokerDisplayConfig.LowStraight
+- simple field PokerDisplayConfig.ThreeOfAKind
+- simple field PokerDisplayConfig.TwoPair
+- simple field PokerDisplayConfig.OnePair
+- simple field PokerDisplayConfig.Nothing
+Converting type main.TradeItem
+- simple field TradeItem.Name
+- simple field TradeItem.Quantity
+- simple field TradeItem.RawData
+2026/04/25 13:08:19 Sent message: dino/petal/oil/cola
+2026/04/25 13:08:19 [INCOMING SHOUT] Dubbo(13) -> dino/petal/oil/cola
+2026/04/25 13:09:19 Sent message: dino/petal/oil/cola
+2026/04/25 13:09:20 [INCOMING SHOUT] Dubbo(13) -> dino/petal/oil/cola
+2026/04/25 13:10:13 Dice 1975752 added
+2026/04/25 13:10:16 Dice 1844012 added
+2026/04/25 13:10:16 Dice 473930 added
+2026/04/25 13:10:17 Dice 2683867 added
+2026/04/25 13:10:18 Dice 2020153 added
+2026/04/25 13:10:18 [STRIP_WAIT] waiting for strip scan completion session=3 timeout=20s
+2026/04/25 13:10:20 Sent message: gb/sacks/dino/petal/oil/cola
+2026/04/25 13:10:20 [INCOMING SHOUT] Dubbo(12) -> gb/sacks/dino/petal/oil/cola
+2026/04/25 13:10:21 [STRIP_WAIT] session=3 complete: scan finished (active=false)
+2026/04/25 13:10:22 Sent message: You can bet 1 item, max 10 per item - see my live hand - rollorigins.club
+2026/04/25 13:10:22 [INCOMING SHOUT] Dubbo(12) -> You can bet 1 item, max 10 per item - see my live hand - rollorigins.club
+2026/04/25 13:10:29 [WebView2] Environment created successfully
+2026/04/25 13:10:29 initialized (connected=true)
+2026/04/25 13:10:29 connected (game-ous.habbo.com:40001)
+2026/04/25 13:10:29 client SHOCKWAVE (297)
+2026/04/25 13:10:34 [WebView2] Environment created successfully
+2026/04/25 13:10:34 initialized (connected=true)
+2026/04/25 13:10:34 connected (game-ous.habbo.com:40001)
+2026/04/25 13:10:34 client SHOCKWAVE (297)
+2026/04/25 13:10:41 [STRIP_WAIT] waiting for strip scan completion session=1 timeout=20s
+2026/04/25 13:10:42 activated
+2026/04/25 13:10:43 activated
+2026/04/25 13:10:44 [STRIP_WAIT] session=1 complete: scan finished (active=false)
+2026/04/25 13:10:46 [STRIP_WAIT] waiting for strip scan completion session=1 timeout=20s
+2026/04/25 13:10:49 [TRADE_OPEN #1] Incoming[104] -> `{MIaW}MI
+2026/04/25 13:10:49 [STRIP_WAIT] waiting for strip scan completion session=2 timeout=20s
+[WebView2 Error] The parameter is incorrect.
+
+Stack trace:
+2026/04/25 13:10:49 1: github.com/wailsapp/go-webview2/pkg/edge.(*Chromium).errorCallback
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/go-webview2@v1.0.22/pkg/edge/chromium.go:151
+2026/04/25 13:10:49 2: github.com/wailsapp/go-webview2/pkg/edge.(*Chromium).Focus
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/go-webview2@v1.0.22/pkg/edge/chromium.go:575
+2026/04/25 13:10:49 3: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows.(*Frontend).onFocus
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/frontend.go:994
+2026/04/25 13:10:49 4: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc.(*EventManager).Fire
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/eventmanager.go:18
+2026/04/25 13:10:49 5: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc.generalWndProc
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/wndproc.go:92
+2026/04/25 13:10:49 6: runtime.callbackWrap
+	C:/Program Files/Go/src/runtime/syscall_windows.go:388
+2026/04/25 13:10:49 7: runtime.cgocallbackg1
+	C:/Program Files/Go/src/runtime/cgocall.go:466
+2026/04/25 13:10:49 8: runtime.cgocallbackg
+	C:/Program Files/Go/src/runtime/cgocall.go:362
+2026/04/25 13:10:49 9: runtime.cgocallback
+	C:/Program Files/Go/src/runtime/asm_amd64.s:1160
+2026/04/25 13:10:49 10: runtime.systemstack_switch
+	C:/Program Files/Go/src/runtime/asm_amd64.s:516
+2026/04/25 13:10:49 11: runtime.cgocall
+	C:/Program Files/Go/src/runtime/cgocall.go:185
+2026/04/25 13:10:49 12: syscall.syscalln
+	C:/Program Files/Go/src/runtime/syscall_windows.go:431
+2026/04/25 13:10:49 13: syscall.SyscallN
+	C:/Program Files/Go/src/syscall/dll_windows.go:99
+2026/04/25 13:10:49 14: syscall.(*Proc).Call
+	C:/Program Files/Go/src/syscall/dll_windows.go:256
+2026/04/25 13:10:49 15: syscall.(*LazyProc).Call
+	C:/Program Files/Go/src/syscall/dll_windows.go:376
+2026/04/25 13:10:49 16: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc/w32.DefWindowProc
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/w32/user32.go:321
+2026/04/25 13:10:49 17: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc.(*Form).WndProc
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/form.go:316
+2026/04/25 13:10:49 18: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows.(*Window).WndProc
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/window.go:317
+2026/04/25 13:10:49 19: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc.generalWndProc
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/wndproc.go:64
+2026/04/25 13:10:49 20: runtime.callbackWrap
+	C:/Program Files/Go/src/runtime/syscall_windows.go:388
+2026/04/25 13:10:49 21: runtime.cgocallbackg1
+	C:/Program Files/Go/src/runtime/cgocall.go:466
+2026/04/25 13:10:49 22: runtime.cgocallbackg
+	C:/Program Files/Go/src/runtime/cgocall.go:362
+2026/04/25 13:10:49 23: runtime.cgocallback
+	C:/Program Files/Go/src/runtime/asm_amd64.s:1160
+2026/04/25 13:10:49 24: runtime.systemstack_switch
+	C:/Program Files/Go/src/runtime/asm_amd64.s:516
+2026/04/25 13:10:49 25: runtime.cgocall
+	C:/Program Files/Go/src/runtime/cgocall.go:185
+2026/04/25 13:10:49 26: syscall.syscalln
+	C:/Program Files/Go/src/runtime/syscall_windows.go:431
+2026/04/25 13:10:49 27: syscall.SyscallN
+	C:/Program Files/Go/src/syscall/dll_windows.go:99
+2026/04/25 13:10:49 28: syscall.(*Proc).Call
+	C:/Program Files/Go/src/syscall/dll_windows.go:256
+2026/04/25 13:10:49 29: syscall.(*LazyProc).Call
+	C:/Program Files/Go/src/syscall/dll_windows.go:376
+2026/04/25 13:10:49 30: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc/w32.SetForegroundWindow
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/w32/user32.go:546
+2026/04/25 13:10:49 31: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows.(*Frontend).WindowShow.(*Frontend).ShowWindow.func1
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/frontend.go:987
+2026/04/25 13:10:49 32: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc.(*ControlBase).invokeCallbacks
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/controlbase.go:558
+2026/04/25 13:10:49 33: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc.generalWndProc
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/wndproc.go:148
+2026/04/25 13:10:49 34: runtime.callbackWrap
+	C:/Program Files/Go/src/runtime/syscall_windows.go:388
+2026/04/25 13:10:49 35: runtime.cgocallbackg1
+	C:/Program Files/Go/src/runtime/cgocall.go:466
+2026/04/25 13:10:49 36: runtime.cgocallbackg
+	C:/Program Files/Go/src/runtime/cgocall.go:362
+2026/04/25 13:10:49 37: runtime.cgocallback
+	C:/Program Files/Go/src/runtime/asm_amd64.s:1160
+2026/04/25 13:10:49 38: runtime.systemstack_switch
+	C:/Program Files/Go/src/runtime/asm_amd64.s:516
+2026/04/25 13:10:49 39: runtime.cgocall
+	C:/Program Files/Go/src/runtime/cgocall.go:185
+2026/04/25 13:10:49 40: syscall.syscalln
+	C:/Program Files/Go/src/runtime/syscall_windows.go:431
+2026/04/25 13:10:49 41: syscall.SyscallN
+	C:/Program Files/Go/src/syscall/dll_windows.go:99
+2026/04/25 13:10:49 42: syscall.(*Proc).Call
+	C:/Program Files/Go/src/syscall/dll_windows.go:256
+2026/04/25 13:10:49 43: syscall.(*LazyProc).Call
+	C:/Program Files/Go/src/syscall/dll_windows.go:376
+2026/04/25 13:10:49 44: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc/w32.DispatchMessage
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/w32/user32.go:364
+2026/04/25 13:10:49 45: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows/winc.RunMainLoop
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/winc/app.go:84
+2026/04/25 13:10:49 46: github.com/wailsapp/wails/v2/internal/frontend/desktop/windows.(*Frontend).RunMainLoop
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/frontend/desktop/windows/frontend.go:238
+2026/04/25 13:10:49 47: github.com/wailsapp/wails/v2/internal/app.(*App).Run
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/internal/app/app_production.go:19
+2026/04/25 13:10:49 48: github.com/wailsapp/wails/v2/pkg/application.(*Application).Run
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/pkg/application/application.go:73
+2026/04/25 13:10:49 49: github.com/wailsapp/wails/v2.Run
+	C:/Users/Dubbo/go/pkg/mod/github.com/wailsapp/wails/v2@v2.12.0/wails.go:14
+2026/04/25 13:10:49 50: main.main
+	C:/Users/Dubbo/habbodealer/habbodealer/app.go:65
+2026/04/25 13:10:49 51: runtime.main
+	C:/Program Files/Go/src/runtime/proc.go:290
+2026/04/25 13:10:50 [TRADE_OPEN #1] Incoming[104] -> `{MIaW}MI
+2026/04/25 13:10:50 [STRIP_WAIT] waiting for strip scan completion session=2 timeout=20s
+2026/04/25 13:10:51 [INCOMING SHOUT] Mikka(2) -> Trade Opened: "Tomadachi"
+2026/04/25 13:10:51 [STRIP_WAIT] session=2 complete: scan finished (active=false)
+2026/04/25 13:10:51 [INCOMING SHOUT] 5 -> Trade Opened: "Unknown"
+2026/04/25 13:10:53 [TRADE_LIMIT_DEBUG] check item="chair_plasty*109" qty=1 max=50 over=false
+2026/04/25 13:10:53 [TRADE_LIMIT_DEBUG] unique=1 maxUnique=5 tooManyUnique=false tooMuchQuantity=false
+2026/04/25 13:10:53 [STRIP_WAIT] waiting for strip scan completion session=3 timeout=20s
+2026/04/25 13:11:13 [STRIP_WAIT] timeout waiting for session=3 (current=3 active=true pages=8)
+2026/04/25 13:11:14 [INCOMING SHOUT] 5 -> Sorry none avabile to see my hand - rollorigins.club
+2026/04/25 13:11:15 [TRADE_CLOSE #1] Incoming[110] -> `{M
+2026/04/25 13:11:15 [STRIP_WAIT] waiting for strip scan completion session=4 timeout=20s
+2026/04/25 13:11:16 [INCOMING SHOUT] 5 -> Trade Closed: "Unknown"
+2026/04/25 13:11:20 Sent message: gb/sacks/dino/petal/oil/cola
+2026/04/25 13:11:20 [INCOMING SHOUT] Dubbo(12) -> gb/sacks/dino/petal/oil/cola
+2026/04/25 13:12:20 Sent message: gb/sacks/dino/petal/oil/cola
+2026/04/25 13:12:20 [INCOMING SHOUT] Dubbo(12) -> gb/sacks/dino/petal/oil/cola
+2026/04/25 13:12:21 [TRADE_REOPEN] initial 120s re-announcing dealer open
+2026/04/25 13:12:22 Sent message: You can bet 1 item, max 10 per item - see my live hand - rollorigins.club
+2026/04/25 13:12:22 [INCOMING SHOUT] Dubbo(12) -> You can bet 1 item, max 10 per item - see my live hand - rollorigins.club
+2026/04/25 13:13:20 Sent message: gb/sacks/dino/petal/oil/cola
+2026/04/25 13:13:20 [INCOMING SHOUT] Dubbo(12) -> gb/sacks/dino/petal/oil/cola
+Converting type main.AutoShoutConfig
+- simple field AutoShoutConfig.Enabled
+- simple field AutoShoutConfig.Phrase
+- simple field AutoShoutConfig.Seconds
+Converting type main.BlockRecommendedConfig
+- simple field BlockRecommendedConfig.Enabled
+Converting type main.BlockSlideObjectConfig
+- simple field BlockSlideObjectConfig.Enabled
+Converting type main.CasinoStats
+- simple field CasinoStats.GeneratedAt
+- struct CasinoStats.Range (main.StatsRange)
+   Converting type main.StatsRange
+   - simple field StatsRange.Key
+   - simple field StatsRange.StartAt
+   - simple field StatsRange.EndAt
+- struct CasinoStats.Overall (main.CasinoStatsSummary)
+   Converting type main.CasinoStatsSummary
+   - simple field CasinoStatsSummary.TotalRounds
+   - simple field CasinoStatsSummary.CompletedRounds
+   - simple field CasinoStatsSummary.IssueRounds
+   - simple field CasinoStatsSummary.PlayerWins
+   - simple field CasinoStatsSummary.DealerWins
+   - simple field CasinoStatsSummary.PlayerWinRate
+   - simple field CasinoStatsSummary.DealerWinRate
+   - simple field CasinoStatsSummary.IssueRate
+   - simple field CasinoStatsSummary.TotalBetItemsIn
+   - simple field CasinoStatsSummary.TotalPayoutItemsOut
+   - simple field CasinoStatsSummary.NetItems
+   - simple field CasinoStatsSummary.RTPPercent
+   - simple field CasinoStatsSummary.ProfitMarginPercent
+   - simple field CasinoStatsSummary.CasinoEdgePercent
+   - simple field CasinoStatsSummary.AverageNetPerRound
+   - simple field CasinoStatsSummary.UniquePlayers
+   - simple field CasinoStatsSummary.BestGameByNet
+   - simple field CasinoStatsSummary.WorstGameByNet
+   - simple field CasinoStatsSummary.BestItemByNet
+   - simple field CasinoStatsSummary.WorstItemByNet
+   - simple field CasinoStatsSummary.MostProfitablePlayer
+   - simple field CasinoStatsSummary.LeastProfitablePlayer
+   - simple field CasinoStatsSummary.BestSingleWin
+   - simple field CasinoStatsSummary.WorstSingleLoss
+   - map field CasinoStatsSummary.BetItemCounts
+   - map field CasinoStatsSummary.PayoutItemCounts
+   - map field CasinoStatsSummary.NetItemCounts
+- map field CasinoStats.ByGame
+   Converting type main.GameStats
+   - simple field GameStats.Game
+   - simple field GameStats.TotalRounds
+   - simple field GameStats.CompletedRounds
+   - simple field GameStats.IssueRounds
+   - simple field GameStats.PlayerWins
+   - simple field GameStats.DealerWins
+   - simple field GameStats.PlayerWinRate
+   - simple field GameStats.DealerWinRate
+   - simple field GameStats.TotalBetItemsIn
+   - simple field GameStats.TotalPayoutItemsOut
+   - simple field GameStats.NetItems
+   - simple field GameStats.RTPPercent
+   - simple field GameStats.CasinoEdgePercent
+   - simple field GameStats.AverageNetPerRound
+   - simple field GameStats.LargestBet
+   - simple field GameStats.LargestPayout
+   - simple field GameStats.WorstCasinoLoss
+   - simple field GameStats.BestCasinoWin
+   - map field GameStats.BetItemCounts
+   - map field GameStats.PayoutItemCounts
+   - map field GameStats.NetItemCounts
+- struct slice CasinoStats.ByItem ([]main.ItemStats)
+   Converting type main.ItemStats
+   - simple field ItemStats.Name
+   - simple field ItemStats.BetIn
+   - simple field ItemStats.PayoutOut
+   - simple field ItemStats.Net
+   - simple field ItemStats.GamesPlayed
+   - simple field ItemStats.CasinoWins
+   - simple field ItemStats.CasinoLosses
+   - simple field ItemStats.CasinoWinRate
+   - simple field ItemStats.Status
+   - map field ItemStats.ByGameBetIn
+   - map field ItemStats.ByGamePayoutOut
+   - map field ItemStats.ByGameNet
+- struct slice CasinoStats.ByPlayer ([]main.PlayerStats)
+   Converting type main.PlayerStats
+   - simple field PlayerStats.PlayerName
+   - simple field PlayerStats.TotalRounds
+   - simple field PlayerStats.PlayerWins
+   - simple field PlayerStats.DealerWins
+   - simple field PlayerStats.PlayerWinRate
+   - simple field PlayerStats.BetItemsIn
+   - simple field PlayerStats.PayoutItemsOut
+   - simple field PlayerStats.NetAgainstCasino
+   - simple field PlayerStats.AverageNetPerGame
+   - simple field PlayerStats.IsProfitable
+   - map field PlayerStats.ByGameRounds
+   - map field PlayerStats.ByGameWins
+   - map field PlayerStats.ByGameLosses
+   - map field PlayerStats.ByGameWinRate
+- struct CasinoStats.Issues (main.IssueStats)
+   Converting type main.IssueStats
+   - simple field IssueStats.TotalIssues
+   - map field IssueStats.ByReason
+   - simple field IssueStats.GameChoiceTimeouts
+   - simple field IssueStats.PayoutTimeouts
+   - simple field IssueStats.PayoutCancelFlags
+   - simple field IssueStats.TradeConfirmTimeouts
+- struct CasinoStats.Trends (main.TrendStats)
+   Converting type main.TrendStats
+   - struct slice TrendStats.Daily ([]main.DailyStatsPoint)
+      Converting type main.DailyStatsPoint
+      - simple field DailyStatsPoint.Day
+      - simple field DailyStatsPoint.TotalRounds
+      - simple field DailyStatsPoint.NetItems
+      - simple field DailyStatsPoint.IssueRounds
+      - simple field DailyStatsPoint.BetItemsIn
+      - simple field DailyStatsPoint.PayoutItemsOut
+      - simple field DailyStatsPoint.RTPPercent
+Converting type main.CatalogItem
+- simple field CatalogItem.Name
+- simple field CatalogItem.DisplayName
+- simple field CatalogItem.Value
+Converting type main.DealerOpenConfig
+- simple field DealerOpenConfig.Enabled
+- simple field DealerOpenConfig.TradeSeconds
+- simple field DealerOpenConfig.AnnounceSeconds
+Converting type main.PokerDisplayConfig
+- simple field PokerDisplayConfig.FiveOfAKind
+- simple field PokerDisplayConfig.FourOfAKind
+- simple field PokerDisplayConfig.FullHouse
+- simple field PokerDisplayConfig.HighStraight
+- simple field PokerDisplayConfig.LowStraight
+- simple field PokerDisplayConfig.ThreeOfAKind
+- simple field PokerDisplayConfig.TwoPair
+- simple field PokerDisplayConfig.OnePair
+- simple field PokerDisplayConfig.Nothing
+Converting type main.TradeItem
+- simple field TradeItem.Name
+- simple field TradeItem.Quantity
+- simple field TradeItem.RawData
+2026/04/25 13:14:07 [WebView2] Environment created successfully
+2026/04/25 13:14:08 initialized (connected=true)
+2026/04/25 13:14:08 connected (game-ous.habbo.com:40001)
+2026/04/25 13:14:08 client SHOCKWAVE (297)
+2026/04/25 13:14:13 [WebView2] Environment created successfully
+2026/04/25 13:14:14 initialized (connected=true)
+2026/04/25 13:14:14 connected (game-ous.habbo.com:40001)
+2026/04/25 13:14:14 client SHOCKWAVE (297)
+2026/04/25 13:14:18 activated
+2026/04/25 13:14:19 activated
+2026/04/25 13:14:20 [STRIP_WAIT] waiting for strip scan completion session=1 timeout=20s
+2026/04/25 13:14:20 Sent message: gb/sacks/dino/petal/oil/cola
+2026/04/25 13:14:20 [INCOMING SHOUT] Dubbo(12) -> gb/sacks/dino/petal/oil/cola
+2026/04/25 13:14:22 [TRADE_REOPEN] 120s periodic dealer-open announcer firing
+2026/04/25 13:14:22 Sent message: You can bet 1 item, max 10 per item - see my live hand - rollorigins.club
+2026/04/25 13:14:22 [INCOMING SHOUT] Dubbo(12) -> You can bet 1 item, max 10 per item - see my live hand - rollorigins.club
+2026/04/25 13:14:26 [STRIP_WAIT] waiting for strip scan completion session=1 timeout=20s
+2026/04/25 13:14:28 [STRIP_WAIT] session=1 complete: scan finished (active=false)
+2026/04/25 13:14:40 [STRIP_WAIT] timeout waiting for session=1 (current=1 active=true pages=8)
+2026/04/25 13:15:20 Sent message: gb/sacks/dino/petal/oil/cola
+2026/04/25 13:15:20 [INCOMING SHOUT] Dubbo(12) -> gb/sacks/dino/petal/oil/cola
+2026/04/25 13:15:26 [TRADE_OPEN #1] Incoming[104] -> `{MIaW}MI
+2026/04/25 13:15:26 [STRIP_WAIT] waiting for strip scan completion session=2 timeout=20s
+2026/04/25 13:15:27 [INCOMING SHOUT] 2 -> Trade Opened: "Tomadachi"
+2026/04/25 13:15:27 [TRADE_OPEN #1] Incoming[104] -> `{MIaW}MI
+2026/04/25 13:15:27 [STRIP_WAIT] waiting for strip scan completion session=2 timeout=20s
+2026/04/25 13:15:28 [INCOMING SHOUT] Mikka(2) -> Trade Opened: "Tomadachi"
+2026/04/25 13:15:28 [INCOMING SHOUT] Tomadachi(5) -> Trade Opened: "Unknown"
+2026/04/25 13:15:28 [INCOMING SHOUT] 5 -> Trade Opened: "Unknown"
+2026/04/25 13:15:28 [STRIP_WAIT] session=2 complete: scan finished (active=false)
+2026/04/25 13:15:31 [TRADE_LIMIT_DEBUG] check item="chair_plasty*109" qty=1 max=50 over=false
+2026/04/25 13:15:31 [TRADE_LIMIT_DEBUG] unique=1 maxUnique=5 tooManyUnique=false tooMuchQuantity=false
+2026/04/25 13:15:31 [STRIP_WAIT] waiting for strip scan completion session=3 timeout=20s
+2026/04/25 13:15:35 [TRADE_CLOSE #1] Incoming[110] -> `{M
+2026/04/25 13:15:35 [STRIP_WAIT] waiting for strip scan completion session=4 timeout=20s
+2026/04/25 13:15:35 [STRIP_WAIT] waiting for strip scan completion session=3 timeout=20s
+2026/04/25 13:15:35 [TRADE_CLOSE #1] Incoming[110] -> aW}M
+2026/04/25 13:15:35 [STRIP_WAIT] session=3 complete: scan advanced current=4
+2026/04/25 13:15:35 [STRIP_WAIT] session=2 complete: scan advanced current=3
+2026/04/25 13:15:35 [INCOMING SHOUT] Tomadachi(5) -> Player wins! Starting payout.
+2026/04/25 13:15:35 [INCOMING SHOUT] 5 -> Player wins! Starting payout.
+2026/04/25 13:15:35 [INCOMING SHOUT] Mikka(2) -> Tomadachi wins! Starting payout.
+2026/04/25 13:15:35 [INCOMING SHOUT] 2 -> Tomadachi wins! Starting payout.
+2026/04/25 13:15:37 [STRIP_WAIT] session=3 complete: scan finished (active=false)
+2026/04/25 13:15:37 [TRADE_OPEN #2] Incoming[104] -> aW}MI`{MI
+2026/04/25 13:15:37 [TRADE_OPEN #2] Incoming[104] -> aW}MI`{MI
+2026/04/25 13:15:37 [STRIP_WAIT] waiting for strip scan completion session=5 timeout=20s
+2026/04/25 13:15:37 [STRIP_WAIT] waiting for strip scan completion session=4 timeout=20s
+2026/04/25 13:15:37 [STRIP_WAIT] session=4 complete: scan advanced current=5
+2026/04/25 13:15:38 [STRIP_WAIT] waiting for strip scan completion session=6 timeout=20s
+2026/04/25 13:15:38 [STRIP_WAIT] waiting for strip scan completion session=5 timeout=20s
+2026/04/25 13:15:38 [STRIP_WAIT] session=5 complete: scan advanced current=6
+2026/04/25 13:15:38 [STRIP_WAIT] session=4 complete: scan advanced current=5
+2026/04/25 13:15:40 [STRIP_WAIT] session=5 complete: scan finished (active=false)
+2026/04/25 13:15:40 [STRIP_WAIT] waiting for strip scan completion session=6 timeout=20s
+2026/04/25 13:15:43 [TRADE_CLOSE #2] Incoming[110] -> `{M
+2026/04/25 13:15:43 [TRADE_CLOSE #2] Incoming[110] -> aW}M
+2026/04/25 13:15:43 [INCOMING SHOUT] Tomadachi(5) -> "Player" closed trade
+2026/04/25 13:15:43 [INCOMING SHOUT] 5 -> "Player" closed trade
+2026/04/25 13:15:43 [INCOMING SHOUT] Mikka(2) -> "Tomadachi" closed trade
+2026/04/25 13:15:43 [INCOMING SHOUT] 2 -> "Tomadachi" closed trade
+2026/04/25 13:15:46 [STRIP_WAIT] session=6 complete: scan finished (active=false)
+2026/04/25 13:15:46 [STRIP_WAIT] waiting for strip scan completion session=7 timeout=20s
+2026/04/25 13:15:51 [TRADE_OPEN #3] Incoming[104] -> aW}MI`{MI
+2026/04/25 13:15:51 [TRADE_OPEN #3] Incoming[104] -> aW}MI`{MI
+2026/04/25 13:15:51 [STRIP_WAIT] waiting for strip scan completion session=7 timeout=20s
+2026/04/25 13:15:51 [STRIP_WAIT] waiting for strip scan completion session=8 timeout=20s
+2026/04/25 13:15:51 [STRIP_WAIT] session=6 complete: scan advanced current=7
+2026/04/25 13:15:51 [STRIP_WAIT] waiting for strip scan completion session=8 timeout=20s
+2026/04/25 13:15:51 [STRIP_WAIT] session=7 complete: scan advanced current=8
+2026/04/25 13:15:51 [STRIP_WAIT] session=7 complete: scan advanced current=8
+2026/04/25 13:15:51 [STRIP_WAIT] waiting for strip scan completion session=9 timeout=20s
+2026/04/25 13:15:51 [STRIP_WAIT] waiting for strip scan completion session=9 timeout=20s
+2026/04/25 13:15:51 [STRIP_WAIT] session=8 complete: scan advanced current=9
+2026/04/25 13:15:52 [STRIP_WAIT] session=8 complete: scan advanced current=9
+2026/04/25 13:15:52 [STRIP_WAIT] waiting for strip scan completion session=10 timeout=20s
+2026/04/25 13:15:52 [STRIP_WAIT] session=9 complete: scan advanced current=10
+2026/04/25 13:15:52 [STRIP_WAIT] waiting for strip scan completion session=11 timeout=20s
+2026/04/25 13:15:52 [STRIP_WAIT] session=10 complete: scan advanced current=11
+2026/04/25 13:15:52 [STRIP_WAIT] session=9 complete: scan finished (active=false)
+2026/04/25 13:15:52 [STRIP_WAIT] waiting for strip scan completion session=10 timeout=20s
+2026/04/25 13:15:55 [STRIP_WAIT] waiting for strip scan completion session=12 timeout=20s
+2026/04/25 13:15:55 [STRIP_WAIT] waiting for strip scan completion session=11 timeout=20s
+2026/04/25 13:15:55 [STRIP_WAIT] session=11 complete: scan advanced current=12
+2026/04/25 13:15:55 [STRIP_WAIT] session=10 complete: scan advanced current=11
+2026/04/25 13:15:55 [STRIP_WAIT] session=12 complete: scan advanced current=13
+2026/04/25 13:15:55 [STRIP_WAIT] waiting for strip scan completion session=12 timeout=20s
+2026/04/25 13:15:55 [STRIP_WAIT] waiting for strip scan completion session=13 timeout=20s
+2026/04/25 13:15:55 [STRIP_WAIT] session=11 complete: scan advanced current=12
+2026/04/25 13:16:03 [TRADE_CLOSE #3] Incoming[110] -> `{M
+2026/04/25 13:16:03 [TRADE_CLOSE #3] Incoming[110] -> aW}M
+2026/04/25 13:16:03 [STRIP_WAIT] waiting for strip scan completion session=14 timeout=20s
+2026/04/25 13:16:03 [STRIP_WAIT] waiting for strip scan completion session=13 timeout=20s
+2026/04/25 13:16:03 [STRIP_WAIT] session=13 complete: scan advanced current=14
+2026/04/25 13:16:03 [STRIP_WAIT] session=12 complete: scan advanced current=13
+2026/04/25 13:16:03 [INCOMING SHOUT] 5 -> Trade Completed: "Mikka"
+2026/04/25 13:16:03 [INCOMING SHOUT] 5 -> Trade Completed: "Mikka"
+2026/04/25 13:16:04 [INCOMING SHOUT] 2 -> Trade Completed: "Tomadachi"
+2026/04/25 13:16:04 [INCOMING SHOUT] 2 -> Trade Completed: "Tomadachi"
+2026/04/25 13:16:04 [STRIP_WAIT] session=14 complete: scan finished (active=false)
+2026/04/25 13:16:04 Dealer announcement skipped; incoming trades remain allowed.
+2026/04/25 13:16:20 Sent message: gb/sacks/dino/petal/oil/cola
+2026/04/25 13:16:20 [INCOMING SHOUT] Dubbo(12) -> gb/sacks/dino/petal/oil/cola
+2026/04/25 13:16:22 [TRADE_REOPEN] 120s periodic dealer-open announcer firing
+2026/04/25 13:16:22 Sent message: You can bet 1 item, max 10 per item - see my live hand - rollorigins.club
+2026/04/25 13:16:22 [INCOMING SHOUT] Dubbo(12) -> You can bet 1 item, max 10 per item - see my live hand - rollorigins.club
+2026/04/25 13:16:23 [STRIP_WAIT] timeout waiting for session=13 (current=13 active=true pages=15)
+2026/04/25 13:16:23 Dealer announcement skipped; incoming trades remain allowed.

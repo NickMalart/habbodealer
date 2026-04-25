@@ -2,7 +2,10 @@ package main
 
 import (
 	"embed"
+	"fmt"
 	"log"
+	"os"
+	"runtime"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -31,6 +34,32 @@ func (a *App) GetCurrentVersion() string {
 }
 
 func main() {
+	// Redirect stdout/stderr early so runtime panics and prints go to a log file.
+	var crashLog *os.File
+	if f, err := os.OpenFile("crash_runtime.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+		crashLog = f
+		os.Stdout = f
+		os.Stderr = f
+		log.SetOutput(f)
+	} else {
+		log.Printf("failed to open crash log: %v", err)
+	}
+
+	// Capture panics in main goroutine and write stack to the crash log.
+	defer func() {
+		if r := recover(); r != nil {
+			buf := make([]byte, 1<<20)
+			n := runtime.Stack(buf, true)
+			if crashLog != nil {
+				fmt.Fprintf(crashLog, "panic: %v\n%s\n", r, buf[:n])
+				crashLog.Sync()
+				crashLog.Close()
+			} else {
+				fmt.Printf("panic: %v\n%s\n", r, buf[:n])
+			}
+		}
+	}()
+
 	app = NewApp(ext, assets)
 	setupExt()
 	err := wails.Run(&options.App{

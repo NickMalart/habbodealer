@@ -2703,7 +2703,10 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			a.AddLogMsg("[PINGPONG] bypassing trade-open guards (ping-pong mode)")
 		}
 
-		a.ShowWindow()
+		// Skipping ShowWindow here to avoid WebView2 focus crashes when an
+		// incoming TRADE_OPEN is received from another dealer instance.
+		// The UI can be shown manually if needed.
+		a.AddLogMsg("[TRADE_OPEN] skipping ShowWindow to avoid WebView2 focus crash")
 		stopUnderfundedTradeMonitor()
 		lastTradeCoverageNotice = ""
 		lastTradeBlockNotice = ""
@@ -3907,11 +3910,14 @@ func (a *App) startPingPongReturn(target int, items []TradeItem) {
 	if pkt := ext.NewPacket(out.TRADE_OPEN, target); pkt != nil {
 		a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing TRADE_OPEN payload=% X", pkt.Data))
 	}
+	// Mark the outgoing TRADE_OPEN target before sending so incoming
+	// server echoes can be matched against our recent outgoing state.
+	rememberOutgoingTradeOpenTarget(target)
+	a.AddLogMsg(fmt.Sprintf("[PINGPONG] remembered outgoing TRADE_OPEN target=%d", target))
 	ext.Send(out.TRADE_OPEN, target)
 	rawOpen := []byte(encodeVL64(target))
 	a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing raw TRADE_OPEN fallback payload=% X", rawOpen))
 	ext.Send(g.Out.Id("TRADE_OPEN"), rawOpen)
-	rememberOutgoingTradeOpenTarget(target)
 
 	// Wait briefly for server to echo incoming TRADE_OPEN for correlation.
 	// Adding items before the server acknowledges the open can cause
