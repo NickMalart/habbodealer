@@ -4657,3 +4657,17 @@ Converting type main.TradeItem
 2026/04/25 14:37:26 [STRIP_WAIT] waiting for strip scan completion session=112 timeout=20s
 2026/04/25 14:37:29 [STRIP_WAIT] session=112 complete: scan finished (active=false)
 2026/04/25 14:37:29 [STRIP_WAIT] session=103 complete: scan advanced current=104
+2026/04/25 14:37:42 [TRADE_OPEN #23] Incoming[104] -> `{MIaW}MI
+2026/04/25 14:37:42 [STRIP_WAIT] waiting for strip scan completion session=105 timeout=20s
+2026/04/25 14:37:42 [STRIP_WAIT] waiting for strip scan completion session=113 timeout=20s
+2026/04/25 14:37:42 [INCOMING SHOUT] 2 -> Trade Opened: "Tomadachi"
+2026/04/25 14:37:43 [TRADE_OPEN #22] Incoming[104] -> `{MIaW}MI
+2026/04/25 14:37:43 [STRIP_WAIT] waiting for strip scan completion session=114 timeout=20s
+2026/04/25 14:37:43 [STRIP_WAIT] session=113 complete: scan advanced current=114
+2026/04/25 14:37:43 [STRIP_WAIT] waiting for strip scan completion session=115 timeout=20s
+2026/04/25 14:37:43 [STRIP_WAIT] session=114 complete: scan advanced current=115
+2026/04/25 14:37:43 [INCOMING SHOUT] Mikka(2) -> Trade Opened: "Tomadachi"
+2026/04/25 14:37:43 [STRIP_WAIT] session=115 complete: scan finished (active=false)
+2026/04/25 14:37:43 [STRIP_WAIT] waiting for strip scan completion session=116 timeout=20s
+2026/04/25 14:37:44 [STRIP_WAIT] waiting for strip scan completion session=117 timeout=20s
+2026/04/25 14:37:44 [STRIP_WAIT] session=116 complete: scan advanced current=117
