@@ -2547,12 +2547,10 @@ func handleTradePacket(a *App, e *g.Intercept) {
 					} else if altID == stableTradePartnerID {
 						altName = stableTradePartnerName
 					}
-					// Suppress quick ping-pong auto-accept briefly so the payout
-					// opening instance has time to place items before any fast
-					// accept/confirm behavior triggers.
-					suppressUntil := time.Now().Add(6 * time.Second)
-					atomic.StoreInt64(&pingPongSuppressAutoAcceptUntil, suppressUntil.UnixNano())
-					a.AddLogMsg(fmt.Sprintf("[PINGPONG] post-payout auto-triggering payout to %d (%s); suppressing fast-accept until %s", altID, altName, suppressUntil.Format(time.RFC3339Nano)))
+					// No suppression: allow quick ping-pong auto-accepts immediately
+					// so continuous ping-pong trading is not paused.
+					atomic.StoreInt64(&pingPongSuppressAutoAcceptUntil, 0)
+					a.AddLogMsg(fmt.Sprintf("[PINGPONG] post-payout auto-triggering payout to %d (%s); no fast-accept suppression", altID, altName))
 					go func(id int, name string) {
 						time.Sleep(800 * time.Millisecond)
 						startPayout(a, id, name, true)
@@ -3422,6 +3420,13 @@ func resumeDealerAfterPayoutIssue(a *App, reason string) {
 func (a *App) startPayoutResponseTimeoutMonitor(playerName string, targetID int, targetName string) {
 	stopPayoutResponseTimeoutMonitor()
 
+	// In ping-pong test mode we don't want the payout response timeout
+	// monitor to escalate and interrupt the continuous ping-pong loop.
+	if pingPongMode {
+		a.AddLogMsg("[PINGPONG] skipping payout response timeout monitor in ping-pong mode")
+		return
+	}
+
 	payoutResponseTimeoutMonitorID++
 	monitorID := payoutResponseTimeoutMonitorID
 	payoutResponseTimeoutActive = true
@@ -3501,7 +3506,12 @@ func startPayout(a *App, targetID int, targetName string, suppressHistory bool) 
 		// Small delay so the winner shout clears Habbo's rate limiter first
 		time.Sleep(1200 * time.Millisecond)
 
-		for attempt := 1; attempt <= 5; attempt++ {
+		maxAttempts := 5
+		if pingPongMode {
+			// In ping-pong test mode, retry indefinitely instead of giving up.
+			maxAttempts = 0 // 0 => unlimited
+		}
+		for attempt := 1; maxAttempts == 0 || attempt <= maxAttempts; attempt++ {
 			if sessionID != payoutSessionID {
 				return
 			}
@@ -3561,8 +3571,8 @@ func startPayout(a *App, targetID int, targetName string, suppressHistory bool) 
 			// Trade didn't open after 5s, loop for next attempt
 		}
 
-		// All 5 attempts exhausted
-		if sessionID == payoutSessionID {
+		// All attempts exhausted (only runs when maxAttempts > 0)
+		if maxAttempts > 0 && sessionID == payoutSessionID {
 			msg := "Recorded game history and flagged"
 			a.AddLogMsg(fmt.Sprintf("[PAYOUT] all attempts exhausted, shouting: %q", msg))
 			a.markCurrentGameHistoryIssue("Payout trade failed to open after all retry attempts", true)
@@ -4113,13 +4123,14 @@ func (a *App) startPingPongReturn(target int, items []TradeItem) {
 	a.AddLogMsg(fmt.Sprintf("[PINGPONG] outgoing raw TRADE_OPEN fallback payload=% X", rawOpen))
 	ext.Send(g.Out.Id("TRADE_OPEN"), rawOpen)
 
-	// Wait briefly for server to echo incoming TRADE_OPEN for correlation.
-	// Adding items before the server acknowledges the open can cause
-	// the adds to be ignored; wait up to ~2.5s for an incoming ack. If none
-	// seen, resend the open once and wait a short window.
+	// Wait for TRADE_OPEN ack with periodic resends. Increase the window
+	// and resend periodically to reduce adds-before-open races.
 	opened := false
-	waitUntil := time.Now().Add(2500 * time.Millisecond)
-	for time.Now().Before(waitUntil) {
+	openStart := time.Now()
+	openDeadline := openStart.Add(6 * time.Second)
+	nextResend := openStart.Add(1500 * time.Millisecond)
+
+	for time.Now().Before(openDeadline) {
 		lastIncomingTradeMu.Lock()
 		raw := make([]byte, len(lastIncomingTradeOpenRaw))
 		copy(raw, lastIncomingTradeOpenRaw)
@@ -4129,29 +4140,17 @@ func (a *App) startPingPongReturn(target int, items []TradeItem) {
 			opened = true
 			break
 		}
+		if time.Now().After(nextResend) {
+			a.AddLogMsg("[PINGPONG] no TRADE_OPEN ack yet; re-sending open")
+			ext.Send(out.TRADE_OPEN, target)
+			ext.Send(g.Out.Id("TRADE_OPEN"), []byte(encodeVL64(target)))
+			nextResend = time.Now().Add(1500 * time.Millisecond)
+		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	if !opened {
-		a.AddLogMsg("[PINGPONG] no incoming TRADE_OPEN ack; re-sending open and waiting briefly")
-		ext.Send(out.TRADE_OPEN, target)
-		ext.Send(g.Out.Id("TRADE_OPEN"), []byte(encodeVL64(target)))
-		waitUntil = time.Now().Add(1000 * time.Millisecond)
-		for time.Now().Before(waitUntil) {
-			lastIncomingTradeMu.Lock()
-			raw := make([]byte, len(lastIncomingTradeOpenRaw))
-			copy(raw, lastIncomingTradeOpenRaw)
-			lastIncomingTradeMu.Unlock()
-			if len(raw) > 0 && packetContainsVL64Value(raw, target) {
-				a.AddLogMsg(fmt.Sprintf("[PINGPONG] incoming TRADE_OPEN ack seen after resend payload=% X", raw))
-				opened = true
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		if !opened {
-			a.AddLogMsg("[PINGPONG] still no TRADE_OPEN ack; proceeding")
-			time.Sleep(300 * time.Millisecond)
-		}
+		a.AddLogMsg("[PINGPONG] still no TRADE_OPEN ack; proceeding")
+		time.Sleep(300 * time.Millisecond)
 	}
 
 	allAccepted := true
@@ -4237,12 +4236,14 @@ func (a *App) startPingPongReturn(target int, items []TradeItem) {
 	}
 	// If one or more adds did not echo, avoid accepting an empty offer.
 	if !allAccepted {
-		// Suppress immediate reopen attempts for a short randomized window
-		// to avoid tight reopen/close ping loops when both sides race.
-		suppressUntil := time.Now().Add(2500*time.Millisecond + time.Duration(rand.Intn(3000))*time.Millisecond)
-		atomic.StoreInt64(&pingPongSuppressOpenUntil, suppressUntil.UnixNano())
-		a.AddLogMsg(fmt.Sprintf("[PINGPONG] not all adds echoed; aborting accept, closing trade and suppressing reopen until %s", suppressUntil.Format(time.RFC3339Nano)))
+		// Close current trade and schedule an immediate retry so ping-pong keeps going.
+		atomic.StoreInt64(&pingPongSuppressOpenUntil, 0)
+		a.AddLogMsg("[PINGPONG] not all adds echoed; scheduling immediate retry (no reopen suppression)")
 		ext.Send(out.TRADE_CLOSE)
+		go func(pid int, itms []TradeItem) {
+			time.Sleep(250 * time.Millisecond)
+			a.startPingPongReturn(pid, itms)
+		}(target, items)
 		return
 	}
 
@@ -4497,11 +4498,10 @@ func (a *App) startAutoReturnExact(target int, items []TradeItem) {
 
 	// If any add failed to echo, do not accept an empty offer; close instead.
 	if !allAccepted {
-		// Apply a short randomized suppression window to avoid immediate
-		// reopen attempts which can cause tight open/close loops.
-		suppressUntil := time.Now().Add(2500*time.Millisecond + time.Duration(rand.Intn(3000))*time.Millisecond)
-		atomic.StoreInt64(&pingPongSuppressOpenUntil, suppressUntil.UnixNano())
-		a.AddLogMsg(fmt.Sprintf("[RETURN] not all adds echoed; aborting accept, closing trade and suppressing reopen until %s", suppressUntil.Format(time.RFC3339Nano)))
+		// Do not suppress reopen attempts — allow immediate reopen so ping-pong
+		// trading continues without timeouts.
+		atomic.StoreInt64(&pingPongSuppressOpenUntil, 0)
+		a.AddLogMsg("[RETURN] not all adds echoed; aborting accept, closing trade (no reopen suppression)")
 		ext.Send(out.TRADE_CLOSE)
 		return
 	}
