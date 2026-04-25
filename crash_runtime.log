@@ -4671,3 +4671,11 @@ Converting type main.TradeItem
 2026/04/25 14:37:43 [STRIP_WAIT] waiting for strip scan completion session=116 timeout=20s
 2026/04/25 14:37:44 [STRIP_WAIT] waiting for strip scan completion session=117 timeout=20s
 2026/04/25 14:37:44 [STRIP_WAIT] session=116 complete: scan advanced current=117
+2026/04/25 14:37:46 [STRIP_WAIT] session=117 complete: scan finished (active=false)
+2026/04/25 14:37:46 [STRIP_WAIT] waiting for strip scan completion session=106 timeout=20s
+2026/04/25 14:37:46 [STRIP_WAIT] session=105 complete: scan advanced current=106
+2026/04/25 14:37:48 [TRADE_LIMIT_DEBUG] check item="chair_plasty*109" qty=1 max=50 over=false
+2026/04/25 14:37:48 [TRADE_LIMIT_DEBUG] unique=1 maxUnique=5 tooManyUnique=false tooMuchQuantity=false
+2026/04/25 14:37:48 [STRIP_WAIT] waiting for strip scan completion session=118 timeout=20s
+2026/04/25 14:37:48 [STRIP_WAIT] waiting for strip scan completion session=107 timeout=20s
+2026/04/25 14:37:48 [STRIP_WAIT] session=106 complete: scan advanced current=107
