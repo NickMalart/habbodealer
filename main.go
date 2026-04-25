@@ -3742,9 +3742,9 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 
 		var reminder string
 		if onlyUnderOver7Mode {
-			reminder = "Shout over or under"
+			reminder = "Shout U (2-6) or O (8-12) to DOUBLE!"
 		} else {
-			reminder = "Shout pkr, 21, 13, trih, tril, uo"
+			reminder = "Shout pkr, 21, 13, trih, tril"
 		}
 		a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] 30s no response, repeating prompt for %s", player))
 		sendShout(reminder)
@@ -6550,9 +6550,9 @@ func (a *App) sendTradeCompletionMessage() {
 
 	var msg string
 	if onlyUnderOver7Mode {
-		msg = "Shout over or under"
+		msg = "Shout U (2-6) or O (8-12) to DOUBLE!"
 	} else {
-		msg = "Shout pkr, 21, 13, trih, tril, uo"
+		msg = "Shout pkr, 21, 13, trih, tril"
 	}
 	awaitingGameChoice = true
 	gameChoiceUnreadableWarned = false
@@ -8306,7 +8306,7 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 	mutex.Lock()
 	for i, dice := range diceList {
 		if dice.ID == diceID {
-			if dice.IsRolling && (isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting) {
+			if dice.IsRolling && (isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling) {
 				dice.IsRolling = false
 				func() {
 					defer func() {
@@ -8320,7 +8320,7 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 			diceList[i].Value = adjustedDiceValue
 			diceList[i].IsClosed = diceList[i].Value == 0
 
-			if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting {
+			if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling {
 				log.Printf("Dice %d rolled: %d\n", diceID, adjustedDiceValue)
 				logRollResult := fmt.Sprintf("Dice %d rolled: %d\n", diceID, adjustedDiceValue)
 				a.AddLogMsg(logRollResult)
