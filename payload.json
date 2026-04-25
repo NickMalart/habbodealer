@@ -5,7 +5,7 @@
   "embeds": [
     {
       "color": 3447003,
-      "description": "Player: fosk",
+      "description": "Player: BlackieJackie",
       "fields": [
         {
           "inline": true,
@@ -20,7 +20,7 @@
         {
           "inline": true,
           "name": "Player Result",
-          "value": "8"
+          "value": "5"
         },
         {
           "inline": true,
@@ -30,28 +30,28 @@
         {
           "inline": false,
           "name": "Bet Items",
-          "value": "spyro x5"
+          "value": "md_limukaappi_liq x1"
         },
         {
           "inline": false,
           "name": "Payout Items",
-          "value": "spyro x10"
+          "value": "md_limukaappi_liq x2"
         },
         {
           "inline": true,
           "name": "Started At",
-          "value": "2026-04-26T00:32:35+10:00"
+          "value": "2026-04-26T08:57:34+10:00"
         },
         {
           "inline": true,
           "name": "Completed At",
-          "value": "2026-04-26T00:32:44+10:00"
+          "value": "2026-04-26T08:57:42+10:00"
         }
       ],
       "footer": {
-        "text": "Game ID: 1777127555900721200"
+        "text": "Game ID: 1777157854774455800"
       },
-      "timestamp": "2026-04-26T00:32:44+10:00",
+      "timestamp": "2026-04-26T08:57:42+10:00",
       "title": "UO7 — Completed"
     }
   ],

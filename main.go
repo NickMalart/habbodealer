@@ -320,6 +320,29 @@ var (
 	maxTradeUniqueItems     int = 5
 	maxTradeQuantityPerItem int = 50
 
+	// Risk system (snapshot + internal tracking)
+	isRiskEnabled     bool
+	riskInitialized   bool
+	riskSnapshotTaken bool
+	dealerSnapshotQty int
+	dealerRisk        int
+	playerRisk        int
+	// Dedicated risk snapshot (immutable until explicit refresh)
+	riskHandSnapshot      []TradeItem
+	riskHandSnapshotReady bool
+
+	// Risk session state
+	riskSessionActive bool
+	riskSessionGame   string
+	riskSessionParams map[string]interface{}
+	riskPendingBet    int
+	riskPartnerID     int
+	riskPartnerName   string
+
+	// One-shot override for payout auto-add to convert internal bank -> items
+	riskPayoutRequired map[string]int
+	riskPayoutActive   bool
+
 	// When true, record every intercepted packet as a raw event for auditing
 	// and debugging. This writes a minimal per-packet JSON record including
 	// header, direction and hex payload. WARNING: this can generate a lot of
@@ -366,6 +389,7 @@ type LiveDealerStatusPayload struct {
 	RoomName           string            `json:"roomName"`
 	MaxUniqueItems     int               `json:"maxUniqueItems"`
 	MaxQuantityPerItem int               `json:"maxQuantityPerItem"`
+	RiskEnabled        bool              `json:"riskEnabled"`
 	Snapshot           []TradeItem       `json:"snapshot,omitempty"`
 	RecentGames        []LiveGameSummary `json:"recentGames,omitempty"`
 }
@@ -1301,6 +1325,50 @@ func (a *App) SetOnlyUnderOver(enabled bool) {
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "dealerModeChanged", enabled)
 	}
+}
+
+// SetRiskEnabled toggles Risk mode at runtime and resets session state when enabling.
+func (a *App) SetRiskEnabled(enabled bool) {
+	mutex.Lock()
+	prev := isRiskEnabled
+	isRiskEnabled = enabled
+	if enabled {
+		// fresh session state when enabling
+		riskInitialized = false
+		riskSnapshotTaken = false
+		// clear any dedicated risk snapshot
+		riskHandSnapshot = nil
+		riskHandSnapshotReady = false
+		dealerSnapshotQty = 0
+		dealerRisk = 0
+		playerRisk = 0
+		riskSessionActive = false
+		riskSessionGame = ""
+		riskSessionParams = nil
+		riskPendingBet = 0
+		riskPartnerID = 0
+		riskPartnerName = ""
+		riskPayoutRequired = nil
+		riskPayoutActive = false
+	}
+	mutex.Unlock()
+
+	a.AddLogMsg(fmt.Sprintf("[RISK] enabled=%t", enabled))
+	if !enabled && prev && riskInitialized && riskSessionActive {
+		// force finalize if disabling mid-session
+		go a.finalizeRiskKeep()
+	}
+
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "riskEnabledUpdate", enabled)
+	}
+}
+
+func (a *App) GetRiskEnabled() bool {
+	mutex.Lock()
+	v := isRiskEnabled
+	mutex.Unlock()
+	return v
 }
 
 // runAutoShoutLoop runs the ticker that shouts the configured phrase.
@@ -3307,18 +3375,40 @@ func (a *App) autoAddPayoutItems() {
 		return
 	}
 
-	betItems := gameBetItems
-	if len(betItems) == 0 {
-		a.AddLogMsg("[PAYOUT] no bet items recorded, skipping auto-add")
-		return
+	// Allow a one-shot override from Risk finalize to specify exact required map.
+	mutex.Lock()
+	override := riskPayoutActive
+	overrideReq := riskPayoutRequired
+	if override {
+		// consume override once
+		riskPayoutActive = false
+		riskPayoutRequired = nil
 	}
+	mutex.Unlock()
 
-	a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] auto-add start: bet item types=%d", len(betItems)))
-	for i, betItem := range betItems {
-		a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] bet[%d] name=%q qty=%d payoutTarget=%d", i, betItem.Name, betItem.Quantity, betItem.Quantity*2))
+	var required map[string]int
+	var betItems []TradeItem
+	if override && len(overrideReq) > 0 {
+		required = overrideReq
+		// Build a pseudo betItems list for logging/ordering
+		for name, qty := range required {
+			betItems = append(betItems, TradeItem{Name: name, Quantity: qty})
+		}
+		sort.Slice(betItems, func(i, j int) bool { return betItems[i].Name < betItems[j].Name })
+	} else {
+		betItems = gameBetItems
+		if len(betItems) == 0 {
+			a.AddLogMsg("[PAYOUT] no bet items recorded, skipping auto-add")
+			return
+		}
+
+		a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] auto-add start: bet item types=%d", len(betItems)))
+		for i, betItem := range betItems {
+			a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] bet[%d] name=%q qty=%d payoutTarget=%d", i, betItem.Name, betItem.Quantity, betItem.Quantity*2))
+		}
+
+		required = payoutRequirementsFromBetItems(betItems)
 	}
-
-	required := payoutRequirementsFromBetItems(betItems)
 	// Compute total required items up-front so outgoing intercept can
 	// track progress against this expected count while we send adds.
 	requiredTotal := 0
@@ -3427,6 +3517,267 @@ func (a *App) autoAddPayoutItems() {
 	}
 
 	go a.verifyAndRetryPayoutAdds(plannedIDs)
+}
+
+// handlePlayerWinRisk records an initial win into the internal Risk state
+// instead of immediately opening a payout trade. It initializes dealer bank
+// from the one-time snapshot and adjusts internal counters.
+func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playerID int, game string, params map[string]interface{}) {
+	if !isRiskEnabled {
+		startPayout(a, playerID, playerName)
+		return
+	}
+
+	if len(betItems) == 0 {
+		startPayout(a, playerID, playerName)
+		return
+	}
+
+	betQty := 0
+	for _, it := range betItems {
+		betQty += it.Quantity
+	}
+	if betQty <= 0 {
+		startPayout(a, playerID, playerName)
+		return
+	}
+
+	// Ensure dealer snapshot captured (prefer dedicated risk snapshot)
+	a.captureRiskSnapshot(false)
+
+	mutex.Lock()
+	if !riskInitialized {
+		// Prefer the pre-captured risk snapshot if available; otherwise
+		// fall back to dealerSnapshotQty which may have been set by capture.
+		initialQty := dealerSnapshotQty
+		if riskHandSnapshotReady && len(riskHandSnapshot) > 0 {
+			initialQty = 0
+			for _, it := range riskHandSnapshot {
+				initialQty += it.Quantity
+			}
+			dealerSnapshotQty = initialQty
+			riskSnapshotTaken = true
+		}
+		dealerRisk = initialQty + betQty
+		playerRisk = 0
+		riskInitialized = true
+		riskPartnerID = playerID
+		riskPartnerName = playerName
+	}
+
+	payout := betQty * 2
+	if payout > dealerRisk {
+		payout = dealerRisk
+	}
+	dealerRisk -= payout
+	playerRisk += payout
+
+	riskSessionActive = true
+	riskSessionGame = game
+	riskSessionParams = params
+	mutex.Unlock()
+
+	a.AddLogMsg(fmt.Sprintf("[RISK] win recorded bet=%d payout=%d dealerRisk=%d playerRisk=%d", betQty, payout, dealerRisk, playerRisk))
+	// Use mute-aware send path like other winner announcements so the
+	// prompt isn't silently swallowed by flood-control mutes.
+	msg := fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Max Risk: %d", playerRisk, absoluteMaxRisk())
+	go func(m string) {
+		waitForUnmute(90 * time.Second)
+		time.Sleep(800 * time.Millisecond)
+		sendMessageWithDelay(m)
+	}(msg)
+}
+
+// handleRiskBet validates and applies a player's risk bet (internal state move)
+// then starts a risk re-roll round.
+func (a *App) handleRiskBet(n int, sender string) {
+	mutex.Lock()
+	if !riskSessionActive || (riskPartnerName != "" && !strings.EqualFold(sender, riskPartnerName)) {
+		mutex.Unlock()
+		return
+	}
+	max := maxTradeQuantityPerItem
+	if playerRisk < max {
+		max = playerRisk
+	}
+	if dealerRisk < max {
+		max = dealerRisk
+	}
+	if n <= 0 || n > max {
+		mutex.Unlock()
+		sendShout(fmt.Sprintf("Invalid risk amount. Max: %d", max))
+		return
+	}
+
+	playerRisk -= n
+	dealerRisk += n
+	riskPendingBet = n
+	mutex.Unlock()
+
+	a.AddLogMsg(fmt.Sprintf("[RISK] %s risked %d (playerRisk=%d dealerRisk=%d)", sender, n, playerRisk, dealerRisk))
+	go a.executeRiskRound()
+}
+
+// executeRiskRound performs the same game roll for the active risk session.
+// It sets minimal game state then invokes the normal roll path so evaluation
+// still runs through the existing finalize/evaluate functions which will
+// route results via applyRiskOutcome when riskSessionActive is true.
+func (a *App) executeRiskRound() {
+	mutex.Lock()
+	game := riskSessionGame
+	params := riskSessionParams
+	mutex.Unlock()
+
+	switch game {
+	case "UO7", "UO":
+		if v, ok := params["uoChoice"].(string); ok {
+			mutex.Lock()
+			uoPlayerChoice = v
+			uoRoundActive = true
+			mutex.Unlock()
+		} else {
+			mutex.Lock()
+			uoRoundActive = true
+			mutex.Unlock()
+		}
+		a.rollUnderOverDice()
+	case "13":
+		mutex.Lock()
+		thirteenPlayerTurn = true
+		mutex.Unlock()
+		a.roll13Dice()
+	case "Tri":
+		if v, ok := params["mode"].(string); ok {
+			mutex.Lock()
+			triMode = v
+			mutex.Unlock()
+		}
+		a.rollTriDice()
+	case "21":
+		mutex.Lock()
+		blackjackPlayerTurn = true
+		mutex.Unlock()
+		a.rollBjDice()
+	default:
+		// Unknown game: simple coin flip fallback
+		win := rand.Intn(2) == 0
+		a.applyRiskOutcome(win)
+	}
+}
+
+// applyRiskOutcome applies the result of a risk re-roll to internal bank
+// accounting, shouts status, and finalizes if necessary.
+func (a *App) applyRiskOutcome(playerWins bool) {
+	mutex.Lock()
+	partner := riskPartnerName
+	pending := riskPendingBet
+	if !riskSessionActive {
+		mutex.Unlock()
+		return
+	}
+	if !playerWins {
+		// Player loses: dealer collects player's bank and session ends.
+		dealerRisk += playerRisk
+		playerRisk = 0
+		riskPendingBet = 0
+		riskSessionActive = false
+		mutex.Unlock()
+
+		a.AddLogMsg(fmt.Sprintf("[RISK] %s lost risk session; dealerRisk=%d", partner, dealerRisk))
+		sendShout(fmt.Sprintf("%s lost the risk streak. Dealer bank: %d", partner, dealerRisk))
+		go a.openDealerAfterRound()
+		return
+	}
+
+	// Player won the risk round: dealer pays double of pending bet.
+	pay := pending * 2
+	if pay > dealerRisk {
+		pay = dealerRisk
+	}
+	dealerRisk -= pay
+	playerRisk += pay
+	riskPendingBet = 0
+	mutex.Unlock()
+
+	a.AddLogMsg(fmt.Sprintf("[RISK] %s won risk round: paid %d (playerRisk=%d dealerRisk=%d)", partner, pay, playerRisk, dealerRisk))
+	sendShout(fmt.Sprintf("%s won risk round! Bank: %d", partner, playerRisk))
+
+	// If dealer has no funds left, finalize into physical payout
+	mutex.Lock()
+	shouldFinalize := dealerRisk <= 0
+	mutex.Unlock()
+	if shouldFinalize {
+		go a.finalizeRiskKeep()
+	}
+}
+
+// finalizeRiskKeep converts the current `playerRisk` internal bank into a
+// physical payout trade by setting a one-shot required map and calling
+// startPayout (autoAddPayoutItems will consume the override).
+func (a *App) finalizeRiskKeep() {
+	mutex.Lock()
+	if playerRisk <= 0 || riskPartnerID <= 0 {
+		mutex.Unlock()
+		return
+	}
+	total := playerRisk
+	targetID := riskPartnerID
+	targetName := riskPartnerName
+	// clear risk state early
+	riskSessionActive = false
+	riskSessionGame = ""
+	riskSessionParams = nil
+	riskPendingBet = 0
+	playerRisk = 0
+	mutex.Unlock()
+
+	a.AddLogMsg(fmt.Sprintf("[RISK] finalizing Keep -> payout %d to %s(%d)", total, targetName, targetID))
+
+	// Build required map proportionally from recorded bet types if available
+	base := payoutRequirementsFromBetItems(gameBetItems)
+	baseTotal := 0
+	for _, v := range base {
+		baseTotal += v
+	}
+
+	required := map[string]int{}
+	if baseTotal == 0 {
+		// fallback: use first snapshot item name
+		handItemsMu.Lock()
+		if len(tradeHandSnapshot) > 0 {
+			required[tradeHandSnapshot[0].Name] = total
+		}
+		handItemsMu.Unlock()
+		if len(required) == 0 {
+			a.AddLogMsg("[RISK] cannot build payout requirement: no base bet and no snapshot")
+			return
+		}
+	} else {
+		mult := total / baseTotal
+		rem := total % baseTotal
+		names := make([]string, 0, len(base))
+		for n := range base {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			required[n] = base[n] * mult
+		}
+		i := 0
+		for rem > 0 {
+			required[names[i%len(names)]]++
+			rem--
+			i++
+		}
+	}
+
+	mutex.Lock()
+	riskPayoutRequired = required
+	riskPayoutActive = true
+	mutex.Unlock()
+
+	// Use normal payout flow which will be auto-added using the override
+	startPayout(a, targetID, targetName)
 }
 
 func snapshotHandItemIDs() map[string][]int {
@@ -5616,6 +5967,16 @@ func (a *App) openDealerAfterRound() {
 		requestRoomUsers(a)
 	}
 
+	// Refresh dedicated risk snapshot to reflect post-payout inventory.
+	if isRiskEnabled {
+		go func() {
+			// small settle to ensure hand snapshot is ready
+			time.Sleep(250 * time.Millisecond)
+			_a := a
+			_a.captureRiskSnapshot(true)
+		}()
+	}
+
 	if !ok {
 		a.AddLogMsg("[DEALER_REOPEN] refusing to announce dealer open because forced hand refresh failed")
 		return
@@ -6042,6 +6403,7 @@ func (a *App) sendLiveDealerStatus(open bool, dealerName string) {
 			RoomName:           a.getCurrentRoomName(),
 			MaxUniqueItems:     maxTradeUniqueItems,
 			MaxQuantityPerItem: maxTradeQuantityPerItem,
+			RiskEnabled:        isRiskEnabled,
 			RecentGames:        a.getRecentGameSummaries(5),
 		}
 
@@ -6209,6 +6571,9 @@ func (a *App) captureTradeHandSnapshot() {
 	// Send snapshot to configured live-dealer webhook (non-blocking)
 	a.sendLiveDealerSnapshot(snapshot)
 
+	// One-time risk snapshot capture if Risk mode enabled
+	a.initRiskSnapshotIfNeeded()
+
 	// If the partner already accepted while we were refreshing the hand,
 	// attempt an immediate auto-accept now the frozen snapshot is ready.
 	go a.maybeAutoAcceptOnSnapshotReady("capture")
@@ -6222,6 +6587,100 @@ func (a *App) invalidateTradeHandSnapshot(reason string) {
 
 	a.AddLogMsg(fmt.Sprintf("[TRADE_HAND_SNAPSHOT] invalidated: %s", reason))
 	a.AddLogMsg("[TRADE_HAND_SNAPSHOT] ready=false")
+}
+
+// initRiskSnapshotIfNeeded captures the dealer's one-time hand quantity
+// snapshot when Risk mode is enabled. It is intentionally idempotent.
+func (a *App) initRiskSnapshotIfNeeded() {
+	// Delegate to the explicit risk snapshot capturer. Non-forced.
+	_ = a.captureRiskSnapshot(false)
+}
+
+// captureRiskSnapshot copies a one-shot risk snapshot from the frozen trade
+// snapshot. If force==true it will replace any existing risk snapshot (used
+// after payouts or explicit refreshes). Returns true on success.
+func (a *App) captureRiskSnapshot(force bool) bool {
+	if !isRiskEnabled {
+		return false
+	}
+
+	mutex.Lock()
+	already := riskHandSnapshotReady
+	mutex.Unlock()
+	if already && !force {
+		return true
+	}
+
+	// Wait briefly for frozen snapshot to be available.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		handItemsMu.Lock()
+		ready := tradeHandSnapshotReady && len(tradeHandSnapshot) > 0
+		if ready {
+			snap := make([]TradeItem, len(tradeHandSnapshot))
+			copy(snap, tradeHandSnapshot)
+			handItemsMu.Unlock()
+
+			mutex.Lock()
+			if !riskHandSnapshotReady || force {
+				riskHandSnapshot = snap
+				riskHandSnapshotReady = true
+				total := 0
+				for _, it := range snap {
+					total += it.Quantity
+				}
+				dealerSnapshotQty = total
+				riskSnapshotTaken = true
+			}
+			mutex.Unlock()
+
+			a.AddLogMsg(fmt.Sprintf("[RISK] captured risk snapshot total=%d types=%d force=%t", dealerSnapshotQty, len(snap), force))
+			return true
+		}
+		handItemsMu.Unlock()
+
+		if time.Now().After(deadline) {
+			if force {
+				// Fall back to live hand if forced.
+				handItemsMu.Lock()
+				snap := make([]TradeItem, len(currentHandItems))
+				copy(snap, currentHandItems)
+				handItemsMu.Unlock()
+
+				mutex.Lock()
+				riskHandSnapshot = snap
+				riskHandSnapshotReady = true
+				total := 0
+				for _, it := range snap {
+					total += it.Quantity
+				}
+				dealerSnapshotQty = total
+				riskSnapshotTaken = true
+				mutex.Unlock()
+
+				a.AddLogMsg(fmt.Sprintf("[RISK] forced capture from live hand total=%d types=%d", dealerSnapshotQty, len(snap)))
+				return true
+			}
+			a.AddLogMsg("[RISK] captureRiskSnapshot timed out waiting for frozen snapshot")
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// absoluteMaxRisk returns the maximum single-risk amount allowed by
+// configured per-item limits and current internal bank quantities.
+func absoluteMaxRisk() int {
+	mutex.Lock()
+	defer mutex.Unlock()
+	m := maxTradeQuantityPerItem
+	if playerRisk < m {
+		m = playerRisk
+	}
+	if dealerRisk < m {
+		m = dealerRisk
+	}
+	return m
 }
 
 func (a *App) forceRefreshHandSnapshot(reason string) bool {
@@ -7736,6 +8195,16 @@ func (a *App) evaluateUnderOverRound() {
 		a.setCurrentGameHistoryResults(strconv.Itoa(total), "", playerName, "Payout Pending", false)
 		a.noteCurrentGameHistory(winnerMsg)
 		resetPayoutRetryState()
+		if isRiskEnabled {
+			if riskSessionActive {
+				// This evaluation is part of an active risk re-roll
+				go a.applyRiskOutcome(true)
+				return
+			}
+			params := map[string]interface{}{"uoChoice": uoPlayerChoice}
+			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "UO7", params)
+			return
+		}
 		startPayout(a, payoutTargetID, payoutTargetName)
 		return
 	}
@@ -7796,6 +8265,14 @@ func (a *App) finalize13Round(playerWins bool, reason string) {
 		a.noteCurrentGameHistory(winnerMsg)
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT] 13 player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
 		resetPayoutRetryState()
+		if isRiskEnabled {
+			if riskSessionActive {
+				go a.applyRiskOutcome(true)
+				return
+			}
+			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "13", nil)
+			return
+		}
 		startPayout(a, payoutTargetID, payoutTargetName)
 		return
 	}
@@ -7875,6 +8352,15 @@ func (a *App) finalizeTriRound() {
 		a.noteCurrentGameHistory(winnerMsg)
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT] tri player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
 		resetPayoutRetryState()
+		if isRiskEnabled {
+			if riskSessionActive {
+				go a.applyRiskOutcome(true)
+				return
+			}
+			params := map[string]interface{}{"mode": triMode}
+			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "Tri", params)
+			return
+		}
 		startPayout(a, payoutTargetID, payoutTargetName)
 		return
 	}
@@ -7940,9 +8426,33 @@ func getExpectedDiceCount() int {
 // when the user clicks the "Start Casino" button. It resets any existing dice and
 // enables recording of incoming dice IDs. It also receives trade-limit configuration
 // values which are stored in global state and emitted in live-dealer payloads.
-func (a *App) StartCasinoSetup(dealerName string, roomName string, maxUniqueItems int, maxQuantityPerItem int) {
+func (a *App) StartCasinoSetup(dealerName string, roomName string, maxUniqueItems int, maxQuantityPerItem int, riskEnabled bool) {
 	// Reset state first (this will lock/unlock internally)
 	resetDiceState()
+
+	// Apply risk mode flag from frontend
+	mutex.Lock()
+	isRiskEnabled = riskEnabled
+	if riskEnabled {
+		// clear any previous risk session metadata so the new session is clean
+		riskInitialized = false
+		riskSnapshotTaken = false
+		// clear any dedicated risk snapshot
+		riskHandSnapshot = nil
+		riskHandSnapshotReady = false
+		dealerSnapshotQty = 0
+		dealerRisk = 0
+		playerRisk = 0
+		riskSessionActive = false
+		riskSessionGame = ""
+		riskSessionParams = nil
+		riskPendingBet = 0
+		riskPartnerID = 0
+		riskPartnerName = ""
+		riskPayoutRequired = nil
+		riskPayoutActive = false
+	}
+	mutex.Unlock()
 
 	mutex.Lock()
 	diceSetupActive = true
@@ -9040,6 +9550,34 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		log.Printf("[INCOMING %s] %d -> %s", chatType, index, msg)
 		a.AddChatLog(fmt.Sprintf("[IN %s] %d -> %s", chatType, index, msg))
 		go LogEvent("chat_incoming", map[string]interface{}{"type": chatType, "sender_index": index, "text": msg}, fmt.Sprintf("Incoming %s (index=%d)", chatType, index), nil)
+	}
+
+	// Risk command parsing: case-insensitive, supports "r2", "r 2", "risk 2", and "keep"
+	if riskSessionActive {
+		// Ensure sender is the current risk partner
+		isPartner := false
+		if riskPartnerID > 0 && index == riskPartnerID {
+			isPartner = true
+		}
+		if riskPartnerName != "" && strings.EqualFold(senderName, riskPartnerName) {
+			isPartner = true
+		}
+		if isPartner {
+			cleaned := strings.TrimSpace(msg)
+			lower := strings.ToLower(cleaned)
+			if strings.EqualFold(lower, "keep") {
+				e.Block()
+				go a.finalizeRiskKeep()
+				return
+			}
+			re := regexp.MustCompile(`(?i)^\s*(?:r|risk)\s*?(\d+)\s*$`)
+			if m := re.FindStringSubmatch(msg); len(m) == 2 {
+				amt, _ := strconv.Atoi(m[1])
+				e.Block()
+				go a.handleRiskBet(amt, senderName)
+				return
+			}
+		}
 	}
 
 	if awaitingBlackjackDecision {

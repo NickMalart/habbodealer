@@ -68,6 +68,8 @@ export function GetGameHistoryJSON():Promise<string>;
 
 export function GetLastTradePartnerName():Promise<string>;
 
+export function GetRiskEnabled():Promise<boolean>;
+
 export function GetTradeItemsJSON():Promise<string>;
 
 export function ListEventDatesJSON():Promise<string>;
@@ -96,13 +98,15 @@ export function SaveDealerOpenConfig(arg1:boolean,arg2:number,arg3:number):Promi
 
 export function SetOnlyUnderOver(arg1:boolean):Promise<void>;
 
+export function SetRiskEnabled(arg1:boolean):Promise<void>;
+
 export function ShowCommands():Promise<void>;
 
 export function ShowWindow():Promise<void>;
 
 export function SkipDiceSetupForTesting():Promise<void>;
 
-export function StartCasinoSetup(arg1:string,arg2:string,arg3:number,arg4:number):Promise<void>;
+export function StartCasinoSetup(arg1:string,arg2:string,arg3:number,arg4:number,arg5:boolean):Promise<void>;
 
 export function StopCasinoSetup():Promise<void>;
 

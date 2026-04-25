@@ -134,6 +134,10 @@ export function GetLastTradePartnerName() {
   return window['go']['main']['App']['GetLastTradePartnerName']();
 }
 
+export function GetRiskEnabled() {
+  return window['go']['main']['App']['GetRiskEnabled']();
+}
+
 export function GetTradeItemsJSON() {
   return window['go']['main']['App']['GetTradeItemsJSON']();
 }
@@ -190,6 +194,10 @@ export function SetOnlyUnderOver(arg1) {
   return window['go']['main']['App']['SetOnlyUnderOver'](arg1);
 }
 
+export function SetRiskEnabled(arg1) {
+  return window['go']['main']['App']['SetRiskEnabled'](arg1);
+}
+
 export function ShowCommands() {
   return window['go']['main']['App']['ShowCommands']();
 }
@@ -202,8 +210,8 @@ export function SkipDiceSetupForTesting() {
   return window['go']['main']['App']['SkipDiceSetupForTesting']();
 }
 
-export function StartCasinoSetup(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['StartCasinoSetup'](arg1, arg2, arg3, arg4);
+export function StartCasinoSetup(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['StartCasinoSetup'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function StopCasinoSetup() {

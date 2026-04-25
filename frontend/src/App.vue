@@ -93,6 +93,10 @@
                 <input type="checkbox" v-model="onlyUnderOverMode" />
                 Only Under/Over 7 (only show Over/Under to players)
               </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;">
+                <input type="checkbox" v-model="riskModeEnabledInput" />
+                Enable Risk Mode
+              </label>
             </div>
             <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
               <button class="copy-btn" @click="cancelDealerName">Cancel</button>
@@ -780,6 +784,8 @@ export default {
       dealerAnnounceSeconds: 45,
       // Dealer mode: when true, only Under/Over-7 is presented to players
       onlyUnderOverMode: false,
+      // Risk mode: when true, enable Risk banking mechanic
+      riskModeEnabledInput: false,
       // Block recommended-rooms packet
       blockRecommendedRooms: true,
       // Block slide-object-bundle packet
@@ -983,7 +989,7 @@ export default {
 
           // send dealer mode to backend before starting setup
           await window.go.main.App.SetOnlyUnderOver(this.onlyUnderOverMode);
-          await window.go.main.App.StartCasinoSetup(name, roomName, maxUnique, maxPer);
+          await window.go.main.App.StartCasinoSetup(name, roomName, maxUnique, maxPer, this.riskModeEnabledInput);
 
           this.showDealerNameModal = false;
           const expected = this.onlyUnderOverMode ? 2 : 5;
