@@ -398,6 +398,18 @@ export namespace main {
 	        this.announceSeconds = source["announceSeconds"];
 	    }
 	}
+	export class ExplainTwoDiceConfig {
+	    enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExplainTwoDiceConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	    }
+	}
 	
 	
 	
@@ -445,6 +457,21 @@ export namespace main {
 	        this.Name = source["Name"];
 	        this.Quantity = source["Quantity"];
 	        this.RawData = source["RawData"];
+	    }
+	}
+	
+	export class TwoDiceConfig {
+	    uo7: boolean;
+	    field: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new TwoDiceConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.uo7 = source["uo7"];
+	        this.field = source["field"];
 	    }
 	}
 

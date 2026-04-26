@@ -115,9 +115,16 @@ var (
 		2: true, 3: true, 4: true,
 		9: true, 10: true, 11: true, 12: true,
 	}
-	fieldDealerWins = map[int]bool{
-		5: true, 6: true, 7: true, 8: true,
-	}
+	// explainTwoDiceGames controls whether the dealer will shout an explanation
+	// of the two-dice games (Under/Over-7 and Field) when a round starts.
+	explainTwoDiceGames bool = true
+	explainTwoDiceMu    sync.Mutex
+	// Two-dice game availability toggles (can be changed before setup)
+	twoDiceUOEnabled    bool   = true
+	twoDiceFieldEnabled bool   = true
+	twoDiceDefaultGame  string = "uo"
+	twoDiceMu           sync.Mutex
+
 	pokerSequencePlayerName   string
 	pokerSequencePlayerResult PokerHandResult
 	pokerSequencePlayerHand   string
@@ -951,6 +958,101 @@ func (a *App) ToggleBlockRecommendedRooms(enabled bool) BlockRecommendedConfig {
 	}
 
 	return cfg
+}
+
+// ExplainTwoDiceConfig holds whether two-dice game explanations are auto-shouted.
+type ExplainTwoDiceConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
+// GetExplainTwoDiceConfig returns current explainTwoDiceGames setting.
+func (a *App) GetExplainTwoDiceConfig() ExplainTwoDiceConfig {
+	explainTwoDiceMu.Lock()
+	defer explainTwoDiceMu.Unlock()
+	return ExplainTwoDiceConfig{Enabled: explainTwoDiceGames}
+}
+
+// ToggleExplainTwoDice enables/disables automatic explanation shouts for two-dice games.
+func (a *App) ToggleExplainTwoDice(enabled bool) ExplainTwoDiceConfig {
+	explainTwoDiceMu.Lock()
+	explainTwoDiceGames = enabled
+	explainTwoDiceMu.Unlock()
+
+	cfg := ExplainTwoDiceConfig{Enabled: explainTwoDiceGames}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "explainTwoDiceUpdate", string(b))
+	}
+
+	a.AddLogMsg(fmt.Sprintf("[CONFIG] ExplainTwoDiceGames = %t", explainTwoDiceGames))
+	return cfg
+}
+
+// TwoDiceConfig exposes which two-dice games are enabled.
+type TwoDiceConfig struct {
+	UO7   bool `json:"uo7"`
+	Field bool `json:"field"`
+}
+
+// GetTwoDiceConfig returns current two-dice game availability.
+func (a *App) GetTwoDiceConfig() TwoDiceConfig {
+	twoDiceMu.Lock()
+	defer twoDiceMu.Unlock()
+	return TwoDiceConfig{UO7: twoDiceUOEnabled, Field: twoDiceFieldEnabled}
+}
+
+// ToggleTwoDiceUO enables/disables Under/Over-7 availability.
+func (a *App) ToggleTwoDiceUO(enabled bool) TwoDiceConfig {
+	twoDiceMu.Lock()
+	twoDiceUOEnabled = enabled
+	twoDiceMu.Unlock()
+
+	cfg := TwoDiceConfig{UO7: twoDiceUOEnabled, Field: twoDiceFieldEnabled}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "twoDiceUpdate", string(b))
+	}
+	a.AddLogMsg(fmt.Sprintf("[CONFIG] TwoDice UO7 enabled = %t", twoDiceUOEnabled))
+	return cfg
+}
+
+// ToggleTwoDiceField enables/disables Field game availability.
+func (a *App) ToggleTwoDiceField(enabled bool) TwoDiceConfig {
+	twoDiceMu.Lock()
+	twoDiceFieldEnabled = enabled
+	twoDiceMu.Unlock()
+
+	cfg := TwoDiceConfig{UO7: twoDiceUOEnabled, Field: twoDiceFieldEnabled}
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "twoDiceUpdate", string(b))
+	}
+	a.AddLogMsg(fmt.Sprintf("[CONFIG] TwoDice Field enabled = %t", twoDiceFieldEnabled))
+	return cfg
+}
+
+// GetTwoDiceDefaultConfig returns which two-dice game is the default when 'uo' is used.
+func (a *App) GetTwoDiceDefaultConfig() map[string]string {
+	twoDiceMu.Lock()
+	def := twoDiceDefaultGame
+	twoDiceMu.Unlock()
+	return map[string]string{"default": def}
+}
+
+// SetTwoDiceDefault sets the default two-dice game ("uo" or "field").
+func (a *App) SetTwoDiceDefault(def string) map[string]string {
+	if def != "uo" && def != "field" {
+		def = "uo"
+	}
+	twoDiceMu.Lock()
+	twoDiceDefaultGame = def
+	twoDiceMu.Unlock()
+	if a.ctx != nil {
+		b, _ := json.Marshal(map[string]string{"default": twoDiceDefaultGame})
+		runtime.EventsEmit(a.ctx, "twoDiceDefaultUpdate", string(b))
+	}
+	a.AddLogMsg(fmt.Sprintf("[CONFIG] Two-dice default set to %s", def))
+	return map[string]string{"default": twoDiceDefaultGame}
 }
 
 // BlockSlideObjectConfig holds frontend-friendly block config for the
@@ -3703,12 +3805,7 @@ func (a *App) handleRiskBet(n int, sender string) {
 
 	a.startGameChoiceTimeoutMonitor()
 
-	var msg string
-	if onlyUnderOver7Mode {
-		msg = "Shout U (2-6) or O (8-12) to DOUBLE!"
-	} else {
-		msg = "Shout pkr, 21, 13, trih, tril, field (f)"
-	}
+	msg := getGameChoicePrompt()
 
 	a.AddLogMsg(fmt.Sprintf("[RISK] prompting for game choice: %q (partner=%q id=%d)", msg, awaitingGameChoicePartnerName, awaitingGameChoicePartnerID))
 	sendShout(msg)
@@ -3726,6 +3823,17 @@ func (a *App) executeRiskRound() {
 
 	switch game {
 	case "UO7", "UO":
+		// Respect configured default: UO may map to the Field game
+		twoDiceMu.Lock()
+		def := twoDiceDefaultGame
+		twoDiceMu.Unlock()
+		if def == "field" {
+			mutex.Lock()
+			fieldRoundActive = true
+			mutex.Unlock()
+			a.rollFieldDice()
+			break
+		}
 		if v, ok := params["uoChoice"].(string); ok {
 			mutex.Lock()
 			uoPlayerChoice = v
@@ -4267,12 +4375,7 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 			return
 		}
 
-		var reminder string
-		if onlyUnderOver7Mode {
-			reminder = "Shout U (2-6) or O (8-12) to DOUBLE!"
-		} else {
-			reminder = "Shout pkr, 21, 13, trih, tril, field (f)"
-		}
+		reminder := getGameChoicePrompt()
 		a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] 30s no response, repeating prompt for %s", player))
 		sendShout(reminder)
 
@@ -7217,12 +7320,7 @@ func (a *App) sendTradeCompletionMessage() {
 	a.beginGameHistory(partnerName, gameBetItems)
 	a.AddLogMsg("[TRADE_FLOW] beginGameHistory returned")
 
-	var msg string
-	if onlyUnderOver7Mode {
-		msg = "Shout U (2-6) or O (8-12) to DOUBLE!"
-	} else {
-		msg = "Shout pkr, 21, 13, trih, tril, field (f)"
-	}
+	msg := getGameChoicePrompt()
 	awaitingGameChoice = true
 	gameChoiceUnreadableWarned = false
 	awaitingGameChoicePartnerName = normalizeUsername(strings.TrimSpace(tradeStarterName))
@@ -8276,6 +8374,16 @@ func (a *App) beginUnderOverRound(mode string) {
 	uoPlayerChoice = strings.ToLower(strings.TrimSpace(mode))
 	a.setCurrentGameHistoryGame("UO7")
 
+	// Optionally explain the Under/Over-7 rules before rolling
+	explainTwoDiceMu.Lock()
+	explain := explainTwoDiceGames
+	explainTwoDiceMu.Unlock()
+	if explain {
+		expl := "Under/Over-7: Roll two dice. Under (2-6) wins if you shouted U; Over (8-12) wins if you shouted O. 7 is an automatic dealer win. Double payout!"
+		a.AddLogMsg(fmt.Sprintf("[GAME_EXPLAIN] shouting: %q", expl))
+		sendShout(expl)
+	}
+
 	go func() {
 		time.Sleep(1400 * time.Millisecond)
 		isUORolling = true
@@ -8462,8 +8570,13 @@ func (a *App) beginFieldRound() {
 	a.setCurrentGameHistoryGame("Field")
 
 	msg := "Field — Winning totals: 2,3,4,9,10,11,12. Dealer wins on 5,6,7,8. Double payout!"
-	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
-	sendShout(msg)
+	explainTwoDiceMu.Lock()
+	explain := explainTwoDiceGames
+	explainTwoDiceMu.Unlock()
+	if explain {
+		a.AddLogMsg(fmt.Sprintf("[GAME_EXPLAIN] shouting: %q", msg))
+		sendShout(msg)
+	}
 
 	go func() {
 		time.Sleep(1400 * time.Millisecond)
@@ -10169,6 +10282,40 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		return
 	}
 
+	// Enforce per-game availability toggles for two-dice games
+	twoDiceMu.Lock()
+	uoEnabled := twoDiceUOEnabled
+	fieldEnabled := twoDiceFieldEnabled
+	defaultGame := twoDiceDefaultGame
+	twoDiceMu.Unlock()
+	if choice == "uo" {
+		// If the default two-dice mapping points 'uo' to Field, check Field enablement
+		if defaultGame == "field" {
+			if !fieldEnabled {
+				a.AddLogMsg("[GAME_SELECT] Field (via UO) selected but disabled; ignoring")
+				if !ChatIsDisabled {
+					go sendMessageWithDelay("Field game is disabled by dealer.")
+				}
+				return
+			}
+		} else {
+			if !uoEnabled {
+				a.AddLogMsg("[GAME_SELECT] Under/Over-7 selected but disabled; ignoring")
+				if !ChatIsDisabled {
+					go sendMessageWithDelay("Under/Over-7 is disabled by dealer.")
+				}
+				return
+			}
+		}
+	}
+	if choice == "field" && !fieldEnabled {
+		a.AddLogMsg("[GAME_SELECT] Field selected but disabled; ignoring")
+		if !ChatIsDisabled {
+			go sendMessageWithDelay("Field game is disabled by dealer.")
+		}
+		return
+	}
+
 	// senderName already resolved above.
 
 	// Accept only if sender matches the locked trade starter.
@@ -10246,9 +10393,17 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Tri; prompting for High/Low", index))
 		a.beginTriChoiceSequence()
 	case "uo":
-		// Two-step Under/Over selection: prompt player for Over or Under
-		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Under/Over; prompting for Over/Under", index))
-		a.beginUOChoiceSequence()
+		// Two-step Under/Over selection: may be remapped to Field via default
+		twoDiceMu.Lock()
+		def := twoDiceDefaultGame
+		twoDiceMu.Unlock()
+		if def == "field" {
+			a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected UO mapped to Field; starting Field round", index))
+			a.beginFieldRound()
+		} else {
+			a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Under/Over; prompting for Over/Under", index))
+			a.beginUOChoiceSequence()
+		}
 	case "field":
 		// Field selection: immediate round
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Field; starting Field round", index))
@@ -10284,8 +10439,6 @@ func normalizeIncomingGameChoice(msg string) (string, bool) {
 		return "13", true
 	case "tri":
 		return "tri", true
-	case "field", "f":
-		return "field", true
 	case "field", "f":
 		return "field", true
 	case "uo", "uo7", "underover", "underover7":
@@ -10348,6 +10501,28 @@ func normalizeLooseGameChoice(msg string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// getGameChoicePrompt builds the prompt string listing available games,
+// respecting onlyUnderOver7Mode and per-game availability toggles.
+func getGameChoicePrompt() string {
+	twoDiceMu.Lock()
+	uo := twoDiceUOEnabled
+	field := twoDiceFieldEnabled
+	twoDiceMu.Unlock()
+
+	if onlyUnderOver7Mode && uo {
+		return "Shout U (2-6) or O (8-12) to DOUBLE!"
+	}
+
+	games := []string{"pkr", "21", "13", "trih", "tril"}
+	if uo {
+		games = append(games, "uo")
+	}
+	if field {
+		games = append(games, "field (f)")
+	}
+	return fmt.Sprintf("Shout %s", strings.Join(games, ", "))
 }
 
 func looksLikeUnreadableGameChoiceAttempt(msg string) bool {

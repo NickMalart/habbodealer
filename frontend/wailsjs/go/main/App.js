@@ -126,6 +126,10 @@ export function GetDealerOpenConfig() {
   return window['go']['main']['App']['GetDealerOpenConfig']();
 }
 
+export function GetExplainTwoDiceConfig() {
+  return window['go']['main']['App']['GetExplainTwoDiceConfig']();
+}
+
 export function GetGameHistoryJSON() {
   return window['go']['main']['App']['GetGameHistoryJSON']();
 }
@@ -140,6 +144,10 @@ export function GetRiskEnabled() {
 
 export function GetTradeItemsJSON() {
   return window['go']['main']['App']['GetTradeItemsJSON']();
+}
+
+export function GetTwoDiceConfig() {
+  return window['go']['main']['App']['GetTwoDiceConfig']();
 }
 
 export function ListEventDatesJSON() {
@@ -284,4 +292,16 @@ export function ToggleBlockStatusEffects(arg1) {
 
 export function ToggleBlockUserBanned(arg1) {
   return window['go']['main']['App']['ToggleBlockUserBanned'](arg1);
+}
+
+export function ToggleExplainTwoDice(arg1) {
+  return window['go']['main']['App']['ToggleExplainTwoDice'](arg1);
+}
+
+export function ToggleTwoDiceField(arg1) {
+  return window['go']['main']['App']['ToggleTwoDiceField'](arg1);
+}
+
+export function ToggleTwoDiceUO(arg1) {
+  return window['go']['main']['App']['ToggleTwoDiceUO'](arg1);
 }

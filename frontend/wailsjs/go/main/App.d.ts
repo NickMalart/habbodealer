@@ -64,6 +64,8 @@ export function GetCurrentVersion():Promise<string>;
 
 export function GetDealerOpenConfig():Promise<main.DealerOpenConfig>;
 
+export function GetExplainTwoDiceConfig():Promise<main.ExplainTwoDiceConfig>;
+
 export function GetGameHistoryJSON():Promise<string>;
 
 export function GetLastTradePartnerName():Promise<string>;
@@ -71,6 +73,8 @@ export function GetLastTradePartnerName():Promise<string>;
 export function GetRiskEnabled():Promise<boolean>;
 
 export function GetTradeItemsJSON():Promise<string>;
+
+export function GetTwoDiceConfig():Promise<main.TwoDiceConfig>;
 
 export function ListEventDatesJSON():Promise<string>;
 
@@ -143,3 +147,9 @@ export function ToggleBlockSlideObjectBundleOutgoing(arg1:boolean):Promise<main.
 export function ToggleBlockStatusEffects(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
 
 export function ToggleBlockUserBanned(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
+
+export function ToggleExplainTwoDice(arg1:boolean):Promise<main.ExplainTwoDiceConfig>;
+
+export function ToggleTwoDiceField(arg1:boolean):Promise<main.TwoDiceConfig>;
+
+export function ToggleTwoDiceUO(arg1:boolean):Promise<main.TwoDiceConfig>;
