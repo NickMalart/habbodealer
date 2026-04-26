@@ -3784,7 +3784,7 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			mutex.Unlock()
 
 			a.AddLogMsg(fmt.Sprintf("[RISK] %s lost risk session; dealerRisk=%d playerRisk=%d", partner, dealerRisk, playerRisk))
-			sendShout(fmt.Sprintf("%s lost the risk streak.", partner))
+			// public loss shout intentionally silenced; keep logs and private prompt
 
 			if playerRisk > 0 && dealerRisk <= 0 {
 				go a.finalizeRiskKeep()
@@ -3798,7 +3798,7 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		mutex.Unlock()
 
 		a.AddLogMsg(fmt.Sprintf("[RISK] %s lost risk round; bank remains playerRisk=%d dealerRisk=%d", partner, playerRisk, dealerRisk))
-		sendShout(fmt.Sprintf("%s lost the risk round. Bank: %d", partner, playerRisk))
+		// public loss shout intentionally silenced; player will be re-prompted privately
 
 		go func(max int) {
 			waitForUnmute(90 * time.Second)
