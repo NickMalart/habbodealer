@@ -1840,6 +1840,7 @@ func (a *App) setCurrentGameHistoryResults(playerResult string, dealerResult str
 func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
 	a.AddLogMsg("[GAME_HISTORY] markCurrentGameHistoryIssue start")
 	a.gameHistoryMu.Lock()
+	var completedEntry *GameHistoryEntry
 	if !a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
 		entry.Issue = true
 		entry.IssueReason = reason
@@ -1847,6 +1848,8 @@ func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
 		entry.Notes = append(entry.Notes, reason)
 		if complete {
 			entry.CompletedAt = gameHistoryTimestamp()
+			e := *entry
+			completedEntry = &e
 		}
 	}) {
 		a.gameHistoryMu.Unlock()
@@ -1859,6 +1862,10 @@ func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
 	a.gameHistoryMu.Unlock()
 	a.AddLogMsg("[GAME_HISTORY] markCurrentGameHistoryIssue unlocked, syncing")
 	a.syncGameHistory()
+	// If this call marked the entry complete, send that single entry to Discord.
+	if complete && completedEntry != nil {
+		go a.sendDiscordWebhookForGame(*completedEntry)
+	}
 }
 
 func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note string, complete bool) {
@@ -3903,14 +3910,35 @@ func (a *App) finalizeRiskKeep() {
 
 	required := map[string]int{}
 	if baseTotal == 0 {
-		// fallback: use first snapshot item name
-		handItemsMu.Lock()
-		if len(tradeHandSnapshot) > 0 {
-			required[tradeHandSnapshot[0].Name] = total
+		// Try multiple fallbacks: risk snapshot, frozen trade snapshot, live hand.
+		// Prefer the dedicated risk snapshot if present, then the frozen
+		// trade snapshot, then the live current hand as a last resort. This
+		// prevents aborting finalizeRiskKeep when a reasonable payout can be
+		// constructed from available state.
+		mutex.Lock()
+		if riskHandSnapshotReady && len(riskHandSnapshot) > 0 {
+			required[riskHandSnapshot[0].Name] = total
 		}
-		handItemsMu.Unlock()
+		mutex.Unlock()
+
 		if len(required) == 0 {
-			a.AddLogMsg("[RISK] cannot build payout requirement: no base bet and no snapshot")
+			handItemsMu.Lock()
+			if len(tradeHandSnapshot) > 0 {
+				required[tradeHandSnapshot[0].Name] = total
+			}
+			handItemsMu.Unlock()
+		}
+
+		if len(required) == 0 {
+			handItemsMu.Lock()
+			if len(currentHandItems) > 0 {
+				required[currentHandItems[0].Name] = total
+			}
+			handItemsMu.Unlock()
+		}
+
+		if len(required) == 0 {
+			a.AddLogMsg("[RISK] cannot build payout requirement: no base bet and no hand snapshot")
 			return
 		}
 	} else {
