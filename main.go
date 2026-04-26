@@ -141,6 +141,7 @@ var (
 	// Rate-limiting for public shouts triggered by trade coverage/limit
 	lastTradeCoverageShoutAt time.Time
 	lastTradeLimitShoutAt    time.Time
+	lastDealerOpenShoutAt    time.Time
 	tradeShoutCooldown       = 45 * time.Second
 	// Whether the partner has accepted during the current open trade.
 	// Keep this sticky until the trade closes so we can re-arm auto-accept
@@ -3783,7 +3784,7 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			mutex.Unlock()
 
 			a.AddLogMsg(fmt.Sprintf("[RISK] %s lost risk session; dealerRisk=%d playerRisk=%d", partner, dealerRisk, playerRisk))
-			sendShout(fmt.Sprintf("%s lost the risk streak. Dealer bank: %d", partner, dealerRisk))
+			sendShout(fmt.Sprintf("%s lost the risk streak.", partner))
 
 			if playerRisk > 0 && dealerRisk <= 0 {
 				go a.finalizeRiskKeep()
@@ -6030,8 +6031,17 @@ func (a *App) reopenDealerIdle(reason string) {
 	if shouldAnnounceDealerOpen() {
 		dealerTradeWindowOpen = true
 		openMsg := a.dealerOpenMessage()
-		a.AddLogMsg(fmt.Sprintf("[TRADE_REOPEN] shouting: %q (%s)", openMsg, reason))
-		go sendMessageWithDelay(openMsg)
+		// Enforce a short cooldown to avoid rapid repeated dealer-open shouts
+		// when reopen cycles happen in quick succession.
+		now := time.Now()
+		allowed := lastDealerOpenShoutAt.IsZero() || now.Sub(lastDealerOpenShoutAt) > tradeShoutCooldown
+		if allowed {
+			lastDealerOpenShoutAt = now
+			a.AddLogMsg(fmt.Sprintf("[TRADE_REOPEN] shouting: %q (%s)", openMsg, reason))
+			go sendMessageWithDelay(openMsg)
+		} else {
+			a.AddLogMsg(fmt.Sprintf("[TRADE_REOPEN] skipping dealer-open shout due to cooldown (%s)", reason))
+		}
 	} else {
 		dealerTradeWindowOpen = false
 	}
@@ -8391,6 +8401,13 @@ func (a *App) evaluateUnderOverRound() {
 			}
 			params := map[string]interface{}{"uoChoice": uoPlayerChoice}
 			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "UO7", params)
+			// Send immediate webhook for pending player win so external listeners see it.
+			a.gameHistoryMu.Lock()
+			if idx := a.findCurrentGameHistoryIndexLocked(); idx >= 0 {
+				entry := a.gameHistory[idx]
+				go a.sendDiscordWebhookForGame(entry)
+			}
+			a.gameHistoryMu.Unlock()
 			return
 		}
 		startPayout(a, payoutTargetID, payoutTargetName)
@@ -8466,6 +8483,13 @@ func (a *App) finalize13Round(playerWins bool, reason string) {
 				return
 			}
 			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "13", nil)
+			// Send immediate webhook for pending player win so external listeners see it.
+			a.gameHistoryMu.Lock()
+			if idx := a.findCurrentGameHistoryIndexLocked(); idx >= 0 {
+				entry := a.gameHistory[idx]
+				go a.sendDiscordWebhookForGame(entry)
+			}
+			a.gameHistoryMu.Unlock()
 			return
 		}
 		startPayout(a, payoutTargetID, payoutTargetName)
@@ -8554,6 +8578,13 @@ func (a *App) finalizeTriRound() {
 			}
 			params := map[string]interface{}{"mode": triMode}
 			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "Tri", params)
+			// Send immediate webhook for pending player win so external listeners see it.
+			a.gameHistoryMu.Lock()
+			if idx := a.findCurrentGameHistoryIndexLocked(); idx >= 0 {
+				entry := a.gameHistory[idx]
+				go a.sendDiscordWebhookForGame(entry)
+			}
+			a.gameHistoryMu.Unlock()
 			return
 		}
 		startPayout(a, payoutTargetID, payoutTargetName)

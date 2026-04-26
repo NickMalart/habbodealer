@@ -7,8 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"xabbo.b7c.io/goearth/shockwave/out"
 )
 
 // Send message with a delay to simulate user typing/waiting
@@ -31,8 +29,9 @@ func sendMessageWithDelay(message string) {
 		}
 	}
 
-	ext.Send(out.SHOUT, message)
-	log.Printf("Sent message: %s", message)
+	// Use mute-aware sendShout so messages respect mute/queueing and rate limits.
+	sendShout(message)
+	log.Printf("Queued/shouted message: %s", message)
 }
 
 // Wait for all dice results and evaluate the poker hand
