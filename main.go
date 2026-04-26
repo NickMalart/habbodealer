@@ -8332,14 +8332,7 @@ func (a *App) evaluateUnderOverRound() {
 	} else if len(diceList) >= 2 {
 		total = diceList[0].Value + diceList[1].Value
 	}
-	totalText := strconv.Itoa(total)
 	a.AddLogMsg(fmt.Sprintf("[UO] evaluating total=%d playerChoice=%s", total, uoPlayerChoice))
-
-	if !ChatIsDisabled {
-		waitForUnmute(90 * time.Second)
-		time.Sleep(800 * time.Millisecond)
-		sendMessageWithDelay(fmt.Sprintf("%s", totalText))
-	}
 
 	playerWins := false
 	if total == 7 {
@@ -8383,6 +8376,16 @@ func (a *App) evaluateUnderOverRound() {
 		if isRiskEnabled {
 			if riskSessionActive {
 				// This evaluation is part of an active risk re-roll
+				// Send an immediate webhook for the pending player win so Discord
+				// and external listeners see the result even while the session
+				// continues under Risk. Do this without marking the history
+				// entry complete so payout bookkeeping remains intact.
+				a.gameHistoryMu.Lock()
+				if idx := a.findCurrentGameHistoryIndexLocked(); idx >= 0 {
+					entry := a.gameHistory[idx]
+					go a.sendDiscordWebhookForGame(entry)
+				}
+				a.gameHistoryMu.Unlock()
 				go a.applyRiskOutcome(true)
 				return
 			}
