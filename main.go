@@ -3589,7 +3589,7 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 }
 
 // handleRiskBet validates and applies a player's risk bet (internal state move)
-// then starts a risk re-roll round.
+// then prompts the player to choose a game for the re-roll (do not auto-roll).
 func (a *App) handleRiskBet(n int, sender string) {
 	mutex.Lock()
 	if !riskSessionActive || (riskPartnerName != "" && !strings.EqualFold(sender, riskPartnerName)) {
@@ -3615,7 +3615,45 @@ func (a *App) handleRiskBet(n int, sender string) {
 	mutex.Unlock()
 
 	a.AddLogMsg(fmt.Sprintf("[RISK] %s risked %d (playerRisk=%d dealerRisk=%d)", sender, n, playerRisk, dealerRisk))
-	go a.executeRiskRound()
+
+	// Prompt the player to choose a game for the risk re-roll (locked to the partner).
+	awaitingGameChoice = true
+	gameChoiceUnreadableWarned = false
+
+	// Use the established risk partner name if available.
+	if strings.TrimSpace(riskPartnerName) != "" {
+		awaitingGameChoicePartnerName = normalizeUsername(strings.TrimSpace(riskPartnerName))
+	} else {
+		awaitingGameChoicePartnerName = normalizeUsername(strings.TrimSpace(sender))
+	}
+
+	// Attempt to resolve a chat index to lock the prompt.
+	awaitingGameChoicePartnerID = 0
+	if riskPartnerID > 0 {
+		awaitingGameChoicePartnerID = riskPartnerID
+	} else if tradeStarterChatID > 0 {
+		awaitingGameChoicePartnerID = tradeStarterChatID
+	} else if awaitingGameChoicePartnerName != "" {
+		if chatIdx, ok := lookupRoomEntityIndexByName(awaitingGameChoicePartnerName); ok && chatIdx > 0 {
+			awaitingGameChoicePartnerID = chatIdx
+		} else if chatIdx, ok := waitForUsers28RoomIndexByName(awaitingGameChoicePartnerName, 900*time.Millisecond); ok && chatIdx > 0 {
+			awaitingGameChoicePartnerID = chatIdx
+		} else if chatIdx, ok := lookupUsers28RoomIndexByName(awaitingGameChoicePartnerName); ok && chatIdx > 0 {
+			awaitingGameChoicePartnerID = chatIdx
+		}
+	}
+
+	a.startGameChoiceTimeoutMonitor()
+
+	var msg string
+	if onlyUnderOver7Mode {
+		msg = "Shout U (2-6) or O (8-12) to DOUBLE!"
+	} else {
+		msg = "Shout pkr, 21, 13, trih, tril"
+	}
+
+	a.AddLogMsg(fmt.Sprintf("[RISK] prompting for game choice: %q (partner=%q id=%d)", msg, awaitingGameChoicePartnerName, awaitingGameChoicePartnerID))
+	sendShout(msg)
 }
 
 // executeRiskRound performs the same game roll for the active risk session.

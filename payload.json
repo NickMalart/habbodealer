@@ -20,7 +20,7 @@
         {
           "inline": true,
           "name": "Player Result",
-          "value": "5"
+          "value": "11"
         },
         {
           "inline": true,
@@ -40,18 +40,18 @@
         {
           "inline": true,
           "name": "Started At",
-          "value": "2026-04-26T08:57:34+10:00"
+          "value": "2026-04-26T11:55:15+10:00"
         },
         {
           "inline": true,
           "name": "Completed At",
-          "value": "2026-04-26T08:57:42+10:00"
+          "value": "2026-04-26T11:55:44+10:00"
         }
       ],
       "footer": {
-        "text": "Game ID: 1777157854774455800"
+        "text": "Game ID: 1777168515878672700"
       },
-      "timestamp": "2026-04-26T08:57:42+10:00",
+      "timestamp": "2026-04-26T11:55:44+10:00",
       "title": "UO7 — Completed"
     }
   ],
