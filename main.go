@@ -104,10 +104,20 @@ var (
 	triDealerTotal              int
 	triPlayerName               string
 	// Under/Over-7 state
-	isUORolling               bool
-	uoRoundActive             bool
-	uoPlayerChoice            string // "over" or "under"
-	onlyUnderOver7Mode        bool   // when true, dealer prompts only Under/Over-7
+	isUORolling        bool
+	uoRoundActive      bool
+	uoPlayerChoice     string // "over" or "under"
+	onlyUnderOver7Mode bool   // when true, dealer prompts only Under/Over-7
+	// Field (2d6) state
+	isFieldRolling   bool
+	fieldRoundActive bool
+	fieldPlayerWins  = map[int]bool{
+		2: true, 3: true, 4: true,
+		9: true, 10: true, 11: true, 12: true,
+	}
+	fieldDealerWins = map[int]bool{
+		5: true, 6: true, 7: true, 8: true,
+	}
 	pokerSequencePlayerName   string
 	pokerSequencePlayerResult PokerHandResult
 	pokerSequencePlayerHand   string
@@ -3697,7 +3707,7 @@ func (a *App) handleRiskBet(n int, sender string) {
 	if onlyUnderOver7Mode {
 		msg = "Shout U (2-6) or O (8-12) to DOUBLE!"
 	} else {
-		msg = "Shout pkr, 21, 13, trih, tril"
+		msg = "Shout pkr, 21, 13, trih, tril, field (f)"
 	}
 
 	a.AddLogMsg(fmt.Sprintf("[RISK] prompting for game choice: %q (partner=%q id=%d)", msg, awaitingGameChoicePartnerName, awaitingGameChoicePartnerID))
@@ -3727,6 +3737,11 @@ func (a *App) executeRiskRound() {
 			mutex.Unlock()
 		}
 		a.rollUnderOverDice()
+	case "field-dice":
+		mutex.Lock()
+		fieldRoundActive = true
+		mutex.Unlock()
+		a.rollFieldDice()
 	case "13":
 		mutex.Lock()
 		thirteenPlayerTurn = true
@@ -4256,7 +4271,7 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 		if onlyUnderOver7Mode {
 			reminder = "Shout U (2-6) or O (8-12) to DOUBLE!"
 		} else {
-			reminder = "Shout pkr, 21, 13, trih, tril"
+			reminder = "Shout pkr, 21, 13, trih, tril, field (f)"
 		}
 		a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] 30s no response, repeating prompt for %s", player))
 		sendShout(reminder)
@@ -7206,7 +7221,7 @@ func (a *App) sendTradeCompletionMessage() {
 	if onlyUnderOver7Mode {
 		msg = "Shout U (2-6) or O (8-12) to DOUBLE!"
 	} else {
-		msg = "Shout pkr, 21, 13, trih, tril"
+		msg = "Shout pkr, 21, 13, trih, tril, field (f)"
 	}
 	awaitingGameChoice = true
 	gameChoiceUnreadableWarned = false
@@ -8425,6 +8440,166 @@ func (a *App) evaluateUnderOverRound() {
 	}
 
 	// Ensure the winner message is delivered before reopening the dealer
+	go func() {
+		time.Sleep(1200 * time.Millisecond)
+		a.openDealerAfterRound()
+	}()
+}
+
+// beginFieldRound starts the Field (2d6) round: shout rules then roll.
+func (a *App) beginFieldRound() {
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	resetPokerSequence()
+	resetBlackjackSequence()
+	reset13Sequence()
+	resetTriSequence()
+
+	fieldRoundActive = true
+	a.setCurrentGameHistoryGame("Field")
+
+	msg := "Field — Winning totals: 2,3,4,9,10,11,12. Dealer wins on 5,6,7,8. Double payout!"
+	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
+	sendShout(msg)
+
+	go func() {
+		time.Sleep(1400 * time.Millisecond)
+		isFieldRolling = true
+		a.rollFieldDice()
+	}()
+}
+
+// rollFieldDice rolls two dice (prefer indices 0 and 4 when 5+ dice configured).
+func (a *App) rollFieldDice() {
+	// Test-mode short-circuit
+	if fakeDiceTestingMode {
+		mutex.Lock()
+		if len(diceList) < 2 {
+			mutex.Unlock()
+			a.AddLogMsg("[FIELD] Not enough dice to roll")
+			isFieldRolling = false
+			return
+		}
+		currentSum = 0
+		indices := []int{0, 1}
+		if len(diceList) >= 5 {
+			indices = []int{0, 4}
+		}
+		for _, idx := range indices {
+			diceList[idx].Value = rand.Intn(6) + 1
+			diceList[idx].IsClosed = false
+			currentSum += diceList[idx].Value
+			a.AddLogMsg(fmt.Sprintf("Dice %d rolled: %d", diceList[idx].ID, diceList[idx].Value))
+		}
+		mutex.Unlock()
+		a.evaluateFieldRound()
+		isFieldRolling = false
+		return
+	}
+
+	mutex.Lock()
+	var indices []int
+	if len(diceList) >= 5 {
+		indices = []int{0, 4}
+	} else if len(diceList) >= 2 {
+		indices = []int{0, 1}
+	}
+	if len(indices) < 2 {
+		mutex.Unlock()
+		a.AddLogMsg("[FIELD] Not enough dice to roll")
+		isFieldRolling = false
+		return
+	}
+	resultsWaitGroup.Add(len(indices))
+	mutex.Unlock()
+
+	for _, index := range indices {
+		diceList[index].Roll()
+		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
+	}
+
+	time.Sleep(1000 * time.Millisecond)
+	resultsWaitGroup.Wait()
+
+	a.evaluateFieldRound()
+	isFieldRolling = false
+}
+
+// evaluateFieldRound computes Field result and integrates with Risk/payout flow.
+func (a *App) evaluateFieldRound() {
+	mutex.Lock()
+	mutex.Unlock()
+	if !fieldRoundActive {
+		isFieldRolling = false
+		return
+	}
+
+	total := 0
+	if len(diceList) >= 5 {
+		total = diceList[0].Value + diceList[4].Value
+	} else if len(diceList) >= 2 {
+		total = diceList[0].Value + diceList[1].Value
+	}
+	a.AddLogMsg(fmt.Sprintf("[FIELD] evaluating total=%d", total))
+
+	playerWins := fieldPlayerWins[total]
+
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+	winnerName := "Dealer"
+	if playerWins {
+		winnerName = playerName
+	}
+	winnerMsg := fmt.Sprintf("%s Wins - %s: %d", winnerName, playerName, total)
+
+	a.AddLogMsg(fmt.Sprintf("[FIELD_RULES] winner=%s total=%d", winnerName, total))
+	if !ChatIsDisabled {
+		waitForUnmute(90 * time.Second)
+		time.Sleep(800 * time.Millisecond)
+		sendMessageWithDelay(winnerMsg)
+	}
+
+	payoutTargetID := lastTradePartnerID
+	payoutTargetName := playerName
+	fieldRoundActive = false
+
+	if playerWins && payoutTargetID > 0 {
+		a.setCurrentGameHistoryResults(strconv.Itoa(total), "", playerName, "Payout Pending", false)
+		a.noteCurrentGameHistory(winnerMsg)
+		resetPayoutRetryState()
+		if isRiskEnabled {
+			if riskSessionActive {
+				go a.applyRiskOutcome(true)
+				return
+			}
+			// Start a standard risk flow for Field wins
+			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "field-dice", nil)
+			// Send immediate webhook for pending player win
+			a.gameHistoryMu.Lock()
+			if idx := a.findCurrentGameHistoryIndexLocked(); idx >= 0 {
+				entry := a.gameHistory[idx]
+				go a.sendDiscordWebhookForGame(entry)
+			}
+			a.gameHistoryMu.Unlock()
+			return
+		}
+		startPayout(a, payoutTargetID, payoutTargetName)
+		return
+	}
+
+	a.setCurrentGameHistoryResults(strconv.Itoa(total), "", a.getCurrentDealerName(), "Completed", true)
+	a.noteCurrentGameHistory(winnerMsg)
+
+	if isRiskEnabled && riskSessionActive {
+		go a.applyRiskOutcome(false)
+		return
+	}
+
 	go func() {
 		time.Sleep(1200 * time.Millisecond)
 		a.openDealerAfterRound()
@@ -10074,6 +10249,10 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		// Two-step Under/Over selection: prompt player for Over or Under
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Under/Over; prompting for Over/Under", index))
 		a.beginUOChoiceSequence()
+	case "field":
+		// Field selection: immediate round
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Field; starting Field round", index))
+		a.beginFieldRound()
 	case "uo_over":
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Under/Over -> Over; starting round", index))
 		a.setCurrentGameHistoryGame("UO7")
@@ -10105,6 +10284,10 @@ func normalizeIncomingGameChoice(msg string) (string, bool) {
 		return "13", true
 	case "tri":
 		return "tri", true
+	case "field", "f":
+		return "field", true
+	case "field", "f":
+		return "field", true
 	case "uo", "uo7", "underover", "underover7":
 		return "uo", true
 	case "over", "o", "over7", "o7":
@@ -10236,6 +10419,8 @@ func gameChoiceDisplay(choice string) string {
 		return "13"
 	case "tri":
 		return "Tri"
+	case "field":
+		return "Field"
 	case "uo", "uo_over", "uo_under":
 		return "UO7"
 	case "trih":
