@@ -3572,15 +3572,44 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 	dealerRisk -= payout
 	playerRisk += payout
 
+	// compute usable max under lock (per-item cap, player-limited and dealer-limited)
+	displayMax := maxTradeQuantityPerItem
+	if playerRisk < displayMax {
+		displayMax = playerRisk
+	}
+	if dealerRisk < displayMax {
+		displayMax = dealerRisk
+	}
+
+	// If there's nothing the player can risk, clear session state and finalize or reopen.
+	if displayMax <= 0 {
+		finalPlayerRisk := playerRisk
+		// clear session flags (keep partner info if we need it for finalize)
+		riskSessionActive = false
+		riskSessionGame = ""
+		riskSessionParams = nil
+		riskPendingBet = 0
+		// don't clear riskPartnerID/riskPartnerName here; finalizeRiskKeep relies on them
+		mutex.Unlock()
+
+		if finalPlayerRisk > 0 {
+			// Dealer cannot cover further risk; convert bank into physical payout.
+			go a.finalizeRiskKeep()
+		} else {
+			a.AddLogMsg(fmt.Sprintf("[RISK] no bank available to risk (playerRisk=%d dealerRisk=%d); reopening dealer", finalPlayerRisk, dealerRisk))
+			go a.openDealerAfterRound()
+		}
+		return
+	}
+
+	// Normal path: start a risk session and prompt player
 	riskSessionActive = true
 	riskSessionGame = game
 	riskSessionParams = params
 	mutex.Unlock()
 
 	a.AddLogMsg(fmt.Sprintf("[RISK] win recorded bet=%d payout=%d dealerRisk=%d playerRisk=%d", betQty, payout, dealerRisk, playerRisk))
-	// Use mute-aware send path like other winner announcements so the
-	// prompt isn't silently swallowed by flood-control mutes.
-	msg := fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Max Risk: %d", playerRisk, absoluteMaxRisk())
+	msg := fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, displayMax)
 	go func(m string) {
 		waitForUnmute(90 * time.Second)
 		time.Sleep(800 * time.Millisecond)
@@ -3592,10 +3621,28 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 // then prompts the player to choose a game for the re-roll (do not auto-roll).
 func (a *App) handleRiskBet(n int, sender string) {
 	mutex.Lock()
+	// Only the partner who won may place risk bets while a session is active.
 	if !riskSessionActive || (riskPartnerName != "" && !strings.EqualFold(sender, riskPartnerName)) {
 		mutex.Unlock()
 		return
 	}
+
+	// Defensive guards: reject if player's internal bank is empty or dealer reopened.
+	if playerRisk <= 0 {
+		mutex.Unlock()
+		sendShout("No bank available to risk.")
+		a.AddLogMsg(fmt.Sprintf("[RISK] rejected r%d from %s: no player bank", n, sender))
+		// If there's no bank left, ensure dealer reopens cleanly.
+		go a.openDealerAfterRound()
+		return
+	}
+	if dealerAcceptingTrades || awaitingTradeOpen {
+		mutex.Unlock()
+		sendShout("Risk unavailable while dealer is open.")
+		a.AddLogMsg(fmt.Sprintf("[RISK] rejected r%d from %s: dealer open", n, sender))
+		return
+	}
+
 	max := maxTradeQuantityPerItem
 	if playerRisk < max {
 		max = playerRisk
@@ -3714,16 +3761,57 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		return
 	}
 	if !playerWins {
-		// Player loses: dealer collects player's bank and session ends.
-		dealerRisk += playerRisk
-		playerRisk = 0
+		// Player loses the pending bet only; keep any remaining bank so player
+		// may choose to risk again. Clear pending bet and decide whether to
+		// re-prompt or end the session if nothing remains usable.
 		riskPendingBet = 0
-		riskSessionActive = false
+
+		// compute usable max including per-item cap
+		displayMax := maxTradeQuantityPerItem
+		if playerRisk < displayMax {
+			displayMax = playerRisk
+		}
+		if dealerRisk < displayMax {
+			displayMax = dealerRisk
+		}
+
+		// If nothing left to risk, end session and reopen/finalize as appropriate.
+		if playerRisk <= 0 || displayMax <= 0 {
+			riskSessionActive = false
+			riskSessionGame = ""
+			riskSessionParams = nil
+			mutex.Unlock()
+
+			a.AddLogMsg(fmt.Sprintf("[RISK] %s lost risk session; dealerRisk=%d playerRisk=%d", partner, dealerRisk, playerRisk))
+			sendShout(fmt.Sprintf("%s lost the risk streak. Dealer bank: %d", partner, dealerRisk))
+
+			if playerRisk > 0 && dealerRisk <= 0 {
+				go a.finalizeRiskKeep()
+				return
+			}
+			go a.openDealerAfterRound()
+			return
+		}
+
+		// Player still has bank left: keep session and re-prompt.
 		mutex.Unlock()
 
-		a.AddLogMsg(fmt.Sprintf("[RISK] %s lost risk session; dealerRisk=%d", partner, dealerRisk))
-		sendShout(fmt.Sprintf("%s lost the risk streak. Dealer bank: %d", partner, dealerRisk))
-		go a.openDealerAfterRound()
+		a.AddLogMsg(fmt.Sprintf("[RISK] %s lost risk round; bank remains playerRisk=%d dealerRisk=%d", partner, playerRisk, dealerRisk))
+		sendShout(fmt.Sprintf("%s lost the risk round. Bank: %d", partner, playerRisk))
+
+		go func(max int) {
+			waitForUnmute(90 * time.Second)
+			time.Sleep(800 * time.Millisecond)
+			sendMessageWithDelay(fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, max))
+		}(displayMax)
+
+		// If dealer has no funds left, finalize into physical payout
+		mutex.Lock()
+		shouldFinalize := dealerRisk <= 0
+		mutex.Unlock()
+		if shouldFinalize {
+			go a.finalizeRiskKeep()
+		}
 		return
 	}
 
@@ -3739,6 +3827,40 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 
 	a.AddLogMsg(fmt.Sprintf("[RISK] %s won risk round: paid %d (playerRisk=%d dealerRisk=%d)", partner, pay, playerRisk, dealerRisk))
 	sendShout(fmt.Sprintf("%s won risk round! Bank: %d", partner, playerRisk))
+
+	// Recompute usable max (include per-item cap) and re-prompt the player, or finalize/reopen if nothing to risk.
+	mutex.Lock()
+	displayMax := maxTradeQuantityPerItem
+	if playerRisk < displayMax {
+		displayMax = playerRisk
+	}
+	if dealerRisk < displayMax {
+		displayMax = dealerRisk
+	}
+	if displayMax <= 0 {
+		finalPlayerRisk := playerRisk
+		// clear session flags (keep partner info for finalize)
+		riskSessionActive = false
+		riskPendingBet = 0
+		riskSessionGame = ""
+		riskSessionParams = nil
+		mutex.Unlock()
+
+		if finalPlayerRisk > 0 {
+			// Dealer cannot cover further risk; convert bank into physical payout.
+			go a.finalizeRiskKeep()
+		} else {
+			go a.openDealerAfterRound()
+		}
+		return
+	}
+	mutex.Unlock()
+
+	go func(max int) {
+		waitForUnmute(90 * time.Second)
+		time.Sleep(800 * time.Millisecond)
+		sendMessageWithDelay(fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, max))
+	}(displayMax)
 
 	// If dealer has no funds left, finalize into physical payout
 	mutex.Lock()
@@ -5981,6 +6103,15 @@ func (a *App) openDealerAfterRound() {
 	awaitingGameChoicePartnerID = 0
 	awaitingGameChoicePartnerName = ""
 
+	// Defensive: clear lingering risk session state so reopened dealer does
+	// not accept stale `rN` commands from a previous round.
+	mutex.Lock()
+	riskSessionActive = false
+	riskPendingBet = 0
+	riskSessionGame = ""
+	riskSessionParams = nil
+	mutex.Unlock()
+
 	// Optional: clear visible trade items (but keep frozen snapshot).
 	a.ClearTradeItems()
 
@@ -6717,6 +6848,22 @@ func absoluteMaxRisk() int {
 	}
 	if dealerRisk < m {
 		m = dealerRisk
+	}
+	return m
+}
+
+// playerBankMaxRisk returns the maximum single-risk amount limited by the
+// current internal banks (player and dealer). This excludes per-item limits
+// which are shown separately in dealer messages.
+func playerBankMaxRisk() int {
+	mutex.Lock()
+	defer mutex.Unlock()
+	m := playerRisk
+	if dealerRisk < m {
+		m = dealerRisk
+	}
+	if m < 0 {
+		return 0
 	}
 	return m
 }
