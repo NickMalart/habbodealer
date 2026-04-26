@@ -8397,6 +8397,13 @@ func (a *App) evaluateUnderOverRound() {
 	a.setCurrentGameHistoryResults(strconv.Itoa(total), "", a.getCurrentDealerName(), "Completed", true)
 	a.noteCurrentGameHistory(winnerMsg)
 
+	// If a risk session is active, route this loss through the risk logic
+	// so only the pending bet is lost and the player can be re-prompted.
+	if isRiskEnabled && riskSessionActive {
+		go a.applyRiskOutcome(false)
+		return
+	}
+
 	// Ensure the winner message is delivered before reopening the dealer
 	go func() {
 		time.Sleep(1200 * time.Millisecond)
