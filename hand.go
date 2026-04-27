@@ -11,8 +11,7 @@ import (
 
 // Send message with a delay to simulate user typing/waiting
 func sendMessageWithDelay(message string) {
-	// sleep random between 250 and 500ms
-	time.Sleep(time.Duration(rand.Intn(250)+250) * time.Millisecond)
+	// Immediately enqueue the message; the shout worker will apply spacing.
 	// Ensure we have an up-to-date frozen hand snapshot before posting the
 	// canonical "dealer open" announcement. This avoids announcing that we're
 	// open before inventory is ready for coverage checks.

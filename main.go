@@ -1992,13 +1992,10 @@ func sendShout(msg string) {
 		return
 	}
 	startShoutWorker()
-	select {
-	case shoutQueue <- trimmed:
-		// enqueued
-	default:
-		// channel full: fallback to async direct send so we don't drop important notices
-		go func(m string) { ext.Send(out.SHOUT, m) }(trimmed)
-	}
+	// Block until there is room in the queue so every shout goes through the
+	// centralized shout worker and is rate-limited. This ensures consistent
+	// 2.5s spacing between actual sends.
+	shoutQueue <- trimmed
 }
 
 func registerCustomTradeHeaders(a *App) {
@@ -2056,10 +2053,9 @@ func handleMuteEnd() {
 			}
 		}
 
-		// Send queued messages conservatively to avoid re-triggering flood-control.
+		// Enqueue queued messages and let the shout worker apply spacing.
 		for _, message := range messageQueue {
 			sendShout(message)
-			time.Sleep(shoutReplaySpacing + time.Duration(rand.Intn(400))*time.Millisecond)
 		}
 
 		// Clear the queue
