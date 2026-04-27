@@ -1971,10 +1971,17 @@ func startShoutWorker() {
 				if isMuted {
 					// If muted, keep it in the muted queue for later replay.
 					messageQueue = append(messageQueue, s)
+					log.Printf("[SHOUT_WORKER] muted while dequeued at %s: %q", time.Now().Format(time.RFC3339Nano), s)
 					continue
 				}
+				// Ensure a controlled spacing before each actual send so the
+				// worker enforces the flood-control delay regardless of how
+				// quickly callers enqueue messages.
+				sleepDur := shoutSpacing + time.Duration(rand.Intn(600))*time.Millisecond
+				log.Printf("[SHOUT_WORKER] dequeued at %s, sleeping %s before send: %q", time.Now().Format(time.RFC3339Nano), sleepDur, s)
+				time.Sleep(sleepDur)
 				ext.Send(out.SHOUT, s)
-				time.Sleep(shoutSpacing + time.Duration(rand.Intn(600))*time.Millisecond)
+				log.Printf("[SHOUT_WORKER] sent at %s: %q", time.Now().Format(time.RFC3339Nano), s)
 			}
 		}()
 	})
@@ -1989,9 +1996,11 @@ func sendShout(msg string) {
 	}
 	if isMuted {
 		messageQueue = append(messageQueue, trimmed)
+		log.Printf("[SHOUT_QUEUE] muted enqueue at %s: %q", time.Now().Format(time.RFC3339Nano), trimmed)
 		return
 	}
 	startShoutWorker()
+	log.Printf("[SHOUT_QUEUE] enqueue at %s: %q", time.Now().Format(time.RFC3339Nano), trimmed)
 	// Block until there is room in the queue so every shout goes through the
 	// centralized shout worker and is rate-limited. This ensures consistent
 	// 2.5s spacing between actual sends.
