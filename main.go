@@ -104,10 +104,19 @@ var (
 	triDealerTotal              int
 	triPlayerName               string
 	// Under/Over-7 state
-	isUORolling               bool
-	uoRoundActive             bool
-	uoPlayerChoice            string // "over" or "under"
-	onlyUnderOver7Mode        bool   // when true, dealer prompts only Under/Over-7
+	isUORolling    bool
+	uoRoundActive  bool
+	uoPlayerChoice string // "over", "under" or "7"
+	// When true the dealer has selected the special UnderOver7 game-mode
+	// which allows a player to shout "7" for a potential 3x payout.
+	underOver7GameModeEnabled bool
+	// Payout multiplier selected for the current payout round (2 or 3).
+	payoutMultiplierForRound int = 2
+	// Variant marker for the active Under/Over round: "uo" or "uo7".
+	uoVariantForRound string
+	// Pending variant selection when prompting for Over/Under (set by beginUO7ChoiceSequence)
+	pendingUoVariant          string
+	onlyUnderOver7Mode        bool // when true, dealer prompts only Under/Over-7
 	pokerSequencePlayerName   string
 	pokerSequencePlayerResult PokerHandResult
 	pokerSequencePlayerHand   string
@@ -342,6 +351,8 @@ var (
 	riskPendingBet    int
 	riskPartnerID     int
 	riskPartnerName   string
+	// Per-risk session payout multiplier (2 or 3). Set when a risk session starts.
+	riskSessionPayoutMultiplier int = 2
 
 	// One-shot override for payout auto-add to convert internal bank -> items
 	riskPayoutRequired map[string]int
@@ -1331,10 +1342,41 @@ func (a *App) SetOnlyUnderOver(enabled bool) {
 	}
 }
 
+// SetUnderOver7Mode enables/disables the special UnderOver7 game-mode
+// (allows shouting "7" for a potential 3x payout). This is a dealer-level
+// configuration that affects trade coverage checks and predicted payouts.
+func (a *App) SetUnderOver7Mode(enabled bool) {
+	mutex.Lock()
+	underOver7GameModeEnabled = enabled
+	mutex.Unlock()
+
+	a.AddLogMsg(fmt.Sprintf("[CONFIG] UnderOver7 game-mode = %t", enabled))
+
+	// When enabling the UO7 dealer mode, always force Risk off and clean up.
+	if enabled {
+		if a.GetRiskEnabled() {
+			a.AddLogMsg("[CONFIG] UnderOver7 enabled - forcing Risk OFF (UnderOver7 forbids Risk)")
+			a.SetRiskEnabled(false)
+		}
+	}
+
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "underOver7ModeChanged", enabled)
+	}
+}
+
 // SetRiskEnabled toggles Risk mode at runtime and resets session state when enabling.
 func (a *App) SetRiskEnabled(enabled bool) {
 	mutex.Lock()
 	prev := isRiskEnabled
+	blocked := false
+
+	// Block enabling Risk if UnderOver7 mode is currently active.
+	if enabled && underOver7GameModeEnabled {
+		enabled = false
+		blocked = true
+	}
+
 	isRiskEnabled = enabled
 	if enabled {
 		// fresh session state when enabling
@@ -1357,14 +1399,18 @@ func (a *App) SetRiskEnabled(enabled bool) {
 	}
 	mutex.Unlock()
 
-	a.AddLogMsg(fmt.Sprintf("[RISK] enabled=%t", enabled))
-	if !enabled && prev && riskInitialized && riskSessionActive {
+	if blocked {
+		a.AddLogMsg("[RISK] enable attempt blocked: UnderOver7 mode active; refusing to enable Risk")
+	}
+
+	a.AddLogMsg(fmt.Sprintf("[RISK] enabled=%t", isRiskEnabled))
+	if !isRiskEnabled && prev && riskInitialized && riskSessionActive {
 		// force finalize if disabling mid-session
 		go a.finalizeRiskKeep()
 	}
 
 	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "riskEnabledUpdate", enabled)
+		runtime.EventsEmit(a.ctx, "riskEnabledUpdate", isRiskEnabled)
 	}
 }
 
@@ -2531,15 +2577,19 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			// Send the trade items summary to chat
 			a.sendTradeCompletionMessage()
 
-			// Record predicted payout items for history as 2x the bet items
+			// Record predicted payout items for history as 2x (or 3x for UO7)
 			// This ensures the frontend shows a sensible payout count even when
 			// an explicit payout trade flow was not used.
+			mult := 2
+			if underOver7GameModeEnabled {
+				mult = 3
+			}
 			payoutPred := make([]TradeItem, 0, len(gameBetItems))
 			for _, it := range gameBetItems {
 				if it.Quantity <= 0 {
 					continue
 				}
-				payoutPred = append(payoutPred, TradeItem{Name: it.Name, Quantity: it.Quantity * 2, RawData: it.RawData})
+				payoutPred = append(payoutPred, TradeItem{Name: it.Name, Quantity: it.Quantity * mult, RawData: it.RawData})
 			}
 			if len(payoutPred) > 0 {
 				// Keep the round open after the bet trade completes. At this point the
@@ -3416,7 +3466,7 @@ func (a *App) autoAddPayoutItems() {
 			a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] bet[%d] name=%q qty=%d payoutTarget=%d", i, betItem.Name, betItem.Quantity, betItem.Quantity*2))
 		}
 
-		required = payoutRequirementsFromBetItems(betItems)
+		required = payoutRequirementsFromBetItemsMult(betItems, payoutMultiplierForRound)
 	}
 	// Compute total required items up-front so outgoing intercept can
 	// track progress against this expected count while we send adds.
@@ -3574,7 +3624,18 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 		riskPartnerName = playerName
 	}
 
-	payout := betQty * 2
+	// Compute payout multiplier: support UO7 triple payout when applicable.
+	mult := 2
+	if strings.EqualFold(game, "UO7") {
+		if v, ok := params["uoChoice"].(string); ok {
+			if strings.TrimSpace(strings.ToLower(v)) == "7" {
+				mult = 3
+			}
+		}
+	}
+	// Record the per-risk-session multiplier so re-rolls and finalization honor it.
+	riskSessionPayoutMultiplier = mult
+	payout := betQty * mult
 	if payout > dealerRisk {
 		payout = dealerRisk
 	}
@@ -3705,7 +3766,9 @@ func (a *App) handleRiskBet(n int, sender string) {
 	}
 
 	var msg string
-	if onlyUnderOver7Mode {
+	if underOver7GameModeEnabled {
+		msg = "Shout U (2-6), O (8-12) or 7 to TRIPLE!"
+	} else if onlyUnderOver7Mode {
 		msg = "Shout U (2-6) or O (8-12) to DOUBLE!"
 	} else {
 		msg = "Shout pkr, 21, 13, trih, tril"
@@ -3830,8 +3893,8 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		return
 	}
 
-	// Player won the risk round: dealer pays double of pending bet.
-	pay := pending * 2
+	// Player won the risk round: dealer pays according to session multiplier.
+	pay := pending * riskSessionPayoutMultiplier
 	if pay > dealerRisk {
 		pay = dealerRisk
 	}
@@ -3898,18 +3961,22 @@ func (a *App) finalizeRiskKeep() {
 	total := playerRisk
 	targetID := riskPartnerID
 	targetName := riskPartnerName
+	sessionMult := riskSessionPayoutMultiplier
 	// clear risk state early
 	riskSessionActive = false
 	riskSessionGame = ""
 	riskSessionParams = nil
 	riskPendingBet = 0
 	playerRisk = 0
+	// reset multiplier to default
+	riskSessionPayoutMultiplier = 2
 	mutex.Unlock()
 
-	a.AddLogMsg(fmt.Sprintf("[RISK] finalizing Keep -> payout %d to %s(%d)", total, targetName, targetID))
+	a.AddLogMsg(fmt.Sprintf("[RISK] finalizing Keep -> payout %d to %s(%d) (mult=%d)", total, targetName, targetID, sessionMult))
 
 	// Build required map proportionally from recorded bet types if available
-	base := payoutRequirementsFromBetItems(gameBetItems)
+	baseMult := sessionMult
+	base := payoutRequirementsFromBetItemsMult(gameBetItems, baseMult)
 	baseTotal := 0
 	for _, v := range base {
 		baseTotal += v
@@ -4028,15 +4095,25 @@ func ownTradeOfferTotal() int {
 	return total
 }
 
-func payoutRequirementsFromBetItems(betItems []TradeItem) map[string]int {
+// payoutRequirementsFromBetItemsMult returns a map of required payout quantities
+// per item given the bet items and a multiplier (2 for normal wins, 3 for UO7 "7" wins).
+func payoutRequirementsFromBetItemsMult(betItems []TradeItem, mult int) map[string]int {
 	required := map[string]int{}
+	if mult <= 0 {
+		mult = 2
+	}
 	for _, item := range betItems {
 		if item.Quantity <= 0 {
 			continue
 		}
-		required[item.Name] += item.Quantity * 2
+		required[item.Name] += item.Quantity * mult
 	}
 	return required
+}
+
+// Backwards-compatible wrapper: default multiplier 2
+func payoutRequirementsFromBetItems(betItems []TradeItem) map[string]int {
+	return payoutRequirementsFromBetItemsMult(betItems, 2)
 }
 
 func ownTradeOfferCounts() map[string]int {
@@ -4090,7 +4167,7 @@ func (a *App) verifyAndRetryPayoutAdds(plannedIDs []int) {
 		return
 	}
 
-	required := payoutRequirementsFromBetItems(gameBetItems)
+	required := payoutRequirementsFromBetItemsMult(gameBetItems, payoutMultiplierForRound)
 	if len(required) == 0 {
 		a.AddLogMsg("[PAYOUT_DEBUG] no payout requirements found while verifying add")
 		return
@@ -4313,7 +4390,9 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 			}
 
 			var reminder string
-			if onlyUnderOver7Mode {
+			if underOver7GameModeEnabled {
+				reminder = "Shout U (2-6), O (8-12) or 7 to TRIPLE!"
+			} else if onlyUnderOver7Mode {
 				reminder = "Shout U (2-6) or O (8-12) to DOUBLE!"
 			} else {
 				reminder = "Shout pkr, 21, 13, trih, tril"
@@ -6976,10 +7055,33 @@ func (a *App) notifyTradeQuantityCoverage() {
 		return
 	}
 
-	// No grace timer now — close immediately with fixed message.
+	// No grace timer now — close immediately with a contextual message.
 	stopShortageMonitor()
 
-	msg := "Sorry none avabile to see my hand - rollorigins.club"
+	// Build a human-friendly shortage message: distinguish "none available"
+	// from "insufficient quantity" and show hand/incoming counts.
+	var msg string
+	if len(shortages) == 1 {
+		s := shortages[0]
+		if s.HaveHand == 0 && s.Incoming == 0 {
+			msg = fmt.Sprintf("Sorry, I have no %s to pay out - see my hand - rollorigins.club",
+				formatTradeItemName(s.Name))
+		} else {
+			msg = fmt.Sprintf("Sorry, insufficient %s for payout (hand %d + incoming %d = %d; need %d) - see my hand - rollorigins.club",
+				formatTradeItemName(s.Name), s.HaveHand, s.Incoming, s.Have, s.Required)
+		}
+	} else {
+		parts := make([]string, 0, len(shortages))
+		for _, s := range shortages {
+			if s.HaveHand == 0 && s.Incoming == 0 {
+				parts = append(parts, fmt.Sprintf("no %s", formatTradeItemName(s.Name)))
+			} else {
+				parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(s.Name), s.Have, s.Required))
+			}
+		}
+		msg = fmt.Sprintf("Sorry, insufficient stock: %s - see my hand - rollorigins.club", strings.Join(parts, "; "))
+	}
+
 	changed := msg != lastTradeCoverageNotice
 	lastTradeCoverageNotice = msg
 	lastTradeBlockNotice = msg
@@ -7039,8 +7141,13 @@ func (a *App) getTradeCoverageShortages() []tradeShortage {
 		return nil
 	}
 
-	// required payout quantities (uses existing logic: bet*2)
-	required := payoutRequirementsFromBetItems(partnerItems)
+	// required payout quantities: use 3x when dealer-level UnderOver7 game-mode
+	// is enabled (worst-case coverage for a shouted "7"), otherwise 2x.
+	mult := 2
+	if underOver7GameModeEnabled {
+		mult = 3
+	}
+	required := payoutRequirementsFromBetItemsMult(partnerItems, mult)
 	if len(required) == 0 {
 		return nil
 	}
@@ -7075,7 +7182,7 @@ func (a *App) getTradeCoverageShortages() []tradeShortage {
 		if it.Quantity <= 0 {
 			continue
 		}
-		requiredCanon[key] += it.Quantity * 2
+		requiredCanon[key] += it.Quantity * mult
 	}
 
 	shortages := make([]tradeShortage, 0)
@@ -7247,7 +7354,9 @@ func (a *App) sendTradeCompletionMessage() {
 	a.AddLogMsg("[TRADE_FLOW] beginGameHistory returned")
 
 	var msg string
-	if onlyUnderOver7Mode {
+	if underOver7GameModeEnabled {
+		msg = "Shout U (2-6), O (8-12) to DOUBLE! or 7 to TRIPLE!"
+	} else if onlyUnderOver7Mode {
 		msg = "Shout U (2-6) or O (8-12) to DOUBLE!"
 	} else {
 		msg = "Shout pkr, 21, 13, trih, tril"
@@ -8289,6 +8398,39 @@ func (a *App) beginUOChoiceSequence() {
 	sendShout(msg)
 }
 
+// beginUO7ChoiceSequence prompts the player to choose Over, Under or 7
+// for the UnderOver7 variant (allows a 3x payout if player picks 7 and wins).
+func (a *App) beginUO7ChoiceSequence() {
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	resetPokerSequence()
+	resetBlackjackSequence()
+	reset13Sequence()
+	resetTriSequence()
+
+	awaitingUOChoice = true
+	awaitingUOChoicePartnerName = playerName
+	// Mark pending variant so beginUnderOverRound knows to treat the round as UO7
+	pendingUoVariant = "uo7"
+
+	if chatIdx, ok := lookupRoomEntityIndexByName(playerName); ok && chatIdx > 0 {
+		awaitingUOChoicePartnerID = chatIdx
+	} else if chatIdx, ok := waitForUsers28RoomIndexByName(playerName, 900*time.Millisecond); ok && chatIdx > 0 {
+		awaitingUOChoicePartnerID = chatIdx
+	} else if chatIdx, ok := lookupUsers28RoomIndexByName(playerName); ok && chatIdx > 0 {
+		awaitingUOChoicePartnerID = chatIdx
+	} else {
+		awaitingUOChoicePartnerID = lastTradePartnerID
+	}
+
+	msg := "Over, Under or 7?"
+	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
+	sendShout(msg)
+}
+
 // beginUnderOverRound starts the Under/Over-7 round with the given player choice: "over" or "under".
 func (a *App) beginUnderOverRound(mode string) {
 	playerName := strings.TrimSpace(lastTradePartnerName)
@@ -8302,8 +8444,27 @@ func (a *App) beginUnderOverRound(mode string) {
 	resetTriSequence()
 
 	uoRoundActive = true
-	uoPlayerChoice = strings.ToLower(strings.TrimSpace(mode))
-	a.setCurrentGameHistoryGame("UO7")
+	// Normalize incoming mode (accept "7" as valid choice)
+	choice := strings.ToLower(strings.TrimSpace(mode))
+	if choice == "seven" {
+		choice = "7"
+	}
+	uoPlayerChoice = choice
+	// Establish variant for this round: prefer any pending variant set when prompting,
+	// otherwise fall back to dealer-level configuration.
+	if pendingUoVariant != "" {
+		uoVariantForRound = pendingUoVariant
+		pendingUoVariant = ""
+	} else if underOver7GameModeEnabled {
+		uoVariantForRound = "uo7"
+	} else {
+		uoVariantForRound = "uo"
+	}
+	gameLabel := "UO"
+	if uoVariantForRound == "uo7" {
+		gameLabel = "UO7"
+	}
+	a.setCurrentGameHistoryGame(gameLabel)
 
 	go func() {
 		time.Sleep(1400 * time.Millisecond)
@@ -8388,14 +8549,40 @@ func (a *App) evaluateUnderOverRound() {
 	}
 	a.AddLogMsg(fmt.Sprintf("[UO] evaluating total=%d playerChoice=%s", total, uoPlayerChoice))
 
+	// Default payout multiplier is 2; may be 3 for UO7 when player chose "7" and won.
+	mult := 2
 	playerWins := false
-	if total == 7 {
-		playerWins = false // dealer always wins on a 7
-	} else if total < 7 {
-		playerWins = (uoPlayerChoice == "under")
+	// Consider variant selected for this round. If the round variant is "uo7"
+	// then the player may choose "7" for a triple payout.
+	if uoVariantForRound == "uo7" {
+		if uoPlayerChoice == "7" {
+			playerWins = (total == 7)
+			if playerWins {
+				mult = 3
+			}
+		} else {
+			// Standard over/under behaviour; 7 is a dealer win unless player picked 7.
+			if total == 7 {
+				playerWins = false
+			} else if total < 7 {
+				playerWins = (uoPlayerChoice == "under")
+			} else {
+				playerWins = (uoPlayerChoice == "over")
+			}
+		}
 	} else {
-		playerWins = (uoPlayerChoice == "over")
+		// Legacy behaviour: dealer always wins on a 7
+		if total == 7 {
+			playerWins = false
+		} else if total < 7 {
+			playerWins = (uoPlayerChoice == "under")
+		} else {
+			playerWins = (uoPlayerChoice == "over")
+		}
 	}
+
+	// Persist multiplier for payout routines that will auto-add items.
+	payoutMultiplierForRound = mult
 
 	playerName := strings.TrimSpace(lastTradePartnerName)
 	if playerName == "" {
@@ -8427,7 +8614,8 @@ func (a *App) evaluateUnderOverRound() {
 		a.setCurrentGameHistoryResults(strconv.Itoa(total), "", playerName, "Payout Pending", false)
 		a.noteCurrentGameHistory(winnerMsg)
 		resetPayoutRetryState()
-		if isRiskEnabled {
+		// Never route Under/Over-7 rounds into Risk (UO7 is auto-payout only).
+		if isRiskEnabled && uoVariantForRound != "uo7" {
 			if riskSessionActive {
 				// This evaluation is part of an active risk re-roll
 				// Send an immediate webhook for the pending player win so Discord
@@ -8444,7 +8632,11 @@ func (a *App) evaluateUnderOverRound() {
 				return
 			}
 			params := map[string]interface{}{"uoChoice": uoPlayerChoice}
-			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "UO7", params)
+			riskGame := "UO"
+			if uoVariantForRound == "uo7" {
+				riskGame = "UO7"
+			}
+			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, riskGame, params)
 			// Send immediate webhook for pending player win so external listeners see it.
 			a.gameHistoryMu.Lock()
 			if idx := a.findCurrentGameHistoryIndexLocked(); idx >= 0 {
@@ -8463,7 +8655,8 @@ func (a *App) evaluateUnderOverRound() {
 
 	// If a risk session is active, route this loss through the risk logic
 	// so only the pending bet is lost and the player can be re-prompted.
-	if isRiskEnabled && riskSessionActive {
+	// Do NOT route UO7 rounds into Risk.
+	if isRiskEnabled && riskSessionActive && uoVariantForRound != "uo7" {
 		go a.applyRiskOutcome(false)
 		return
 	}
@@ -8686,7 +8879,9 @@ func resetDiceState() {
 // the current dealer mode. Under/Over-7 mode requires only 2 dice; otherwise
 // the default is 5.
 func getExpectedDiceCount() int {
-	if onlyUnderOver7Mode {
+	// Use 2 dice when either 'only under/over' dealer mode is enabled
+	// or when the separate UnderOver7 game-mode (7-for-3x) is enabled.
+	if onlyUnderOver7Mode || underOver7GameModeEnabled {
 		return 2
 	}
 	return 5
@@ -9936,7 +10131,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	if awaitingUOChoice {
 		cleaned := strings.ToLower(strings.TrimSpace(msg))
 		cleaned = gameChoiceCleanupRe.ReplaceAllString(cleaned, "")
-		if cleaned != "over" && cleaned != "under" {
+		// Accept over, under or 7 (allow "seven" too)
+		if cleaned != "over" && cleaned != "under" && cleaned != "7" && cleaned != "seven" {
 			a.AddLogMsg(fmt.Sprintf("[UO_DEBUG] awaiting UO choice from %q(index=%d), ignored non-choice message=%q", awaitingUOChoicePartnerName, awaitingUOChoicePartnerID, msg))
 			return
 		}
@@ -9961,12 +10157,53 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 
 		e.Block()
 		awaitingUOChoice = false
+		if cleaned == "seven" {
+			cleaned = "7"
+		}
 		a.AddLogMsg(fmt.Sprintf("[UO_DEBUG] accepted choice=%q from sender=%q index=%d (expectedName=%q expectedIndex=%d)", cleaned, senderName, index, awaitingUOChoicePartnerName, awaitingUOChoicePartnerID))
+
+		// If this UO choice is being made as part of an active risk session,
+		// record the selected choice and multiplier on the risk session and
+		// execute the risk roll path instead of starting a normal round.
+		if riskSessionActive {
+			variant := "uo"
+			if pendingUoVariant != "" {
+				variant = pendingUoVariant
+				pendingUoVariant = ""
+			} else if underOver7GameModeEnabled {
+				variant = "uo7"
+			}
+			gameLabel := "UO"
+			if variant == "uo7" {
+				gameLabel = "UO7"
+			}
+			mutex.Lock()
+			riskSessionGame = gameLabel
+			riskSessionParams = map[string]interface{}{"uoChoice": cleaned}
+			if cleaned == "7" && variant == "uo7" {
+				riskSessionPayoutMultiplier = 3
+			} else {
+				riskSessionPayoutMultiplier = 2
+			}
+			mutex.Unlock()
+
+			a.setCurrentGameHistoryGame(gameLabel)
+			ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay("uo7"))
+			a.AddLogMsg(fmt.Sprintf("[UO_DEBUG] risk re-roll choice=%q variant=%s mult=%d; executing risk roll", cleaned, variant, riskSessionPayoutMultiplier))
+			sendShout(ack)
+			go func() {
+				time.Sleep(1400 * time.Millisecond)
+				a.executeRiskRound()
+			}()
+			return
+		}
 
 		if cleaned == "over" {
 			a.beginUnderOverRound("over")
-		} else {
+		} else if cleaned == "under" {
 			a.beginUnderOverRound("under")
+		} else {
+			a.beginUnderOverRound("7")
 		}
 		return
 	}
@@ -10015,6 +10252,94 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 
 	choice, ok := normalizeIncomingGameChoice(msg)
 	if !ok {
+		// Quick path: if UO7 mode active and player directly shouted "7"/"seven",
+		// accept it as an immediate Under/Over-7 selection and start the round.
+		cleanedChoice := strings.ToLower(strings.TrimSpace(msg))
+		cleanedChoice = gameChoiceCleanupRe.ReplaceAllString(cleanedChoice, "")
+		if underOver7GameModeEnabled && (cleanedChoice == "7" || cleanedChoice == "seven") {
+			// verify sender matches expected trade starter
+			indexMatch := awaitingGameChoicePartnerID > 0 && index == awaitingGameChoicePartnerID
+			nameMatch := awaitingGameChoicePartnerName != "" && strings.EqualFold(senderName, awaitingGameChoicePartnerName)
+			if !indexMatch && !nameMatch && awaitingGameChoicePartnerName != "" {
+				if expectedIdx, ok := lookupRoomEntityIndexByName(awaitingGameChoicePartnerName); ok && expectedIdx > 0 && expectedIdx == index {
+					indexMatch = true
+				}
+			}
+			if !indexMatch && !nameMatch && awaitingGameChoicePartnerName != "" {
+				if expectedIdx, ok := lookupUsers28RoomIndexByName(awaitingGameChoicePartnerName); ok && expectedIdx > 0 && expectedIdx == index {
+					indexMatch = true
+				}
+			}
+			if !indexMatch && !nameMatch {
+				if mappedName, ok := lookupRoomIdentityByChatIndex(index); ok && awaitingGameChoicePartnerName != "" && strings.EqualFold(strings.TrimSpace(mappedName), awaitingGameChoicePartnerName) {
+					nameMatch = true
+					senderName = mappedName
+				}
+			}
+			if !indexMatch && !nameMatch {
+				a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] ignoring %q from %q (index %d); waiting for locked starter %q (index %d trade_id=%d)", cleanedChoice, senderName, index, awaitingGameChoicePartnerName, awaitingGameChoicePartnerID, tradeStarterTradeID))
+				return
+			}
+
+			e.Block()
+
+			if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isHitting || is13Hitting || isClosing {
+				a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %q selected but dice are busy", cleanedChoice))
+				return
+			}
+
+			stopGameChoiceTimeoutMonitor()
+			awaitingGameChoice = false
+			gameChoiceUnreadableWarned = false
+			awaitingGameChoicePartnerID = 0
+			awaitingGameChoicePartnerName = ""
+
+			// If this selection is part of an active risk session, record the
+			// chosen variant and multiplier on the risk session and execute
+			// the risk roll path instead of starting a normal round.
+			if riskSessionActive {
+				variant := "uo"
+				if pendingUoVariant != "" {
+					variant = pendingUoVariant
+					pendingUoVariant = ""
+				} else if underOver7GameModeEnabled {
+					variant = "uo7"
+				}
+				gameLabel := "UO"
+				if variant == "uo7" {
+					gameLabel = "UO7"
+				}
+				mutex.Lock()
+				riskSessionGame = gameLabel
+				riskSessionParams = map[string]interface{}{"uoChoice": "7"}
+				if variant == "uo7" {
+					riskSessionPayoutMultiplier = 3
+				} else {
+					riskSessionPayoutMultiplier = 2
+				}
+				mutex.Unlock()
+
+				a.setCurrentGameHistoryGame(gameLabel)
+				ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay("uo7"))
+				a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] risk re-roll selected -> 7 (variant=%s mult=%d); executing risk roll", variant, riskSessionPayoutMultiplier))
+				sendShout(ack)
+				go func() {
+					time.Sleep(1400 * time.Millisecond)
+					a.executeRiskRound()
+				}()
+				return
+			}
+
+			ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay("uo7"))
+			a.setCurrentGameHistoryGame(gameChoiceDisplay("uo7"))
+			a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", ack))
+			sendShout(ack)
+
+			a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Under/Over7 -> 7; starting round", index))
+			a.beginUnderOverRound("7")
+			return
+		}
+
 		// If the message is still readable despite punctuation/spaces, accept it.
 		if looseChoice, looseOK := normalizeLooseGameChoice(msg); looseOK {
 			choice = looseChoice
@@ -10114,18 +10439,71 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		// Two-step Tri selection: prompt player for High or Low
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Tri; prompting for High/Low", index))
 		a.beginTriChoiceSequence()
+	case "uo7":
+		// Two-step Under/Over-7 selection: prompt player for Over/Under/7
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Under/Over7; prompting for Over/Under/7", index))
+		a.beginUO7ChoiceSequence()
 	case "uo":
 		// Two-step Under/Over selection: prompt player for Over or Under
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Under/Over; prompting for Over/Under", index))
 		a.beginUOChoiceSequence()
 	case "uo_over":
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Under/Over -> Over; starting round", index))
-		a.setCurrentGameHistoryGame("UO7")
-		a.beginUnderOverRound("over")
+		// If this was chosen as part of a risk session, record the risk
+		// parameters and execute the risk roll instead of starting a normal
+		// round.
+		if riskSessionActive {
+			variant := "uo"
+			if underOver7GameModeEnabled {
+				variant = "uo7"
+			}
+			gameLabel := "UO"
+			if variant == "uo7" {
+				gameLabel = "UO7"
+			}
+			mutex.Lock()
+			riskSessionGame = gameLabel
+			riskSessionParams = map[string]interface{}{"uoChoice": "over"}
+			riskSessionPayoutMultiplier = 2
+			mutex.Unlock()
+			a.setCurrentGameHistoryGame(gameLabel)
+			ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay("uo7"))
+			sendShout(ack)
+			go func() {
+				time.Sleep(1400 * time.Millisecond)
+				a.executeRiskRound()
+			}()
+		} else {
+			a.setCurrentGameHistoryGame("UO7")
+			a.beginUnderOverRound("over")
+		}
 	case "uo_under":
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Under/Over -> Under; starting round", index))
-		a.setCurrentGameHistoryGame("UO7")
-		a.beginUnderOverRound("under")
+		if riskSessionActive {
+			variant := "uo"
+			if underOver7GameModeEnabled {
+				variant = "uo7"
+			}
+			gameLabel := "UO"
+			if variant == "uo7" {
+				gameLabel = "UO7"
+			}
+			mutex.Lock()
+			riskSessionGame = gameLabel
+			riskSessionParams = map[string]interface{}{"uoChoice": "under"}
+			riskSessionPayoutMultiplier = 2
+			mutex.Unlock()
+			a.setCurrentGameHistoryGame(gameLabel)
+			ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay("uo7"))
+			sendShout(ack)
+			go func() {
+				time.Sleep(1400 * time.Millisecond)
+				a.executeRiskRound()
+			}()
+		} else {
+			a.setCurrentGameHistoryGame("UO7")
+			a.beginUnderOverRound("under")
+		}
 	case "trihigh":
 		// Direct Tri High selection
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected TriH; starting round", index))
@@ -10149,8 +10527,10 @@ func normalizeIncomingGameChoice(msg string) (string, bool) {
 		return "13", true
 	case "tri":
 		return "tri", true
-	case "uo", "uo7", "underover", "underover7":
+	case "uo", "underover":
 		return "uo", true
+	case "uo7", "underover7":
+		return "uo7", true
 	case "over", "o", "over7", "o7":
 		return "uo_over", true
 	case "under", "u", "under7", "u7":
@@ -10192,8 +10572,10 @@ func normalizeLooseGameChoice(msg string) (string, bool) {
 		return "13", true
 	case "tri":
 		return "tri", true
-	case "uo", "uo7", "underover", "underover7":
+	case "uo", "underover":
 		return "uo", true
+	case "uo7", "underover7":
+		return "uo7", true
 	case "over", "o", "over7", "o7":
 		return "uo_over", true
 	case "under", "u", "under7", "u7":

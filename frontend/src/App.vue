@@ -41,16 +41,16 @@
       <div class="dice-setup-modal-backdrop" v-if="showDiceSetupModal" @click="showDiceSetupModal = false">
         <div class="dice-setup-modal" @click.stop>
           <div class="game-guide-header">
-            <h3 class="section-title game-guide-title">Roll all {{ onlyUnderOverMode ? 2 : 5 }} dice</h3>
+            <h3 class="section-title game-guide-title">Roll all {{ (onlyUnderOverMode || underOver7Mode) ? 2 : 5 }} dice</h3>
             <button type="button" class="copy-btn" @click="showDiceSetupModal = false">Close</button>
           </div>
-          <p class="game-guide-text">Please roll all {{ onlyUnderOverMode ? 2 : 5 }} dice in the game. Circles will turn green as each dice is recorded.</p>
+          <p class="game-guide-text">Please roll all {{ (onlyUnderOverMode || underOver7Mode) ? 2 : 5 }} dice in the game. Circles will turn green as each dice is recorded.</p>
           <div class="dice-circles">
             <div v-for="(slot, idx) in diceSetup" :key="idx" :class="['dice-circle', { rolled: diceSetup[idx] && diceSetup[idx].rolled }]">{{ idx + 1 }}</div>
           </div>
           <div class="game-guide-block">
             <div class="game-guide-label">Status</div>
-            <div class="game-guide-text">{{ (diceSetup.filter(d => d.rolled).length) || 0 }} / {{ diceSetup.length || (onlyUnderOverMode ? 2 : 5) }} rolled</div>
+            <div class="game-guide-text">{{ (diceSetup.filter(d => d.rolled).length) || 0 }} / {{ diceSetup.length || ((onlyUnderOverMode || underOver7Mode) ? 2 : 5) }} rolled</div>
           </div>
         </div>
       </div>
@@ -94,7 +94,11 @@
                 Only Under/Over 7 (only show Over/Under to players)
               </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;">
-                <input type="checkbox" v-model="riskModeEnabledInput" />
+                <input type="checkbox" v-model="underOver7Mode" />
+                Enable Under/Over-7 mode (allow '7' triple payout)
+              </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;">
+                <input type="checkbox" v-model="riskModeEnabledInput" :disabled="underOver7Mode" />
                 Enable Risk Mode
               </label>
             </div>
@@ -784,6 +788,8 @@ export default {
       dealerAnnounceSeconds: 45,
       // Dealer mode: when true, only Under/Over-7 is presented to players
       onlyUnderOverMode: false,
+      // UI toggle: enable Under/Over-7 mode (allow '7' triple payout)
+      underOver7Mode: false,
       // Risk mode: when true, enable Risk banking mechanic
       riskModeEnabledInput: false,
       // Block recommended-rooms packet
@@ -989,10 +995,11 @@ export default {
 
           // send dealer mode to backend before starting setup
           await window.go.main.App.SetOnlyUnderOver(this.onlyUnderOverMode);
+          await window.go.main.App.SetUnderOver7Mode(this.underOver7Mode);
           await window.go.main.App.StartCasinoSetup(name, roomName, maxUnique, maxPer, this.riskModeEnabledInput);
 
           this.showDealerNameModal = false;
-          const expected = this.onlyUnderOverMode ? 2 : 5;
+          const expected = (this.onlyUnderOverMode || this.underOver7Mode) ? 2 : 5;
           this.diceSetup = Array.from({ length: expected }).map(() => ({ rolled: false, id: 0, value: 0 }));
           this.showDiceSetupModal = true;
           this.casinoStatus = 'Awaiting dice rolls';
@@ -1846,7 +1853,7 @@ export default {
         const payload = JSON.parse(jsonStr || '{}') || {};
         const dice = (payload.dice || []).map(d => ({ id: d.ID, value: d.Value, rolled: d.Value && d.Value > 0 }));
         // ensure correct number of slots based on selected dealer mode
-        const expected = this.onlyUnderOverMode ? 2 : 5;
+        const expected = (this.onlyUnderOverMode || this.underOver7Mode) ? 2 : 5;
         this.diceSetup = Array.from({ length: expected }).map((_, i) => dice[i] || { id: 0, value: 0, rolled: false });
 
         const active = !!payload.active;
@@ -1884,6 +1891,22 @@ export default {
         }
       } catch (e) {
         console.error('diceSetupUpdate parse', e);
+      }
+    });
+    // Sync UI when backend toggles UnderOver7 dealer mode.
+    window.runtime.EventsOn("underOver7ModeChanged", (payload) => {
+      try {
+        let enabled = payload;
+        if (typeof payload === 'string') {
+          try { enabled = JSON.parse(payload); } catch (e) {}
+        }
+        this.underOver7Mode = !!enabled;
+        if (this.underOver7Mode) {
+          this.riskModeEnabledInput = false;
+          try { window.go.main.App.SetRiskEnabled(false); } catch (_) {}
+        }
+      } catch (e) {
+        console.error('underOver7ModeChanged handler', e);
       }
     });
     // AutoShout initial fetch and subscription

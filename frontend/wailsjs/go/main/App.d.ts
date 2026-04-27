@@ -100,6 +100,8 @@ export function SetOnlyUnderOver(arg1:boolean):Promise<void>;
 
 export function SetRiskEnabled(arg1:boolean):Promise<void>;
 
+export function SetUnderOver7Mode(arg1:boolean):Promise<void>;
+
 export function ShowCommands():Promise<void>;
 
 export function ShowWindow():Promise<void>;

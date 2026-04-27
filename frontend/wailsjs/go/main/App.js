@@ -198,6 +198,10 @@ export function SetRiskEnabled(arg1) {
   return window['go']['main']['App']['SetRiskEnabled'](arg1);
 }
 
+export function SetUnderOver7Mode(arg1) {
+  return window['go']['main']['App']['SetUnderOver7Mode'](arg1);
+}
+
 export function ShowCommands() {
   return window['go']['main']['App']['ShowCommands']();
 }

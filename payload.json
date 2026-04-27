@@ -5,12 +5,12 @@
   "embeds": [
     {
       "color": 3447003,
-      "description": "Player: BlackieJackie",
+      "description": "Player: Gymbox",
       "fields": [
         {
           "inline": true,
           "name": "Winner",
-          "value": "Dealer"
+          "value": "Gymbox"
         },
         {
           "inline": true,
@@ -20,7 +20,7 @@
         {
           "inline": true,
           "name": "Player Result",
-          "value": "3"
+          "value": "7"
         },
         {
           "inline": true,
@@ -30,28 +30,28 @@
         {
           "inline": false,
           "name": "Bet Items",
-          "value": "md_limukaappi_liq x1"
+          "value": "spyro x1"
         },
         {
           "inline": false,
           "name": "Payout Items",
-          "value": "md_limukaappi_liq x2"
+          "value": "spyro x2"
         },
         {
           "inline": true,
           "name": "Started At",
-          "value": "2026-04-26T14:01:44+10:00"
+          "value": "2026-04-28T09:58:25+10:00"
         },
         {
           "inline": true,
           "name": "Completed At",
-          "value": "2026-04-26T14:02:41+10:00"
+          "value": "2026-04-28T09:58:53+10:00"
         }
       ],
       "footer": {
-        "text": "Game ID: 1777176104570947000"
+        "text": "Game ID: 1777334305003002000"
       },
-      "timestamp": "2026-04-26T14:02:41+10:00",
+      "timestamp": "2026-04-28T09:58:53+10:00",
       "title": "UO7 — Completed"
     }
   ],
