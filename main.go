@@ -356,8 +356,8 @@ var (
 	// Centralized shout worker/queue to avoid flood-control mutes
 	shoutQueue         chan string
 	shoutWorkerOnce    sync.Once
-	shoutSpacing       = 1500 * time.Millisecond
-	shoutReplaySpacing = 1 * time.Second
+	shoutSpacing       = 2500 * time.Millisecond
+	shoutReplaySpacing = 2500 * time.Millisecond
 
 	autoShoutStopChan chan struct{}
 	autoShoutMu       sync.Mutex
@@ -3836,7 +3836,7 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 	mutex.Unlock()
 
 	a.AddLogMsg(fmt.Sprintf("[RISK] %s won risk round: paid %d (playerRisk=%d dealerRisk=%d)", partner, pay, playerRisk, dealerRisk))
-	sendShout(fmt.Sprintf("%s won risk round! Bank: %d", partner, playerRisk))
+	// Duplicate winner shout removed: the winner is already announced by the game result.
 
 	// Recompute usable max (include per-item cap) and re-prompt the player, or finalize/reopen if nothing to risk.
 	mutex.Lock()

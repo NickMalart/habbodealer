@@ -57,12 +57,12 @@ func (a *App) evaluatePokerHand() {
 			// If the user is muted, log/queue appropriately
 			if pokerSequenceStage == 1 {
 				log.Printf("User is muted. Queuing message: %s", fmt.Sprintf("%s, Now dealer Roll", hand))
-				// ToDo: messageQueue = append(messageQueue, fmt.Sprintf("%s, Now dealer Roll", hand))
+				messageQueue = append(messageQueue, fmt.Sprintf("%s, Now dealer Roll", hand))
 			} else if pokerSequenceStage == 2 {
 				log.Printf("User is muted. Suppressing dealer-hand announcement (winner will be posted)")
 			} else {
 				log.Printf("User is muted. Queuing message: %s", hand)
-				// ToDo: messageQueue = append(messageQueue, hand)
+				messageQueue = append(messageQueue, hand)
 			}
 		}
 	}
@@ -596,7 +596,7 @@ func (a *App) evaluateTriRound() {
 		} else {
 			if triPlayerTurn {
 				log.Printf("User is muted. Queuing message: %s", fmt.Sprintf("%s, Now dealer Roll", totalText))
-				// ToDo: messageQueue = append(messageQueue, fmt.Sprintf("%s, Now dealer Roll", totalText))
+				messageQueue = append(messageQueue, fmt.Sprintf("%s, Now dealer Roll", totalText))
 			}
 		}
 	}
