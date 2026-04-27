@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"bytes"
@@ -235,8 +235,11 @@ var (
 	dealerOpenHeartbeatActive  bool
 	gameChoiceTimeoutMonitorID int
 	gameChoiceTimeoutActive    bool
-	gameChoiceUnreadableWarned bool
-	dealerResyncInProgress     bool
+	// Risk decision monitor (initial "Keep or Risk" prompt)
+	riskDecisionTimeoutMonitorID int
+	riskDecisionTimeoutActive    bool
+	gameChoiceUnreadableWarned   bool
+	dealerResyncInProgress       bool
 	// When true, the UI has enabled dice setup mode and incoming dice IDs
 	// should be recorded for the bot setup. Must be enabled by the Start Casino
 	// button in the frontend.
@@ -3611,11 +3614,14 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 
 	a.AddLogMsg(fmt.Sprintf("[RISK] win recorded bet=%d payout=%d dealerRisk=%d playerRisk=%d", betQty, payout, dealerRisk, playerRisk))
 	msg := fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, displayMax)
-	go func(m string) {
+
+	// Send initial prompt (mute-aware) and start the risk-decision reminder monitor
+	go func(m string, player string) {
 		waitForUnmute(90 * time.Second)
 		time.Sleep(800 * time.Millisecond)
 		sendMessageWithDelay(m)
-	}(msg)
+		a.startRiskDecisionTimeoutMonitor(m, player)
+	}(msg, playerName)
 }
 
 // handleRiskBet validates and applies a player's risk bet (internal state move)
@@ -3627,6 +3633,8 @@ func (a *App) handleRiskBet(n int, sender string) {
 		mutex.Unlock()
 		return
 	}
+	// Player engaged with risk decision; cancel the initial Keep-or-Risk reminder monitor.
+	stopRiskDecisionTimeoutMonitor()
 
 	// Defensive guards: reject if player's internal bank is empty or dealer reopened.
 	if playerRisk <= 0 {
@@ -3691,8 +3699,6 @@ func (a *App) handleRiskBet(n int, sender string) {
 		}
 	}
 
-	a.startGameChoiceTimeoutMonitor()
-
 	var msg string
 	if onlyUnderOver7Mode {
 		msg = "Shout U (2-6) or O (8-12) to DOUBLE!"
@@ -3702,6 +3708,9 @@ func (a *App) handleRiskBet(n int, sender string) {
 
 	a.AddLogMsg(fmt.Sprintf("[RISK] prompting for game choice: %q (partner=%q id=%d)", msg, awaitingGameChoicePartnerName, awaitingGameChoicePartnerID))
 	sendShout(msg)
+
+	// Start the game-choice reminder monitor after the initial prompt is sent.
+	a.startGameChoiceTimeoutMonitor()
 }
 
 // executeRiskRound performs the same game roll for the active risk session.
@@ -4138,6 +4147,7 @@ func (a *App) verifyAndRetryPayoutAdds(plannedIDs []int) {
 
 	a.AddLogMsg("[PAYOUT_DEBUG] payout items still not fully reflected in own trade offer; waiting for manual intervention")
 	a.noteCurrentGameHistory("Payout items did not fully reflect in trade offer; manual review may be needed")
+	a.markCurrentGameHistoryIssue("Payout items did not fully reflect in trade offer after automated attempts", true)
 }
 
 func stopUnderfundedTradeMonitor() {
@@ -4229,6 +4239,47 @@ func stopGameChoiceTimeoutMonitor() {
 	gameChoiceTimeoutActive = false
 }
 
+// stopRiskDecisionTimeoutMonitor cancels the initial Keep-or-Risk reminder monitor.
+func stopRiskDecisionTimeoutMonitor() {
+	riskDecisionTimeoutMonitorID++
+	riskDecisionTimeoutActive = false
+}
+
+// startRiskDecisionTimeoutMonitor will repeat the initial Keep-or-Risk prompt
+// up to 4 more times (5 total) before auto-finalizing the Keep path.
+func (a *App) startRiskDecisionTimeoutMonitor(msg string, player string) {
+	stopRiskDecisionTimeoutMonitor()
+
+	riskDecisionTimeoutMonitorID++
+	monitorID := riskDecisionTimeoutMonitorID
+	riskDecisionTimeoutActive = true
+
+	go func(id int, reminder string, p string) {
+		// Repeat 4 reminders (so initial + 4 = 5 total)
+		for attempt := 1; attempt <= 4; attempt++ {
+			time.Sleep(30 * time.Second)
+
+			if id != riskDecisionTimeoutMonitorID || !riskDecisionTimeoutActive || !riskSessionActive {
+				return
+			}
+
+			a.AddLogMsg(fmt.Sprintf("[RISK_DECISION_TIMEOUT] repeating prompt %d/4 for %s", attempt, p))
+			sendShout(reminder)
+		}
+
+		if id != riskDecisionTimeoutMonitorID || !riskDecisionTimeoutActive || !riskSessionActive {
+			return
+		}
+
+		a.AddLogMsg(fmt.Sprintf("[RISK_DECISION_TIMEOUT] final timeout for %s; auto-finalizing Keep", p))
+		sendShout(fmt.Sprintf("No response from %q — finalizing Keep and attempting payout.", p))
+		time.Sleep(1200 * time.Millisecond)
+
+		// Convert bank -> payout and start normal payout flow.
+		go a.finalizeRiskKeep()
+	}(monitorID, msg, player)
+}
+
 func (a *App) startGameChoiceTimeoutMonitor() {
 	stopGameChoiceTimeoutMonitor()
 
@@ -4245,56 +4296,44 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 	}
 
 	go func(id int, player string) {
-		// First 30 seconds
-		time.Sleep(30 * time.Second)
+		// Repeat the prompt 4 more times (initial prompt already sent by caller)
+		reminderCount := 4
+		interval := 30 * time.Second
+
+		for attempt := 1; attempt <= reminderCount; attempt++ {
+			time.Sleep(interval)
+
+			if id != gameChoiceTimeoutMonitorID || !gameChoiceTimeoutActive || !awaitingGameChoice {
+				return
+			}
+
+			var reminder string
+			if onlyUnderOver7Mode {
+				reminder = "Shout U (2-6) or O (8-12) to DOUBLE!"
+			} else {
+				reminder = "Shout pkr, 21, 13, trih, tril"
+			}
+
+			a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] repeating prompt %d/%d for %s", attempt, reminderCount, player))
+			sendShout(reminder)
+		}
 
 		if id != gameChoiceTimeoutMonitorID || !gameChoiceTimeoutActive || !awaitingGameChoice {
 			return
 		}
 
-		var reminder string
-		if onlyUnderOver7Mode {
-			reminder = "Shout U (2-6) or O (8-12) to DOUBLE!"
-		} else {
-			reminder = "Shout pkr, 21, 13, trih, tril"
-		}
-		a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] 30s no response, repeating prompt for %s", player))
-		sendShout(reminder)
-
-		// Another 30 seconds
-		time.Sleep(30 * time.Second)
-
-		if id != gameChoiceTimeoutMonitorID || !gameChoiceTimeoutActive || !awaitingGameChoice {
-			return
-		}
-
-		// Final timeout hit
+		// Final timeout hit: auto-finalize Keep -> payout
 		awaitingGameChoice = false
 		gameChoiceUnreadableWarned = false
 		awaitingGameChoicePartnerID = 0
 		awaitingGameChoicePartnerName = ""
 		gameChoiceTimeoutActive = false
 
-		closeMsg := fmt.Sprintf("Closing trade no response from %q", player)
-		flagMsg := "We have flagged this game, please advise us on rollorigins.club"
-
-		a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] final timeout for %s", player))
-
-		sendShout(closeMsg)
+		a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] final timeout for %s after %d reminders; auto-finalizing Keep", player, reminderCount))
+		sendShout(fmt.Sprintf("No response from %q — finalizing Keep and attempting payout.", player))
 		time.Sleep(1200 * time.Millisecond)
 
-		sendShout(flagMsg)
-
-		a.markCurrentGameHistoryIssue(
-			fmt.Sprintf("No game choice response from %s after 60 seconds", player),
-			true,
-		)
-
-		time.Sleep(1200 * time.Millisecond)
-		ext.Send(out.TRADE_CLOSE)
-
-		time.Sleep(1500 * time.Millisecond)
-		go a.reopenDealerIdle("game choice timeout")
+		go a.finalizeRiskKeep()
 	}(monitorID, playerName)
 }
 
