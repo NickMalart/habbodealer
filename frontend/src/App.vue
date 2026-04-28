@@ -169,6 +169,41 @@
           <button class="save-button" @click="saveAutoShout">Save</button>
           <button class="save-button" @click="toggleAutoShout">{{ autoShoutEnabled ? 'Stop Auto Shout' : 'Start Auto Shout' }}</button>
         </div>
+
+        <!-- Auto Shout slot #2 (duplicate) -->
+        <div class="auto-shout-panel" style="margin-top:12px;padding:10px;border-top:1px dashed rgba(255,255,255,0.04);">
+          <div class="form-group">
+            <label>Phrase</label>
+            <input type="text" v-model="autoShoutPhrase2" placeholder="Enter phrase to shout" />
+          </div>
+
+          <div class="preset-row" style="margin-bottom:8px;">
+            <div class="game-guide-label" style="display:inline-block;margin-right:8px;margin-bottom:4px;">Presets</div>
+            <div style="display:inline-flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <button type="button" class="copy-btn preset-btn" @click="setAutoShoutPreset2('See My Hand - rollorigins.club')">See My Hand - rollorigins.club</button>
+              <button type="button" class="copy-btn" @click="addAutoShoutPreset2" title="Save current phrase as preset">Add Preset</button>
+            </div>
+            <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
+              <template v-for="(p, idx) in autoShoutPresets2" :key="'preset2-'+idx">
+                <div style="display:inline-flex;align-items:center;gap:6px;">
+                  <button type="button" class="copy-btn preset-btn" @click="setAutoShoutPreset2(p)">{{ p }}</button>
+                  <button type="button" class="copy-btn delete-preset" @click="deleteAutoShoutPreset2(idx)" title="Delete preset">×</button>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Seconds</label>
+            <input type="number" min="1" v-model.number="autoShoutSeconds2" />
+          </div>
+
+          <div style="display:flex;gap:8px;justify-content:center;align-items:center;">
+            <button class="save-button" @click="saveAutoShout2">Save</button>
+            <button class="save-button" @click="toggleAutoShout2">{{ autoShoutEnabled2 ? 'Stop Auto Shout' : 'Start Auto Shout' }}</button>
+          </div>
+        </div>
+
         <div style="margin-top:18px;border-top:1px solid rgba(255,255,255,0.04);padding-top:12px;">
           <h3 class="section-subtitle">Dealer Open</h3>
           <p class="config-intro">Control automatic "Dealer open" announcements and trade-window timeout.</p>
@@ -785,6 +820,11 @@ export default {
       autoShoutSeconds: 30,
       autoShoutEnabled: false,
       autoShoutPresets: [],
+      // Auto shout #2 UI state
+      autoShoutPhrase2: '',
+      autoShoutSeconds2: 30,
+      autoShoutEnabled2: false,
+      autoShoutPresets2: [],
       // Dealer open UI state
       dealerOpenEnabled: true,
       dealerTradeSeconds: 45,
@@ -1410,6 +1450,101 @@ export default {
         console.error(e);
       }
     },
+    // --- AutoShout slot #2 methods ---
+    setAutoShoutPreset2(phrase) {
+      try {
+        this.autoShoutPhrase2 = String(phrase || '');
+        this.$nextTick(() => {
+          const els = document.querySelectorAll('input[placeholder="Enter phrase to shout"]');
+          const el = (els && els.length > 1) ? els[1] : (els[0] || null);
+          if (el && typeof el.focus === 'function') el.focus();
+        });
+      } catch (e) {}
+    },
+
+    loadAutoShoutPresets2() {
+      try {
+        const raw = localStorage.getItem('autoShout2Presets') || '[]';
+        const arr = JSON.parse(raw || '[]') || [];
+        if (Array.isArray(arr)) {
+          this.autoShoutPresets2 = arr.filter(p => typeof p === 'string');
+        } else {
+          this.autoShoutPresets2 = [];
+        }
+      } catch (e) {
+        this.autoShoutPresets2 = [];
+      }
+    },
+
+    saveAutoShoutPresets2() {
+      try {
+        localStorage.setItem('autoShout2Presets', JSON.stringify(this.autoShoutPresets2 || []));
+      } catch (e) {}
+    },
+
+    addAutoShoutPreset2() {
+      try {
+        const phrase = String(this.autoShoutPhrase2 || '').trim();
+        if (!phrase) {
+          this.addLogMsg('[UI] Cannot add empty preset (slot 2)');
+          return;
+        }
+        if (!Array.isArray(this.autoShoutPresets2)) this.autoShoutPresets2 = [];
+        if (this.autoShoutPresets2.includes(phrase)) {
+          this.addLogMsg('[UI] Preset already exists (slot 2)');
+          return;
+        }
+        this.autoShoutPresets2.push(phrase);
+        this.saveAutoShoutPresets2();
+        this.addLogMsg('[UI] Preset added (slot 2)');
+      } catch (e) {
+        console.error('addAutoShoutPreset2', e);
+      }
+    },
+
+    deleteAutoShoutPreset2(idx) {
+      try {
+        if (!Array.isArray(this.autoShoutPresets2)) return;
+        const removed = this.autoShoutPresets2.splice(idx, 1);
+        this.saveAutoShoutPresets2();
+        this.addLogMsg(`[UI] Removed preset (slot 2): ${removed && removed[0] ? removed[0] : ''}`);
+      } catch (e) {
+        console.error('deleteAutoShoutPreset2', e);
+      }
+    },
+
+    async saveAutoShout2() {
+      try {
+        await window.go.main.App.SaveAutoShoutConfig2(this.autoShoutPhrase2 || '', Number(this.autoShoutSeconds2 || 30));
+        this.addLogMsg('[UI] AutoShout #2 config saved');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to save autoShout #2 config');
+        console.error(e);
+      }
+    },
+
+    async toggleAutoShout2() {
+      try {
+        const next = !this.autoShoutEnabled2;
+        const cfg = await window.go.main.App.ToggleAutoShout2(next);
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.autoShoutEnabled2 = !!parsed.enabled;
+            this.autoShoutPhrase2 = parsed.phrase || '';
+            this.autoShoutSeconds2 = parsed.seconds || 30;
+          } catch (e) {}
+        } else if (cfg) {
+          this.autoShoutEnabled2 = !!cfg.enabled;
+          this.autoShoutPhrase2 = cfg.phrase || '';
+          this.autoShoutSeconds2 = cfg.seconds || 30;
+        }
+        this.addLogMsg('[UI] AutoShout #2 toggled');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to toggle autoShout #2');
+        console.error(e);
+      }
+    },
     async toggleBlockRecommendedRooms() {
       try {
         const next = !!this.blockRecommendedRooms;
@@ -1945,6 +2080,25 @@ export default {
       console.error('autoShout init', e);
     }
 
+    // AutoShout #2 initial fetch
+    try {
+      const cfgb = await window.go.main.App.GetAutoShoutConfig2();
+      if (typeof cfgb === 'string') {
+        try {
+          const parsed = JSON.parse(cfgb || '{}') || {};
+          this.autoShoutEnabled2 = !!parsed.enabled;
+          this.autoShoutPhrase2 = parsed.phrase || '';
+          this.autoShoutSeconds2 = parsed.seconds || 30;
+        } catch (e) {}
+      } else if (cfgb) {
+        this.autoShoutEnabled2 = !!cfgb.enabled;
+        this.autoShoutPhrase2 = cfgb.phrase || '';
+        this.autoShoutSeconds2 = cfgb.seconds || 30;
+      }
+    } catch (e) {
+      console.error('autoShout2 init', e);
+    }
+
     // DealerOpen initial fetch
     try {
       const cfg2 = await window.go.main.App.GetDealerOpenConfig();
@@ -1967,6 +2121,7 @@ export default {
     // Load user-defined auto shout presets from localStorage
     try {
       this.loadAutoShoutPresets();
+      this.loadAutoShoutPresets2();
     } catch (e) {}
 
     // Block recommended-rooms initial fetch and subscription
@@ -2327,6 +2482,14 @@ export default {
         this.autoShoutEnabled = !!parsed.enabled;
         this.autoShoutPhrase = parsed.phrase || '';
         this.autoShoutSeconds = parsed.seconds || 30;
+      } catch (e) {}
+    });
+    window.runtime.EventsOn("autoShoutUpdate2", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        this.autoShoutEnabled2 = !!parsed.enabled;
+        this.autoShoutPhrase2 = parsed.phrase || '';
+        this.autoShoutSeconds2 = parsed.seconds || 30;
       } catch (e) {}
     });
     window.runtime.EventsOn("dealerOpenUpdate", (jsonStr) => {

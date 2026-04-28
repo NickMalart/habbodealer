@@ -372,6 +372,14 @@ var (
 
 	autoShoutStopChan chan struct{}
 	autoShoutMu       sync.Mutex
+
+	// Auto shout #2 (duplicate slot)
+	autoShout2Enabled bool
+	autoShout2Phrase  string
+	autoShout2Seconds int = 30
+
+	autoShout2StopChan chan struct{}
+	autoShout2Mu       sync.Mutex
 )
 
 type TradeItem struct {
@@ -1451,6 +1459,128 @@ func (a *App) runAutoShoutLoop(stopChan chan struct{}, phrase string, seconds in
 
 			if isMuted {
 				a.AddLogMsg("[AUTO_SHOUT] skipped because muted")
+				continue
+			}
+
+			sendMessageWithDelay(currentPhrase)
+		}
+	}
+}
+
+// GetAutoShoutConfig2 returns the current auto-shout configuration for slot 2.
+func (a *App) GetAutoShoutConfig2() AutoShoutConfig {
+	autoShout2Mu.Lock()
+	defer autoShout2Mu.Unlock()
+
+	return AutoShoutConfig{
+		Enabled: autoShout2Enabled,
+		Phrase:  autoShout2Phrase,
+		Seconds: autoShout2Seconds,
+	}
+}
+
+// SaveAutoShoutConfig2 updates phrase and seconds for slot 2. If auto-shout is
+// currently enabled, the loop is restarted to apply interval changes.
+func (a *App) SaveAutoShoutConfig2(phrase string, seconds int) AutoShoutConfig {
+	autoShout2Mu.Lock()
+	autoShout2Phrase = strings.TrimSpace(phrase)
+	if seconds < 1 {
+		seconds = 1
+	}
+	autoShout2Seconds = seconds
+	wasEnabled := autoShout2Enabled
+	autoShout2Mu.Unlock()
+
+	// If enabled, restart loop so interval changes apply immediately.
+	if wasEnabled {
+		// Toggle off then on to restart
+		a.ToggleAutoShout2(false)
+		return a.ToggleAutoShout2(true)
+	}
+
+	cfg := AutoShoutConfig{
+		Enabled: wasEnabled,
+		Phrase:  autoShout2Phrase,
+		Seconds: autoShout2Seconds,
+	}
+
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "autoShoutUpdate2", string(b))
+	}
+
+	return cfg
+}
+
+// ToggleAutoShout2 enables or disables the auto shout loop for slot 2.
+func (a *App) ToggleAutoShout2(enabled bool) AutoShoutConfig {
+	autoShout2Mu.Lock()
+
+	autoShout2Enabled = enabled
+
+	if autoShout2StopChan != nil {
+		close(autoShout2StopChan)
+		autoShout2StopChan = nil
+	}
+
+	if enabled {
+		autoShout2StopChan = make(chan struct{})
+		stopChan := autoShout2StopChan
+		phrase := autoShout2Phrase
+		seconds := autoShout2Seconds
+		if seconds < 1 {
+			seconds = 1
+			autoShout2Seconds = 1
+		}
+
+		go a.runAutoShoutLoop2(stopChan, phrase, seconds)
+	}
+
+	cfg := AutoShoutConfig{
+		Enabled: autoShout2Enabled,
+		Phrase:  autoShout2Phrase,
+		Seconds: autoShout2Seconds,
+	}
+	autoShout2Mu.Unlock()
+
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "autoShoutUpdate2", string(b))
+	}
+
+	return cfg
+}
+
+// runAutoShoutLoop2 runs the ticker that shouts the configured phrase for slot 2.
+func (a *App) runAutoShoutLoop2(stopChan chan struct{}, phrase string, seconds int) {
+	ticker := time.NewTicker(time.Duration(seconds) * time.Second)
+	defer ticker.Stop()
+
+	a.AddLogMsg(fmt.Sprintf("[AUTO_SHOUT 2] started: every %ds -> %q", seconds, phrase))
+
+	for {
+		select {
+		case <-stopChan:
+			a.AddLogMsg("[AUTO_SHOUT 2] stopped")
+			return
+
+		case <-ticker.C:
+			autoShout2Mu.Lock()
+			enabled := autoShout2Enabled
+			currentPhrase := strings.TrimSpace(autoShout2Phrase)
+			autoShout2Mu.Unlock()
+
+			if !enabled || currentPhrase == "" {
+				continue
+			}
+
+			if ChatIsDisabled {
+				a.AddLogMsg("[AUTO_SHOUT 2] skipped because chat is disabled")
+				continue
+			}
+
+			if isMuted {
+				a.AddLogMsg("[AUTO_SHOUT 2] skipped because muted")
 				continue
 			}
 
