@@ -2577,12 +2577,14 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			// Send the trade items summary to chat
 			a.sendTradeCompletionMessage()
 
-			// Record predicted payout items for history as 2x (or 3x for UO7)
+			// Record predicted payout items for history as 2x (or configured UO7 multiplier)
 			// This ensures the frontend shows a sensible payout count even when
 			// an explicit payout trade flow was not used.
 			mult := 2
 			if underOver7GameModeEnabled {
-				mult = 3
+				mutex.Lock()
+				mult = underOver7PayoutMultiplier
+				mutex.Unlock()
 			}
 			payoutPred := make([]TradeItem, 0, len(gameBetItems))
 			for _, it := range gameBetItems {
@@ -3624,12 +3626,14 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 		riskPartnerName = playerName
 	}
 
-	// Compute payout multiplier: support UO7 triple payout when applicable.
+	// Compute payout multiplier: support UO7 configured multiplier when applicable.
 	mult := 2
 	if strings.EqualFold(game, "UO7") {
 		if v, ok := params["uoChoice"].(string); ok {
 			if strings.TrimSpace(strings.ToLower(v)) == "7" {
-				mult = 3
+				mutex.Lock()
+				mult = underOver7PayoutMultiplier
+				mutex.Unlock()
 			}
 		}
 	}
@@ -3767,7 +3771,10 @@ func (a *App) handleRiskBet(n int, sender string) {
 
 	var msg string
 	if underOver7GameModeEnabled {
-		msg = "Shout U (2-6), O (8-12) or 7 to TRIPLE!"
+		mutex.Lock()
+		m := underOver7PayoutMultiplier
+		mutex.Unlock()
+		msg = fmt.Sprintf("Shout U (2-6), O (8-12) or 7 to WIN x%d!", m)
 	} else if onlyUnderOver7Mode {
 		msg = "Shout U (2-6) or O (8-12) to DOUBLE!"
 	} else {
@@ -4391,7 +4398,10 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 
 			var reminder string
 			if underOver7GameModeEnabled {
-				reminder = "Shout U (2-6), O (8-12) or 7 to TRIPLE!"
+				mutex.Lock()
+				m := underOver7PayoutMultiplier
+				mutex.Unlock()
+				reminder = fmt.Sprintf("Shout U (2-6), O (8-12) or 7 to WIN x%d!", m)
 			} else if onlyUnderOver7Mode {
 				reminder = "Shout U (2-6) or O (8-12) to DOUBLE!"
 			} else {
@@ -7141,11 +7151,14 @@ func (a *App) getTradeCoverageShortages() []tradeShortage {
 		return nil
 	}
 
-	// required payout quantities: use 3x when dealer-level UnderOver7 game-mode
-	// is enabled (worst-case coverage for a shouted "7"), otherwise 2x.
+	// required payout quantities: use configured UO7 multiplier when dealer-level
+	// UnderOver7 game-mode is enabled (worst-case coverage for a shouted "7"),
+	// otherwise 2x.
 	mult := 2
 	if underOver7GameModeEnabled {
-		mult = 3
+		mutex.Lock()
+		mult = underOver7PayoutMultiplier
+		mutex.Unlock()
 	}
 	required := payoutRequirementsFromBetItemsMult(partnerItems, mult)
 	if len(required) == 0 {
@@ -7355,7 +7368,10 @@ func (a *App) sendTradeCompletionMessage() {
 
 	var msg string
 	if underOver7GameModeEnabled {
-		msg = "Shout U (2-6), O (8-12) to DOUBLE! or 7 to TRIPLE!"
+		mutex.Lock()
+		m := underOver7PayoutMultiplier
+		mutex.Unlock()
+		msg = fmt.Sprintf("Shout U (2-6), O (8-12) to DOUBLE! or 7 to WIN x%d!", m)
 	} else if onlyUnderOver7Mode {
 		msg = "Shout U (2-6) or O (8-12) to DOUBLE!"
 	} else {
@@ -8558,7 +8574,9 @@ func (a *App) evaluateUnderOverRound() {
 		if uoPlayerChoice == "7" {
 			playerWins = (total == 7)
 			if playerWins {
-				mult = 3
+				mutex.Lock()
+				mult = underOver7PayoutMultiplier
+				mutex.Unlock()
 			}
 		} else {
 			// Standard over/under behaviour; 7 is a dealer win unless player picked 7.
@@ -10181,7 +10199,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			riskSessionGame = gameLabel
 			riskSessionParams = map[string]interface{}{"uoChoice": cleaned}
 			if cleaned == "7" && variant == "uo7" {
-				riskSessionPayoutMultiplier = 3
+				riskSessionPayoutMultiplier = underOver7PayoutMultiplier
 			} else {
 				riskSessionPayoutMultiplier = 2
 			}
@@ -10313,7 +10331,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 				riskSessionGame = gameLabel
 				riskSessionParams = map[string]interface{}{"uoChoice": "7"}
 				if variant == "uo7" {
-					riskSessionPayoutMultiplier = 3
+					riskSessionPayoutMultiplier = underOver7PayoutMultiplier
 				} else {
 					riskSessionPayoutMultiplier = 2
 				}

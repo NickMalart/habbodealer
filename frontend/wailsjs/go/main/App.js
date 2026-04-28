@@ -202,6 +202,10 @@ export function SetUnderOver7Mode(arg1) {
   return window['go']['main']['App']['SetUnderOver7Mode'](arg1);
 }
 
+export function SetUnderOver7PayoutMultiplier(arg1) {
+  return window['go']['main']['App']['SetUnderOver7PayoutMultiplier'](arg1);
+}
+
 export function ShowCommands() {
   return window['go']['main']['App']['ShowCommands']();
 }

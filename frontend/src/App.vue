@@ -95,7 +95,10 @@
               </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;">
                 <input type="checkbox" v-model="underOver7Mode" />
-                Enable Under/Over-7 mode (allow '7' triple payout)
+                Enable Under/Over-7 mode (allow '7' x{{ uo7Multiplier }} payout)
+                <select v-model.number="uo7Multiplier" :disabled="!underOver7Mode" style="margin-left:8px;">
+                  <option v-for="n in [2,3,4,5]" :key="n" :value="n">x{{ n }}</option>
+                </select>
               </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;">
                 <input type="checkbox" v-model="riskModeEnabledInput" :disabled="underOver7Mode" />
@@ -788,8 +791,10 @@ export default {
       dealerAnnounceSeconds: 45,
       // Dealer mode: when true, only Under/Over-7 is presented to players
       onlyUnderOverMode: false,
-      // UI toggle: enable Under/Over-7 mode (allow '7' triple payout)
+      // UI toggle: enable Under/Over-7 mode (allow '7' payout multiplier)
       underOver7Mode: false,
+      // Dealer-selected UO7 payout multiplier (2..5)
+      uo7Multiplier: 3,
       // Risk mode: when true, enable Risk banking mechanic
       riskModeEnabledInput: false,
       // Block recommended-rooms packet
@@ -995,6 +1000,8 @@ export default {
 
           // send dealer mode to backend before starting setup
           await window.go.main.App.SetOnlyUnderOver(this.onlyUnderOverMode);
+          // set the UO7 payout multiplier before enabling mode / starting
+          await window.go.main.App.SetUnderOver7PayoutMultiplier(this.uo7Multiplier);
           await window.go.main.App.SetUnderOver7Mode(this.underOver7Mode);
           await window.go.main.App.StartCasinoSetup(name, roomName, maxUnique, maxPer, this.riskModeEnabledInput);
 
@@ -1785,6 +1792,16 @@ export default {
         }
       } catch (e) {
         this.currentGamePlayerName = '';
+      }
+    });
+
+    // Listen for backend updates to the UO7 payout multiplier
+    window.runtime.EventsOn("underOver7PayoutMultiplierChanged", (val) => {
+      try {
+        const n = Number(val) || 3;
+        this.uo7Multiplier = n;
+      } catch (e) {
+        console.error('underOver7PayoutMultiplierChanged handler error', e);
       }
     });
 
