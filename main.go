@@ -10492,6 +10492,10 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			mutex.Unlock()
 
 			a.setCurrentGameHistoryGame(gameLabel)
+			// Record the raw shout so history and webhooks show exactly what the player said
+			a.noteCurrentGameHistory(fmt.Sprintf("Player shouted: %q", msg))
+			// Record the raw shout so history and webhooks show exactly what the player said
+			a.noteCurrentGameHistory(fmt.Sprintf("Player shouted: %q", msg))
 			ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay("uo7"))
 			a.AddLogMsg(fmt.Sprintf("[UO_DEBUG] risk re-roll choice=%q variant=%s mult=%d; executing risk roll", cleaned, variant, riskSessionPayoutMultiplier))
 			sendShout(ack)
@@ -10502,6 +10506,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			return
 		}
 
+		// Record the raw shout so history and webhooks show exactly what the player said
+		a.noteCurrentGameHistory(fmt.Sprintf("Player shouted: %q", msg))
 		if cleaned == "over" {
 			a.beginUnderOverRound("over")
 		} else if cleaned == "under" {
@@ -10541,6 +10547,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		e.Block()
 		awaitingTriChoice = false
 		a.AddLogMsg(fmt.Sprintf("[TRI_DEBUG] accepted choice=%q from sender=%q index=%d (expectedName=%q expectedIndex=%d)", cleaned, senderName, index, awaitingTriChoicePartnerName, awaitingTriChoicePartnerID))
+		// Record the raw shout so history and webhooks show exactly what the player said
+		a.noteCurrentGameHistory(fmt.Sprintf("Player shouted: %q", msg))
 
 		if cleaned == "high" {
 			a.beginTriRound("high")
@@ -10636,6 +10644,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 
 			ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay("uo7"))
 			a.setCurrentGameHistoryGame(gameChoiceDisplay("uo7"))
+			// Record the raw shout so history and webhooks show exactly what the player said
+			a.noteCurrentGameHistory(fmt.Sprintf("Player shouted: %q", msg))
 			a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", ack))
 			sendShout(ack)
 
@@ -10726,6 +10736,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		// Combine the standard "Starting" ack with the player-roll prompt
 		ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay(choice))
 		a.setCurrentGameHistoryGame(gameChoiceDisplay(choice))
+		// Record the raw shout so history and webhooks show exactly what the player said
+		a.noteCurrentGameHistory(fmt.Sprintf("Player shouted: %q", msg))
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", ack))
 		sendShout(ack)
 	} else {
@@ -10780,6 +10792,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			riskSessionPayoutMultiplier = 2
 			mutex.Unlock()
 			a.setCurrentGameHistoryGame(gameLabel)
+			// Record the raw shout so history and webhooks show exactly what the player said
+			a.noteCurrentGameHistory(fmt.Sprintf("Player shouted: %q", msg))
 			ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay("uo7"))
 			sendShout(ack)
 			go func() {
@@ -10788,6 +10802,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			}()
 		} else {
 			a.setCurrentGameHistoryGame("UO7")
+			// Record the raw shout so history and webhooks show exactly what the player said
+			a.noteCurrentGameHistory(fmt.Sprintf("Player shouted: %q", msg))
 			a.beginUnderOverRound("over")
 		}
 	case "uo_under":
@@ -10807,6 +10823,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			riskSessionPayoutMultiplier = 2
 			mutex.Unlock()
 			a.setCurrentGameHistoryGame(gameLabel)
+			// Record the raw shout so history and webhooks show exactly what the player said
+			a.noteCurrentGameHistory(fmt.Sprintf("Player shouted: %q", msg))
 			ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay("uo7"))
 			sendShout(ack)
 			go func() {
@@ -10815,6 +10833,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			}()
 		} else {
 			a.setCurrentGameHistoryGame("UO7")
+			// Record the raw shout so history and webhooks show exactly what the player said
+			a.noteCurrentGameHistory(fmt.Sprintf("Player shouted: %q", msg))
 			a.beginUnderOverRound("under")
 		}
 	case "trihigh":

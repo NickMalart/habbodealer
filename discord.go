@@ -71,6 +71,17 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 		return s
 	}
 
+	formatNotes := func(notes []string) string {
+		if len(notes) == 0 {
+			return "None"
+		}
+		s := strings.Join(notes, "\n")
+		if len(s) > 900 {
+			s = s[:900] + "…"
+		}
+		return s
+	}
+
 	embed := map[string]interface{}{
 		"title":       fmt.Sprintf("%s — %s", entry.Game, entry.Status),
 		"description": fmt.Sprintf("Player: %s", entry.PlayerName),
@@ -82,6 +93,7 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 			{"name": "Dealer Result", "value": entry.DealerResult, "inline": true},
 			{"name": "Bet Items", "value": formatItems(entry.BetItems), "inline": false},
 			{"name": "Payout Items", "value": formatItems(entry.PayoutItems), "inline": false},
+			{"name": "Notes", "value": formatNotes(entry.Notes), "inline": false},
 			{"name": "Started At", "value": entry.StartedAt, "inline": true},
 			{"name": "Completed At", "value": entry.CompletedAt, "inline": true},
 		},
