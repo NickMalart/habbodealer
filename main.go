@@ -2551,9 +2551,25 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			tradeItemsMu.Lock()
 			payoutItems := cloneTradeItems(currentOwnTradeItems)
 			tradeItemsMu.Unlock()
-			partnerName := normalizeUsername(strings.TrimSpace(lastTradePartnerName))
+			// Determine partner name robustly: prefer explicit payout target
+			// (set by startPayout), then fall back to the lastTradePartnerName
+			// and finally try short lookups by trade id / room entity.
+			partnerName := strings.TrimSpace(payoutTargetName)
+			if partnerName == "" {
+				partnerName = normalizeUsername(strings.TrimSpace(lastTradePartnerName))
+			} else {
+				partnerName = normalizeUsername(partnerName)
+			}
 			if partnerName == "" || partnerName == "Unknown" {
-				partnerName = strings.TrimSpace(payoutTargetName)
+				if lastTradePartnerID > 0 {
+					if name, ok := waitForUsers28TradeIDName(lastTradePartnerID, 700*time.Millisecond); ok {
+						partnerName = normalizeUsername(strings.TrimSpace(name))
+					} else if user, ok := lookupUsers28UserByTradeID(lastTradePartnerID); ok {
+						partnerName = normalizeUsername(strings.TrimSpace(user.Username))
+					} else if name, ok := lookupRoomEntityNameByIndex(lastTradePartnerID); ok {
+						partnerName = normalizeUsername(strings.TrimSpace(name))
+					}
+				}
 			}
 			if partnerName == "" {
 				partnerName = "Unknown"
@@ -2948,7 +2964,26 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		}
 		a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN_STABLE] name=%q id=%d token=%q chat_id=%d", stableTradePartnerName, stableTradePartnerID, stableTradePartnerToken, tradeStarterChatID))
 
-		partnerName := strings.TrimSpace(lastTradePartnerName)
+		// Determine partner name robustly: prefer explicit payout target
+		// then fall back to lastTradePartnerName and finally try short
+		// lookups by trade id / room entity.
+		partnerName := strings.TrimSpace(payoutTargetName)
+		if partnerName == "" {
+			partnerName = normalizeUsername(strings.TrimSpace(lastTradePartnerName))
+		} else {
+			partnerName = normalizeUsername(partnerName)
+		}
+		if partnerName == "" || partnerName == "Unknown" {
+			if lastTradePartnerID > 0 {
+				if name, ok := waitForUsers28TradeIDName(lastTradePartnerID, 700*time.Millisecond); ok {
+					partnerName = normalizeUsername(strings.TrimSpace(name))
+				} else if user, ok := lookupUsers28UserByTradeID(lastTradePartnerID); ok {
+					partnerName = normalizeUsername(strings.TrimSpace(user.Username))
+				} else if name, ok := lookupRoomEntityNameByIndex(lastTradePartnerID); ok {
+					partnerName = normalizeUsername(strings.TrimSpace(name))
+				}
+			}
+		}
 		if partnerName == "" {
 			partnerName = "Unknown"
 		}
@@ -4804,7 +4839,26 @@ func scheduleAutoTradeConfirm(a *App, payload string) {
 }
 
 func handleTradeConfirmTimeout(a *App) {
-	partnerName := strings.TrimSpace(lastTradePartnerName)
+	// Determine partner name robustly: prefer explicit payout target,
+	// then fall back to lastTradePartnerName and finally try short
+	// lookups by trade id / room entity.
+	partnerName := strings.TrimSpace(payoutTargetName)
+	if partnerName == "" {
+		partnerName = normalizeUsername(strings.TrimSpace(lastTradePartnerName))
+	} else {
+		partnerName = normalizeUsername(partnerName)
+	}
+	if partnerName == "" || partnerName == "Unknown" {
+		if lastTradePartnerID > 0 {
+			if name, ok := waitForUsers28TradeIDName(lastTradePartnerID, 700*time.Millisecond); ok {
+				partnerName = normalizeUsername(strings.TrimSpace(name))
+			} else if user, ok := lookupUsers28UserByTradeID(lastTradePartnerID); ok {
+				partnerName = normalizeUsername(strings.TrimSpace(user.Username))
+			} else if name, ok := lookupRoomEntityNameByIndex(lastTradePartnerID); ok {
+				partnerName = normalizeUsername(strings.TrimSpace(name))
+			}
+		}
+	}
 	if partnerName == "" {
 		partnerName = "Unknown"
 	}
