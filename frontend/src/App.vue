@@ -105,6 +105,24 @@
                 Enable Risk Mode
               </label>
             </div>
+            <div class="game-guide-block" style="margin-top:8px;">
+              <div class="game-guide-label">Enabled Games</div>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;">
+                <input type="checkbox" v-model="selectedGames" :value="'pkr'" /> Poker (pkr)
+              </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;">
+                <input type="checkbox" v-model="selectedGames" :value="'21'" /> 21
+              </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;">
+                <input type="checkbox" v-model="selectedGames" :value="'13'" /> 13
+              </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;">
+                <input type="checkbox" v-model="selectedGames" :value="'tri'" /> Tri (trih/tril)
+              </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;">
+                <input type="checkbox" v-model="selectedGames" :value="'uo'" /> Under/Over (uo)
+              </label>
+            </div>
             <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
               <button class="copy-btn" @click="cancelDealerName">Cancel</button>
               <button class="copy-btn" @click="confirmDealerName">Start</button>
@@ -833,6 +851,8 @@ export default {
       onlyUnderOverMode: false,
       // UI toggle: enable Under/Over-7 mode (allow '7' payout multiplier)
       underOver7Mode: false,
+      // Enabled games (default: all enabled)
+      selectedGames: ['pkr','21','13','tri','uo'],
       // Dealer-selected UO7 payout multiplier (2..5)
       uo7Multiplier: 3,
       // Risk mode: when true, enable Risk banking mechanic
@@ -1043,6 +1063,12 @@ export default {
           // set the UO7 payout multiplier before enabling mode / starting
           await window.go.main.App.SetUnderOver7PayoutMultiplier(this.uo7Multiplier);
           await window.go.main.App.SetUnderOver7Mode(this.underOver7Mode);
+          // save enabled games selection to backend
+          try {
+            await window.go.main.App.SaveEnabledGames(this.selectedGames || []);
+          } catch (e) {
+            // ignore if binding not present
+          }
           await window.go.main.App.StartCasinoSetup(name, roomName, maxUnique, maxPer, this.riskModeEnabledInput);
 
           this.showDealerNameModal = false;

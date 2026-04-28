@@ -120,16 +120,19 @@ var (
 	pokerSequencePlayerName   string
 	pokerSequencePlayerResult PokerHandResult
 	pokerSequencePlayerHand   string
-	payoutActive              bool
-	payoutTradeActive         bool
-	payoutTargetID            int
-	payoutTargetName          string
-	payoutAttempts            int
-	payoutSessionID           int
-	payoutTradeSent           bool
-	payoutExpectedAddCount    int
-	payoutActualAddCount      int
-	lastPayoutCancelNoticeAt  time.Time
+	// Enabled games map controls which games players may select at runtime.
+	// Defaults: all supported games enabled to preserve existing behaviour.
+	enabledGames             map[string]bool = map[string]bool{"pkr": true, "21": true, "13": true, "tri": true, "uo": true}
+	payoutActive             bool
+	payoutTradeActive        bool
+	payoutTargetID           int
+	payoutTargetName         string
+	payoutAttempts           int
+	payoutSessionID          int
+	payoutTradeSent          bool
+	payoutExpectedAddCount   int
+	payoutActualAddCount     int
+	lastPayoutCancelNoticeAt time.Time
 
 	// Payout retry/monitor state
 	payoutResponseTimeoutMonitorID int
@@ -3943,7 +3946,7 @@ func (a *App) handleRiskBet(n int, sender string) {
 	} else if onlyUnderOver7Mode {
 		msg = "Shout U (2-6) or O (8-12) to DOUBLE!"
 	} else {
-		msg = "Shout pkr, 21, 13, trih, tril"
+		msg = gameSelectionPrompt()
 	}
 
 	a.AddLogMsg(fmt.Sprintf("[RISK] prompting for game choice: %q (partner=%q id=%d)", msg, awaitingGameChoicePartnerName, awaitingGameChoicePartnerID))
@@ -4570,7 +4573,7 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 			} else if onlyUnderOver7Mode {
 				reminder = "Shout U (2-6) or O (8-12) to DOUBLE!"
 			} else {
-				reminder = "Shout pkr, 21, 13, trih, tril"
+				reminder = gameSelectionPrompt()
 			}
 
 			a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] repeating prompt %d/%d for %s", attempt, reminderCount, player))
@@ -7559,7 +7562,7 @@ func (a *App) sendTradeCompletionMessage() {
 	} else if onlyUnderOver7Mode {
 		msg = "Shout U (2-6) or O (8-12) to DOUBLE!"
 	} else {
-		msg = "Shout pkr, 21, 13, trih, tril"
+		msg = gameSelectionPrompt()
 	}
 	awaitingGameChoice = true
 	gameChoiceUnreadableWarned = false
@@ -9161,6 +9164,105 @@ func (a *App) StartCasinoSetup(dealerName string, roomName string, maxUniqueItem
 	a.sendLiveDealerStatus(false, name)
 }
 
+// SaveEnabledGames persists which games are allowed to be chosen by players.
+// Called from the frontend before starting the casino.
+func (a *App) SaveEnabledGames(games []string) {
+	mutex.Lock()
+	defer mutex.Unlock()
+	// reset map
+	enabledGames = map[string]bool{}
+	for _, g := range games {
+		v := strings.ToLower(strings.TrimSpace(g))
+		switch v {
+		case "pkr", "poker":
+			enabledGames["pkr"] = true
+		case "21":
+			enabledGames["21"] = true
+		case "13", "thirteen":
+			enabledGames["13"] = true
+		case "tri":
+			enabledGames["tri"] = true
+		case "uo", "uo7", "underover", "underover7":
+			enabledGames["uo"] = true
+		}
+	}
+
+	a.AddLogMsg(fmt.Sprintf("[CONFIG] enabled games: %v", a.GetEnabledGames()))
+	if a.ctx != nil {
+		if b, err := json.Marshal(a.GetEnabledGames()); err == nil {
+			runtime.EventsEmit(a.ctx, "enabledGamesUpdate", string(b))
+		}
+	}
+}
+
+// GetEnabledGames returns the list of currently enabled games in a stable order.
+func (a *App) GetEnabledGames() []string {
+	mutex.Lock()
+	defer mutex.Unlock()
+	order := []string{"pkr", "21", "13", "tri", "uo"}
+	out := []string{}
+	for _, k := range order {
+		if enabledGames[k] {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// isChoiceAllowed returns true if the provided normalized choice is enabled.
+func isChoiceAllowed(choice string) bool {
+	mutex.Lock()
+	defer mutex.Unlock()
+	switch choice {
+	case "pkr":
+		return enabledGames["pkr"]
+	case "21":
+		return enabledGames["21"]
+	case "13":
+		return enabledGames["13"]
+	case "tri", "trihigh", "trilow", "trih", "tril":
+		return enabledGames["tri"]
+	case "uo", "uo7", "uo_over", "uo_under":
+		return enabledGames["uo"]
+	default:
+		return false
+	}
+}
+
+// gameSelectionPrompt builds the shout prompt string based on enabled games
+// and respects Under/Over special modes.
+func gameSelectionPrompt() string {
+	mutex.Lock()
+	defer mutex.Unlock()
+	if underOver7GameModeEnabled {
+		m := underOver7PayoutMultiplier
+		return fmt.Sprintf("Shout U (2-6), O (8-12) or 7 to WIN x%d!", m)
+	}
+	if onlyUnderOver7Mode {
+		return "Shout U (2-6) or O (8-12) to DOUBLE!"
+	}
+	parts := []string{}
+	if enabledGames["pkr"] {
+		parts = append(parts, "pkr")
+	}
+	if enabledGames["21"] {
+		parts = append(parts, "21")
+	}
+	if enabledGames["13"] {
+		parts = append(parts, "13")
+	}
+	if enabledGames["tri"] {
+		parts = append(parts, "trih, tril")
+	}
+	if enabledGames["uo"] {
+		parts = append(parts, "uo")
+	}
+	if len(parts) == 0 {
+		return "No games configured"
+	}
+	return "Shout " + strings.Join(parts, ", ")
+}
+
 // PauseCasinoSetup temporarily disables dice setup recording without clearing
 // currently recorded dice.
 func (a *App) PauseCasinoSetup() {
@@ -10595,6 +10697,15 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	if strings.TrimSpace(senderName) != "" && (strings.TrimSpace(lastTradePartnerName) == "" || strings.EqualFold(strings.TrimSpace(lastTradePartnerName), "Unknown")) {
 		lastTradePartnerName = strings.TrimSpace(senderName)
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] backfilled trade partner name from chat sender: %q", lastTradePartnerName))
+	}
+
+	// If the chosen game is disabled by configuration, reject it and prompt
+	// the player with the allowed games. Keep awaitingGameChoice=true so the
+	// player can try again.
+	if !isChoiceAllowed(choice) {
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] rejected %q from %q: disabled", choice, senderName))
+		sendShout(fmt.Sprintf("%s is disabled. Available: %s", gameChoiceDisplay(choice), gameSelectionPrompt()))
+		return
 	}
 
 	e.Block()
