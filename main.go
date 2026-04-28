@@ -604,6 +604,10 @@ type GameHistoryEntry struct {
 	BetItems     []TradeItem `json:"betItems"`
 	PayoutItems  []TradeItem `json:"payoutItems"`
 	Notes        []string    `json:"notes"`
+	// New fields to capture player choice and raw shout, plus payout multiplier
+	Choice           string `json:"choice,omitempty"`
+	ChoiceShout      string `json:"choiceShout,omitempty"`
+	PayoutMultiplier int    `json:"payoutMultiplier,omitempty"`
 }
 
 type tradeShortage struct {
@@ -1963,6 +1967,45 @@ func (a *App) setCurrentGameHistoryGame(game string) {
 	a.syncGameHistory()
 }
 
+// setCurrentGameHistoryChoice records the normalized choice and the raw shout
+func (a *App) setCurrentGameHistoryChoice(choice string, shout string) {
+	a.AddLogMsg("[GAME_HISTORY] setCurrentGameHistoryChoice start")
+	a.gameHistoryMu.Lock()
+	if !a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+		if strings.TrimSpace(choice) != "" {
+			entry.Choice = choice
+		}
+		if strings.TrimSpace(shout) != "" {
+			entry.ChoiceShout = shout
+			entry.Notes = append(entry.Notes, fmt.Sprintf("Player shouted: %q", shout))
+		}
+	}) {
+		a.gameHistoryMu.Unlock()
+		return
+	}
+	a.gameHistoryMu.Unlock()
+	a.AddLogMsg("[GAME_HISTORY] setCurrentGameHistoryChoice unlocked, syncing")
+	a.syncGameHistory()
+}
+
+// setCurrentGameHistoryPayoutMultiplier stores the payout multiplier for the current entry
+func (a *App) setCurrentGameHistoryPayoutMultiplier(mult int) {
+	a.AddLogMsg("[GAME_HISTORY] setCurrentGameHistoryPayoutMultiplier start")
+	a.gameHistoryMu.Lock()
+	if !a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+		if mult > 0 {
+			entry.PayoutMultiplier = mult
+			entry.Notes = append(entry.Notes, fmt.Sprintf("Payout multiplier: %dx", mult))
+		}
+	}) {
+		a.gameHistoryMu.Unlock()
+		return
+	}
+	a.gameHistoryMu.Unlock()
+	a.AddLogMsg("[GAME_HISTORY] setCurrentGameHistoryPayoutMultiplier unlocked, syncing")
+	a.syncGameHistory()
+}
+
 func (a *App) setCurrentGameHistoryResults(playerResult string, dealerResult string, winner string, status string, complete bool) {
 	a.AddLogMsg("[GAME_HISTORY] setCurrentGameHistoryResults start")
 	a.gameHistoryMu.Lock()
@@ -2056,11 +2099,11 @@ func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note strin
 				if b.Quantity <= 0 {
 					continue
 				}
-				inferred = append(inferred, TradeItem{Name: b.Name, Quantity: b.Quantity * 2, RawData: b.RawData})
+				inferred = append(inferred, TradeItem{Name: b.Name, Quantity: b.Quantity * payoutMultiplierForRound, RawData: b.RawData})
 			}
 			entry.PayoutItems = inferred
 			if len(inferred) > 0 {
-				entry.Notes = append(entry.Notes, "Predicted payout (2x bet)")
+				entry.Notes = append(entry.Notes, fmt.Sprintf("Predicted payout (%dx bet)", payoutMultiplierForRound))
 			}
 		} else {
 			entry.PayoutItems = cloneTradeItems(items)
@@ -8785,6 +8828,8 @@ func (a *App) evaluateUnderOverRound() {
 
 	// Persist multiplier for payout routines that will auto-add items.
 	payoutMultiplierForRound = mult
+	// Record multiplier in game history so UI/webhooks reflect the correct payout
+	a.setCurrentGameHistoryPayoutMultiplier(mult)
 
 	playerName := strings.TrimSpace(lastTradePartnerName)
 	if playerName == "" {
@@ -10363,6 +10408,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			cleaned = "7"
 		}
 		a.AddLogMsg(fmt.Sprintf("[UO_DEBUG] accepted choice=%q from sender=%q index=%d (expectedName=%q expectedIndex=%d)", cleaned, senderName, index, awaitingUOChoicePartnerName, awaitingUOChoicePartnerID))
+		// Record normalized choice and raw shout into game history
+		a.setCurrentGameHistoryChoice(cleaned, msg)
 
 		// If this UO choice is being made as part of an active risk session,
 		// record the selected choice and multiplier on the risk session and
@@ -10439,6 +10486,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		e.Block()
 		awaitingTriChoice = false
 		a.AddLogMsg(fmt.Sprintf("[TRI_DEBUG] accepted choice=%q from sender=%q index=%d (expectedName=%q expectedIndex=%d)", cleaned, senderName, index, awaitingTriChoicePartnerName, awaitingTriChoicePartnerID))
+		// Record normalized choice and raw shout into game history
+		a.setCurrentGameHistoryChoice(cleaned, msg)
 
 		if cleaned == "high" {
 			a.beginTriRound("high")
@@ -10495,6 +10544,9 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			gameChoiceUnreadableWarned = false
 			awaitingGameChoicePartnerID = 0
 			awaitingGameChoicePartnerName = ""
+
+			// Record the immediate selection and raw shout into game history
+			a.setCurrentGameHistoryChoice("7", msg)
 
 			// If this selection is part of an active risk session, record the
 			// chosen variant and multiplier on the risk session and execute
@@ -10614,6 +10666,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	if choice != "tri" && choice != "uo" {
 		// Combine the standard "Starting" ack with the player-roll prompt
 		ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay(choice))
+		// Record normalized choice and raw shout into game history
+		a.setCurrentGameHistoryChoice(choice, msg)
 		a.setCurrentGameHistoryGame(gameChoiceDisplay(choice))
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", ack))
 		sendShout(ack)

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -71,17 +72,42 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 		return s
 	}
 
+	formatNotes := func(notes []string) string {
+		if len(notes) == 0 {
+			return "None"
+		}
+		s := strings.Join(notes, "\n")
+		if len(s) > 900 {
+			s = s[:900] + "…"
+		}
+		return s
+	}
+
+	formatField := func(v string) string {
+		if strings.TrimSpace(v) == "" {
+			return "None"
+		}
+		if len(v) > 900 {
+			return v[:900] + "…"
+		}
+		return v
+	}
+
 	embed := map[string]interface{}{
 		"title":       fmt.Sprintf("%s — %s", entry.Game, entry.Status),
 		"description": fmt.Sprintf("Player: %s", entry.PlayerName),
 		"color":       3447003,
 		"fields": []map[string]interface{}{
-			{"name": "Winner", "value": entry.Winner, "inline": true},
-			{"name": "Outcome", "value": entry.Status, "inline": true},
-			{"name": "Player Result", "value": entry.PlayerResult, "inline": true},
-			{"name": "Dealer Result", "value": entry.DealerResult, "inline": true},
+			{"name": "Winner", "value": formatField(entry.Winner), "inline": true},
+			{"name": "Outcome", "value": formatField(entry.Status), "inline": true},
+			{"name": "Choice", "value": formatField(entry.Choice), "inline": true},
+			{"name": "Player Result", "value": formatField(entry.PlayerResult), "inline": true},
+			{"name": "Dealer Result", "value": formatField(entry.DealerResult), "inline": true},
+			{"name": "Payout Multiplier", "value": strconv.Itoa(entry.PayoutMultiplier), "inline": true},
+			{"name": "Player Shout", "value": formatField(entry.ChoiceShout), "inline": false},
 			{"name": "Bet Items", "value": formatItems(entry.BetItems), "inline": false},
 			{"name": "Payout Items", "value": formatItems(entry.PayoutItems), "inline": false},
+			{"name": "Notes", "value": formatNotes(entry.Notes), "inline": false},
 			{"name": "Started At", "value": entry.StartedAt, "inline": true},
 			{"name": "Completed At", "value": entry.CompletedAt, "inline": true},
 		},
