@@ -7288,6 +7288,122 @@ func (a *App) notifyTradeQuantityCoverage() {
 		return
 	}
 
+	// If UnderOver7 mode is enabled and the current shortages are only for
+	// the UO7 multiplier (but a normal 2x payout is still possible), do NOT
+	// close the trade. Instead, send a per-item public warning, set the
+	// pending variant to force Over/Under, and keep the trade open.
+	if underOver7GameModeEnabled {
+		handItemsMu.Lock()
+		ready := tradeHandSnapshotReady
+		var handSnapshot []TradeItem
+		if ready {
+			handSnapshot = make([]TradeItem, len(tradeHandSnapshot))
+			copy(handSnapshot, tradeHandSnapshot)
+		}
+		handItemsMu.Unlock()
+
+		tradeItemsMu.Lock()
+		partnerItems := make([]TradeItem, len(currentTradeItems))
+		copy(partnerItems, currentTradeItems)
+		tradeItemsMu.Unlock()
+
+		if ready && len(partnerItems) > 0 {
+			handMap := map[string]int{}
+			for _, it := range handSnapshot {
+				key := strings.ToLower(strings.TrimSpace(it.Name))
+				if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+					key = k
+				}
+				handMap[key] += it.Quantity
+			}
+			incomingMap := map[string]int{}
+			for _, it := range partnerItems {
+				key := strings.ToLower(strings.TrimSpace(it.Name))
+				if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+					key = k
+				}
+				incomingMap[key] += it.Quantity
+			}
+
+			mutex.Lock()
+			multUO7 := underOver7PayoutMultiplier
+			mutex.Unlock()
+
+			requiredUO7 := map[string]int{}
+			requiredX2 := map[string]int{}
+			for _, it := range partnerItems {
+				key := strings.ToLower(strings.TrimSpace(it.Name))
+				if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+					key = k
+				}
+				if it.Quantity <= 0 {
+					continue
+				}
+				requiredUO7[key] += it.Quantity * multUO7
+				requiredX2[key] += it.Quantity * 2
+			}
+
+			shortageUO7 := false
+			shortageX2 := false
+			for name, req := range requiredUO7 {
+				have := handMap[name] + incomingMap[name]
+				if have < req {
+					shortageUO7 = true
+					break
+				}
+			}
+			for name, req := range requiredX2 {
+				have := handMap[name] + incomingMap[name]
+				if have < req {
+					shortageX2 = true
+					break
+				}
+			}
+
+			// UO7-only shortage: warn and force Over/Under (do not close trade)
+			if shortageUO7 && !shortageX2 {
+				parts := []string{}
+				seen := map[string]bool{}
+				for _, it := range partnerItems {
+					key := strings.ToLower(strings.TrimSpace(it.Name))
+					if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+						key = k
+					}
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+					avail := handMap[key] + incomingMap[key]
+					coverable := avail / multUO7
+					parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
+				}
+				msg := fmt.Sprintf("Sorry, I can no longer cover the UO7 x%d payout — please choose Over or Under. For 7 I can cover: %s - see my hand - rollorigins.club", multUO7, strings.Join(parts, "; "))
+
+				changed := msg != lastTradeCoverageNotice
+				lastTradeCoverageNotice = msg
+				lastTradeBlockNotice = msg
+
+				now := time.Now()
+				shouldShout := changed && (lastTradeCoverageShoutAt.IsZero() || now.Sub(lastTradeCoverageShoutAt) > tradeShoutCooldown)
+				if shouldShout {
+					lastTradeCoverageShoutAt = now
+					go func(m string) {
+						time.Sleep(350 * time.Millisecond)
+						sendShout(m)
+					}(msg)
+				} else {
+					a.AddLogMsg("[TRADE_COVERAGE] UO7-only shout suppressed by cooldown")
+				}
+
+				// Prevent 7 selection and force Over/Under when the round starts
+				pendingUoVariant = "uo"
+				a.noteCurrentGameHistory("UO7 coverage insufficient - warned partner and forced Over/Under")
+				a.AddLogMsg("[TRADE_COVERAGE] UO7-only shortage: keeping trade open and forcing Over/Under")
+				return
+			}
+		}
+	}
+
 	// No grace timer now — close immediately with a contextual message.
 	stopShortageMonitor()
 
