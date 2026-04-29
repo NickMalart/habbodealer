@@ -7490,11 +7490,17 @@ func (a *App) getTradeCoverageShortages() []tradeShortage {
 
 	// required payout quantities: use configured UO7 multiplier when dealer-level
 	// UnderOver7 game-mode is enabled (worst-case coverage for a shouted "7"),
-	// otherwise 2x.
+	// otherwise 2x. If we've already forced Over/Under for this trade
+	// (pendingUoVariant == "uo"), compute requirements as 2x so coverage
+	// checks accept Over/Under offers.
 	mult := 2
 	if underOver7GameModeEnabled {
 		mutex.Lock()
 		mult = underOver7PayoutMultiplier
+		// treat forced Over/Under as 2x
+		if pendingUoVariant == "uo" {
+			mult = 2
+		}
 		mutex.Unlock()
 	}
 	required := payoutRequirementsFromBetItemsMult(partnerItems, mult)
