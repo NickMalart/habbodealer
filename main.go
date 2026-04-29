@@ -4680,7 +4680,7 @@ func startShortageMonitor(a *App, timeout time.Duration) {
 					partnerName = "Player"
 				}
 				a.AddLogMsg(fmt.Sprintf("[TRADE_COVERAGE] shortage unresolved; force-closing trade with %s", partnerName))
-				sendShout("Sorry none avabile to see my hand - rollorigins.club")
+				sendShout("Shortage unresolved; closing trade")
 				ext.Send(out.TRADE_CLOSE)
 				stopShortageMonitor()
 				return
@@ -7377,7 +7377,7 @@ func (a *App) notifyTradeQuantityCoverage() {
 					coverable := avail / multUO7
 					parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
 				}
-				msg := fmt.Sprintf("Sorry, I can no longer cover the UO7 x%d payout — please choose Over or Under. For 7 I can cover: %s - see my hand - rollorigins.club", multUO7, strings.Join(parts, "; "))
+				msg := fmt.Sprintf("I can only cover Under or Over for 7. I can cover: %s", strings.Join(parts, "; "))
 
 				changed := msg != lastTradeCoverageNotice
 				lastTradeCoverageNotice = msg
@@ -7413,11 +7413,9 @@ func (a *App) notifyTradeQuantityCoverage() {
 	if len(shortages) == 1 {
 		s := shortages[0]
 		if s.HaveHand == 0 && s.Incoming == 0 {
-			msg = fmt.Sprintf("Sorry, I have no %s to pay out - see my hand - rollorigins.club",
-				formatTradeItemName(s.Name))
+			msg = fmt.Sprintf("No %s available", formatTradeItemName(s.Name))
 		} else {
-			msg = fmt.Sprintf("Sorry, insufficient %s for payout (hand %d + incoming %d = %d; need %d) - see my hand - rollorigins.club",
-				formatTradeItemName(s.Name), s.HaveHand, s.Incoming, s.Have, s.Required)
+			msg = fmt.Sprintf("Short %s %d/%d", formatTradeItemName(s.Name), s.Have, s.Required)
 		}
 	} else {
 		parts := make([]string, 0, len(shortages))
@@ -7428,7 +7426,7 @@ func (a *App) notifyTradeQuantityCoverage() {
 				parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(s.Name), s.Have, s.Required))
 			}
 		}
-		msg = fmt.Sprintf("Sorry, insufficient stock: %s - see my hand - rollorigins.club", strings.Join(parts, "; "))
+		msg = fmt.Sprintf("Short: %s", strings.Join(parts, "; "))
 	}
 
 	changed := msg != lastTradeCoverageNotice
@@ -10605,7 +10603,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 						coverable := avail / multUO7
 						parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
 					}
-					msg := fmt.Sprintf("Sorry, I can no longer cover the UO7 x%d payout — please choose Over or Under. For 7 I can cover: %s - see my hand - rollorigins.club", multUO7, strings.Join(parts, "; "))
+					msg := fmt.Sprintf("I can only cover Under or Over for 7. I can cover: %s", strings.Join(parts, "; "))
 					changed := msg != lastTradeCoverageNotice
 					lastTradeCoverageNotice = msg
 					lastTradeBlockNotice = msg
@@ -10845,7 +10843,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 						parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
 					}
 
-					msg := fmt.Sprintf("Sorry, I can no longer cover the UO7 x%d payout — please choose Over or Under. For 7 I can cover: %s - see my hand - rollorigins.club", multUO7, strings.Join(parts, "; "))
+					msg := fmt.Sprintf("I can only cover Under or Over for 7. I can cover: %s", strings.Join(parts, "; "))
 					changed := msg != lastTradeCoverageNotice
 					lastTradeCoverageNotice = msg
 					lastTradeBlockNotice = msg
@@ -11108,7 +11106,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 					parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
 				}
 
-				msg := fmt.Sprintf("Sorry, I can no longer cover the UO7 x%d payout — please choose Over or Under. For 7 I can cover: %s - see my hand - rollorigins.club", multUO7, strings.Join(parts, "; "))
+				msg := fmt.Sprintf("I can only cover Under or Over for 7. I can cover: %s", strings.Join(parts, "; "))
 				changed := msg != lastTradeCoverageNotice
 				lastTradeCoverageNotice = msg
 				lastTradeBlockNotice = msg
