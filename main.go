@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bytes"
@@ -788,6 +788,36 @@ func (a *App) startup(ctx context.Context) {
 		defer ticker.Stop()
 		for range ticker.C {
 			a.sendLiveDealerStatus(dealerAcceptingTrades, a.getCurrentDealerName())
+		}
+	}()
+
+	// Periodic hand-snapshot sender: keep remote site up-to-date for open dealers.
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			// Skip when no dealer/casino/trade is open.
+			if !casinoActive && !dealerAcceptingTrades && !tradeOpen {
+				continue
+			}
+
+			// Prefer frozen snapshot when available, otherwise use live hand.
+			handItemsMu.Lock()
+			var items []TradeItem
+			if tradeHandSnapshotReady && len(tradeHandSnapshot) > 0 {
+				items = make([]TradeItem, len(tradeHandSnapshot))
+				copy(items, tradeHandSnapshot)
+			} else if len(currentHandItems) > 0 {
+				items = make([]TradeItem, len(currentHandItems))
+				copy(items, currentHandItems)
+			}
+			handItemsMu.Unlock()
+
+			if len(items) == 0 {
+				continue
+			}
+			// sendLiveDealerSnapshot is already asynchronous.
+			a.sendLiveDealerSnapshot(items)
 		}
 	}()
 
