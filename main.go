@@ -11052,6 +11052,18 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 				return
 			}
 
+			// If we have previously forced Over/Under for this trade, do not
+			// acknowledge a shouted '7' with a "Starting" ack. Instead,
+			// re-prompt Over/Under so the player must choose U/O explicitly.
+			mutex.Lock()
+			pv := pendingUoVariant
+			mutex.Unlock()
+			if pv == "uo" {
+				a.AddLogMsg("[GAME_SELECT] received '7' but pendingUoVariant==\"uo\"; re-prompting Over/Under without acknowledging '7'")
+				a.beginUOChoiceSequence()
+				return
+			}
+
 			ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay("uo7"))
 			a.setCurrentGameHistoryGame(gameChoiceDisplay("uo7"))
 			a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", ack))
