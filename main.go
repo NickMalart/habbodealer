@@ -10399,10 +10399,121 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		}
 
 		e.Block()
-		awaitingUOChoice = false
+		// Normalize "seven" -> "7" early for checks
 		if cleaned == "seven" {
 			cleaned = "7"
 		}
+
+		// If player selected "7", verify UO7 coverage; if UO7 is short but
+		// normal x2 is still possible, do NOT allow a 7 selection. Warn
+		// publicly with per-item coverable counts and keep the UO choice
+		// locked so the player may reply with Over/Under.
+		if cleaned == "7" {
+			handItemsMu.Lock()
+			ready := tradeHandSnapshotReady
+			var handSnapshot []TradeItem
+			if ready {
+				handSnapshot = make([]TradeItem, len(tradeHandSnapshot))
+				copy(handSnapshot, tradeHandSnapshot)
+			}
+			handItemsMu.Unlock()
+
+			tradeItemsMu.Lock()
+			partnerItems := make([]TradeItem, len(currentTradeItems))
+			copy(partnerItems, currentTradeItems)
+			tradeItemsMu.Unlock()
+
+			if ready && len(partnerItems) > 0 {
+				handMap := map[string]int{}
+				for _, it := range handSnapshot {
+					key := strings.ToLower(strings.TrimSpace(it.Name))
+					if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+						key = k
+					}
+					handMap[key] += it.Quantity
+				}
+				incomingMap := map[string]int{}
+				for _, it := range partnerItems {
+					key := strings.ToLower(strings.TrimSpace(it.Name))
+					if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+						key = k
+					}
+					incomingMap[key] += it.Quantity
+				}
+
+				multUO7 := underOver7PayoutMultiplier
+				requiredUO7 := map[string]int{}
+				requiredX2 := map[string]int{}
+				for _, it := range partnerItems {
+					key := strings.ToLower(strings.TrimSpace(it.Name))
+					if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+						key = k
+					}
+					if it.Quantity <= 0 {
+						continue
+					}
+					requiredUO7[key] += it.Quantity * multUO7
+					requiredX2[key] += it.Quantity * 2
+				}
+
+				shortageUO7 := false
+				shortageX2 := false
+				for name, req := range requiredUO7 {
+					have := handMap[name] + incomingMap[name]
+					if have < req {
+						shortageUO7 = true
+						break
+					}
+				}
+				for name, req := range requiredX2 {
+					have := handMap[name] + incomingMap[name]
+					if have < req {
+						shortageX2 = true
+						break
+					}
+				}
+
+				if shortageUO7 && !shortageX2 {
+					parts := []string{}
+					seen := map[string]bool{}
+					for _, it := range partnerItems {
+						key := strings.ToLower(strings.TrimSpace(it.Name))
+						if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+							key = k
+						}
+						if seen[key] {
+							continue
+						}
+						seen[key] = true
+						avail := handMap[key] + incomingMap[key]
+						coverable := avail / multUO7
+						parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
+					}
+					msg := fmt.Sprintf("Sorry, I can no longer cover the UO7 x%d payout — please choose Over or Under. For 7 I can cover: %s - see my hand - rollorigins.club", multUO7, strings.Join(parts, "; "))
+					changed := msg != lastTradeCoverageNotice
+					lastTradeCoverageNotice = msg
+					lastTradeBlockNotice = msg
+					now := time.Now()
+					shouldShout := changed && (lastTradeCoverageShoutAt.IsZero() || now.Sub(lastTradeCoverageShoutAt) > tradeShoutCooldown)
+					if shouldShout {
+						lastTradeCoverageShoutAt = now
+						time.Sleep(350 * time.Millisecond)
+						sendShout(msg)
+					} else {
+						a.AddLogMsg("[TRADE_COVERAGE] UO7-only shout suppressed by cooldown")
+					}
+
+					pendingUoVariant = "uo"
+					a.noteCurrentGameHistory("UO7 coverage prevented 7 selection; partner asked to choose Over/Under")
+					a.AddLogMsg("[UO_DEBUG] prevented 7 choice due to UO7 coverage")
+					// Keep awaitingUOChoice true so the partner can now reply with Over/Under.
+					return
+				}
+			}
+		}
+
+		// Persist acceptance and continue as normal
+		awaitingUOChoice = false
 		a.AddLogMsg(fmt.Sprintf("[UO_DEBUG] accepted choice=%q from sender=%q index=%d (expectedName=%q expectedIndex=%d)", cleaned, senderName, index, awaitingUOChoicePartnerName, awaitingUOChoicePartnerID))
 		// Record normalized choice and raw shout into game history
 		a.setCurrentGameHistoryChoice(cleaned, msg)
@@ -10506,7 +10617,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		if underOver7GameModeEnabled && (cleanedChoice == "7" || cleanedChoice == "seven") {
 			// verify sender matches expected trade starter
 			indexMatch := awaitingGameChoicePartnerID > 0 && index == awaitingGameChoicePartnerID
-			nameMatch := awaitingGameChoicePartnerName != "" && strings.EqualFold(senderName, awaitingGameChoicePartnerName)
+			nameMatch := awaitingUOChoicePartnerName != "" && strings.EqualFold(senderName, awaitingGameChoicePartnerName)
+			nameMatch = awaitingGameChoicePartnerName != "" && strings.EqualFold(senderName, awaitingGameChoicePartnerName)
 			if !indexMatch && !nameMatch && awaitingGameChoicePartnerName != "" {
 				if expectedIdx, ok := lookupRoomEntityIndexByName(awaitingGameChoicePartnerName); ok && expectedIdx > 0 && expectedIdx == index {
 					indexMatch = true
@@ -10533,6 +10645,110 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isHitting || is13Hitting || isClosing {
 				a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %q selected but dice are busy", cleanedChoice))
 				return
+			}
+
+			// Check UO7 coverage vs normal x2. If only UO7 is short, warn and force Over/Under.
+			handItemsMu.Lock()
+			ready := tradeHandSnapshotReady
+			var handSnapshot []TradeItem
+			if ready {
+				handSnapshot = make([]TradeItem, len(tradeHandSnapshot))
+				copy(handSnapshot, tradeHandSnapshot)
+			}
+			handItemsMu.Unlock()
+
+			tradeItemsMu.Lock()
+			partnerItems := make([]TradeItem, len(currentTradeItems))
+			copy(partnerItems, currentTradeItems)
+			tradeItemsMu.Unlock()
+
+			if ready && len(partnerItems) > 0 {
+				handMap := map[string]int{}
+				for _, it := range handSnapshot {
+					key := strings.ToLower(strings.TrimSpace(it.Name))
+					if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+						key = k
+					}
+					handMap[key] += it.Quantity
+				}
+				incomingMap := map[string]int{}
+				for _, it := range partnerItems {
+					key := strings.ToLower(strings.TrimSpace(it.Name))
+					if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+						key = k
+					}
+					incomingMap[key] += it.Quantity
+				}
+
+				multUO7 := underOver7PayoutMultiplier
+				requiredUO7 := map[string]int{}
+				requiredX2 := map[string]int{}
+				for _, it := range partnerItems {
+					key := strings.ToLower(strings.TrimSpace(it.Name))
+					if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+						key = k
+					}
+					if it.Quantity <= 0 {
+						continue
+					}
+					requiredUO7[key] += it.Quantity * multUO7
+					requiredX2[key] += it.Quantity * 2
+				}
+
+				shortageUO7 := false
+				shortageX2 := false
+				for name, req := range requiredUO7 {
+					have := handMap[name] + incomingMap[name]
+					if have < req {
+						shortageUO7 = true
+						break
+					}
+				}
+				for name, req := range requiredX2 {
+					have := handMap[name] + incomingMap[name]
+					if have < req {
+						shortageX2 = true
+						break
+					}
+				}
+
+				if shortageUO7 && !shortageX2 {
+					parts := []string{}
+					seen := map[string]bool{}
+					for _, it := range partnerItems {
+						key := strings.ToLower(strings.TrimSpace(it.Name))
+						if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+							key = k
+						}
+						if seen[key] {
+							continue
+						}
+						seen[key] = true
+						avail := handMap[key] + incomingMap[key]
+						coverable := avail / multUO7
+						parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
+					}
+
+					msg := fmt.Sprintf("Sorry, I can no longer cover the UO7 x%d payout — please choose Over or Under. For 7 I can cover: %s - see my hand - rollorigins.club", multUO7, strings.Join(parts, "; "))
+					changed := msg != lastTradeCoverageNotice
+					lastTradeCoverageNotice = msg
+					lastTradeBlockNotice = msg
+					now := time.Now()
+					shouldShout := changed && (lastTradeCoverageShoutAt.IsZero() || now.Sub(lastTradeCoverageShoutAt) > tradeShoutCooldown)
+					if shouldShout {
+						lastTradeCoverageShoutAt = now
+						time.Sleep(350 * time.Millisecond)
+						sendShout(msg)
+					} else {
+						a.AddLogMsg("[TRADE_COVERAGE] UO7-only shout suppressed by cooldown")
+					}
+
+					pendingUoVariant = "uo"
+					a.noteCurrentGameHistory("UO7 coverage insufficient - switched to Over/Under")
+					a.AddLogMsg("[GAME_SELECT] falling back to Over/Under choice due to UO7 coverage")
+					a.beginUOChoiceSequence()
+					return
+				}
 			}
 
 			stopGameChoiceTimeoutMonitor()
@@ -10692,7 +10908,112 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Tri; prompting for High/Low", index))
 		a.beginTriChoiceSequence()
 	case "uo7":
-		// Two-step Under/Over-7 selection: prompt player for Over/Under/7
+		// Two-step Under/Over-7 selection: check whether UO7 coverage is possible
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Under/Over7; checking UO7 coverage", index))
+
+		handItemsMu.Lock()
+		ready := tradeHandSnapshotReady
+		var handSnapshot []TradeItem
+		if ready {
+			handSnapshot = make([]TradeItem, len(tradeHandSnapshot))
+			copy(handSnapshot, tradeHandSnapshot)
+		}
+		handItemsMu.Unlock()
+
+		tradeItemsMu.Lock()
+		partnerItems := make([]TradeItem, len(currentTradeItems))
+		copy(partnerItems, currentTradeItems)
+		tradeItemsMu.Unlock()
+
+		if ready && len(partnerItems) > 0 {
+			handMap := map[string]int{}
+			for _, it := range handSnapshot {
+				key := strings.ToLower(strings.TrimSpace(it.Name))
+				if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+					key = k
+				}
+				handMap[key] += it.Quantity
+			}
+			incomingMap := map[string]int{}
+			for _, it := range partnerItems {
+				key := strings.ToLower(strings.TrimSpace(it.Name))
+				if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+					key = k
+				}
+				incomingMap[key] += it.Quantity
+			}
+
+			multUO7 := underOver7PayoutMultiplier
+			requiredUO7 := map[string]int{}
+			requiredX2 := map[string]int{}
+			for _, it := range partnerItems {
+				key := strings.ToLower(strings.TrimSpace(it.Name))
+				if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+					key = k
+				}
+				if it.Quantity <= 0 {
+					continue
+				}
+				requiredUO7[key] += it.Quantity * multUO7
+				requiredX2[key] += it.Quantity * 2
+			}
+
+			shortageUO7 := false
+			shortageX2 := false
+			for name, req := range requiredUO7 {
+				have := handMap[name] + incomingMap[name]
+				if have < req {
+					shortageUO7 = true
+					break
+				}
+			}
+			for name, req := range requiredX2 {
+				have := handMap[name] + incomingMap[name]
+				if have < req {
+					shortageX2 = true
+					break
+				}
+			}
+
+			if shortageUO7 && !shortageX2 {
+				parts := []string{}
+				seen := map[string]bool{}
+				for _, it := range partnerItems {
+					key := strings.ToLower(strings.TrimSpace(it.Name))
+					if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+						key = k
+					}
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+					avail := handMap[key] + incomingMap[key]
+					coverable := avail / multUO7
+					parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
+				}
+
+				msg := fmt.Sprintf("Sorry, I can no longer cover the UO7 x%d payout — please choose Over or Under. For 7 I can cover: %s - see my hand - rollorigins.club", multUO7, strings.Join(parts, "; "))
+				changed := msg != lastTradeCoverageNotice
+				lastTradeCoverageNotice = msg
+				lastTradeBlockNotice = msg
+				now := time.Now()
+				shouldShout := changed && (lastTradeCoverageShoutAt.IsZero() || now.Sub(lastTradeCoverageShoutAt) > tradeShoutCooldown)
+				if shouldShout {
+					lastTradeCoverageShoutAt = now
+					time.Sleep(350 * time.Millisecond)
+					sendShout(msg)
+				} else {
+					a.AddLogMsg("[TRADE_COVERAGE] UO7-only shout suppressed by cooldown")
+				}
+
+				pendingUoVariant = "uo"
+				a.noteCurrentGameHistory("UO7 coverage insufficient - switched to Over/Under")
+				a.AddLogMsg("[GAME_SELECT] falling back to Over/Under choice due to UO7 coverage")
+				a.beginUOChoiceSequence()
+				break
+			}
+		}
+
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Under/Over7; prompting for Over/Under/7", index))
 		a.beginUO7ChoiceSequence()
 	case "uo":
