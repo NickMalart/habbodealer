@@ -2766,15 +2766,11 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			// Send the trade items summary to chat
 			a.sendTradeCompletionMessage()
 
-			// Record predicted payout items for history as 2x (or configured UO7 multiplier)
-			// This ensures the frontend shows a sensible payout count even when
-			// an explicit payout trade flow was not used.
+			// Record predicted payout items for history as 2x.
+			// Predict 2x at bet completion; the actual multiplier is set later
+			// when the game choice is evaluated so predictions don't inflate when
+			// UO7 mode is active but the player hasn't picked "7".
 			mult := 2
-			if underOver7GameModeEnabled {
-				mutex.Lock()
-				mult = underOver7PayoutMultiplier
-				mutex.Unlock()
-			}
 			payoutPred := make([]TradeItem, 0, len(gameBetItems))
 			for _, it := range gameBetItems {
 				if it.Quantity <= 0 {
