@@ -10622,8 +10622,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	if awaitingUOChoice {
 		cleaned := strings.ToLower(strings.TrimSpace(msg))
 		cleaned = gameChoiceCleanupRe.ReplaceAllString(cleaned, "")
-		// Accept over, under or 7 (allow "seven" too)
-		if cleaned != "over" && cleaned != "under" && cleaned != "7" && cleaned != "seven" {
+		// Accept over, under, short forms o/u, or 7 (allow "seven" too)
+		if cleaned != "over" && cleaned != "under" && cleaned != "o" && cleaned != "u" && cleaned != "7" && cleaned != "seven" {
 			a.AddLogMsg(fmt.Sprintf("[UO_DEBUG] awaiting UO choice from %q(index=%d), ignored non-choice message=%q", awaitingUOChoicePartnerName, awaitingUOChoicePartnerID, msg))
 			return
 		}
@@ -10650,6 +10650,13 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		// Normalize "seven" -> "7" early for checks
 		if cleaned == "seven" {
 			cleaned = "7"
+		}
+
+		// Accept shorthand letters: 'o' -> over, 'u' -> under
+		if cleaned == "o" {
+			cleaned = "over"
+		} else if cleaned == "u" {
+			cleaned = "under"
 		}
 
 		// If player selected "7", verify UO7 coverage; if UO7 is short but
