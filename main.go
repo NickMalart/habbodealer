@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"bytes"
@@ -4604,8 +4604,13 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 			if underOver7GameModeEnabled {
 				mutex.Lock()
 				m := underOver7PayoutMultiplier
+				pv := pendingUoVariant
 				mutex.Unlock()
-				reminder = fmt.Sprintf("Shout U (2-6), O (8-12) or 7 to WIN x%d!", m)
+				if pv == "uo" {
+					reminder = "Shout U (2-6), O (8-12) to DOUBLE!"
+				} else {
+					reminder = fmt.Sprintf("Shout U (2-6), O (8-12) or 7 to WIN x%d!", m)
+				}
 			} else if onlyUnderOver7Mode {
 				reminder = "Shout U (2-6) or O (8-12) to DOUBLE!"
 			} else {
@@ -7377,7 +7382,7 @@ func (a *App) notifyTradeQuantityCoverage() {
 					coverable := avail / multUO7
 					parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
 				}
-				msg := fmt.Sprintf("I can only cover Under or Over for 7. I can cover: %s", strings.Join(parts, "; "))
+				msg := fmt.Sprintf("I can only cover Over or Under. I can cover: %s", strings.Join(parts, "; "))
 
 				changed := msg != lastTradeCoverageNotice
 				lastTradeCoverageNotice = msg
@@ -7713,8 +7718,13 @@ func (a *App) sendTradeCompletionMessage() {
 	if underOver7GameModeEnabled {
 		mutex.Lock()
 		m := underOver7PayoutMultiplier
+		pv := pendingUoVariant
 		mutex.Unlock()
-		msg = fmt.Sprintf("Shout U (2-6), O (8-12) to DOUBLE! or 7 to WIN x%d!", m)
+		if pv == "uo" {
+			msg = "Shout U (2-6), O (8-12) to DOUBLE!"
+		} else {
+			msg = fmt.Sprintf("Shout U (2-6), O (8-12) to DOUBLE! or 7 to WIN x%d!", m)
+		}
 	} else if onlyUnderOver7Mode {
 		msg = "Shout U (2-6) or O (8-12) to DOUBLE!"
 	} else {
@@ -8900,7 +8910,7 @@ func (a *App) beginUnderOverRound(mode string) {
 					coverable := avail / multUO7
 					parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
 				}
-				msg := fmt.Sprintf("I can only cover Under or Over for 7. I can cover: %s", strings.Join(parts, "; "))
+				msg := fmt.Sprintf("I can only cover Over or Under. I can cover: %s", strings.Join(parts, "; "))
 
 				changed := msg != lastTradeCoverageNotice
 				lastTradeCoverageNotice = msg
@@ -10727,7 +10737,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 						coverable := avail / multUO7
 						parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
 					}
-					msg := fmt.Sprintf("I can only cover Under or Over for 7. I can cover: %s", strings.Join(parts, "; "))
+					msg := fmt.Sprintf("I can only cover Over or Under. I can cover: %s", strings.Join(parts, "; "))
 					changed := msg != lastTradeCoverageNotice
 					lastTradeCoverageNotice = msg
 					lastTradeBlockNotice = msg
@@ -10755,8 +10765,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		// Over/Under (pendingUoVariant=="uo"), reject the '7' and re-prompt
 		// so the partner can reply with Over/Under only.
 		if cleaned == "7" && pendingUoVariant == "uo" {
-			a.AddLogMsg("[UO_DEBUG] partner attempted '7' but pendingUoVariant==\"uo\"; re-prompting Over/Under")
-			a.beginUOChoiceSequence()
+			// Ignore '7' selections when Over/Under has been forced; do not
+			// acknowledge or accept the shout so the player must choose Over/Under.
 			return
 		}
 		awaitingUOChoice = false
@@ -10975,7 +10985,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 						parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
 					}
 
-					msg := fmt.Sprintf("I can only cover Under or Over for 7. I can cover: %s", strings.Join(parts, "; "))
+					msg := fmt.Sprintf("I can only cover Over or Under. I can cover: %s", strings.Join(parts, "; "))
 					changed := msg != lastTradeCoverageNotice
 					lastTradeCoverageNotice = msg
 					lastTradeBlockNotice = msg
@@ -11238,7 +11248,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 					parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
 				}
 
-				msg := fmt.Sprintf("I can only cover Under or Over for 7. I can cover: %s", strings.Join(parts, "; "))
+				msg := fmt.Sprintf("I can only cover Over or Under. I can cover: %s", strings.Join(parts, "; "))
 				changed := msg != lastTradeCoverageNotice
 				lastTradeCoverageNotice = msg
 				lastTradeBlockNotice = msg
