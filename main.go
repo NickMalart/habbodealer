@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bytes"
@@ -8815,6 +8815,117 @@ func (a *App) beginUnderOverRound(mode string) {
 	if choice == "seven" {
 		choice = "7"
 	}
+
+	// Defensive: prevent starting a "7" round when UO7 coverage is insufficient.
+	// If UO7 is short but normal x2 is coverable, force Over/Under and re-prompt.
+	if choice == "7" {
+		// If we already forced Over/Under, re-prompt Over/Under.
+		if pendingUoVariant == "uo" {
+			a.AddLogMsg("[GAME_SELECT] partner attempted '7' but pendingUoVariant==\"uo\"; re-prompting Over/Under")
+			a.beginUOChoiceSequence()
+			return
+		}
+
+		handItemsMu.Lock()
+		ready := tradeHandSnapshotReady
+		var handSnapshot []TradeItem
+		if ready {
+			handSnapshot = make([]TradeItem, len(tradeHandSnapshot))
+			copy(handSnapshot, tradeHandSnapshot)
+		}
+		handItemsMu.Unlock()
+
+		tradeItemsMu.Lock()
+		partnerItems := make([]TradeItem, len(currentTradeItems))
+		copy(partnerItems, currentTradeItems)
+		tradeItemsMu.Unlock()
+
+		if ready && len(partnerItems) > 0 {
+			handMap := map[string]int{}
+			for _, it := range handSnapshot {
+				key := strings.ToLower(strings.TrimSpace(it.Name))
+				if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+					key = k
+				}
+				handMap[key] += it.Quantity
+			}
+			incomingMap := map[string]int{}
+			for _, it := range partnerItems {
+				key := strings.ToLower(strings.TrimSpace(it.Name))
+				if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+					key = k
+				}
+				incomingMap[key] += it.Quantity
+			}
+
+			mutex.Lock()
+			multUO7 := underOver7PayoutMultiplier
+			mutex.Unlock()
+
+			shortageUO7 := false
+			shortageX2 := false
+			for _, it := range partnerItems {
+				key := strings.ToLower(strings.TrimSpace(it.Name))
+				if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+					key = k
+				}
+				if it.Quantity <= 0 {
+					continue
+				}
+				if handMap[key]+incomingMap[key] < it.Quantity*multUO7 {
+					shortageUO7 = true
+				}
+				if handMap[key]+incomingMap[key] < it.Quantity*2 {
+					shortageX2 = true
+				}
+				if shortageUO7 && shortageX2 {
+					break
+				}
+			}
+
+			// If only UO7 is short, force UO (2x), shout concise cover counts and re-prompt.
+			if shortageUO7 && !shortageX2 {
+				parts := []string{}
+				seen := map[string]bool{}
+				for _, it := range partnerItems {
+					key := strings.ToLower(strings.TrimSpace(it.Name))
+					if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
+						key = k
+					}
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+					avail := handMap[key] + incomingMap[key]
+					coverable := avail / multUO7
+					parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
+				}
+				msg := fmt.Sprintf("I can only cover Under or Over for 7. I can cover: %s", strings.Join(parts, "; "))
+
+				changed := msg != lastTradeCoverageNotice
+				lastTradeCoverageNotice = msg
+				lastTradeBlockNotice = msg
+				now := time.Now()
+				shouldShout := changed && (lastTradeCoverageShoutAt.IsZero() || now.Sub(lastTradeCoverageShoutAt) > tradeShoutCooldown)
+				if shouldShout {
+					lastTradeCoverageShoutAt = now
+					go func(m string) {
+						time.Sleep(350 * time.Millisecond)
+						sendShout(m)
+					}(msg)
+				} else {
+					a.AddLogMsg("[GAME_SELECT] UO7-only shout suppressed by cooldown")
+				}
+
+				pendingUoVariant = "uo"
+				a.noteCurrentGameHistory("UO7 coverage prevented starting 7 - forced Over/Under")
+				a.AddLogMsg("[GAME_SELECT] forced Over/Under; re-prompting partner")
+				a.beginUOChoiceSequence()
+				return
+			}
+		}
+	}
+
 	uoPlayerChoice = choice
 	// Establish variant for this round: prefer any pending variant set when prompting,
 	// otherwise fall back to dealer-level configuration.
