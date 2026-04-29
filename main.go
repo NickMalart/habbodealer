@@ -8764,6 +8764,13 @@ func (a *App) beginUO7ChoiceSequence() {
 	if playerName == "" {
 		playerName = "Player"
 	}
+	// If a forced Over/Under variant is already in effect (pendingUoVariant=="uo"),
+	// do not offer the 7 option — fall back to the 2x Over/Under prompt.
+	if pendingUoVariant == "uo" {
+		a.AddLogMsg("[GAME_SELECT] beginUO7ChoiceSequence suppressed; pendingUoVariant==\"uo\" — forcing Over/Under prompt")
+		a.beginUOChoiceSequence()
+		return
+	}
 
 	resetPokerSequence()
 	resetBlackjackSequence()
@@ -10633,6 +10640,14 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		}
 
 		// Persist acceptance and continue as normal
+		// If the partner attempted to choose '7' but we previously forced
+		// Over/Under (pendingUoVariant=="uo"), reject the '7' and re-prompt
+		// so the partner can reply with Over/Under only.
+		if cleaned == "7" && pendingUoVariant == "uo" {
+			a.AddLogMsg("[UO_DEBUG] partner attempted '7' but pendingUoVariant==\"uo\"; re-prompting Over/Under")
+			a.beginUOChoiceSequence()
+			return
+		}
 		awaitingUOChoice = false
 		a.AddLogMsg(fmt.Sprintf("[UO_DEBUG] accepted choice=%q from sender=%q index=%d (expectedName=%q expectedIndex=%d)", cleaned, senderName, index, awaitingUOChoicePartnerName, awaitingUOChoicePartnerID))
 		// Record normalized choice and raw shout into game history
