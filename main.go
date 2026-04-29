@@ -7276,6 +7276,13 @@ func (a *App) notifyTradeQuantityCoverage() {
 		lastTradeBlockNotice = ""
 		a.AddLogMsg("[TRADE_COVERAGE] sufficient stock for payout")
 
+		// If a pending forced variant was set while shortages existed, clear it
+		// now that coverage has been restored so UO7 choices may be offered again.
+		mutex.Lock()
+		pendingUoVariant = ""
+		mutex.Unlock()
+		a.AddLogMsg("[TRADE_COVERAGE] cleared pendingUoVariant due to restored coverage")
+
 		// Cancel any active shortage monitor since coverage is sufficient now.
 		stopShortageMonitor()
 
