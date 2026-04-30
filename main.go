@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"bytes"
@@ -729,6 +729,8 @@ func (a *App) getCurrentRoomName() string {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	// initialize raffle manager (persisted to raffle_tickets.json)
+	Raffle = NewRaffleManager("raffle_tickets.json", a.ctx)
 	a.loadGameHistory()
 	a.setupExt()
 	go func() {
@@ -3315,6 +3317,26 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 		// Clear trade items when trade closes. Ensure client/server trade
 		// window state is cleared too.
+		// record raffle tickets from partner (before clearing trade items)
+		partner := normalizeUsername(strings.TrimSpace(lastTradePartnerName))
+		items := a.GetCurrentTradeItems()
+		if len(items) > 0 && Raffle != nil {
+			if Raffle.IsActive() {
+				go func(p string, its []TradeItem) {
+					if tickets, err := Raffle.RecordContribution(p, its); err != nil {
+						a.AddLogMsg(fmt.Sprintf("[RAFFLE] failed to record: %v", err))
+					} else {
+						if tickets > 0 {
+							a.AddLogMsg(fmt.Sprintf("[RAFFLE] awarded %d ticket(s) to %s", tickets, p))
+						} else {
+							a.AddLogMsg(fmt.Sprintf("[RAFFLE] contribution seen but 0 tickets awarded to %s", p))
+						}
+					}
+				}(partner, items)
+			} else {
+				a.AddLogMsg("[RAFFLE] raffle inactive; not recording contribution")
+			}
+		}
 		a.ClearTradeItems()
 
 		// If a trade was open, we previously sent a delayed outgoing
@@ -6169,6 +6191,95 @@ func (a *App) GetTradeItemsJSON() string {
 		return "[]"
 	}
 	return string(jsonData)
+}
+
+// GetRaffleStateJSON returns the raffle tickets and contributions as JSON
+func (a *App) GetRaffleStateJSON() string {
+	if Raffle == nil {
+		return "{}"
+	}
+	state := map[string]interface{}{
+		"tickets":       Raffle.AllTickets(),
+		"contributions": Raffle.ListContributions(),
+		"active":        Raffle.IsActive(),
+		"name":          Raffle.Name,
+		"prizeName":     Raffle.PrizeName,
+		"prizeCount":    Raffle.PrizeCount,
+		"startAt":       Raffle.StartAt,
+		"endAt":         Raffle.EndAt,
+	}
+	b, err := json.Marshal(state)
+	if err != nil {
+		a.AddLogMsg(fmt.Sprintf("[RAFFLE] failed to marshal state: %v", err))
+		return "{}"
+	}
+	return string(b)
+}
+
+// DrawRaffleWinner draws a weighted winner and returns the name (or empty string)
+func (a *App) DrawRaffleWinner(seed int64) string {
+	if Raffle == nil {
+		return ""
+	}
+	winner, err := Raffle.DrawWinner(seed)
+	if err != nil {
+		a.AddLogMsg(fmt.Sprintf("[RAFFLE] draw failed: %v", err))
+		return ""
+	}
+	a.AddLogMsg(fmt.Sprintf("[RAFFLE] winner drawn: %s", winner))
+	return winner
+}
+
+// StartRaffle starts a new raffle with given name, prize name and count
+func (a *App) StartRaffle(name string, prizeName string, prizeCount int) error {
+	if Raffle == nil {
+		Raffle = NewRaffleManager("raffle_tickets.json", a.ctx)
+	}
+	if err := Raffle.Start(name, prizeName, prizeCount); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[RAFFLE] start failed: %v", err))
+		return err
+	}
+	a.AddLogMsg(fmt.Sprintf("[RAFFLE] started raffle %q prize=%q x%d", name, prizeName, prizeCount))
+	return nil
+}
+
+// StopRaffle stops the active raffle
+func (a *App) StopRaffle() error {
+	if Raffle == nil {
+		return nil
+	}
+	if err := Raffle.Stop(); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[RAFFLE] stop failed: %v", err))
+		return err
+	}
+	a.AddLogMsg("[RAFFLE] stopped raffle")
+	return nil
+}
+
+// ResumeRaffle resumes a previously saved raffle without clearing tickets.
+func (a *App) ResumeRaffle() error {
+	if Raffle == nil {
+		Raffle = NewRaffleManager("raffle_tickets.json", a.ctx)
+	}
+	if err := Raffle.Resume(); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[RAFFLE] resume failed: %v", err))
+		return err
+	}
+	a.AddLogMsg("[RAFFLE] resumed raffle")
+	return nil
+}
+
+// ResetRaffle resets raffle state (tickets and contributions)
+func (a *App) ResetRaffle() error {
+	if Raffle == nil {
+		Raffle = NewRaffleManager("raffle_tickets.json", a.ctx)
+	}
+	if err := Raffle.Reset(); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[RAFFLE] reset failed: %v", err))
+		return err
+	}
+	a.AddLogMsg("[RAFFLE] raffle reset")
+	return nil
 }
 
 // ClearTradeItems removes all current trade items

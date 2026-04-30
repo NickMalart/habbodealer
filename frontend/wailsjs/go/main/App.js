@@ -30,12 +30,20 @@ export function ClearTradeItems() {
   return window['go']['main']['App']['ClearTradeItems']();
 }
 
+export function DrawRaffleWinner(arg1) {
+  return window['go']['main']['App']['DrawRaffleWinner'](arg1);
+}
+
 export function ExportEventsForDate(arg1) {
   return window['go']['main']['App']['ExportEventsForDate'](arg1);
 }
 
 export function GetAutoShoutConfig() {
   return window['go']['main']['App']['GetAutoShoutConfig']();
+}
+
+export function GetAutoShoutConfig2() {
+  return window['go']['main']['App']['GetAutoShoutConfig2']();
 }
 
 export function GetBlockArticlesPageConfig() {
@@ -134,6 +142,10 @@ export function GetLastTradePartnerName() {
   return window['go']['main']['App']['GetLastTradePartnerName']();
 }
 
+export function GetRaffleStateJSON() {
+  return window['go']['main']['App']['GetRaffleStateJSON']();
+}
+
 export function GetRiskEnabled() {
   return window['go']['main']['App']['GetRiskEnabled']();
 }
@@ -170,12 +182,24 @@ export function ReadEventFileJSON(arg1, arg2) {
   return window['go']['main']['App']['ReadEventFileJSON'](arg1, arg2);
 }
 
+export function ResetRaffle() {
+  return window['go']['main']['App']['ResetRaffle']();
+}
+
 export function ResumeCasinoSetup() {
   return window['go']['main']['App']['ResumeCasinoSetup']();
 }
 
+export function ResumeRaffle() {
+  return window['go']['main']['App']['ResumeRaffle']();
+}
+
 export function SaveAutoShoutConfig(arg1, arg2) {
   return window['go']['main']['App']['SaveAutoShoutConfig'](arg1, arg2);
+}
+
+export function SaveAutoShoutConfig2(arg1, arg2) {
+  return window['go']['main']['App']['SaveAutoShoutConfig2'](arg1, arg2);
 }
 
 export function SaveCatalog(arg1) {
@@ -222,12 +246,24 @@ export function StartCasinoSetup(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['StartCasinoSetup'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function StartRaffle(arg1, arg2, arg3) {
+  return window['go']['main']['App']['StartRaffle'](arg1, arg2, arg3);
+}
+
 export function StopCasinoSetup() {
   return window['go']['main']['App']['StopCasinoSetup']();
 }
 
+export function StopRaffle() {
+  return window['go']['main']['App']['StopRaffle']();
+}
+
 export function ToggleAutoShout(arg1) {
   return window['go']['main']['App']['ToggleAutoShout'](arg1);
+}
+
+export function ToggleAutoShout2(arg1) {
+  return window['go']['main']['App']['ToggleAutoShout2'](arg1);
 }
 
 export function ToggleBlockArticlesPage(arg1) {

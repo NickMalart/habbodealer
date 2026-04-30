@@ -4,7 +4,7 @@
     <!-- Tab bar -->
       <div class="tab-bar">
       <button
-        v-for="tab in ['Home', 'Trade', 'Game History', 'Stats', 'Logs', 'Utility']"
+        v-for="tab in ['Home', 'Trade', 'Game History', 'Stats', 'Logs', 'Raffle', 'Utility']"
         :key="tab"
         :class="['tab-btn', { active: activeTab === tab }]"
         @click="activeTab = tab"
@@ -737,6 +737,48 @@
       </table>
     </div>
 
+    <div v-if="activeTab === 'Raffle'">
+      <h2 class="section-title">Raffle Tickets</h2>
+
+      <div class="game-guide-block">
+        <div class="game-guide-label">Raffle Name</div>
+        <input v-model="raffleNameInput" type="text" placeholder="Enter raffle name" style="width:100%;max-width:420px;" />
+        <div class="game-guide-label" style="margin-top:8px;">Prize</div>
+        <input v-model="rafflePrizeNameInput" type="text" placeholder="Prize name" style="width:70%;max-width:300px;display:inline-block;" />
+        <input v-model.number="rafflePrizeCountInput" type="number" min="1" style="width:80px;margin-left:8px;display:inline-block;" />
+      </div>
+
+      <div class="game-guide-block" style="margin-top:8px;">
+        <button class="copy-btn" @click="raffleInfo.active ? stopRaffle() : startRaffle()">{{ raffleInfo.active ? 'Stop Raffle' : 'Start Raffle' }}</button>
+        <button v-if="!raffleInfo.active && (Object.keys(raffleTickets).length>0 || raffleInfo.name)" class="copy-btn" @click="resumeRaffle" style="margin-left:8px;">Resume Raffle</button>
+        <button class="copy-btn" @click="drawWinner" style="margin-left:8px;">Draw Winner</button>
+        <button class="copy-btn" @click="resetRaffle" style="margin-left:8px;">Reset Raffle</button>
+      </div>
+
+      <div class="game-guide-block" style="margin-top:8px;">
+        <div class="game-guide-label">Status</div>
+        <div class="game-guide-text">{{ raffleInfo.active ? 'Active' : 'Inactive' }} — {{ raffleInfo.name || '—' }}</div>
+        <div class="game-guide-text">Prize: {{ raffleInfo.prizeName || '—' }} x{{ raffleInfo.prizeCount || 0 }}</div>
+        <div class="game-guide-text">Started: {{ raffleInfo.startAt || '—' }} Ended: {{ raffleInfo.endAt || '—' }}</div>
+      </div>
+
+      <div v-if="Object.keys(raffleTickets).length === 0" class="trade-empty">No raffle tickets recorded.</div>
+      <table v-else class="catalog-table">
+        <thead><tr><th>Player</th><th>Tickets</th></tr></thead>
+        <tbody>
+          <tr v-for="(t, p) in raffleTickets" :key="p">
+            <td><span class="catalog-label">{{ p }}</span></td>
+            <td><span class="catalog-label">{{ t }}</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Recent Contributions</h3>
+      <ul>
+        <li v-for="c in raffleContributions" :key="c.at">{{ c.at }} — {{ c.player }}: {{ c.tickets }} tickets ({{ c.items.length }} items)</li>
+      </ul>
+    </div>
+
   <!-- Users bottom bar removed per user request -->
 
   <div id="packet-tooltip" v-if="tooltipVisible" class="packet-tooltip" v-html="tooltipHtml" :style="{ left: tooltipLeft + 'px', top: tooltipTop + 'px' }"></div>
@@ -813,6 +855,13 @@ export default {
       log: [],
       debugLog: [],
       chatLog: [],
+      raffleTickets: {},
+      raffleContributions: [],
+      raffleWinner: '',
+      raffleInfo: { active: false, name: '', prizeName: '', prizeCount: 0, startAt: '', endAt: '' },
+      raffleNameInput: '',
+      rafflePrizeNameInput: '',
+      rafflePrizeCountInput: 1,
       showNameSuggestions: false,
       showFlaggedOnly: false,
       // Auto shout UI state
@@ -1863,6 +1912,89 @@ export default {
       this.tooltipVisible = false;
       this.tooltipHtml = '';
     },
+    async loadRaffleState() {
+      try {
+        const s = await window.go.main.App.GetRaffleStateJSON();
+        const parsed = JSON.parse(s || '{}') || {};
+        this.raffleTickets = parsed.tickets || {};
+        this.raffleContributions = parsed.contributions || [];
+        this.raffleInfo = {
+          active: !!parsed.active,
+          name: parsed.name || '',
+          prizeName: parsed.prizeName || '',
+          prizeCount: parsed.prizeCount || 0,
+          startAt: parsed.startAt || '',
+          endAt: parsed.endAt || ''
+        };
+        if (!this.raffleNameInput) this.raffleNameInput = this.raffleInfo.name || '';
+        if (!this.rafflePrizeNameInput) this.rafflePrizeNameInput = this.raffleInfo.prizeName || '';
+        this.rafflePrizeCountInput = this.raffleInfo.prizeCount || 1;
+      } catch (e) {
+        this.raffleTickets = {};
+        this.raffleContributions = [];
+      }
+    },
+
+    async drawWinner() {
+      try {
+        const winner = await window.go.main.App.DrawRaffleWinner(0);
+        this.raffleWinner = winner || '';
+        if (this.raffleWinner) {
+          this.addLogMsg(`[UI] Raffle winner: ${this.raffleWinner}`);
+        } else {
+          this.addLogMsg('[UI] Raffle draw returned no winner');
+        }
+      } catch (e) {
+        this.addLogMsg('[UI] Raffle draw failed');
+        console.error(e);
+      }
+    },
+
+    async startRaffle() {
+      try {
+        await window.go.main.App.StartRaffle(this.raffleNameInput || 'Raffle', this.rafflePrizeNameInput || 'Prize', Number(this.rafflePrizeCountInput) || 1);
+        await this.loadRaffleState();
+        this.addLogMsg('[UI] raffle started');
+      } catch (e) {
+        this.addLogMsg('[UI] raffle start failed');
+        console.error(e);
+      }
+    },
+
+    async stopRaffle() {
+      try {
+        await window.go.main.App.StopRaffle();
+        await this.loadRaffleState();
+        this.addLogMsg('[UI] raffle stopped');
+      } catch (e) {
+        this.addLogMsg('[UI] raffle stop failed');
+        console.error(e);
+      }
+    },
+
+    async resumeRaffle() {
+      try {
+        await window.go.main.App.ResumeRaffle();
+        await this.loadRaffleState();
+        this.addLogMsg('[UI] raffle resumed');
+      } catch (e) {
+        this.addLogMsg('[UI] raffle resume failed');
+        console.error(e);
+      }
+    },
+
+    async resetRaffle() {
+      try {
+        await window.go.main.App.ResetRaffle();
+        this.raffleTickets = {};
+        this.raffleContributions = [];
+        this.raffleWinner = '';
+        this.addLogMsg('[UI] Raffle reset');
+      } catch (e) {
+        this.addLogMsg('[UI] Raffle reset failed');
+        console.error(e);
+      }
+    },
   },
   async mounted() {
     await this.refreshGameHistory();
@@ -1870,6 +2002,7 @@ export default {
       await this.loadStats('all_time');
       await this.loadStats('today');
       await this.loadEventDates();
+      await this.loadRaffleState();
     window.runtime.EventsOn("logUpdate", (message) => {
       this.log = message.split('\n');
       this.scrollBox('logbox');
@@ -1882,6 +2015,15 @@ export default {
     window.runtime.EventsOn("chatLogUpdate", (message) => {
       this.chatLog = message.split('\n');
       this.scrollBox('chatlogbox');
+    });
+
+    // Raffle updates from backend
+    window.runtime.EventsOn("raffleUpdate", (jsonStr) => {
+      try {
+        this.loadRaffleState();
+      } catch (e) {
+        // ignore
+      }
     });
 
     window.runtime.EventsOn("tradeItemsUpdate", (jsonStr) => {
