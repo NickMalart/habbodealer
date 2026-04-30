@@ -4,7 +4,7 @@
     <!-- Tab bar -->
       <div class="tab-bar">
       <button
-        v-for="tab in ['Home', 'Trade', 'Game History', 'Stats', 'Logs', 'Utility']"
+        v-for="tab in ['Home', 'Trade', 'Game History', 'Raffle', 'Stats', 'Logs', 'Utility']"
         :key="tab"
         :class="['tab-btn', { active: activeTab === tab }]"
         @click="activeTab = tab"
@@ -630,8 +630,110 @@
       </div>
     </div>
 
-    <!-- Stats tab -->
-    <div v-if="activeTab === 'Stats'">
+      <!-- Raffle details modal -->
+      <div class="game-guide-modal-backdrop" v-if="showRaffleModal" @click="closeRaffleModal">
+        <div class="game-guide-modal" @click.stop>
+          <div class="game-guide-header">
+            <h3 class="section-title game-guide-title">{{ selectedRaffle && selectedRaffle.name ? selectedRaffle.name : 'Raffle' }}</h3>
+            <button type="button" class="copy-btn" @click="closeRaffleModal">Close</button>
+          </div>
+
+          <div class="game-guide-block">
+            <div class="game-guide-label">Prize</div>
+            <div class="game-guide-text">{{ (selectedRaffle && selectedRaffle.prizeQty) || 0 }}× {{ formatItemName((selectedRaffle && selectedRaffle.prizeName) || '') }}</div>
+          </div>
+
+          <div class="game-guide-block">
+            <div class="game-guide-label">Status</div>
+            <div class="game-guide-text">{{ selectedRaffle && selectedRaffle.status }}</div>
+          </div>
+
+          <div class="game-guide-block">
+            <div class="game-guide-label">Participants</div>
+            <div v-if="!(selectedRaffle && selectedRaffle.participants && selectedRaffle.participants.length)" class="trade-empty">No entries yet.</div>
+            <table v-else class="catalog-table">
+              <thead><tr><th>Name</th><th>Coins</th><th>Tickets</th></tr></thead>
+              <tbody>
+                <tr v-for="p in selectedRaffle.participants" :key="p.name">
+                  <td>{{ p.name }}</td>
+                  <td>{{ p.coins }}</td>
+                  <td>{{ p.tickets }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="game-guide-block">
+            <div class="game-guide-label">Add Manual Entry</div>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <input v-model="newParticipantName" placeholder="Name" />
+              <input type="number" v-model.number="newParticipantCoins" min="1" />
+              <button class="copy-btn" @click="addManualEntry" :disabled="!selectedRaffle || !newParticipantName || !newParticipantCoins">Add</button>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+            <button class="copy-btn" @click="closeRaffleModal">Close</button>
+            <button v-if="selectedRaffle && selectedRaffle.status === 'created'" class="copy-btn" @click="startRaffle(selectedRaffle.id)">Start</button>
+            <button v-if="selectedRaffle && selectedRaffle.status === 'started'" class="copy-btn" @click="endRaffle(selectedRaffle.id)">End</button>
+            <button v-if="selectedRaffle && selectedRaffle.status === 'ended'" class="copy-btn" @click="resumeRaffle(selectedRaffle.id)">Resume</button>
+            <button class="copy-btn" @click="drawRaffleWinner(selectedRaffle.id)" :disabled="!selectedRaffle || !(selectedRaffle.participants && selectedRaffle.participants.length)">Draw Winner</button>
+            <button class="copy-btn history-danger-btn" @click="confirmDeleteRaffle(selectedRaffle.id)">Delete</button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="activeTab === 'Raffle'">
+        <h2 class="section-title">Raffle</h2>
+
+        <div class="game-guide-block">
+          <div class="game-guide-label">Raffle Name</div>
+          <input v-model="raffleNameInput" type="text" placeholder="Name for the raffle" />
+        </div>
+
+        <div class="game-guide-block">
+          <div class="game-guide-label">Prize Item</div>
+          <input v-model="rafflePrizeNameInput" type="text" placeholder="Item name (e.g. rare_chair)" />
+        </div>
+
+        <div class="game-guide-block">
+          <div class="game-guide-label">Prize Quantity</div>
+          <input v-model.number="rafflePrizeQtyInput" type="number" min="1" />
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button class="copy-btn" @click="createRaffle">Create</button>
+        </div>
+
+        <hr />
+
+        <div v-if="raffles.length === 0" class="trade-empty">No raffles yet.</div>
+        <div v-else class="history-list">
+          <button
+            v-for="r in raffles"
+            :key="r.id"
+            type="button"
+            class="history-card"
+            :class="{ 'history-card-issue': r.status === 'drawn' }"
+            @click="selectRaffle(r)"
+          >
+            <div class="history-card-top">
+              <span class="history-player">{{ r.name || 'Unnamed' }}</span>
+              <span class="history-status" :class="historyStatusClass(r.status || '')">{{ r.status || '' }}</span>
+            </div>
+            <div class="history-meta-row">
+              <span>Prize: {{ r.prizeQty }}x {{ formatItemName(r.prizeName) }}</span>
+              <span v-if="r.winner">Winner: {{ r.winner }}</span>
+            </div>
+            <div class="game-card-action">Click for details</div>
+          </button>
+        </div>
+
+        
+      </div>
+
+      <!-- Stats tab -->
+      <div v-if="activeTab === 'Stats'">
       <h2 class="section-title">Casino Stats</h2>
       <div style="display:flex;justify-content:center;gap:8px;margin-bottom:12px;">
         <button :class="['copy-btn', { 'active': statsRangeKey === 'all_time' }]" @click="loadStats('all_time')">All time</button>
@@ -798,6 +900,7 @@ export default {
       showClearHistoryConfirm: false,
       showDiceSetupModal: false,
       showDealerNameModal: false,
+      showRaffleModal: false,
       dealerNameInput: '',
       roomNameInput: '',
       maxUniqueItemsInput: 5,
@@ -875,6 +978,14 @@ export default {
       eventDates: [],
       selectedEventDate: '',
       eventsForDate: [],
+      // Raffle UI state
+      raffles: [],
+      raffleNameInput: '',
+      rafflePrizeNameInput: '',
+      rafflePrizeQtyInput: 1,
+      selectedRaffle: null,
+      newParticipantName: '',
+      newParticipantCoins: 0,
     };
   },
   computed: {
@@ -1863,6 +1974,79 @@ export default {
       this.tooltipVisible = false;
       this.tooltipHtml = '';
     },
+    // --- Raffle methods ---
+    async loadRaffles() {
+      try {
+        const json = await window.go.main.App.GetRafflesJSON();
+        this.raffles = JSON.parse(json || '[]') || [];
+        if (this.showRaffleModal && this.selectedRaffle) {
+          const updated = this.raffles.find(r => r.id === this.selectedRaffle.id);
+          this.selectedRaffle = updated || null;
+        }
+      } catch (e) {
+        this.addLogMsg('[RAFFLE] failed to load raffles');
+        this.raffles = [];
+        if (this.showRaffleModal) this.selectedRaffle = null;
+      }
+    },
+    selectRaffle(r) {
+      this.selectedRaffle = r;
+      this.showRaffleModal = true;
+    },
+    async createRaffle() {
+      try {
+        await window.go.main.App.CreateRaffle(String(this.raffleNameInput || ''), String(this.rafflePrizeNameInput || ''), Number(this.rafflePrizeQtyInput || 1));
+        this.raffleNameInput = '';
+        this.rafflePrizeNameInput = '';
+        this.rafflePrizeQtyInput = 1;
+        await this.loadRaffles();
+        this.addLogMsg('[RAFFLE] created');
+      } catch (e) { console.error(e); }
+    },
+    async startRaffle(id) { try { await window.go.main.App.StartRaffle(id); await this.loadRaffles(); this.addLogMsg('[RAFFLE] started'); } catch (e) { console.error(e); } },
+    async endRaffle(id) { try { await window.go.main.App.EndRaffle(id); await this.loadRaffles(); this.addLogMsg('[RAFFLE] ended'); } catch (e) { console.error(e); } },
+    async resumeRaffle(id) { try { await window.go.main.App.ResumeRaffle(id); await this.loadRaffles(); this.addLogMsg('[RAFFLE] resumed'); } catch (e) { console.error(e); } },
+    async drawRaffleWinner(id) {
+      try {
+        const json = await window.go.main.App.DrawRaffleWinner(id);
+        if (json) {
+          const parsed = JSON.parse(json || '{}') || {};
+          this.addLogMsg(`[RAFFLE] winner: ${parsed.winner || ''}`);
+          await this.loadRaffles();
+        } else {
+          this.addLogMsg('[RAFFLE] no tickets or draw failed');
+        }
+      } catch (e) { console.error(e); }
+    },
+    async addManualEntry() {
+      if (!this.selectedRaffle || !this.newParticipantName || !this.newParticipantCoins) return;
+      try {
+        await window.go.main.App.AddManualRaffleEntry(this.selectedRaffle.id, String(this.newParticipantName), Number(this.newParticipantCoins));
+        this.newParticipantName = '';
+        this.newParticipantCoins = 0;
+        await this.loadRaffles();
+        this.addLogMsg('[RAFFLE] manual entry added');
+      } catch (e) { console.error(e); }
+    },
+    confirmDeleteRaffle(id) {
+      if (!id) return;
+      if (confirm('Delete this raffle? This cannot be undone.')) {
+        this.deleteRaffle(id);
+      }
+    },
+    async deleteRaffle(id) {
+      try {
+        await window.go.main.App.DeleteRaffle(id);
+        await this.loadRaffles();
+        this.addLogMsg('[RAFFLE] deleted');
+        this.showRaffleModal = false;
+        this.selectedRaffle = null;
+      } catch (e) { console.error(e); }
+    },
+    closeRaffleModal() {
+      this.showRaffleModal = false;
+      this.selectedRaffle = null;
+    },
   },
   async mounted() {
     await this.refreshGameHistory();
@@ -1998,6 +2182,23 @@ export default {
         this.casinoStatsMap['today'] = {};
       }
     });
+
+    // Raffle updates from backend
+    window.runtime.EventsOn("rafflesUpdate", (jsonStr) => {
+      try {
+        this.raffles = JSON.parse(jsonStr || '[]') || [];
+        if (this.showRaffleModal && this.selectedRaffle) {
+          const updated = this.raffles.find(r => r.id === this.selectedRaffle.id);
+          this.selectedRaffle = updated || null;
+        }
+      } catch (_) {
+        this.raffles = [];
+        if (this.showRaffleModal) this.selectedRaffle = null;
+      }
+    });
+
+    // initial load
+    await this.loadRaffles();
 
     // Dice setup updates from backend
     window.runtime.EventsOn("diceSetupUpdate", (jsonStr) => {

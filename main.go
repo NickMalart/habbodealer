@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"bytes"
@@ -382,11 +382,55 @@ var (
 	autoShout2Mu       sync.Mutex
 )
 
+// Raffle announcer configuration — adjust these values (seconds)
+var (
+	raffleAnnounceFirstSeconds  int = 30 // seconds until first repeat after immediate shout
+	raffleAnnounceRepeatSeconds int = 60 // seconds between subsequent repeats
+
+	// Message template: %s = raffle name, %s = prize name, %d = prize qty
+	raffleAnnounceMsgTemplate string = "Raffle Open! %s — Prize: %s x%d. 1 coin = 1 ticket; every 5 coins = 6 tickets. Place coins to enter!"
+
+	raffleAnnouncerMu        sync.Mutex
+	raffleAnnouncerStopChans map[string]chan struct{}
+)
+
 type TradeItem struct {
 	Name     string
 	Quantity int
 	RawData  string // Store raw field for debugging
 }
+
+// --- RAFFLE types and globals ---
+type RaffleParticipant struct {
+	Name    string `json:"name"`
+	Coins   int    `json:"coins"`
+	Tickets int    `json:"tickets"`
+}
+
+type Raffle struct {
+	ID           string              `json:"id"`
+	Name         string              `json:"name"`
+	PrizeName    string              `json:"prizeName"`
+	PrizeQty     int                 `json:"prizeQty"`
+	Status       string              `json:"status"` // created|started|ended|drawn
+	Participants []RaffleParticipant `json:"participants"`
+	Winner       string              `json:"winner,omitempty"`
+	CreatedAt    string              `json:"createdAt"`
+	EndedAt      string              `json:"endedAt,omitempty"`
+}
+
+var (
+	rafflesMu sync.Mutex
+	raffles   []Raffle
+
+	raffleCurrencyValues = map[string]int{
+		"cf_1_coin_bronze": 1,
+		"cf_5_coin_silver": 5,
+		"cf_10_coin_gold":  10,
+		"cf_20_moneybag":   20,
+		"cf_50_goldbar":    50,
+	}
+)
 
 // LiveGameSummary is an anonymized, frontend-friendly summary of a completed
 // game. It intentionally does not expose player names — `Winner` is mapped
@@ -730,6 +774,9 @@ func (a *App) getCurrentRoomName() string {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.loadGameHistory()
+	// Raffle initialization
+	rand.Seed(time.Now().UnixNano())
+	a.loadRaffles()
 	a.setupExt()
 	go func() {
 		a.runExt()
@@ -1862,6 +1909,285 @@ func (a *App) emitGameHistoryUpdate() {
 	runtime.EventsEmit(a.ctx, "gameHistoryUpdate", string(jsonData))
 }
 
+// --- Raffle persistence and APIs ---
+func getRafflesFilePath() string {
+	configDir, _ := os.UserConfigDir()
+	configPath := filepath.Join(configDir, "Gamba-Suite")
+	os.MkdirAll(configPath, 0700)
+	return filepath.Join(configPath, "raffles.json")
+}
+
+func (a *App) loadRaffles() {
+	data, err := os.ReadFile(getRafflesFilePath())
+	if err != nil {
+		return
+	}
+	var loaded []Raffle
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		return
+	}
+	rafflesMu.Lock()
+	raffles = loaded
+	rafflesMu.Unlock()
+	a.emitRafflesUpdate()
+}
+
+func (a *App) saveRafflesLocked() {
+	data, err := json.MarshalIndent(raffles, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(getRafflesFilePath(), data, 0600)
+}
+
+func (a *App) emitRafflesUpdate() {
+	rafflesMu.Lock()
+	list := make([]Raffle, len(raffles))
+	copy(list, raffles)
+	rafflesMu.Unlock()
+	data, err := json.Marshal(list)
+	if err != nil {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "rafflesUpdate", string(data))
+}
+
+// GetRafflesJSON returns all raffles as a JSON string
+func (a *App) GetRafflesJSON() string {
+	rafflesMu.Lock()
+	defer rafflesMu.Unlock()
+	b, _ := json.Marshal(raffles)
+	return string(b)
+}
+
+// CreateRaffle creates a new raffle and returns its JSON
+func (a *App) CreateRaffle(name string, prizeName string, prizeQty int) string {
+	if strings.TrimSpace(name) == "" {
+		name = fmt.Sprintf("Raffle %d", time.Now().Unix())
+	}
+	r := Raffle{
+		ID:           fmt.Sprintf("%d", time.Now().UnixNano()),
+		Name:         name,
+		PrizeName:    prizeName,
+		PrizeQty:     prizeQty,
+		Status:       "created",
+		Participants: []RaffleParticipant{},
+		CreatedAt:    time.Now().Format(time.RFC3339),
+	}
+	rafflesMu.Lock()
+	raffles = append(raffles, r)
+	a.saveRafflesLocked()
+	rafflesMu.Unlock()
+	a.emitRafflesUpdate()
+	b, _ := json.Marshal(r)
+	return string(b)
+}
+
+func (a *App) StartRaffle(id string) string {
+	rafflesMu.Lock()
+	defer rafflesMu.Unlock()
+	now := time.Now().Format(time.RFC3339)
+
+	// End any other started raffle so only one raffle is active at a time.
+	for i := range raffles {
+		if raffles[i].Status == "started" && raffles[i].ID != id {
+			raffles[i].Status = "ended"
+			if raffles[i].EndedAt == "" {
+				raffles[i].EndedAt = now
+			}
+			// stop announcer for the raffle we just ended
+			go a.stopRaffleAnnouncer(raffles[i].ID)
+		}
+	}
+
+	// Start the requested raffle
+	for i := range raffles {
+		if raffles[i].ID == id {
+			raffles[i].Status = "started"
+			raffles[i].EndedAt = ""
+			a.saveRafflesLocked()
+			go a.emitRafflesUpdate()
+			go a.startRaffleAnnouncer(id)
+			b, _ := json.Marshal(raffles[i])
+			return string(b)
+		}
+	}
+	return ""
+}
+
+func (a *App) EndRaffle(id string) string {
+	rafflesMu.Lock()
+	defer rafflesMu.Unlock()
+	for i := range raffles {
+		if raffles[i].ID == id {
+			raffles[i].Status = "ended"
+			raffles[i].EndedAt = time.Now().Format(time.RFC3339)
+			a.saveRafflesLocked()
+			a.stopRaffleAnnouncer(id)
+			go a.emitRafflesUpdate()
+			b, _ := json.Marshal(raffles[i])
+			return string(b)
+		}
+	}
+	return ""
+}
+
+func (a *App) ResumeRaffle(id string) string {
+	rafflesMu.Lock()
+	defer rafflesMu.Unlock()
+	now := time.Now().Format(time.RFC3339)
+
+	// End any other started raffle before resuming the requested one.
+	for i := range raffles {
+		if raffles[i].Status == "started" && raffles[i].ID != id {
+			raffles[i].Status = "ended"
+			if raffles[i].EndedAt == "" {
+				raffles[i].EndedAt = now
+			}
+			go a.stopRaffleAnnouncer(raffles[i].ID)
+		}
+	}
+
+	for i := range raffles {
+		if raffles[i].ID == id {
+			raffles[i].Status = "started"
+			raffles[i].EndedAt = ""
+			a.saveRafflesLocked()
+			go a.emitRafflesUpdate()
+			go a.startRaffleAnnouncer(id)
+			b, _ := json.Marshal(raffles[i])
+			return string(b)
+		}
+	}
+	return ""
+}
+
+func (a *App) DrawRaffleWinner(id string) string {
+	rafflesMu.Lock()
+	defer rafflesMu.Unlock()
+	for i := range raffles {
+		if raffles[i].ID == id {
+			r := &raffles[i]
+			total := 0
+			for _, p := range r.Participants {
+				total += p.Tickets
+			}
+			if total == 0 {
+				return ""
+			}
+			choice := rand.Intn(total)
+			cum := 0
+			winner := ""
+			for _, p := range r.Participants {
+				cum += p.Tickets
+				if choice < cum {
+					winner = p.Name
+					break
+				}
+			}
+			r.Winner = winner
+			r.Status = "drawn"
+			r.EndedAt = time.Now().Format(time.RFC3339)
+			a.saveRafflesLocked()
+			go a.emitRafflesUpdate()
+			out := map[string]string{"winner": winner}
+			b, _ := json.Marshal(out)
+			return string(b)
+		}
+	}
+	return ""
+}
+
+func (a *App) DeleteRaffle(id string) string {
+	rafflesMu.Lock()
+	defer rafflesMu.Unlock()
+	for i := range raffles {
+		if raffles[i].ID == id {
+			removed := raffles[i]
+			raffles = append(raffles[:i], raffles[i+1:]...)
+			a.saveRafflesLocked()
+			go a.emitRafflesUpdate()
+			b, _ := json.Marshal(removed)
+			return string(b)
+		}
+	}
+	return ""
+}
+
+// Manual add (used by UI for testing)
+func (a *App) AddManualRaffleEntry(raffleID string, playerName string, coins int) string {
+	if coins <= 0 || strings.TrimSpace(playerName) == "" {
+		return ""
+	}
+	tickets := coins + (coins / 5)
+	rafflesMu.Lock()
+	defer rafflesMu.Unlock()
+	for i := range raffles {
+		if raffles[i].ID == raffleID {
+			for j := range raffles[i].Participants {
+				if strings.EqualFold(raffles[i].Participants[j].Name, playerName) {
+					raffles[i].Participants[j].Coins += coins
+					raffles[i].Participants[j].Tickets += tickets
+					a.saveRafflesLocked()
+					go a.emitRafflesUpdate()
+					b, _ := json.Marshal(raffles[i].Participants[j])
+					return string(b)
+				}
+			}
+			p := RaffleParticipant{Name: playerName, Coins: coins, Tickets: tickets}
+			raffles[i].Participants = append(raffles[i].Participants, p)
+			a.saveRafflesLocked()
+			go a.emitRafflesUpdate()
+			b, _ := json.Marshal(p)
+			return string(b)
+		}
+	}
+	return ""
+}
+
+// Called internally from trade-completion handler to auto-add entries
+func (a *App) AddRaffleEntryFromTrade(playerName string, items []TradeItem) string {
+	coins := 0
+	for _, it := range items {
+		if v, ok := raffleCurrencyValues[it.Name]; ok {
+			coins += v * it.Quantity
+		}
+	}
+	if coins <= 0 {
+		return ""
+	}
+	tickets := coins + (coins / 5)
+	rafflesMu.Lock()
+	defer rafflesMu.Unlock()
+	// add to most-recent started raffle
+	idx := -1
+	for i := len(raffles) - 1; i >= 0; i-- {
+		if raffles[i].Status == "started" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return ""
+	}
+	for j := range raffles[idx].Participants {
+		if strings.EqualFold(raffles[idx].Participants[j].Name, playerName) {
+			raffles[idx].Participants[j].Coins += coins
+			raffles[idx].Participants[j].Tickets += tickets
+			a.saveRafflesLocked()
+			go a.emitRafflesUpdate()
+			b, _ := json.Marshal(raffles[idx].Participants[j])
+			return string(b)
+		}
+	}
+	p := RaffleParticipant{Name: playerName, Coins: coins, Tickets: tickets}
+	raffles[idx].Participants = append(raffles[idx].Participants, p)
+	a.saveRafflesLocked()
+	go a.emitRafflesUpdate()
+	b, _ := json.Marshal(p)
+	return string(b)
+}
+
 func (a *App) syncGameHistory() {
 	a.AddLogMsg("[GAME_HISTORY] syncGameHistory start")
 
@@ -2234,6 +2560,86 @@ func startShoutWorker() {
 			}
 		}()
 	})
+}
+
+// startRaffleAnnouncer launches a background announcer for a started raffle.
+// It sends an immediate shout then repeats at configured intervals until
+// the raffle is ended or the announcer is stopped.
+func (a *App) startRaffleAnnouncer(id string) {
+	raffleAnnouncerMu.Lock()
+	if raffleAnnouncerStopChans == nil {
+		raffleAnnouncerStopChans = map[string]chan struct{}{}
+	}
+	if ch, ok := raffleAnnouncerStopChans[id]; ok {
+		close(ch)
+		delete(raffleAnnouncerStopChans, id)
+	}
+	stopCh := make(chan struct{})
+	raffleAnnouncerStopChans[id] = stopCh
+	raffleAnnouncerMu.Unlock()
+
+	// Snapshot the raffle data
+	rafflesMu.Lock()
+	var r *Raffle
+	for i := range raffles {
+		if raffles[i].ID == id {
+			r = &raffles[i]
+			break
+		}
+	}
+	rafflesMu.Unlock()
+	if r == nil {
+		return
+	}
+
+	msg := fmt.Sprintf(raffleAnnounceMsgTemplate, r.Name, r.PrizeName, r.PrizeQty)
+	sendShout(msg)
+
+	go func() {
+		select {
+		case <-time.After(time.Duration(raffleAnnounceFirstSeconds) * time.Second):
+		case <-stopCh:
+			return
+		}
+		for {
+			// ensure raffle is still started
+			rafflesMu.Lock()
+			started := false
+			for i := range raffles {
+				if raffles[i].ID == id && raffles[i].Status == "started" {
+					started = true
+					break
+				}
+			}
+			rafflesMu.Unlock()
+			if !started {
+				return
+			}
+
+			sendShout(msg)
+
+			select {
+			case <-time.After(time.Duration(raffleAnnounceRepeatSeconds) * time.Second):
+				continue
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+}
+
+// stopRaffleAnnouncer stops a running announcer for the given raffle id.
+func (a *App) stopRaffleAnnouncer(id string) {
+	raffleAnnouncerMu.Lock()
+	if raffleAnnouncerStopChans == nil {
+		raffleAnnouncerMu.Unlock()
+		return
+	}
+	if ch, ok := raffleAnnouncerStopChans[id]; ok {
+		close(ch)
+		delete(raffleAnnouncerStopChans, id)
+	}
+	raffleAnnouncerMu.Unlock()
 }
 
 // sendShout is a mute-aware helper for sending public shouts. It enqueues
@@ -2795,6 +3201,15 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 			// Send the trade items summary to chat
 			a.sendTradeCompletionMessage()
+
+			// Auto-add raffle entry from this completed bet (if any raffle started)
+			go func() {
+				player := normalizeUsername(strings.TrimSpace(lastTradePartnerName))
+				if player == "" {
+					return
+				}
+				a.AddRaffleEntryFromTrade(player, gameBetItems)
+			}()
 
 			// Record predicted payout items for history as 2x.
 			// Predict 2x at bet completion; the actual multiplier is set later

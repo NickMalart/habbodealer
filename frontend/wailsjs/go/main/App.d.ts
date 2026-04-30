@@ -10,15 +10,29 @@ export function AddErrorLog(arg1:string,arg2:Error):Promise<void>;
 
 export function AddLogMsg(arg1:string):Promise<void>;
 
+export function AddManualRaffleEntry(arg1:string,arg2:string,arg3:number):Promise<string>;
+
+export function AddRaffleEntryFromTrade(arg1:string,arg2:Array<main.TradeItem>):Promise<string>;
+
 export function BuildCasinoStats(arg1:string):Promise<main.CasinoStats>;
 
 export function ClearGameHistory():Promise<void>;
 
 export function ClearTradeItems():Promise<void>;
 
+export function CreateRaffle(arg1:string,arg2:string,arg3:number):Promise<string>;
+
+export function DeleteRaffle(arg1:string):Promise<string>;
+
+export function DrawRaffleWinner(arg1:string):Promise<string>;
+
+export function EndRaffle(arg1:string):Promise<string>;
+
 export function ExportEventsForDate(arg1:string):Promise<string>;
 
 export function GetAutoShoutConfig():Promise<main.AutoShoutConfig>;
+
+export function GetAutoShoutConfig2():Promise<main.AutoShoutConfig>;
 
 export function GetBlockArticlesPageConfig():Promise<main.BlockSlideObjectConfig>;
 
@@ -68,6 +82,8 @@ export function GetGameHistoryJSON():Promise<string>;
 
 export function GetLastTradePartnerName():Promise<string>;
 
+export function GetRafflesJSON():Promise<string>;
+
 export function GetRiskEnabled():Promise<boolean>;
 
 export function GetTradeItemsJSON():Promise<string>;
@@ -88,7 +104,11 @@ export function ReadEventFileJSON(arg1:string,arg2:string):Promise<string>;
 
 export function ResumeCasinoSetup():Promise<void>;
 
+export function ResumeRaffle(arg1:string):Promise<string>;
+
 export function SaveAutoShoutConfig(arg1:string,arg2:number):Promise<main.AutoShoutConfig>;
+
+export function SaveAutoShoutConfig2(arg1:string,arg2:number):Promise<main.AutoShoutConfig>;
 
 export function SaveCatalog(arg1:Array<main.CatalogItem>):Promise<void>;
 
@@ -112,9 +132,13 @@ export function SkipDiceSetupForTesting():Promise<void>;
 
 export function StartCasinoSetup(arg1:string,arg2:string,arg3:number,arg4:number,arg5:boolean):Promise<void>;
 
+export function StartRaffle(arg1:string):Promise<string>;
+
 export function StopCasinoSetup():Promise<void>;
 
 export function ToggleAutoShout(arg1:boolean):Promise<main.AutoShoutConfig>;
+
+export function ToggleAutoShout2(arg1:boolean):Promise<main.AutoShoutConfig>;
 
 export function ToggleBlockArticlesPage(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
 

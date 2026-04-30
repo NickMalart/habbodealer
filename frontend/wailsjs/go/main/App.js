@@ -18,6 +18,14 @@ export function AddLogMsg(arg1) {
   return window['go']['main']['App']['AddLogMsg'](arg1);
 }
 
+export function AddManualRaffleEntry(arg1, arg2, arg3) {
+  return window['go']['main']['App']['AddManualRaffleEntry'](arg1, arg2, arg3);
+}
+
+export function AddRaffleEntryFromTrade(arg1, arg2) {
+  return window['go']['main']['App']['AddRaffleEntryFromTrade'](arg1, arg2);
+}
+
 export function BuildCasinoStats(arg1) {
   return window['go']['main']['App']['BuildCasinoStats'](arg1);
 }
@@ -30,12 +38,32 @@ export function ClearTradeItems() {
   return window['go']['main']['App']['ClearTradeItems']();
 }
 
+export function CreateRaffle(arg1, arg2, arg3) {
+  return window['go']['main']['App']['CreateRaffle'](arg1, arg2, arg3);
+}
+
+export function DeleteRaffle(arg1) {
+  return window['go']['main']['App']['DeleteRaffle'](arg1);
+}
+
+export function DrawRaffleWinner(arg1) {
+  return window['go']['main']['App']['DrawRaffleWinner'](arg1);
+}
+
+export function EndRaffle(arg1) {
+  return window['go']['main']['App']['EndRaffle'](arg1);
+}
+
 export function ExportEventsForDate(arg1) {
   return window['go']['main']['App']['ExportEventsForDate'](arg1);
 }
 
 export function GetAutoShoutConfig() {
   return window['go']['main']['App']['GetAutoShoutConfig']();
+}
+
+export function GetAutoShoutConfig2() {
+  return window['go']['main']['App']['GetAutoShoutConfig2']();
 }
 
 export function GetBlockArticlesPageConfig() {
@@ -134,6 +162,10 @@ export function GetLastTradePartnerName() {
   return window['go']['main']['App']['GetLastTradePartnerName']();
 }
 
+export function GetRafflesJSON() {
+  return window['go']['main']['App']['GetRafflesJSON']();
+}
+
 export function GetRiskEnabled() {
   return window['go']['main']['App']['GetRiskEnabled']();
 }
@@ -174,8 +206,16 @@ export function ResumeCasinoSetup() {
   return window['go']['main']['App']['ResumeCasinoSetup']();
 }
 
+export function ResumeRaffle(arg1) {
+  return window['go']['main']['App']['ResumeRaffle'](arg1);
+}
+
 export function SaveAutoShoutConfig(arg1, arg2) {
   return window['go']['main']['App']['SaveAutoShoutConfig'](arg1, arg2);
+}
+
+export function SaveAutoShoutConfig2(arg1, arg2) {
+  return window['go']['main']['App']['SaveAutoShoutConfig2'](arg1, arg2);
 }
 
 export function SaveCatalog(arg1) {
@@ -222,12 +262,20 @@ export function StartCasinoSetup(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['StartCasinoSetup'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function StartRaffle(arg1) {
+  return window['go']['main']['App']['StartRaffle'](arg1);
+}
+
 export function StopCasinoSetup() {
   return window['go']['main']['App']['StopCasinoSetup']();
 }
 
 export function ToggleAutoShout(arg1) {
   return window['go']['main']['App']['ToggleAutoShout'](arg1);
+}
+
+export function ToggleAutoShout2(arg1) {
+  return window['go']['main']['App']['ToggleAutoShout2'](arg1);
 }
 
 export function ToggleBlockArticlesPage(arg1) {
