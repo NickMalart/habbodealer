@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bytes"
@@ -384,11 +384,12 @@ var (
 
 // Raffle announcer configuration — adjust these values (seconds)
 var (
-	raffleAnnounceFirstSeconds  int = 30 // seconds until first repeat after immediate shout
-	raffleAnnounceRepeatSeconds int = 60 // seconds between subsequent repeats
+	raffleAnnounceFirstSeconds  int = 45 // unified interval: seconds between announces
+	raffleAnnounceRepeatSeconds int = 45 // kept for compatibility but unused separately
 
-	// Message template: %s = raffle name, %s = prize name, %d = prize qty
-	raffleAnnounceMsgTemplate string = "Raffle Open! %s — Prize: %s x%d. 1 coin = 1 ticket; every 5 coins = 6 tickets. Place coins to enter!"
+	// Message parts: both may use format verbs %s (raffle name), %s (prize name), %d (prize qty)
+	raffleAnnounceMsgPart1 string = "Raffle Open: %s — Prize: %s x%d"
+	raffleAnnounceMsgPart2 string = "1 coin = 1 ticket. For every 5 coins you get 1 bonus ticket (e.g. 5 coins = 6 tickets, 10 coins = 12 tickets)."
 
 	raffleAnnouncerMu        sync.Mutex
 	raffleAnnouncerStopChans map[string]chan struct{}
@@ -959,6 +960,73 @@ func (a *App) SaveAutoShoutConfig(phrase string, seconds int) AutoShoutConfig {
 	if a.ctx != nil {
 		b, _ := json.Marshal(cfg)
 		runtime.EventsEmit(a.ctx, "autoShoutUpdate", string(b))
+	}
+
+	return cfg
+}
+
+// RaffleAnnounceConfig holds frontend-friendly raffle announcer settings.
+type RaffleAnnounceConfig struct {
+	FirstSeconds  int    `json:"firstSeconds"`
+	RepeatSeconds int    `json:"repeatSeconds"`
+	MsgPart1      string `json:"msgPart1"`
+	MsgPart2      string `json:"msgPart2"`
+}
+
+// GetRaffleAnnounceConfig returns current raffle announcer settings.
+func (a *App) GetRaffleAnnounceConfig() RaffleAnnounceConfig {
+	raffleAnnouncerMu.Lock()
+	defer raffleAnnouncerMu.Unlock()
+	return RaffleAnnounceConfig{
+		FirstSeconds:  raffleAnnounceFirstSeconds,
+		RepeatSeconds: raffleAnnounceRepeatSeconds,
+		MsgPart1:      raffleAnnounceMsgPart1,
+		MsgPart2:      raffleAnnounceMsgPart2,
+	}
+}
+
+// SaveRaffleAnnounceConfig updates raffle announcer timers and messages.
+// It restarts any active announcers so changes apply immediately.
+func (a *App) SaveRaffleAnnounceConfig(firstSeconds int, repeatSeconds int, msgPart1 string, msgPart2 string) RaffleAnnounceConfig {
+	if firstSeconds < 1 {
+		firstSeconds = 1
+	}
+	if repeatSeconds < 1 {
+		repeatSeconds = 1
+	}
+
+	raffleAnnouncerMu.Lock()
+	raffleAnnounceFirstSeconds = firstSeconds
+	raffleAnnounceRepeatSeconds = repeatSeconds
+	raffleAnnounceMsgPart1 = strings.TrimSpace(msgPart1)
+	raffleAnnounceMsgPart2 = strings.TrimSpace(msgPart2)
+	raffleAnnouncerMu.Unlock()
+
+	cfg := RaffleAnnounceConfig{
+		FirstSeconds:  raffleAnnounceFirstSeconds,
+		RepeatSeconds: raffleAnnounceRepeatSeconds,
+		MsgPart1:      raffleAnnounceMsgPart1,
+		MsgPart2:      raffleAnnounceMsgPart2,
+	}
+
+	if a.ctx != nil {
+		b, _ := json.Marshal(cfg)
+		runtime.EventsEmit(a.ctx, "raffleAnnounceUpdate", string(b))
+	}
+
+	// Restart announcers for active raffles so the new intervals/messages apply.
+	rafflesMu.Lock()
+	var startedIDs []string
+	for i := range raffles {
+		if raffles[i].Status == "started" {
+			startedIDs = append(startedIDs, raffles[i].ID)
+		}
+	}
+	rafflesMu.Unlock()
+
+	for _, id := range startedIDs {
+		go a.stopRaffleAnnouncer(id)
+		go a.startRaffleAnnouncer(id)
 	}
 
 	return cfg
@@ -2562,9 +2630,43 @@ func startShoutWorker() {
 	})
 }
 
+// formatRaffleMsg formats a raffle message template using available raffle
+// fields. It fills placeholders in order: raffle name, prize name, prize qty.
+// If the template contains no formatting verbs the raw template is returned
+// unchanged to avoid fmt.Sprintf adding "%!EXTRA" when extra args are passed.
+func formatRaffleMsg(tmpl string, r *Raffle) string {
+	if !strings.Contains(tmpl, "%") {
+		return tmpl
+	}
+	// Build args by scanning for '%' (simple heuristic) and assign known values
+	args := []interface{}{}
+	for i := 0; i < len(tmpl); i++ {
+		if tmpl[i] == '%' {
+			// skip escaped '%%'
+			if i+1 < len(tmpl) && tmpl[i+1] == '%' {
+				i++
+				continue
+			}
+			if len(args) == 0 {
+				args = append(args, r.Name)
+			} else if len(args) == 1 {
+				args = append(args, r.PrizeName)
+			} else if len(args) == 2 {
+				args = append(args, r.PrizeQty)
+			} else {
+				args = append(args, nil)
+			}
+		}
+	}
+	if len(args) == 0 {
+		return tmpl
+	}
+	return fmt.Sprintf(tmpl, args...)
+}
+
 // startRaffleAnnouncer launches a background announcer for a started raffle.
-// It sends an immediate shout then repeats at configured intervals until
-// the raffle is ended or the announcer is stopped.
+// It sends two short shouts immediately and then repeats both every
+// `raffleAnnounceFirstSeconds` seconds until the raffle is ended or stopped.
 func (a *App) startRaffleAnnouncer(id string) {
 	raffleAnnouncerMu.Lock()
 	if raffleAnnouncerStopChans == nil {
@@ -2592,37 +2694,41 @@ func (a *App) startRaffleAnnouncer(id string) {
 		return
 	}
 
-	msg := fmt.Sprintf(raffleAnnounceMsgTemplate, r.Name, r.PrizeName, r.PrizeQty)
-	sendShout(msg)
+	msg1 := formatRaffleMsg(raffleAnnounceMsgPart1, r)
+	msg2 := formatRaffleMsg(raffleAnnounceMsgPart2, r)
 
+	// immediate shout
+	sendShout(msg1)
+	if strings.TrimSpace(msg2) != "" {
+		sendShout(msg2)
+	}
+
+	// Single ticker: repeat both messages every raffleAnnounceFirstSeconds
+	ticker := time.NewTicker(time.Duration(raffleAnnounceFirstSeconds) * time.Second)
 	go func() {
-		select {
-		case <-time.After(time.Duration(raffleAnnounceFirstSeconds) * time.Second):
-		case <-stopCh:
-			return
-		}
+		defer ticker.Stop()
 		for {
-			// ensure raffle is still started
-			rafflesMu.Lock()
-			started := false
-			for i := range raffles {
-				if raffles[i].ID == id && raffles[i].Status == "started" {
-					started = true
-					break
-				}
-			}
-			rafflesMu.Unlock()
-			if !started {
-				return
-			}
-
-			sendShout(msg)
-
 			select {
-			case <-time.After(time.Duration(raffleAnnounceRepeatSeconds) * time.Second):
-				continue
 			case <-stopCh:
 				return
+			case <-ticker.C:
+				// ensure raffle is still started
+				rafflesMu.Lock()
+				started := false
+				for i := range raffles {
+					if raffles[i].ID == id && raffles[i].Status == "started" {
+						started = true
+						break
+					}
+				}
+				rafflesMu.Unlock()
+				if !started {
+					return
+				}
+				sendShout(formatRaffleMsg(raffleAnnounceMsgPart1, r))
+				if strings.TrimSpace(raffleAnnounceMsgPart2) != "" {
+					sendShout(formatRaffleMsg(raffleAnnounceMsgPart2, r))
+				}
 			}
 		}
 	}()

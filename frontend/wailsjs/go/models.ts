@@ -430,6 +430,24 @@ export namespace main {
 	        this.nothing = source["nothing"];
 	    }
 	}
+	export class RaffleAnnounceConfig {
+	    firstSeconds: number;
+	    repeatSeconds: number;
+	    msgPart1: string;
+	    msgPart2: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RaffleAnnounceConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.firstSeconds = source["firstSeconds"];
+	        this.repeatSeconds = source["repeatSeconds"];
+	        this.msgPart1 = source["msgPart1"];
+	        this.msgPart2 = source["msgPart2"];
+	    }
+	}
 	
 	export class TradeItem {
 	    Name: string;

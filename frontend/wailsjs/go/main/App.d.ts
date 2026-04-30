@@ -82,6 +82,8 @@ export function GetGameHistoryJSON():Promise<string>;
 
 export function GetLastTradePartnerName():Promise<string>;
 
+export function GetRaffleAnnounceConfig():Promise<main.RaffleAnnounceConfig>;
+
 export function GetRafflesJSON():Promise<string>;
 
 export function GetRiskEnabled():Promise<boolean>;
@@ -115,6 +117,8 @@ export function SaveCatalog(arg1:Array<main.CatalogItem>):Promise<void>;
 export function SaveConfig(arg1:main.PokerDisplayConfig):Promise<void>;
 
 export function SaveDealerOpenConfig(arg1:boolean,arg2:number,arg3:number):Promise<main.DealerOpenConfig>;
+
+export function SaveRaffleAnnounceConfig(arg1:number,arg2:number,arg3:string,arg4:string):Promise<main.RaffleAnnounceConfig>;
 
 export function SetOnlyUnderOver(arg1:boolean):Promise<void>;
 

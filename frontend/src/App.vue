@@ -222,6 +222,29 @@
             <button class="save-button" @click="saveDealerOpen">Save</button>
           </div>
         </div>
+        <div style="margin-top:18px;border-top:1px solid rgba(255,255,255,0.04);padding-top:12px;">
+          <h3 class="section-subtitle">Raffle Announcer</h3>
+          <p class="config-intro">Control raffle open shout timing and split the shout into two shorter messages.</p>
+          <div class="form-group">
+            <label>Message 1 interval (seconds)</label>
+            <input type="number" min="1" v-model.number="raffleAnnounceFirstSeconds" />
+          </div>
+          <div class="form-group">
+            <label>Message 2 interval (seconds)</label>
+            <input type="number" min="1" v-model.number="raffleAnnounceRepeatSeconds" />
+          </div>
+          <div class="form-group">
+            <label>Shout part 1</label>
+            <input type="text" v-model="raffleAnnounceMsgPart1" placeholder="Raffle Open: %s — Prize: %s x%d" />
+          </div>
+          <div class="form-group">
+            <label>Shout part 2</label>
+            <input type="text" v-model="raffleAnnounceMsgPart2" placeholder="1 coin = 1 ticket; 5 coins = 6 tickets." />
+          </div>
+          <div style="display:flex;gap:8px;justify-content:center;align-items:center;">
+            <button class="save-button" @click="saveRaffleAnnounce">Save</button>
+          </div>
+        </div>
         <div class="form-group" style="margin-top:12px;">
           <fieldset style="border:1px solid rgba(255,255,255,0.08);padding:10px;border-radius:6px;">
             <legend style="font-weight:600;padding:0 6px;">Block Packets</legend>
@@ -932,6 +955,11 @@ export default {
       dealerOpenEnabled: true,
       dealerTradeSeconds: 45,
       dealerAnnounceSeconds: 45,
+      // Raffle announcer UI state
+      raffleAnnounceFirstSeconds: 45,
+      raffleAnnounceRepeatSeconds: 45,
+      raffleAnnounceMsgPart1: 'Raffle Open: %s — Prize: %s x%d',
+      raffleAnnounceMsgPart2: '1 coin = 1 ticket. For every 5 coins you get 1 bonus ticket (e.g. 5 coins = 6 tickets, 10 coins = 12 tickets).',
       // Dealer mode: when true, only Under/Over-7 is presented to players
       onlyUnderOverMode: false,
       // UI toggle: enable Under/Over-7 mode (allow '7' payout multiplier)
@@ -1536,6 +1564,35 @@ export default {
         this.addLogMsg('[UI] Dealer Open config saved');
       } catch (e) {
         this.addLogMsg('[UI] Failed to save Dealer Open config');
+        console.error(e);
+      }
+    },
+    async saveRaffleAnnounce() {
+      try {
+        const cfg = await window.go.main.App.SaveRaffleAnnounceConfig(
+          Number(this.raffleAnnounceFirstSeconds || 30),
+          Number(this.raffleAnnounceRepeatSeconds || 60),
+          String(this.raffleAnnounceMsgPart1 || ''),
+          String(this.raffleAnnounceMsgPart2 || '')
+        );
+
+        if (typeof cfg === 'string') {
+          try {
+            const parsed = JSON.parse(cfg || '{}') || {};
+            this.raffleAnnounceFirstSeconds = parsed.firstSeconds || 30;
+            this.raffleAnnounceRepeatSeconds = parsed.repeatSeconds || 60;
+            this.raffleAnnounceMsgPart1 = parsed.msgPart1 || '';
+            this.raffleAnnounceMsgPart2 = parsed.msgPart2 || '';
+          } catch (e) {}
+        } else if (cfg) {
+          this.raffleAnnounceFirstSeconds = cfg.firstSeconds || 30;
+          this.raffleAnnounceRepeatSeconds = cfg.repeatSeconds || 60;
+          this.raffleAnnounceMsgPart1 = cfg.msgPart1 || '';
+          this.raffleAnnounceMsgPart2 = cfg.msgPart2 || '';
+        }
+        this.addLogMsg('[UI] Raffle announcer config saved');
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to save raffle announcer config');
         console.error(e);
       }
     },
@@ -2317,6 +2374,27 @@ export default {
       }
     } catch (e) {
       console.error('dealerOpen init', e);
+    }
+
+    // Raffle announcer initial fetch
+    try {
+      const rcfg = await window.go.main.App.GetRaffleAnnounceConfig();
+      if (typeof rcfg === 'string') {
+        try {
+          const parsed = JSON.parse(rcfg || '{}') || {};
+          this.raffleAnnounceFirstSeconds = parsed.firstSeconds || 30;
+          this.raffleAnnounceRepeatSeconds = parsed.repeatSeconds || 60;
+          this.raffleAnnounceMsgPart1 = parsed.msgPart1 || '';
+          this.raffleAnnounceMsgPart2 = parsed.msgPart2 || '';
+        } catch (e) {}
+      } else if (rcfg) {
+        this.raffleAnnounceFirstSeconds = rcfg.firstSeconds || 30;
+        this.raffleAnnounceRepeatSeconds = rcfg.repeatSeconds || 60;
+        this.raffleAnnounceMsgPart1 = rcfg.msgPart1 || '';
+        this.raffleAnnounceMsgPart2 = rcfg.msgPart2 || '';
+      }
+    } catch (e) {
+      console.error('raffleAnnounce init', e);
     }
 
     // Load user-defined auto shout presets from localStorage

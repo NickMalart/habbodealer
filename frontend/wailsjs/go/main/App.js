@@ -162,6 +162,10 @@ export function GetLastTradePartnerName() {
   return window['go']['main']['App']['GetLastTradePartnerName']();
 }
 
+export function GetRaffleAnnounceConfig() {
+  return window['go']['main']['App']['GetRaffleAnnounceConfig']();
+}
+
 export function GetRafflesJSON() {
   return window['go']['main']['App']['GetRafflesJSON']();
 }
@@ -228,6 +232,10 @@ export function SaveConfig(arg1) {
 
 export function SaveDealerOpenConfig(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveDealerOpenConfig'](arg1, arg2, arg3);
+}
+
+export function SaveRaffleAnnounceConfig(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SaveRaffleAnnounceConfig'](arg1, arg2, arg3, arg4);
 }
 
 export function SetOnlyUnderOver(arg1) {
