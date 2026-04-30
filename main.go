@@ -409,15 +409,16 @@ type RaffleParticipant struct {
 }
 
 type Raffle struct {
-	ID           string              `json:"id"`
-	Name         string              `json:"name"`
-	PrizeName    string              `json:"prizeName"`
-	PrizeQty     int                 `json:"prizeQty"`
-	Status       string              `json:"status"` // created|started|ended|drawn
-	Participants []RaffleParticipant `json:"participants"`
-	Winner       string              `json:"winner,omitempty"`
-	CreatedAt    string              `json:"createdAt"`
-	EndedAt      string              `json:"endedAt,omitempty"`
+	ID                string              `json:"id"`
+	Name              string              `json:"name"`
+	PrizeName         string              `json:"prizeName"`
+	PrizeQty          int                 `json:"prizeQty"`
+	Status            string              `json:"status"` // created|started|ended|drawn
+	AcceptingDeposits bool                `json:"acceptingDeposits,omitempty"`
+	Participants      []RaffleParticipant `json:"participants"`
+	Winner            string              `json:"winner,omitempty"`
+	CreatedAt         string              `json:"createdAt"`
+	EndedAt           string              `json:"endedAt,omitempty"`
 }
 
 var (
@@ -431,6 +432,17 @@ var (
 		"cf_20_moneybag":   20,
 		"cf_50_goldbar":    50,
 	}
+)
+
+// Raffle deposit acceptance toggle (default ON — enable via UI/config)
+var (
+	acceptRaffleDeposits bool = true
+	// per-trade marker (reset when trade closes/completes)
+	currentTradeIsRaffle bool
+	// id of raffle associated with the current open trade (if any)
+	currentTradeRaffleID string
+	// Home-screen raffle-mode toggle (enables accepting raffle-only trades)
+	raffleModeActive bool
 )
 
 // LiveGameSummary is an anonymized, frontend-friendly summary of a completed
@@ -1090,6 +1102,24 @@ func (a *App) SaveDealerOpenConfig(enabled bool, tradeSeconds int, announceSecon
 // BlockRecommendedConfig holds frontend-friendly block-recommend config.
 type BlockRecommendedConfig struct {
 	Enabled bool `json:"enabled"`
+}
+
+// ToggleRaffleMode enables/disables raffle-mode accepting deposits from Home UI.
+func (a *App) ToggleRaffleMode(enabled bool) {
+	mutex.Lock()
+	acceptRaffleDeposits = enabled
+	raffleModeActive = enabled
+	mutex.Unlock()
+
+	a.AddLogMsg(fmt.Sprintf("[RAFFLE_MODE] accepting raffle deposits = %t", enabled))
+
+	if a.ctx != nil {
+		payload := struct {
+			Accepting bool `json:"accepting"`
+		}{Accepting: enabled}
+		b, _ := json.Marshal(payload)
+		runtime.EventsEmit(a.ctx, "raffleModeUpdate", string(b))
+	}
 }
 
 // GetBlockRecommendedRoomsConfig returns current blockRecommendedRooms setting.
@@ -2100,6 +2130,23 @@ func (a *App) EndRaffle(id string) string {
 	return ""
 }
 
+// SetRaffleOpen toggles whether a raffle is currently accepting deposits.
+// Call from the UI when the operator clicks the raffle "Open" control.
+func (a *App) SetRaffleOpen(id string, open bool) string {
+	rafflesMu.Lock()
+	defer rafflesMu.Unlock()
+	for i := range raffles {
+		if raffles[i].ID == id {
+			raffles[i].AcceptingDeposits = open
+			a.saveRafflesLocked()
+			go a.emitRafflesUpdate()
+			b, _ := json.Marshal(raffles[i])
+			return string(b)
+		}
+	}
+	return ""
+}
+
 func (a *App) ResumeRaffle(id string) string {
 	rafflesMu.Lock()
 	defer rafflesMu.Unlock()
@@ -2227,12 +2274,31 @@ func (a *App) AddRaffleEntryFromTrade(playerName string, items []TradeItem) stri
 	tickets := coins + (coins / 5)
 	rafflesMu.Lock()
 	defer rafflesMu.Unlock()
-	// add to most-recent started raffle
+	// Prefer raffle explicitly accepting deposits for this trade (if set),
+	// otherwise fall back to most-recent started raffle.
 	idx := -1
-	for i := len(raffles) - 1; i >= 0; i-- {
-		if raffles[i].Status == "started" {
-			idx = i
-			break
+	if currentTradeRaffleID != "" {
+		for i := len(raffles) - 1; i >= 0; i-- {
+			if raffles[i].ID == currentTradeRaffleID {
+				idx = i
+				break
+			}
+		}
+	}
+	if idx < 0 {
+		for i := len(raffles) - 1; i >= 0; i-- {
+			if raffles[i].AcceptingDeposits {
+				idx = i
+				break
+			}
+		}
+	}
+	if idx < 0 {
+		for i := len(raffles) - 1; i >= 0; i-- {
+			if raffles[i].Status == "started" {
+				idx = i
+				break
+			}
 		}
 	}
 	if idx < 0 {
@@ -2877,7 +2943,9 @@ func handleTradePacket(a *App, e *g.Intercept) {
 	}()
 
 	// Only process trade-related logic when casino setup is complete.
-	if !casinoReady {
+	// Allow raffle deposit flows to be processed even when the casino
+	// frontend hasn't been started if `acceptRaffleDeposits` is enabled.
+	if !casinoReady && !acceptRaffleDeposits {
 		return
 	}
 
@@ -2937,6 +3005,33 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		}
 		tradeItemsMu.Unlock()
 		a.AddLogMsg("[TRADE_ACCEPT] partner accepted current trade state")
+
+		// If this incoming trade is a raffle deposit, re-validate now and
+		// accept immediately to mirror dealer auto-accept behaviour.
+		if currentTradeIsRaffle {
+			tradeItemsMu.Lock()
+			itemsCopy := make([]TradeItem, len(currentTradeItems))
+			copy(itemsCopy, currentTradeItems)
+			tradeItemsMu.Unlock()
+
+			coins := 0
+			for _, it := range itemsCopy {
+				val, ok := raffleCurrencyValues[it.Name]
+				if !ok || it.Quantity <= 0 {
+					a.AddLogMsg("[RAFFLE] partner accepted but offered invalid items; closing trade")
+					ext.Send(out.TRADE_CLOSE)
+					sendShout("Sorry — this raffle only accepts the specified coin items; trade closed.")
+					return
+				}
+				coins += val * it.Quantity
+			}
+
+			ext.Send(out.TRADE_ACCEPT)
+			tradeAutoAccepted = true
+			a.AddLogMsg(fmt.Sprintf("[RAFFLE] accepted raffle trade from %q (%d coins)", normalizeUsername(lastTradePartnerName), coins))
+			return
+		}
+
 		scheduleAutoTradeAccept(a, string(e.Packet.Data))
 		return
 	}
@@ -3093,6 +3188,42 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 			a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS #108] partner=%d own=%d all=%d wasOurs=%t (non-payout)", len(currentPartnerItems), len(currentOwnItems), len(allItems), wasOurs))
 			a.emitTradeItemsUpdate("both")
+
+			// If this incoming trade was marked as a raffle deposit, validate
+			// that the partner only offered accepted raffle coin items.
+			if currentTradeIsRaffle {
+				itemsCopy := make([]TradeItem, len(currentPartnerItems))
+				copy(itemsCopy, currentPartnerItems)
+
+				coins := 0
+				for _, it := range itemsCopy {
+					val, ok := raffleCurrencyValues[it.Name]
+					if !ok || it.Quantity <= 0 {
+						a.AddLogMsg(fmt.Sprintf("[RAFFLE] invalid item %q in raffle deposit; closing trade", it.Name))
+						// Close the trade and inform the partner
+						hiddenBlockedTradeCleanupPending = true
+						ignoreNextGuardCloseRecovery = true
+						suppressNextTradeCloseAnnouncement = true
+						ext.Send(out.TRADE_CLOSE)
+						go func() {
+							time.Sleep(350 * time.Millisecond)
+							sendShout("Sorry — this raffle only accepts coins: cf_1_coin_bronze, cf_5_coin_silver, cf_10_coin_gold, cf_20_moneybag, cf_50_goldbar")
+						}()
+						return
+					}
+					coins += val * it.Quantity
+				}
+				if coins <= 0 {
+					a.AddLogMsg("[RAFFLE] no raffle coins detected; closing trade")
+					ext.Send(out.TRADE_CLOSE)
+					go func() {
+						time.Sleep(350 * time.Millisecond)
+						sendShout("Sorry — no valid raffle coins detected, trade closed.")
+					}()
+					return
+				}
+				a.AddLogMsg(fmt.Sprintf("[RAFFLE] validated raffle deposit: %d coins", coins))
+			}
 
 			wasValid := true
 			if len(prevAllCopy) > 0 {
@@ -3309,13 +3440,45 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			a.sendTradeCompletionMessage()
 
 			// Auto-add raffle entry from this completed bet (if any raffle started)
-			go func() {
+			// capture current raffle id so the goroutine can reliably find the
+			// raffle even if global state changes shortly after trade completion.
+			currentRaffleID := currentTradeRaffleID
+			go func(raffleID string) {
 				player := normalizeUsername(strings.TrimSpace(lastTradePartnerName))
 				if player == "" {
 					return
 				}
-				a.AddRaffleEntryFromTrade(player, gameBetItems)
-			}()
+				res := a.AddRaffleEntryFromTrade(player, gameBetItems)
+				if res == "" {
+					return
+				}
+				var p RaffleParticipant
+				if err := json.Unmarshal([]byte(res), &p); err != nil {
+					return
+				}
+				// Prefer raffle name by captured raffle ID, then fall back to most-recent started raffle.
+				raffleName := ""
+				rafflesMu.Lock()
+				if raffleID != "" {
+					for i := len(raffles) - 1; i >= 0; i-- {
+						if raffles[i].ID == raffleID {
+							raffleName = raffles[i].Name
+							break
+						}
+					}
+				}
+				if raffleName == "" {
+					for i := len(raffles) - 1; i >= 0; i-- {
+						if raffles[i].Status == "started" {
+							raffleName = raffles[i].Name
+							break
+						}
+					}
+				}
+				rafflesMu.Unlock()
+				msg := fmt.Sprintf("%s purchased %d ticket(s) for raffle \"%s\" (%d coins)", p.Name, p.Tickets, raffleName, p.Coins)
+				sendShout(msg)
+			}(currentRaffleID)
 
 			// Record predicted payout items for history as 2x.
 			// Predict 2x at bet completion; the actual multiplier is set later
@@ -3492,26 +3655,47 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			}
 		}
 
-		if !isPayoutTradeOpen && !dealerReadyForNewTrade() && !matchedRecentOutgoing {
-			reason := "dealer not open"
-			if dealerGameActive() {
-				reason = "dealer busy in active game"
-			} else if dealerResyncInProgress {
-				reason = "dealer syncing hand"
-			} else if !dealerAcceptingTrades {
-				reason = "dealer not accepting trades"
+		// Determine whether raffle-only deposits should be allowed even when
+		// the dealer is not fully open. This permits a lightweight "Start
+		// Raffle Mode" flow from the home screen where the operator wants to
+		// accept coin-only raffle deposits without running the full casino.
+		allowRaffle := false
+		if acceptRaffleDeposits {
+			rafflesMu.Lock()
+			for i := len(raffles) - 1; i >= 0; i-- {
+				if raffles[i].AcceptingDeposits {
+					allowRaffle = true
+					break
+				}
 			}
+			rafflesMu.Unlock()
+		}
 
-			a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] blocking incoming trade open: %s", reason))
+		if !isPayoutTradeOpen && !dealerReadyForNewTrade() && !matchedRecentOutgoing {
+			if allowRaffle {
+				a.AddLogMsg("[TRADE_GUARD] allowing incoming raffle deposit trade because raffle mode is enabled")
+				// continue to normal trade-open handling below
+			} else {
+				reason := "dealer not open"
+				if dealerGameActive() {
+					reason = "dealer busy in active game"
+				} else if dealerResyncInProgress {
+					reason = "dealer syncing hand"
+				} else if !dealerAcceptingTrades {
+					reason = "dealer not accepting trades"
+				}
 
-			// Detailed guard state for diagnostics
-			a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] block reason=%s awaitingTradeOpen=%t dealerTradeWindowOpen=%t dealerGameActive=%t dealerResyncInProgress=%t", reason, awaitingTradeOpen, dealerTradeWindowOpen, dealerGameActive(), dealerResyncInProgress))
-			hiddenBlockedTradeCleanupPending = true
-			ignoreNextGuardCloseRecovery = true
-			suppressNextTradeCloseAnnouncement = true
-			e.Block()
-			ext.Send(out.TRADE_CLOSE)
-			return
+				a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] blocking incoming trade open: %s", reason))
+
+				// Detailed guard state for diagnostics
+				a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] block reason=%s awaitingTradeOpen=%t dealerTradeWindowOpen=%t dealerGameActive=%t dealerResyncInProgress=%t", reason, awaitingTradeOpen, dealerTradeWindowOpen, dealerGameActive(), dealerResyncInProgress))
+				hiddenBlockedTradeCleanupPending = true
+				ignoreNextGuardCloseRecovery = true
+				suppressNextTradeCloseAnnouncement = true
+				e.Block()
+				ext.Send(out.TRADE_CLOSE)
+				return
+			}
 		}
 
 		if matchedRecentOutgoing {
@@ -3522,13 +3706,17 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		// yet have a ready frozen hand snapshot. This prevents the race where
 		// ClearTradeItems() wiped the snapshot and the dealer reopens immediately.
 		if !isPayoutTradeOpen && !matchedRecentOutgoing && !dealerSnapshotReady() {
-			a.AddLogMsg("[TRADE_GUARD] blocking incoming trade open: hand snapshot not ready")
-			hiddenBlockedTradeCleanupPending = true
-			ignoreNextGuardCloseRecovery = true
-			suppressNextTradeCloseAnnouncement = true
-			e.Block()
-			ext.Send(out.TRADE_CLOSE)
-			return
+			if allowRaffle {
+				a.AddLogMsg("[TRADE_GUARD] skipping snapshot readiness check for raffle deposit trade")
+			} else {
+				a.AddLogMsg("[TRADE_GUARD] blocking incoming trade open: hand snapshot not ready")
+				hiddenBlockedTradeCleanupPending = true
+				ignoreNextGuardCloseRecovery = true
+				suppressNextTradeCloseAnnouncement = true
+				e.Block()
+				ext.Send(out.TRADE_CLOSE)
+				return
+			}
 		}
 
 		awaitingGameChoice = false
@@ -3751,6 +3939,24 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		// a frozen trade snapshot is being prepared.
 		tradeOpen = true
 
+		// If raffle deposits are enabled and a raffle is explicitly accepting
+		// deposits, mark this incoming trade as a raffle deposit so we
+		// validate/announce accordingly and remember which raffle it maps to.
+		currentTradeIsRaffle = false
+		currentTradeRaffleID = ""
+		if acceptRaffleDeposits {
+			rafflesMu.Lock()
+			for i := len(raffles) - 1; i >= 0; i-- {
+				if raffles[i].AcceptingDeposits {
+					currentTradeIsRaffle = true
+					currentTradeRaffleID = raffles[i].ID
+					a.AddLogMsg("[RAFFLE] incoming trade marked as raffle deposit")
+					break
+				}
+			}
+			rafflesMu.Unlock()
+		}
+
 		// Ensure any previous trade state is cleared so the first TRADE_ITEMS
 		// packet for this new trade is interpreted correctly.
 		tradeItemsMu.Lock()
@@ -3837,6 +4043,10 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		// Clear trade items when trade closes. Ensure client/server trade
 		// window state is cleared too.
 		a.ClearTradeItems()
+
+		// Clear raffle marker and associated raffle id for this trade
+		currentTradeIsRaffle = false
+		currentTradeRaffleID = ""
 
 		// If a trade was open, we previously sent a delayed outgoing
 		// TRADE_CLOSE to ensure UI cleared. That can race with a new

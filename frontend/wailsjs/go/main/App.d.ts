@@ -122,6 +122,8 @@ export function SaveRaffleAnnounceConfig(arg1:number,arg2:number,arg3:string,arg
 
 export function SetOnlyUnderOver(arg1:boolean):Promise<void>;
 
+export function SetRaffleOpen(arg1:string,arg2:boolean):Promise<string>;
+
 export function SetRiskEnabled(arg1:boolean):Promise<void>;
 
 export function SetUnderOver7Mode(arg1:boolean):Promise<void>;
@@ -175,3 +177,5 @@ export function ToggleBlockSlideObjectBundleOutgoing(arg1:boolean):Promise<main.
 export function ToggleBlockStatusEffects(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
 
 export function ToggleBlockUserBanned(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
+
+export function ToggleRaffleMode(arg1:boolean):Promise<void>;

@@ -31,6 +31,8 @@
           <div class="casino-actions">
             <button v-if="casinoStatusKey === 'stopped'" type="button" class="copy-btn start-casino-btn" @click="startCasino">Start Casino</button>
             <button v-if="casinoStatusKey !== 'stopped'" type="button" class="copy-btn history-danger-btn" @click="stopCasino">Stop</button>
+            <button v-if="!raffleModeEnabled" type="button" class="copy-btn" @click="toggleRaffle(true)">Start Raffle Mode</button>
+            <button v-if="raffleModeEnabled" type="button" class="copy-btn history-danger-btn" @click="toggleRaffle(false)">Stop Raffle Mode</button>
           </div>
         </div>
         <div v-if="casinoStatusKey !== 'stopped'" class="trade-limits-home">Trade limits: max {{ maxUniqueItemsInput }} unique items, max {{ maxQuantityPerItemInput }} per item</div>
@@ -960,6 +962,8 @@ export default {
       raffleAnnounceRepeatSeconds: 45,
       raffleAnnounceMsgPart1: 'Raffle Open: %s — Prize: %s x%d',
       raffleAnnounceMsgPart2: '1 coin = 1 ticket. For every 5 coins you get 1 bonus ticket (e.g. 5 coins = 6 tickets, 10 coins = 12 tickets).',
+      // Home-screen raffle mode toggle
+      raffleModeEnabled: false,
       // Dealer mode: when true, only Under/Over-7 is presented to players
       onlyUnderOverMode: false,
       // UI toggle: enable Under/Over-7 mode (allow '7' payout multiplier)
@@ -1215,6 +1219,16 @@ export default {
           this.addLogMsg('[UI] Casino stopped');
         } catch (err) {
           this.addLogMsg('[UI] Failed to stop casino');
+          console.error(err);
+        }
+      },
+      async toggleRaffle(enable) {
+        try {
+          await window.go.main.App.ToggleRaffleMode(enable);
+          this.raffleModeEnabled = !!enable;
+          this.addLogMsg(`[UI] Raffle mode ${enable ? 'enabled' : 'disabled'}`);
+        } catch (err) {
+          this.addLogMsg('[UI] Failed to toggle raffle mode');
           console.error(err);
         }
       },
@@ -2256,6 +2270,16 @@ export default {
 
     // initial load
     await this.loadRaffles();
+
+    // Listen for raffle mode updates (home toggle)
+    window.runtime.EventsOn("raffleModeUpdate", (jsonStr) => {
+      try {
+        const payload = JSON.parse(jsonStr || '{}') || {};
+        this.raffleModeEnabled = !!payload.accepting;
+      } catch (_) {
+        this.raffleModeEnabled = false;
+      }
+    });
 
     // Dice setup updates from backend
     window.runtime.EventsOn("diceSetupUpdate", (jsonStr) => {

@@ -242,6 +242,10 @@ export function SetOnlyUnderOver(arg1) {
   return window['go']['main']['App']['SetOnlyUnderOver'](arg1);
 }
 
+export function SetRaffleOpen(arg1, arg2) {
+  return window['go']['main']['App']['SetRaffleOpen'](arg1, arg2);
+}
+
 export function SetRiskEnabled(arg1) {
   return window['go']['main']['App']['SetRiskEnabled'](arg1);
 }
@@ -348,4 +352,8 @@ export function ToggleBlockStatusEffects(arg1) {
 
 export function ToggleBlockUserBanned(arg1) {
   return window['go']['main']['App']['ToggleBlockUserBanned'](arg1);
+}
+
+export function ToggleRaffleMode(arg1) {
+  return window['go']['main']['App']['ToggleRaffleMode'](arg1);
 }
