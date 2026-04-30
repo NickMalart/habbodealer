@@ -430,6 +430,34 @@ export namespace main {
 	        this.nothing = source["nothing"];
 	    }
 	}
+	export class RaffleSummary {
+	    index: number;
+	    name: string;
+	    prizeName: string;
+	    prizeCount: number;
+	    startAt: string;
+	    endAt: string;
+	    active: boolean;
+	    ticketsTotal: number;
+	    contributionsCount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RaffleSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.index = source["index"];
+	        this.name = source["name"];
+	        this.prizeName = source["prizeName"];
+	        this.prizeCount = source["prizeCount"];
+	        this.startAt = source["startAt"];
+	        this.endAt = source["endAt"];
+	        this.active = source["active"];
+	        this.ticketsTotal = source["ticketsTotal"];
+	        this.contributionsCount = source["contributionsCount"];
+	    }
+	}
 	
 	export class TradeItem {
 	    Name: string;

@@ -30,6 +30,10 @@ export function ClearTradeItems() {
   return window['go']['main']['App']['ClearTradeItems']();
 }
 
+export function DeleteSavedRaffle(arg1) {
+  return window['go']['main']['App']['DeleteSavedRaffle'](arg1);
+}
+
 export function DrawRaffleWinner(arg1) {
   return window['go']['main']['App']['DrawRaffleWinner'](arg1);
 }
@@ -154,6 +158,10 @@ export function GetTradeItemsJSON() {
   return window['go']['main']['App']['GetTradeItemsJSON']();
 }
 
+export function ListArchivedRaffleSummaries() {
+  return window['go']['main']['App']['ListArchivedRaffleSummaries']();
+}
+
 export function ListEventDatesJSON() {
   return window['go']['main']['App']['ListEventDatesJSON']();
 }
@@ -162,12 +170,24 @@ export function ListEventsForDateJSON(arg1) {
   return window['go']['main']['App']['ListEventsForDateJSON'](arg1);
 }
 
+export function ListSavedRaffles() {
+  return window['go']['main']['App']['ListSavedRaffles']();
+}
+
+export function LoadArchivedRaffleIndex(arg1) {
+  return window['go']['main']['App']['LoadArchivedRaffleIndex'](arg1);
+}
+
 export function LoadCatalog() {
   return window['go']['main']['App']['LoadCatalog']();
 }
 
 export function LoadConfig() {
   return window['go']['main']['App']['LoadConfig']();
+}
+
+export function LoadSavedRaffle(arg1) {
+  return window['go']['main']['App']['LoadSavedRaffle'](arg1);
 }
 
 export function OpenLastTrade() {

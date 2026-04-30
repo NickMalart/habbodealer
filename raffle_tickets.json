@@ -1,0 +1,57 @@
+[
+  {
+    "tickets": {},
+    "contributions": [],
+    "active": false,
+    "name": "Hi",
+    "prizeName": "Hello",
+    "prizeCount": 1,
+    "startAt": "2026-04-30T18:12:24+10:00",
+    "endAt": "2026-04-30T18:12:27+10:00"
+  },
+  {
+    "tickets": {},
+    "contributions": [],
+    "active": false,
+    "name": "Hi",
+    "prizeName": "Hello",
+    "prizeCount": 1,
+    "startAt": "2026-04-30T18:58:35+10:00",
+    "endAt": "2026-04-30T18:58:36+10:00"
+  },
+  {
+    "tickets": {},
+    "contributions": [],
+    "active": false,
+    "name": "Hi",
+    "prizeName": "Hello",
+    "prizeCount": 1,
+    "startAt": "2026-04-30T18:58:38+10:00",
+    "endAt": "2026-04-30T18:58:42+10:00"
+  },
+  {
+    "tickets": {},
+    "contributions": [],
+    "active": false
+  },
+  {
+    "tickets": {},
+    "contributions": [],
+    "active": false,
+    "name": "asd",
+    "prizeName": "asd",
+    "prizeCount": 1,
+    "startAt": "2026-04-30T19:16:24+10:00",
+    "endAt": "2026-04-30T19:16:25+10:00"
+  },
+  {
+    "tickets": {},
+    "contributions": [],
+    "active": false,
+    "name": "asd",
+    "prizeName": "asd",
+    "prizeCount": 1,
+    "startAt": "2026-04-30T19:23:42+10:00",
+    "endAt": "2026-04-30T19:23:43+10:00"
+  }
+]

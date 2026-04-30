@@ -45,6 +45,9 @@ type RaffleManager struct {
 	PrizeCount int
 	StartAt    string
 	EndAt      string
+	// archive of all raffles stored in the single JSON file at `path`
+	history      []raffleState
+	currentIndex int // index into history for the active/selected raffle, -1 if none
 }
 
 // Raffle is the package-global raffle manager instance (may be nil)
@@ -58,6 +61,7 @@ func NewRaffleManager(path string, ctx context.Context) *RaffleManager {
 		path:          path,
 		ctx:           ctx,
 	}
+	r.currentIndex = -1
 	_ = r.load()
 	return r
 }
@@ -71,26 +75,70 @@ func (r *RaffleManager) load() error {
 	b, err := os.ReadFile(r.path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			r.history = []raffleState{}
+			r.currentIndex = -1
 			return nil
 		}
 		return err
 	}
-	var s raffleState
-	if err := json.Unmarshal(b, &s); err != nil {
-		return err
+
+	// Try to unmarshal as an array of raffles (preferred)
+	var hist []raffleState
+	if err := json.Unmarshal(b, &hist); err == nil && len(hist) > 0 {
+		r.history = hist
+		// choose the last active raffle if present, otherwise the last entry
+		idx := -1
+		for i := len(r.history) - 1; i >= 0; i-- {
+			if r.history[i].Active {
+				idx = i
+				break
+			}
+		}
+		if idx == -1 && len(r.history) > 0 {
+			idx = len(r.history) - 1
+		}
+		r.currentIndex = idx
+		if idx != -1 {
+			s := r.history[idx]
+			if s.Tickets != nil {
+				r.tickets = s.Tickets
+			} else {
+				r.tickets = map[string]int{}
+			}
+			r.contributions = s.Contributions
+			r.Active = s.Active
+			r.Name = s.Name
+			r.PrizeName = s.PrizeName
+			r.PrizeCount = s.PrizeCount
+			r.StartAt = s.StartAt
+			r.EndAt = s.EndAt
+		}
+		return nil
 	}
-	if s.Tickets != nil {
-		r.tickets = s.Tickets
-	} else {
-		r.tickets = map[string]int{}
+
+	// Fallback: try single raffleState for backward compatibility
+	var single raffleState
+	if err := json.Unmarshal(b, &single); err == nil {
+		r.history = []raffleState{single}
+		r.currentIndex = 0
+		if single.Tickets != nil {
+			r.tickets = single.Tickets
+		} else {
+			r.tickets = map[string]int{}
+		}
+		r.contributions = single.Contributions
+		r.Active = single.Active
+		r.Name = single.Name
+		r.PrizeName = single.PrizeName
+		r.PrizeCount = single.PrizeCount
+		r.StartAt = single.StartAt
+		r.EndAt = single.EndAt
+		return nil
 	}
-	r.contributions = s.Contributions
-	r.Active = s.Active
-	r.Name = s.Name
-	r.PrizeName = s.PrizeName
-	r.PrizeCount = s.PrizeCount
-	r.StartAt = s.StartAt
-	r.EndAt = s.EndAt
+
+	// Unparseable file; treat as empty archive to avoid data loss
+	r.history = []raffleState{}
+	r.currentIndex = -1
 	return nil
 }
 
@@ -100,7 +148,9 @@ func (r *RaffleManager) save() error {
 	if r.path == "" {
 		return nil
 	}
-	s := raffleState{
+
+	// Ensure history entry reflects current in-memory state
+	cur := raffleState{
 		Tickets:       r.tickets,
 		Contributions: r.contributions,
 		Active:        r.Active,
@@ -110,7 +160,15 @@ func (r *RaffleManager) save() error {
 		StartAt:       r.StartAt,
 		EndAt:         r.EndAt,
 	}
-	b, err := json.MarshalIndent(s, "", "  ")
+
+	if r.currentIndex < 0 || r.currentIndex >= len(r.history) {
+		r.history = append(r.history, cur)
+		r.currentIndex = len(r.history) - 1
+	} else {
+		r.history[r.currentIndex] = cur
+	}
+
+	b, err := json.MarshalIndent(r.history, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -122,13 +180,35 @@ func (r *RaffleManager) save() error {
 }
 
 func (r *RaffleManager) computeTickets(items []TradeItem) int {
-	total := 0
+	coinValues := map[string]int{
+		"cf_1_coin_bronze": 1,
+		"cf_5_coin_silver": 5,
+		"cf_10_coin_gold":  10,
+		"cf_20_moneybag":   20,
+		"cf_50_goldbar":    50,
+	}
+
+	totalCoins := 0
+	nonCoinUnits := 0
 	for _, it := range items {
-		if it.Quantity > 0 {
-			total += it.Quantity // default: 1 ticket per unit
+		if it.Quantity <= 0 {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(it.Name))
+		if v, ok := coinValues[name]; ok {
+			totalCoins += v * it.Quantity
+		} else {
+			nonCoinUnits += it.Quantity
 		}
 	}
-	return total
+
+	tickets := 0
+	if totalCoins > 0 {
+		tickets = totalCoins + (totalCoins / 5) // +1 ticket per 5 coins
+	}
+	tickets += nonCoinUnits // keep 1 ticket per non-coin unit
+
+	return tickets
 }
 
 // RecordContribution records the player's contribution, returns tickets allocated.
@@ -239,24 +319,36 @@ func (r *RaffleManager) DrawWinner(seed int64) (string, error) {
 
 func (r *RaffleManager) Reset() error {
 	r.mu.Lock()
-	r.tickets = map[string]int{}
-	r.contributions = []RaffleContribution{}
-	r.Active = false
-	r.Name = ""
-	r.PrizeName = ""
-	r.PrizeCount = 0
-	r.StartAt = ""
-	r.EndAt = ""
+	// Start a new empty raffle entry (preserve history)
+	newState := raffleState{
+		Tickets:       map[string]int{},
+		Contributions: []RaffleContribution{},
+		Active:        false,
+		Name:          "",
+		PrizeName:     "",
+		PrizeCount:    0,
+		StartAt:       "",
+		EndAt:         "",
+	}
+	r.history = append(r.history, newState)
+	r.currentIndex = len(r.history) - 1
+	r.tickets = newState.Tickets
+	r.contributions = newState.Contributions
+	r.Active = newState.Active
+	r.Name = newState.Name
+	r.PrizeName = newState.PrizeName
+	r.PrizeCount = newState.PrizeCount
+	r.StartAt = newState.StartAt
+	r.EndAt = newState.EndAt
 	r.mu.Unlock()
 	if r.ctx != nil {
-		// emit a generic update so frontend can refresh
-		payload, _ := json.Marshal(map[string]interface{}{"reset": true})
+		payload, _ := json.Marshal(map[string]interface{}{"newRaffle": true})
 		runtime.EventsEmit(r.ctx, "raffleUpdate", string(payload))
 	}
 	return r.save()
 }
 
-// Start begins a new raffle. It resets tickets/contributions for a fresh raffle.
+// Start begins a new raffle and appends it to the single-file archive.
 func (r *RaffleManager) Start(name, prizeName string, prizeCount int) error {
 	r.mu.Lock()
 	r.tickets = map[string]int{}
@@ -267,6 +359,19 @@ func (r *RaffleManager) Start(name, prizeName string, prizeCount int) error {
 	r.PrizeCount = prizeCount
 	r.StartAt = time.Now().Format(time.RFC3339)
 	r.EndAt = ""
+	// append explicitly to history and set currentIndex
+	s := raffleState{
+		Tickets:       r.tickets,
+		Contributions: r.contributions,
+		Active:        r.Active,
+		Name:          r.Name,
+		PrizeName:     r.PrizeName,
+		PrizeCount:    r.PrizeCount,
+		StartAt:       r.StartAt,
+		EndAt:         r.EndAt,
+	}
+	r.history = append(r.history, s)
+	r.currentIndex = len(r.history) - 1
 	r.mu.Unlock()
 
 	if err := r.save(); err != nil {
@@ -285,7 +390,7 @@ func (r *RaffleManager) Start(name, prizeName string, prizeCount int) error {
 	return nil
 }
 
-// Stop ends the active raffle (keeps tickets/contributions for review).
+// Stop ends the active raffle (marks end time and persists into archive).
 func (r *RaffleManager) Stop() error {
 	r.mu.Lock()
 	r.Active = false
@@ -314,7 +419,7 @@ func (r *RaffleManager) IsActive() bool {
 	return r.Active
 }
 
-// Resume re-activates an existing raffle without clearing previous tickets.
+// Resume re-activates the currently selected raffle (does not alter history order).
 func (r *RaffleManager) Resume() error {
 	r.mu.Lock()
 	if r.tickets == nil {
@@ -340,4 +445,93 @@ func (r *RaffleManager) Resume() error {
 		runtime.EventsEmit(r.ctx, "raffleUpdate", string(payload))
 	}
 	return nil
+}
+
+// RaffleSummary is a compact metadata view for listing archived raffles.
+type RaffleSummary struct {
+	Index              int    `json:"index"`
+	Name               string `json:"name"`
+	PrizeName          string `json:"prizeName"`
+	PrizeCount         int    `json:"prizeCount"`
+	StartAt            string `json:"startAt"`
+	EndAt              string `json:"endAt"`
+	Active             bool   `json:"active"`
+	TicketsTotal       int    `json:"ticketsTotal"`
+	ContributionsCount int    `json:"contributionsCount"`
+}
+
+// ListArchivedRaffles returns a slice of summaries for all raffles in the archive.
+func (r *RaffleManager) ListArchivedRaffles() []RaffleSummary {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]RaffleSummary, 0, len(r.history))
+	for i, s := range r.history {
+		total := 0
+		for _, v := range s.Tickets {
+			total += v
+		}
+		out = append(out, RaffleSummary{
+			Index:              i,
+			Name:               s.Name,
+			PrizeName:          s.PrizeName,
+			PrizeCount:         s.PrizeCount,
+			StartAt:            s.StartAt,
+			EndAt:              s.EndAt,
+			Active:             s.Active,
+			TicketsTotal:       total,
+			ContributionsCount: len(s.Contributions),
+		})
+	}
+	return out
+}
+
+// LoadArchivedRaffle selects the raffle at index and loads it into memory as current.
+func (r *RaffleManager) LoadArchivedRaffle(index int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if index < 0 || index >= len(r.history) {
+		return fmt.Errorf("index out of range")
+	}
+	s := r.history[index]
+	r.currentIndex = index
+	if s.Tickets != nil {
+		r.tickets = s.Tickets
+	} else {
+		r.tickets = map[string]int{}
+	}
+	r.contributions = s.Contributions
+	r.Active = s.Active
+	r.Name = s.Name
+	r.PrizeName = s.PrizeName
+	r.PrizeCount = s.PrizeCount
+	r.StartAt = s.StartAt
+	r.EndAt = s.EndAt
+
+	// persist selection
+	return r.save()
+}
+
+// DeleteArchivedRaffle removes the raffle at index from the archive and persists.
+func (r *RaffleManager) DeleteArchivedRaffle(index int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if index < 0 || index >= len(r.history) {
+		return fmt.Errorf("index out of range")
+	}
+	r.history = append(r.history[:index], r.history[index+1:]...)
+	// adjust currentIndex
+	if r.currentIndex == index {
+		r.currentIndex = -1
+		r.tickets = map[string]int{}
+		r.contributions = []RaffleContribution{}
+		r.Active = false
+		r.Name = ""
+		r.PrizeName = ""
+		r.PrizeCount = 0
+		r.StartAt = ""
+		r.EndAt = ""
+	} else if r.currentIndex > index {
+		r.currentIndex--
+	}
+	return r.save()
 }

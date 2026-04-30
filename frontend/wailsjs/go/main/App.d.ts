@@ -16,6 +16,8 @@ export function ClearGameHistory():Promise<void>;
 
 export function ClearTradeItems():Promise<void>;
 
+export function DeleteSavedRaffle(arg1:string):Promise<void>;
+
 export function DrawRaffleWinner(arg1:number):Promise<string>;
 
 export function ExportEventsForDate(arg1:string):Promise<string>;
@@ -78,13 +80,21 @@ export function GetRiskEnabled():Promise<boolean>;
 
 export function GetTradeItemsJSON():Promise<string>;
 
+export function ListArchivedRaffleSummaries():Promise<Array<main.RaffleSummary>>;
+
 export function ListEventDatesJSON():Promise<string>;
 
 export function ListEventsForDateJSON(arg1:string):Promise<string>;
 
+export function ListSavedRaffles():Promise<Array<string>>;
+
+export function LoadArchivedRaffleIndex(arg1:number):Promise<void>;
+
 export function LoadCatalog():Promise<Array<main.CatalogItem>>;
 
 export function LoadConfig():Promise<main.PokerDisplayConfig>;
+
+export function LoadSavedRaffle(arg1:string):Promise<void>;
 
 export function OpenLastTrade():Promise<void>;
 

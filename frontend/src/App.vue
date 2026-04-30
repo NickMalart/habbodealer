@@ -67,23 +67,21 @@
             </div>
             <div class="game-guide-block">
               <div class="game-guide-label">Room Name</div>
-              <input
-                v-model="roomNameInput"
-                type="text"
-                placeholder="Habbo room name"
-                style="width:100%;padding:8px;border-radius:4px;border:1px solid #ccc;max-width:420px;"
-              />
-            </div>
-            <div class="game-guide-block dealer-limits-grid">
-              <div class="dealer-limit-field">
-                <div class="game-guide-label">Max Unique Items</div>
-                <input v-model.number="maxUniqueItemsInput" type="number" min="1" class="modal-number" />
               </div>
-              <div class="dealer-limit-field">
-                <div class="game-guide-label">Max Quantity Per Item</div>
-                <input v-model.number="maxQuantityPerItemInput" type="number" min="1" class="modal-number" />
-              </div>
-            </div>
+            };
+          },
+          computed: {
+            filteredArchivedList() {
+              if (!this.archivedList || this.archivedList.length === 0) return [];
+              const q = (this.archivedSearch || '').trim().toLowerCase();
+              if (!q) return this.archivedList;
+              return this.archivedList.filter(e => {
+                const name = (e.name || '').toLowerCase();
+                const start = (e.startAt || '').toLowerCase();
+                const end = (e.endAt || '').toLowerCase();
+                return name.includes(q) || start.includes(q) || end.includes(q) || String(e.index).includes(q);
+              });
+            },
             <div style="font-size:12px;color:#bdbdbd;margin-top:8px;">
               Max Unique Items = how many different item types the player may offer. Max Quantity Per Item = max allowed amount for any one item type.
             </div>
@@ -201,6 +199,13 @@
           <div style="display:flex;gap:8px;justify-content:center;align-items:center;">
             <button class="save-button" @click="saveAutoShout2">Save</button>
             <button class="save-button" @click="toggleAutoShout2">{{ autoShoutEnabled2 ? 'Stop Auto Shout' : 'Start Auto Shout' }}</button>
+          </div>
+        </div>
+
+        <div style="margin-top:12px;border-top:1px dashed rgba(255,255,255,0.04);padding-top:12px;">
+          <h3 class="section-subtitle">Raffles</h3>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+            <button class="copy-btn" @click="openArchivedModal">Show Existing Raffle</button>
           </div>
         </div>
 
@@ -749,10 +754,10 @@
       </div>
 
       <div class="game-guide-block" style="margin-top:8px;">
-        <button class="copy-btn" @click="raffleInfo.active ? stopRaffle() : startRaffle()">{{ raffleInfo.active ? 'Stop Raffle' : 'Start Raffle' }}</button>
+        <button class="copy-btn" @click="raffleInfo.active ? stopRaffle() : startRaffle()">{{ raffleInfo.active ? 'End Raffle' : 'Start Raffle' }}</button>
         <button v-if="!raffleInfo.active && (Object.keys(raffleTickets).length>0 || raffleInfo.name)" class="copy-btn" @click="resumeRaffle" style="margin-left:8px;">Resume Raffle</button>
-        <button class="copy-btn" @click="drawWinner" style="margin-left:8px;">Draw Winner</button>
-        <button class="copy-btn" @click="resetRaffle" style="margin-left:8px;">Reset Raffle</button>
+        <button v-if="!raffleInfo.active && raffleInfo.endAt" class="copy-btn" @click="drawWinner" style="margin-left:8px;">Draw Winner</button>
+        <button class="copy-btn" @click="resetRaffle" style="margin-left:8px;">New Raffle</button>
       </div>
 
       <div class="game-guide-block" style="margin-top:8px;">
@@ -777,6 +782,29 @@
       <ul>
         <li v-for="c in raffleContributions" :key="c.at">{{ c.at }} — {{ c.player }}: {{ c.tickets }} tickets ({{ c.items.length }} items)</li>
       </ul>
+    </div>
+
+    <!-- Archived raffles modal -->
+    <div class="dice-setup-modal-backdrop" v-if="showArchivedModal" @click="showArchivedModal = false">
+      <div class="dice-setup-modal" @click.stop>
+        <div class="game-guide-header">
+          <h3 class="section-title game-guide-title">Archived Raffles</h3>
+          <button type="button" class="copy-btn" @click="showArchivedModal = false">Close</button>
+        </div>
+        <div style="max-height:400px;overflow:auto;padding:8px;">
+          <input v-model="archivedSearch" placeholder="Search archived raffles..." style="width:100%;padding:8px;border-radius:4px;border:1px solid #ccc;margin-bottom:8px;" />
+          <div v-if="(!archivedList || archivedList.length === 0)">No archived raffles found.</div>
+          <ul v-else style="list-style:none;padding:0;margin:0;">
+            <li v-for="entry in filteredArchivedList" :key="entry.index" style="padding:6px;border-bottom:1px solid rgba(255,255,255,0.03);display:flex;justify-content:space-between;align-items:center;">
+              <div style="flex:1;">{{ entry.index }}: {{ entry.name || '—' }} — {{ entry.startAt || '—' }} to {{ entry.endAt || '—' }}</div>
+              <div style="display:flex;gap:8px;margin-left:12px;">
+                <button class="copy-btn" @click="loadArchivedByIndex(entry.index)">Load</button>
+                <button class="copy-btn" @click="loadAndResumeByIndex(entry.index)">Load & Resume</button>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </div>
     </div>
 
   <!-- Users bottom bar removed per user request -->
@@ -862,6 +890,9 @@ export default {
       raffleNameInput: '',
       rafflePrizeNameInput: '',
       rafflePrizeCountInput: 1,
+      showArchivedModal: false,
+      archivedList: [],
+      archivedSearch: '',
       showNameSuggestions: false,
       showFlaggedOnly: false,
       // Auto shout UI state
@@ -925,6 +956,19 @@ export default {
       selectedEventDate: '',
       eventsForDate: [],
     };
+  },
+  computed: {
+    filteredArchivedList() {
+      if (!this.archivedList || this.archivedList.length === 0) return [];
+      const q = (this.archivedSearch || '').trim().toLowerCase();
+      if (!q) return this.archivedList;
+      return this.archivedList.filter(e => {
+        const name = (e.name || '').toLowerCase();
+        const start = (e.startAt || '').toLowerCase();
+        const end = (e.endAt || '').toLowerCase();
+        return name.includes(q) || start.includes(q) || end.includes(q) || String(e.index).includes(q);
+      });
+    },
   },
   computed: {
     tradeItemsWithDisplay() {
@@ -1989,9 +2033,51 @@ export default {
         this.raffleTickets = {};
         this.raffleContributions = [];
         this.raffleWinner = '';
-        this.addLogMsg('[UI] Raffle reset');
+        // Clear input fields for a new raffle
+        this.raffleNameInput = '';
+        this.rafflePrizeNameInput = '';
+        this.rafflePrizeCountInput = 1;
+        this.addLogMsg('[UI] New raffle created');
       } catch (e) {
         this.addLogMsg('[UI] Raffle reset failed');
+        console.error(e);
+      }
+    },
+
+    async openArchivedModal() {
+      try {
+        const list = await window.go.main.App.ListArchivedRaffleSummaries();
+        // Ensure JS objects have expected keys
+        this.archivedList = (list || []).map(e => ({ index: e.index, name: e.name, prizeName: e.prizeName, prizeCount: e.prizeCount, startAt: e.startAt, endAt: e.endAt, active: e.active, ticketsTotal: e.ticketsTotal, contributionsCount: e.contributionsCount }));
+        this.archivedSearch = '';
+        this.showArchivedModal = true;
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to list archived raffles');
+        console.error(e);
+      }
+    },
+
+    async loadArchivedByIndex(index) {
+      try {
+        await window.go.main.App.LoadArchivedRaffleIndex(index);
+        await this.loadRaffleState();
+        this.showArchivedModal = false;
+        this.addLogMsg(`[UI] Loaded archived raffle ${index}`);
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to load archived raffle');
+        console.error(e);
+      }
+    },
+
+    async loadAndResumeByIndex(index) {
+      try {
+        await window.go.main.App.LoadArchivedRaffleIndex(index);
+        await window.go.main.App.ResumeRaffle();
+        await this.loadRaffleState();
+        this.showArchivedModal = false;
+        this.addLogMsg(`[UI] Loaded and resumed archived raffle ${index}`);
+      } catch (e) {
+        this.addLogMsg('[UI] Failed to load & resume archived raffle');
         console.error(e);
       }
     },

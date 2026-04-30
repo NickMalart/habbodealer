@@ -6269,6 +6269,100 @@ func (a *App) ResumeRaffle() error {
 	return nil
 }
 
+// ListSavedRaffles returns filenames of saved raffle JSONs from the raffles/ directory.
+func (a *App) ListSavedRaffles() ([]string, error) {
+	if Raffle == nil {
+		Raffle = NewRaffleManager("raffle_tickets.json", a.ctx)
+	}
+	summaries := Raffle.ListArchivedRaffles()
+	out := make([]string, 0, len(summaries))
+	for _, s := range summaries {
+		label := fmt.Sprintf("%d: %s — %s to %s", s.Index, s.Name, s.StartAt, s.EndAt)
+		out = append(out, label)
+	}
+	return out, nil
+}
+
+// ListArchivedRaffleSummaries returns structured summaries for archived raffles.
+func (a *App) ListArchivedRaffleSummaries() ([]RaffleSummary, error) {
+	if Raffle == nil {
+		Raffle = NewRaffleManager("raffle_tickets.json", a.ctx)
+	}
+	return Raffle.ListArchivedRaffles(), nil
+}
+
+// LoadArchivedRaffleIndex loads an archived raffle by its numeric index.
+func (a *App) LoadArchivedRaffleIndex(index int) error {
+	if Raffle == nil {
+		Raffle = NewRaffleManager("raffle_tickets.json", a.ctx)
+	}
+	if err := Raffle.LoadArchivedRaffle(index); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[RAFFLE] load archived raffle failed: %v", err))
+		return err
+	}
+	a.AddLogMsg(fmt.Sprintf("[RAFFLE] loaded archived raffle index %d", index))
+	if a.ctx != nil {
+		payload, _ := json.Marshal(map[string]interface{}{
+			"active":     Raffle.Active,
+			"name":       Raffle.Name,
+			"prizeName":  Raffle.PrizeName,
+			"prizeCount": Raffle.PrizeCount,
+			"startAt":    Raffle.StartAt,
+			"endAt":      Raffle.EndAt,
+		})
+		runtime.EventsEmit(a.ctx, "raffleUpdate", string(payload))
+	}
+	return nil
+}
+
+// LoadSavedRaffle loads a saved raffle by filename (base name in raffles/ or full path) and replaces current state.
+func (a *App) LoadSavedRaffle(name string) error {
+	if Raffle == nil {
+		Raffle = NewRaffleManager("raffle_tickets.json", a.ctx)
+	}
+	// Expect numeric index (stringified) for archived raffles
+	idx, err := strconv.Atoi(name)
+	if err != nil {
+		a.AddLogMsg(fmt.Sprintf("[RAFFLE] invalid raffle index: %v", err))
+		return err
+	}
+	if err := Raffle.LoadArchivedRaffle(idx); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[RAFFLE] load archived raffle failed: %v", err))
+		return err
+	}
+	a.AddLogMsg(fmt.Sprintf("[RAFFLE] loaded archived raffle index %d", idx))
+	if a.ctx != nil {
+		payload, _ := json.Marshal(map[string]interface{}{
+			"active":     Raffle.Active,
+			"name":       Raffle.Name,
+			"prizeName":  Raffle.PrizeName,
+			"prizeCount": Raffle.PrizeCount,
+			"startAt":    Raffle.StartAt,
+			"endAt":      Raffle.EndAt,
+		})
+		runtime.EventsEmit(a.ctx, "raffleUpdate", string(payload))
+	}
+	return nil
+}
+
+// DeleteSavedRaffle deletes a saved raffle file by base name or full path.
+func (a *App) DeleteSavedRaffle(name string) error {
+	if Raffle == nil {
+		Raffle = NewRaffleManager("raffle_tickets.json", a.ctx)
+	}
+	idx, err := strconv.Atoi(name)
+	if err != nil {
+		a.AddLogMsg(fmt.Sprintf("[RAFFLE] invalid raffle index: %v", err))
+		return err
+	}
+	if err := Raffle.DeleteArchivedRaffle(idx); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[RAFFLE] delete archived raffle failed: %v", err))
+		return err
+	}
+	a.AddLogMsg(fmt.Sprintf("[RAFFLE] deleted archived raffle index %d", idx))
+	return nil
+}
+
 // ResetRaffle resets raffle state (tickets and contributions)
 func (a *App) ResetRaffle() error {
 	if Raffle == nil {
@@ -7013,6 +7107,15 @@ func (a *App) emitHandItemsUpdate() {
 // sendLiveDealerSnapshot posts a hand snapshot to the configured live-dealer webhook.
 // Runs asynchronously and logs status via `AddLogMsg`.
 func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
+	// Skip sending snapshot unless dealer is actively accepting trades.
+	mutex.Lock()
+	open := dealerAcceptingTrades
+	mutex.Unlock()
+	if !open {
+		a.AddLogMsg("[TRADE_HAND_SNAPSHOT] skipped send: dealer not accepting trades")
+		return
+	}
+
 	go func(snapshot []TradeItem) {
 		payload := LiveDealerStatusPayload{
 			LastSeenAt:         time.Now().UTC().Format(time.RFC3339),
@@ -7073,6 +7176,12 @@ func (a *App) sendLiveDealerStatus(open bool, dealerName string) {
 		return
 	}
 
+	// Don't send status updates when dealer is explicitly closed.
+	if !open {
+		a.AddLogMsg("[LIVE_DEALER_STATUS] skipped send: dealer not open")
+		return
+	}
+
 	go func(dealerOpen bool, name string) {
 		payload := LiveDealerStatusPayload{
 			LastSeenAt:         time.Now().UTC().Format(time.RFC3339),
@@ -7126,6 +7235,15 @@ func (a *App) sendLiveDealerStatus(open bool, dealerName string) {
 // to the configured live-dealer webhook. Never exposes the player name; winner
 // is mapped to "Player"/"Dealer"/"Unknown".
 func (a *App) sendLiveDealerGames(last int) {
+	// Only send game summaries while dealer is accepting trades.
+	mutex.Lock()
+	open := dealerAcceptingTrades
+	mutex.Unlock()
+	if !open {
+		a.AddLogMsg("[LIVE_DEALER_GAMES] skipped send: dealer not accepting trades")
+		return
+	}
+
 	go func(n int) {
 		type GameSummary struct {
 			ID          string      `json:"id"`
