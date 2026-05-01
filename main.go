@@ -390,7 +390,7 @@ var (
 	raffleAnnounceRepeatSeconds int = 45 // kept for compatibility but unused separately
 
 	// Message parts: both may use format verbs %s (raffle name), %s (prize name), %d (prize qty)
-	raffleAnnounceMsgPart1 string = "Raffle Open: %s - Prize: %s x%d - More Details Discord: yw9nmCcfED"
+	raffleAnnounceMsgPart1 string = "Raffle Open: %s - Prize: %s x%d - More Details Discord: 7QeXEV6jp"
 	raffleAnnounceMsgPart2 string = "1 coin = 1 ticket. For every 5 coins you get 1 bonus ticket."
 
 	raffleAnnouncerMu        sync.Mutex
