@@ -68,7 +68,7 @@ func LogEvent(typ string, payload interface{}, summary string, metadata map[stri
 
 func eventsBaseDir() string {
 	cfgDir, _ := os.UserConfigDir()
-	return filepath.Join(cfgDir, "Gamba-Suite", "events")
+	return filepath.Join(cfgDir, "Roll Origins", "events")
 }
 
 func writeEventRecord(rec EventRecord) error {

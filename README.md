@@ -22,7 +22,7 @@ Gamba Suite is a powerful tool for managing, rolling, and resetting dice with au
    Open your terminal and clone the repository using the following command:
 
    ```bash
-   git clone https://github.com/JTD420/Gamba-Suite.git
+   git clone https://github.com/JTD420/Roll Origins.git
    ```
 
 2. **Navigate to the project directory:**
@@ -30,7 +30,7 @@ Gamba Suite is a powerful tool for managing, rolling, and resetting dice with au
    Change your working directory to the project's directory:
 
    ```bash
-   cd Gamba-Suite
+   cd Roll Origins
    ```
 
 3. **Build the project:**
@@ -46,7 +46,7 @@ Gamba Suite is a powerful tool for managing, rolling, and resetting dice with au
    After building, execute the project with:
 
    ```bash
-   ./Gamba-Suite
+   ./Roll Origins
    ```
 
 ## Usage
@@ -55,7 +55,7 @@ Gamba Suite is a powerful tool for managing, rolling, and resetting dice with au
 
 1. **Run the Project:**
 
-   After executing `./Gamba-Suite`, the application will start running.
+   After executing `./Roll Origins`, the application will start running.
 
 2. **Initialize Dice:**
 

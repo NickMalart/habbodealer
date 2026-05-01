@@ -103,7 +103,7 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 	}
 
 	embed := map[string]interface{}{
-		"title":       fmt.Sprintf("%s — %s", entry.Game, entry.Status),
+		"title":       fmt.Sprintf("%s - %s", entry.Game, entry.Status),
 		"description": fmt.Sprintf("Player: %s", entry.PlayerName),
 		"color":       3447003,
 		"fields": []map[string]interface{}{
@@ -158,7 +158,7 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Gamba-Suite/1.0")
+	req.Header.Set("User-Agent", "Roll Origins/1.0")
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
@@ -185,7 +185,7 @@ const raffleWebhookURL = "https://discordapp.com/api/webhooks/149965160780005792
 
 func getRaffleImagesDir() string {
 	configDir, _ := os.UserConfigDir()
-	path := filepath.Join(configDir, "Gamba-Suite", "raffle_images")
+	path := filepath.Join(configDir, "Roll Origins", "raffle_images")
 	_ = os.MkdirAll(path, 0700)
 	return path
 }
@@ -300,12 +300,117 @@ func removeEdgeBackgroundToTransparent(src image.Image) *image.NRGBA {
 	return out
 }
 
+func trimTransparentBounds(src *image.NRGBA) image.Rectangle {
+	b := src.Bounds()
+	minX, minY := b.Max.X, b.Max.Y
+	maxX, maxY := b.Min.X-1, b.Min.Y-1
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if src.NRGBAAt(x, y).A == 0 {
+				continue
+			}
+			if x < minX {
+				minX = x
+			}
+			if y < minY {
+				minY = y
+			}
+			if x > maxX {
+				maxX = x
+			}
+			if y > maxY {
+				maxY = y
+			}
+		}
+	}
+	if maxX < minX || maxY < minY {
+		return b
+	}
+	return image.Rect(minX, minY, maxX+1, maxY+1)
+}
+
+func cropNRGBA(src *image.NRGBA, rect image.Rectangle) *image.NRGBA {
+	rect = rect.Intersect(src.Bounds())
+	if rect.Empty() {
+		return image.NewNRGBA(image.Rect(0, 0, 1, 1))
+	}
+	out := image.NewNRGBA(image.Rect(0, 0, rect.Dx(), rect.Dy()))
+	for y := 0; y < rect.Dy(); y++ {
+		for x := 0; x < rect.Dx(); x++ {
+			out.SetNRGBA(x, y, src.NRGBAAt(rect.Min.X+x, rect.Min.Y+y))
+		}
+	}
+	return out
+}
+
+func scaleNearestNRGBA(src *image.NRGBA, newW, newH int) *image.NRGBA {
+	if newW < 1 {
+		newW = 1
+	}
+	if newH < 1 {
+		newH = 1
+	}
+	sb := src.Bounds()
+	out := image.NewNRGBA(image.Rect(0, 0, newW, newH))
+	for y := 0; y < newH; y++ {
+		sy := sb.Min.Y + (y*sb.Dy())/newH
+		if sy >= sb.Max.Y {
+			sy = sb.Max.Y - 1
+		}
+		for x := 0; x < newW; x++ {
+			sx := sb.Min.X + (x*sb.Dx())/newW
+			if sx >= sb.Max.X {
+				sx = sb.Max.X - 1
+			}
+			out.SetNRGBA(x, y, src.NRGBAAt(sx, sy))
+		}
+	}
+	return out
+}
+
+func buildLargeRaffleShowcaseImage(src *image.NRGBA) *image.NRGBA {
+	trimmed := cropNRGBA(src, trimTransparentBounds(src))
+	canvasW, canvasH := 1400, 900
+	margin := 70
+	availW := canvasW - margin*2
+	availH := canvasH - margin*2
+	if availW < 1 {
+		availW = canvasW
+	}
+	if availH < 1 {
+		availH = canvasH
+	}
+
+	scaleX := float64(availW) / float64(trimmed.Bounds().Dx())
+	scaleY := float64(availH) / float64(trimmed.Bounds().Dy())
+	scale := scaleX
+	if scaleY < scale {
+		scale = scaleY
+	}
+	if scale < 1 {
+		scale = 1
+	}
+	newW := int(float64(trimmed.Bounds().Dx()) * scale)
+	newH := int(float64(trimmed.Bounds().Dy()) * scale)
+	scaled := scaleNearestNRGBA(trimmed, newW, newH)
+
+	canvas := image.NewNRGBA(image.Rect(0, 0, canvasW, canvasH))
+	offX := (canvasW - newW) / 2
+	offY := (canvasH - newH) / 2
+	for y := 0; y < newH; y++ {
+		for x := 0; x < newW; x++ {
+			canvas.SetNRGBA(offX+x, offY+y, scaled.NRGBAAt(x, y))
+		}
+	}
+	return canvas
+}
+
 func saveTransparentRafflePrizeImage(raffleID string, dataURL string) (string, error) {
 	img, err := decodeRaffleImageDataURL(dataURL)
 	if err != nil {
 		return "", err
 	}
-	processed := removeEdgeBackgroundToTransparent(img)
+	processed := buildLargeRaffleShowcaseImage(removeEdgeBackgroundToTransparent(img))
 	outPath := filepath.Join(getRaffleImagesDir(), raffleID+".png")
 	f, err := os.Create(outPath)
 	if err != nil {
@@ -313,6 +418,43 @@ func saveTransparentRafflePrizeImage(raffleID string, dataURL string) (string, e
 	}
 	defer f.Close()
 	if err := png.Encode(f, processed); err != nil {
+		return "", err
+	}
+	return outPath, nil
+}
+
+func imageToNRGBA(src image.Image) *image.NRGBA {
+	b := src.Bounds()
+	out := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	for y := 0; y < b.Dy(); y++ {
+		for x := 0; x < b.Dx(); x++ {
+			out.SetNRGBA(x, y, color.NRGBAModel.Convert(src.At(b.Min.X+x, b.Min.Y+y)).(color.NRGBA))
+		}
+	}
+	return out
+}
+
+func saveRaffleWinnerProofImage(raffleID string, dataURL string) (string, error) {
+	img, err := decodeRaffleImageDataURL(dataURL)
+	if err != nil {
+		return "", err
+	}
+	converted := imageToNRGBA(img)
+	maxDim := converted.Bounds().Dx()
+	if converted.Bounds().Dy() > maxDim {
+		maxDim = converted.Bounds().Dy()
+	}
+	if maxDim > 1600 {
+		scale := 1600.0 / float64(maxDim)
+		converted = scaleNearestNRGBA(converted, int(float64(converted.Bounds().Dx())*scale), int(float64(converted.Bounds().Dy())*scale))
+	}
+	outPath := filepath.Join(getRaffleImagesDir(), raffleID+"_winner.png")
+	f, err := os.Create(outPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if err := png.Encode(f, converted); err != nil {
 		return "", err
 	}
 	return outPath, nil
@@ -347,7 +489,7 @@ func formatRaffleParticipantsForDiscord(parts []RaffleParticipant) string {
 
 	lines := make([]string, 0, len(cp))
 	for _, p := range cp {
-		line := fmt.Sprintf("🎟️ %s — %d ticket(s)", strings.TrimSpace(p.Name), p.Tickets)
+		line := fmt.Sprintf("🎟️ %s - %d ticket(s)", strings.TrimSpace(p.Name), p.Tickets)
 		lines = append(lines, line)
 	}
 	joined := strings.Join(lines, "\n")
@@ -454,6 +596,11 @@ func buildRaffleDiscordPayload(raffle Raffle, isCreate bool) map[string]interfac
 	if strings.TrimSpace(raffle.EndAt) != "" {
 		desc += fmt.Sprintf("\n⏰ Planned End: %s", formatRaffleDateTime(raffle.EndAt, raffle.EndAtGmt))
 	}
+	heroDescription := fmt.Sprintf("🎁 **%s x%d**\n🔥 %s", raffle.PrizeName, raffle.PrizeQty, raffle.Name)
+	winnerProofDescription := "🤝 Winner payout screenshot"
+	if strings.TrimSpace(raffle.Winner) != "" {
+		winnerProofDescription = fmt.Sprintf("🤝 Proof that %s received the prize", raffle.Winner)
+	}
 
 	fields := []map[string]interface{}{
 		{"name": "📌 Status", "value": truncateDiscordField(fmt.Sprintf("%s %s", statusEmoji, raffle.Status), 250), "inline": true},
@@ -468,8 +615,8 @@ func buildRaffleDiscordPayload(raffle Raffle, isCreate bool) map[string]interfac
 		fields = append(fields, map[string]interface{}{"name": "🛑 Ended", "value": truncateDiscordField(formatRaffleDateTime(raffle.EndedAt, ""), 250), "inline": true})
 	}
 
-	embed := map[string]interface{}{
-		"title":       "🎲 Gamba-Suite Raffle Tracker 🎲",
+	detailsEmbed := map[string]interface{}{
+		"title":       "🎲 Roll Origins Raffle Tracker 🎲",
 		"description": desc,
 		"color":       15844367,
 		"fields":      fields,
@@ -478,11 +625,42 @@ func buildRaffleDiscordPayload(raffle Raffle, isCreate bool) map[string]interfac
 			"text": "✨ Auto-updated on every ticket buy and winner draw ✨",
 		},
 	}
+	embeds := []interface{}{}
 	if strings.TrimSpace(raffle.PrizeImageURL) != "" {
-		embed["image"] = map[string]interface{}{"url": strings.TrimSpace(raffle.PrizeImageURL)}
+		heroEmbed := map[string]interface{}{
+			"title":       "🎁 WHAT'S UP FOR GRABS 🎁",
+			"description": heroDescription,
+			"color":       16766720,
+			"image":       map[string]interface{}{"url": strings.TrimSpace(raffle.PrizeImageURL)},
+		}
+		embeds = append(embeds, heroEmbed)
 	} else if isCreate && strings.TrimSpace(raffle.PrizeImagePath) != "" {
-		embed["image"] = map[string]interface{}{"url": "attachment://raffle_prize.png"}
+		heroEmbed := map[string]interface{}{
+			"title":       "🎁 WHAT'S UP FOR GRABS 🎁",
+			"description": heroDescription,
+			"color":       16766720,
+			"image":       map[string]interface{}{"url": "attachment://raffle_prize.png"},
+		}
+		embeds = append(embeds, heroEmbed)
 	}
+	if strings.TrimSpace(raffle.WinnerImageURL) != "" {
+		proofEmbed := map[string]interface{}{
+			"title":       "🏆 WINNER RECEIVED PRIZE 🏆",
+			"description": winnerProofDescription,
+			"color":       5763719,
+			"image":       map[string]interface{}{"url": strings.TrimSpace(raffle.WinnerImageURL)},
+		}
+		embeds = append(embeds, proofEmbed)
+	} else if strings.TrimSpace(raffle.WinnerImagePath) != "" {
+		proofEmbed := map[string]interface{}{
+			"title":       "🏆 WINNER RECEIVED PRIZE 🏆",
+			"description": winnerProofDescription,
+			"color":       5763719,
+			"image":       map[string]interface{}{"url": "attachment://winner_proof.png"},
+		}
+		embeds = append(embeds, proofEmbed)
+	}
+	embeds = append(embeds, detailsEmbed)
 
 	content := fmt.Sprintf("%s %s | 🎁 %s x%d | 🎟️ %d total tickets", headline, raffle.Name, raffle.PrizeName, raffle.PrizeQty, totalTickets)
 	if strings.TrimSpace(raffle.Winner) != "" {
@@ -490,9 +668,9 @@ func buildRaffleDiscordPayload(raffle Raffle, isCreate bool) map[string]interfac
 	}
 
 	return map[string]interface{}{
-		"username": "Gamba-Suite Raffles",
+		"username": "Roll Origins Raffles",
 		"content":  truncateDiscordField(content, 1800),
-		"embeds":   []interface{}{embed},
+		"embeds":   embeds,
 		"allowed_mentions": map[string][]string{
 			"parse": {},
 		},
@@ -509,7 +687,7 @@ func doDiscordWebhookRequest(method string, urlStr string, payload map[string]in
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Gamba-Suite/1.0")
+	req.Header.Set("User-Agent", "Roll Origins/1.0")
 
 	client := &http.Client{Timeout: 7 * time.Second}
 	resp, err := client.Do(req)
@@ -521,7 +699,11 @@ func doDiscordWebhookRequest(method string, urlStr string, payload map[string]in
 	return resp.StatusCode, body, nil
 }
 
-func doDiscordWebhookMultipartPost(urlStr string, payload map[string]interface{}, filePath string, fieldName string, fileName string) (int, []byte, error) {
+func doDiscordWebhookMultipartRequest(method string, urlStr string, payload map[string]interface{}, files []struct {
+	Path      string
+	FieldName string
+	FileName  string
+}) (int, []byte, error) {
 	jb, err := json.Marshal(payload)
 	if err != nil {
 		return 0, nil, err
@@ -531,27 +713,29 @@ func doDiscordWebhookMultipartPost(urlStr string, payload map[string]interface{}
 	if err := w.WriteField("payload_json", string(jb)); err != nil {
 		return 0, nil, err
 	}
-	fileBytes, err := os.ReadFile(filePath)
-	if err != nil {
-		return 0, nil, err
-	}
-	part, err := w.CreateFormFile(fieldName, fileName)
-	if err != nil {
-		return 0, nil, err
-	}
-	if _, err := part.Write(fileBytes); err != nil {
-		return 0, nil, err
+	for _, file := range files {
+		fileBytes, err := os.ReadFile(file.Path)
+		if err != nil {
+			return 0, nil, err
+		}
+		part, err := w.CreateFormFile(file.FieldName, file.FileName)
+		if err != nil {
+			return 0, nil, err
+		}
+		if _, err := part.Write(fileBytes); err != nil {
+			return 0, nil, err
+		}
 	}
 	if err := w.Close(); err != nil {
 		return 0, nil, err
 	}
 
-	req, err := http.NewRequest("POST", urlStr, &buf)
+	req, err := http.NewRequest(method, urlStr, &buf)
 	if err != nil {
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
-	req.Header.Set("User-Agent", "Gamba-Suite/1.0")
+	req.Header.Set("User-Agent", "Roll Origins/1.0")
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
@@ -561,6 +745,14 @@ func doDiscordWebhookMultipartPost(urlStr string, payload map[string]interface{}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, body, nil
+}
+
+func doDiscordWebhookMultipartPost(urlStr string, payload map[string]interface{}, filePath string, fieldName string, fileName string) (int, []byte, error) {
+	return doDiscordWebhookMultipartRequest("POST", urlStr, payload, []struct {
+		Path      string
+		FieldName string
+		FileName  string
+	}{{Path: filePath, FieldName: fieldName, FileName: fileName}})
 }
 
 func (a *App) sendOrUpdateRaffleDiscordMessage(raffleID string, forceCreate bool) {
@@ -654,12 +846,56 @@ func (a *App) sendOrUpdateRaffleDiscordMessage(raffleID string, forceCreate bool
 
 	payload := buildRaffleDiscordPayload(raffle, false)
 	patchURL := fmt.Sprintf("https://discordapp.com/api/webhooks/%s/%s/messages/%s", webhookID, webhookToken, messageID)
-	status, body, reqErr := doDiscordWebhookRequest("PATCH", patchURL, payload)
+	var status int
+	var body []byte
+	var reqErr error
+	patchFiles := []struct {
+		Path      string
+		FieldName string
+		FileName  string
+	}{}
+	if strings.TrimSpace(raffle.WinnerImagePath) != "" && strings.TrimSpace(raffle.WinnerImageURL) == "" {
+		patchFiles = append(patchFiles, struct {
+			Path      string
+			FieldName string
+			FileName  string
+		}{Path: raffle.WinnerImagePath, FieldName: "files[0]", FileName: "winner_proof.png"})
+	}
+	if len(patchFiles) > 0 {
+		status, body, reqErr = doDiscordWebhookMultipartRequest("PATCH", patchURL, payload, patchFiles)
+	} else {
+		status, body, reqErr = doDiscordWebhookRequest("PATCH", patchURL, payload)
+	}
 	if reqErr != nil {
 		a.AddLogMsg("[DISCORD_RAFFLE] patch message failed: " + reqErr.Error())
 		return
 	}
 	if status >= 200 && status < 300 {
+		if len(patchFiles) > 0 {
+			var resp struct {
+				Attachments []struct {
+					URL string `json:"url"`
+				} `json:"attachments"`
+			}
+			if err := json.Unmarshal(body, &resp); err == nil {
+				for _, att := range resp.Attachments {
+					url := strings.TrimSpace(att.URL)
+					if url == "" || !strings.Contains(strings.ToLower(url), "winner_proof") {
+						continue
+					}
+					rafflesMu.Lock()
+					for i := range raffles {
+						if raffles[i].ID == raffleID {
+							raffles[i].WinnerImageURL = url
+							a.saveRafflesLocked()
+							break
+						}
+					}
+					rafflesMu.Unlock()
+					break
+				}
+			}
+		}
 		a.AddLogMsg("[DISCORD_RAFFLE] patched raffle webhook message")
 		return
 	}

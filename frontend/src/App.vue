@@ -673,6 +673,19 @@
             <div class="game-guide-text">{{ selectedRaffle && selectedRaffle.status }}</div>
           </div>
 
+          <div v-if="selectedRaffle && selectedRaffle.status === 'completed'" class="game-guide-block">
+          <div class="game-guide-label">Winner Proof Screenshot</div>
+          <div class="game-guide-text" style="margin-bottom:8px;">Upload a screenshot of you trading the prize to the winner. This will patch into the Discord raffle card below the prize image.</div>
+          <input type="file" accept="image/png,image/jpeg,image/jpg,image/gif" @change="onRaffleWinnerImageChange" />
+          <div v-if="raffleWinnerImagePreview || (selectedRaffle && selectedRaffle.winnerImageUrl)" style="margin-top:8px;">
+            <img :src="raffleWinnerImagePreview || selectedRaffle.winnerImageUrl" alt="Winner proof preview" style="max-width:260px;max-height:220px;border:1px solid rgba(255,255,255,0.12);border-radius:6px;padding:4px;background:rgba(0,0,0,0.2);" />
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
+            <button class="copy-btn" @click="uploadRaffleWinnerProof" :disabled="!selectedRaffle || !raffleWinnerImageData">Upload Proof</button>
+            <span v-if="selectedRaffle && selectedRaffle.winnerImageUrl" class="game-guide-text">Discord proof image linked</span>
+          </div>
+        </div>
+
           <div class="game-guide-block">
             <div class="game-guide-label">Participants</div>
             <div v-if="!(selectedRaffle && selectedRaffle.participants && selectedRaffle.participants.length)" class="trade-empty">No entries yet.</div>
@@ -1045,6 +1058,8 @@ export default {
       rafflePrizeQtyInput: 1,
       rafflePrizeImageData: '',
       rafflePrizeImagePreview: '',
+      raffleWinnerImageData: '',
+      raffleWinnerImagePreview: '',
       selectedRaffle: null,
       newParticipantName: '',
       newParticipantCoins: 0,
@@ -2110,6 +2125,8 @@ export default {
     },
     selectRaffle(r) {
       this.selectedRaffle = r;
+      this.raffleWinnerImageData = '';
+      this.raffleWinnerImagePreview = '';
       this.showRaffleModal = true;
     },
     onRafflePrizeImageChange(event) {
@@ -2130,6 +2147,30 @@ export default {
           this.rafflePrizeImageData = '';
           this.rafflePrizeImagePreview = '';
           this.addLogMsg('[RAFFLE] failed to read prize image');
+        };
+        reader.readAsDataURL(file);
+      } catch (e) {
+        console.error(e);
+      }
+    },
+    onRaffleWinnerImageChange(event) {
+      try {
+        const file = event && event.target && event.target.files && event.target.files[0] ? event.target.files[0] : null;
+        if (!file) {
+          this.raffleWinnerImageData = '';
+          this.raffleWinnerImagePreview = '';
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          const data = String(reader.result || '');
+          this.raffleWinnerImageData = data;
+          this.raffleWinnerImagePreview = data;
+        };
+        reader.onerror = () => {
+          this.raffleWinnerImageData = '';
+          this.raffleWinnerImagePreview = '';
+          this.addLogMsg('[RAFFLE] failed to read winner proof image');
         };
         reader.readAsDataURL(file);
       } catch (e) {
@@ -2189,6 +2230,18 @@ export default {
           this.addLogMsg('[RAFFLE] no tickets or draw failed');
         }
       } catch (e) { console.error(e); }
+    },
+    async uploadRaffleWinnerProof() {
+      if (!this.selectedRaffle || !this.raffleWinnerImageData) return;
+      try {
+        await window.go.main.App.UploadRaffleWinnerProof(String(this.selectedRaffle.id || ''), String(this.raffleWinnerImageData || ''));
+        this.raffleWinnerImageData = '';
+        this.raffleWinnerImagePreview = '';
+        await this.loadRaffles();
+        this.addLogMsg('[RAFFLE] winner proof uploaded');
+      } catch (e) {
+        console.error(e);
+      }
     },
     async addManualEntry() {
       if (!this.selectedRaffle || !this.newParticipantName || !this.newParticipantCoins) return;

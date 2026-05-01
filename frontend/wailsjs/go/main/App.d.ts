@@ -179,3 +179,5 @@ export function ToggleBlockStatusEffects(arg1:boolean):Promise<main.BlockSlideOb
 export function ToggleBlockUserBanned(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
 
 export function ToggleRaffleMode(arg1:boolean):Promise<void>;
+
+export function UploadRaffleWinnerProof(arg1:string,arg2:string):Promise<string>;

@@ -357,3 +357,7 @@ export function ToggleBlockUserBanned(arg1) {
 export function ToggleRaffleMode(arg1) {
   return window['go']['main']['App']['ToggleRaffleMode'](arg1);
 }
+
+export function UploadRaffleWinnerProof(arg1, arg2) {
+  return window['go']['main']['App']['UploadRaffleWinnerProof'](arg1, arg2);
+}

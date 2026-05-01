@@ -253,7 +253,7 @@ var (
 	// should be recorded for the bot setup. Must be enabled by the Start Casino
 	// button in the frontend.
 	diceSetupActive bool
-	// When true the casino frontend has started — kept for UI state only.
+	// When true the casino frontend has started - kept for UI state only.
 	casinoActive bool
 	// When true the casino has a valid completed dice setup and the bot can run.
 	casinoReady                 bool
@@ -382,13 +382,13 @@ var (
 	autoShout2Mu       sync.Mutex
 )
 
-// Raffle announcer configuration — adjust these values (seconds)
+// Raffle announcer configuration - adjust these values (seconds)
 var (
 	raffleAnnounceFirstSeconds  int = 45 // unified interval: seconds between announces
 	raffleAnnounceRepeatSeconds int = 45 // kept for compatibility but unused separately
 
 	// Message parts: both may use format verbs %s (raffle name), %s (prize name), %d (prize qty)
-	raffleAnnounceMsgPart1 string = "Raffle Open: %s — Prize: %s x%d - More Details Discord: yw9nmCcfED"
+	raffleAnnounceMsgPart1 string = "Raffle Open: %s - Prize: %s x%d - More Details Discord: yw9nmCcfED"
 	raffleAnnounceMsgPart2 string = "1 coin = 1 ticket. For every 5 coins you get 1 bonus ticket."
 
 	raffleAnnouncerMu        sync.Mutex
@@ -415,6 +415,8 @@ type Raffle struct {
 	PrizeQty          int                 `json:"prizeQty"`
 	PrizeImagePath    string              `json:"prizeImagePath,omitempty"`
 	PrizeImageURL     string              `json:"prizeImageUrl,omitempty"`
+	WinnerImagePath   string              `json:"winnerImagePath,omitempty"`
+	WinnerImageURL    string              `json:"winnerImageUrl,omitempty"`
 	Status            string              `json:"status"` // created|started|ended|completed
 	AcceptingDeposits bool                `json:"acceptingDeposits,omitempty"`
 	Participants      []RaffleParticipant `json:"participants"`
@@ -440,7 +442,7 @@ var (
 	}
 )
 
-// Raffle deposit acceptance toggle (default ON — enable via UI/config)
+// Raffle deposit acceptance toggle (default ON - enable via UI/config)
 var (
 	acceptRaffleDeposits bool = true
 	// per-trade marker (reset when trade closes/completes)
@@ -452,7 +454,7 @@ var (
 )
 
 // LiveGameSummary is an anonymized, frontend-friendly summary of a completed
-// game. It intentionally does not expose player names — `Winner` is mapped
+// game. It intentionally does not expose player names - `Winner` is mapped
 // to "Player"/"Dealer"/"Unknown".
 type LiveGameSummary struct {
 	ID          string      `json:"id"`
@@ -533,7 +535,7 @@ func formatTradeLimitViolationMessage(v *tradeLimitViolation) string {
 		parts = append(parts, fmt.Sprintf("max %d each", v.MaxPerItem))
 	}
 
-	base := fmt.Sprintf("Trade over limit — remove items within %ds", int(tradeLimitGracePeriod.Seconds()))
+	base := fmt.Sprintf("Trade over limit - remove items within %ds", int(tradeLimitGracePeriod.Seconds()))
 	if len(parts) > 0 {
 		return base + ": " + strings.Join(parts, ", ")
 	}
@@ -1875,14 +1877,14 @@ func shouldAnnounceDealerOpen() bool {
 
 func getConfigFilePath() string {
 	configDir, _ := os.UserConfigDir()
-	configPath := filepath.Join(configDir, "Gamba-Suite")
+	configPath := filepath.Join(configDir, "Roll Origins")
 	os.MkdirAll(configPath, 0700)
 	return filepath.Join(configPath, "poker_display_config.json")
 }
 
 func getGameHistoryFilePath() string {
 	configDir, _ := os.UserConfigDir()
-	configPath := filepath.Join(configDir, "Gamba-Suite")
+	configPath := filepath.Join(configDir, "Roll Origins")
 	os.MkdirAll(configPath, 0700)
 	return filepath.Join(configPath, "game_history.json")
 }
@@ -1894,7 +1896,7 @@ func cloneTradeItems(items []TradeItem) []TradeItem {
 }
 
 // getRecentGameSummaries returns the last n completed games as anonymized
-// summaries suitable for public status APIs. Player names are not exposed —
+// summaries suitable for public status APIs. Player names are not exposed ?
 // winners are mapped to "Player"/"Dealer"/"Unknown".
 func (a *App) getRecentGameSummaries(n int) []LiveGameSummary {
 	a.gameHistoryMu.Lock()
@@ -2050,7 +2052,7 @@ func (a *App) emitGameHistoryUpdate() {
 // --- Raffle persistence and APIs ---
 func getRafflesFilePath() string {
 	configDir, _ := os.UserConfigDir()
-	configPath := filepath.Join(configDir, "Gamba-Suite")
+	configPath := filepath.Join(configDir, "Roll Origins")
 	os.MkdirAll(configPath, 0700)
 	return filepath.Join(configPath, "raffles.json")
 }
@@ -2285,6 +2287,33 @@ func (a *App) DrawRaffleWinner(id string) string {
 			b, _ := json.Marshal(out)
 			return string(b)
 		}
+	}
+	return ""
+}
+
+func (a *App) UploadRaffleWinnerProof(id string, winnerImageData string) string {
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(winnerImageData) == "" {
+		return ""
+	}
+	path, err := saveRaffleWinnerProofImage(id, winnerImageData)
+	if err != nil {
+		a.AddLogMsg("[RAFFLE_IMAGE] failed to save winner proof image: " + err.Error())
+		return ""
+	}
+
+	rafflesMu.Lock()
+	defer rafflesMu.Unlock()
+	for i := range raffles {
+		if raffles[i].ID != id {
+			continue
+		}
+		raffles[i].WinnerImagePath = path
+		raffles[i].WinnerImageURL = ""
+		a.saveRafflesLocked()
+		go a.emitRafflesUpdate()
+		go a.sendOrUpdateRaffleDiscordMessage(id, false)
+		b, _ := json.Marshal(raffles[i])
+		return string(b)
 	}
 	return ""
 }
@@ -2597,7 +2626,7 @@ func (a *App) setCurrentGameHistoryResults(playerResult string, dealerResult str
 			} else if strings.EqualFold(norm, "Dealer") || strings.EqualFold(norm, a.getCurrentDealerName()) {
 				entry.Winner = "Dealer"
 			} else {
-				// Unknown non-player name — assume dealer and normalize.
+				// Unknown non-player name - assume dealer and normalize.
 				entry.Winner = "Dealer"
 			}
 		}
@@ -2843,7 +2872,7 @@ func (a *App) startRaffleAnnouncer(id string) {
 	msg1 := formatRaffleMsg(raffleAnnounceMsgPart1, r)
 	msg2 := formatRaffleMsg(raffleAnnounceMsgPart2, r)
 
-	// immediate shout(s) — append a single-unit remaining-time if EndAt provided
+	// immediate shout(s) - append a single-unit remaining-time if EndAt provided
 	endStr := strings.TrimSpace(r.EndAt)
 	if endStr != "" {
 		if endTime, err := time.Parse(time.RFC3339, endStr); err == nil {
@@ -2873,7 +2902,7 @@ func (a *App) startRaffleAnnouncer(id string) {
 					}
 				}
 				if suffix != "" {
-					msg1 = fmt.Sprintf("%s — %s", msg1, suffix)
+					msg1 = fmt.Sprintf("%s - %s", msg1, suffix)
 				}
 			}
 		}
@@ -2914,11 +2943,11 @@ func (a *App) startRaffleAnnouncer(id string) {
 						rem2 := endTime2.Sub(time.Now().UTC())
 						if rem2 > 0 {
 							if rem2 >= time.Hour {
-								ann = fmt.Sprintf("%s — %d hours left", ann, int(rem2.Hours()))
+								ann = fmt.Sprintf("%s - %d hours left", ann, int(rem2.Hours()))
 							} else if rem2 >= time.Minute {
-								ann = fmt.Sprintf("%s — %d minutes left", ann, int(rem2.Minutes()))
+								ann = fmt.Sprintf("%s - %d minutes left", ann, int(rem2.Minutes()))
 							} else {
-								ann = fmt.Sprintf("%s — %d seconds left", ann, int(rem2.Seconds()))
+								ann = fmt.Sprintf("%s - %d seconds left", ann, int(rem2.Seconds()))
 							}
 						}
 					}
@@ -2931,7 +2960,7 @@ func (a *App) startRaffleAnnouncer(id string) {
 		}
 	}()
 
-	// Auto-end at EndAt (no countdown shouts — Habbo disallows these).
+	// Auto-end at EndAt (no countdown shouts - Habbo disallows these).
 	endStr = strings.TrimSpace(r.EndAt)
 	if endStr != "" {
 		if endTime, err := time.Parse(time.RFC3339, endStr); err == nil {
@@ -3122,7 +3151,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		return
 	}
 
-	// NOTE: payout coverage guard removed — proceed with outgoing accept/confirm.
+	// NOTE: payout coverage guard removed - proceed with outgoing accept/confirm.
 
 	// TRADE_OPEN outgoing 71 - remember recent target so matching incoming 104 isn't blocked by dealer guard.
 	if e.Packet.Header.Dir == g.Out && e.Packet.Header.Value == 71 {
@@ -3193,7 +3222,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				if !ok || it.Quantity <= 0 {
 					a.AddLogMsg("[RAFFLE] partner accepted but offered invalid items; closing trade")
 					ext.Send(out.TRADE_CLOSE)
-					sendShout("Sorry — this raffle only accepts the specified coin items; trade closed.")
+					sendShout("Sorry - this raffle only accepts the specified coin items; trade closed.")
 					return
 				}
 				coins += val * it.Quantity
@@ -3214,7 +3243,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				if coins == 0 {
 					a.AddLogMsg("[RAFFLE] partner accepted but no raffle coins detected; closing trade")
 					ext.Send(out.TRADE_CLOSE)
-					sendShout("Sorry — this raffle only accepts the specified coin items; trade closed.")
+					sendShout("Sorry - this raffle only accepts the specified coin items; trade closed.")
 					return
 				}
 			}
@@ -3400,7 +3429,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 						ext.Send(out.TRADE_CLOSE)
 						go func() {
 							time.Sleep(350 * time.Millisecond)
-							sendShout("Sorry — this raffle only accepts coins: cf_1_coin_bronze, cf_5_coin_silver, cf_10_coin_gold, cf_20_moneybag, cf_50_goldbar")
+							sendShout("Sorry - this raffle only accepts coins: cf_1_coin_bronze, cf_5_coin_silver, cf_10_coin_gold, cf_20_moneybag, cf_50_goldbar")
 						}()
 						return
 					}
@@ -3419,7 +3448,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 					ext.Send(out.TRADE_CLOSE)
 					go func() {
 						time.Sleep(350 * time.Millisecond)
-						sendShout("Sorry — no valid raffle coins detected, trade closed.")
+						sendShout("Sorry - no valid raffle coins detected, trade closed.")
 					}()
 					return
 				}
@@ -3464,7 +3493,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			}
 
 			// For raffle deposits we intentionally avoid coupling to the
-			// frozen hand snapshot lifecycle — raffle acceptance is solely
+			// frozen hand snapshot lifecycle - raffle acceptance is solely
 			// based on coin items. Only enforce snapshot readiness for
 			// non-raffle trades so normal game coverage checks continue to
 			// protect dealer payouts.
@@ -3654,7 +3683,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 					}
 					rafflesMu.Unlock()
 
-					msg := fmt.Sprintf("%s bought %d tickets — total %d tickets for raffle \"%s\"",
+					msg := fmt.Sprintf("%s bought %d tickets - total %d tickets for raffle \"%s\"",
 						p.Name, purchaseTickets, p.Tickets, raffleName)
 					sendShout(msg)
 				}
@@ -3786,7 +3815,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 	}
 
 	if e.Packet.Header.Value == 104 {
-		// Manual block-all-trades toggle — skip if we just sent our own payout trade open
+		// Manual block-all-trades toggle - skip if we just sent our own payout trade open
 		if blockAllTrades && !payoutTradeSent && !matchesRecentOutgoingFunc(e.Packet.Data) {
 			activeRound := awaitingGameChoice || dealerGameActive() || payoutActive || payoutTradeActive
 			allowed := false
@@ -3887,7 +3916,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		}
 		recentTargetID, matchedRecentOutgoing := matchesRecentOutgoingTradeOpen(e.Packet.Data, incomingTraderID)
 
-		// During payout mode, someone else opened a trade with us — close it and let the payout loop retry
+		// During payout mode, someone else opened a trade with us - close it and let the payout loop retry
 		isPayoutTradeOpen := false
 		if payoutActive {
 			incomingTraderID := 0
@@ -3897,7 +3926,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			expectedID, _ := lookupUsers28TradeIDByName(payoutTargetName)
 			a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] incoming trade-open while payout active: sent=%t target=%q targetID=%d expectedChatID=%d incomingChatID=%d matchedRecentOutgoing=%t", payoutTradeSent, payoutTargetName, payoutTargetID, expectedID, incomingTraderID, matchedRecentOutgoing))
 			if payoutTradeSent {
-				// Our outgoing TRADE_OPEN was accepted — this is the payout trade opening successfully
+				// Our outgoing TRADE_OPEN was accepted - this is the payout trade opening successfully
 				savedPayoutTargetID := payoutTargetID
 				savedPayoutTargetName := payoutTargetName
 				stopPayout() // kills retry goroutine
@@ -3912,7 +3941,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				// only after the dealer (us) actually accepts the payout so we
 				// don't time out while auto-adding many items.
 			} else {
-				// Someone else opened a trade with us during payout — block it
+				// Someone else opened a trade with us during payout - block it
 				a.AddLogMsg(fmt.Sprintf("[PAYOUT] incoming trade blocked during payout to %s, closing", payoutTargetName))
 
 				// Detailed guard state for diagnostics
@@ -4389,7 +4418,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				go a.reopenDealerIdle("incomplete trade close")
 			}
 		} else if payoutTradeActive {
-			// Payout trade completed normally — clear active flag
+			// Payout trade completed normally - clear active flag
 			payoutTradeActive = false
 			a.AddLogMsg("[PAYOUT] payout trade completed successfully")
 			stopPayoutResponseTimeoutMonitor()
@@ -4640,7 +4669,7 @@ func startPayout(a *App, targetID int, targetName string) {
 			for i := 0; i < 50; i++ {
 				time.Sleep(100 * time.Millisecond)
 				if sessionID != payoutSessionID {
-					// Trade opened (or externally cancelled) — done
+					// Trade opened (or externally cancelled) - done
 					return
 				}
 			}
@@ -5604,7 +5633,7 @@ func (a *App) startRiskDecisionTimeoutMonitor(msg string, player string) {
 		}
 
 		a.AddLogMsg(fmt.Sprintf("[RISK_DECISION_TIMEOUT] final timeout for %s; auto-finalizing Keep", p))
-		sendShout(fmt.Sprintf("No response from %q — finalizing Keep and attempting payout.", p))
+		sendShout(fmt.Sprintf("No response from %q - finalizing Keep and attempting payout.", p))
 		time.Sleep(1200 * time.Millisecond)
 
 		// Convert bank -> payout and start normal payout flow.
@@ -5672,7 +5701,7 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 		gameChoiceTimeoutActive = false
 
 		a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] final timeout for %s after %d reminders; auto-finalizing Keep", player, reminderCount))
-		sendShout(fmt.Sprintf("No response from %q — finalizing Keep and attempting payout.", player))
+		sendShout(fmt.Sprintf("No response from %q - finalizing Keep and attempting payout.", player))
 		time.Sleep(1200 * time.Millisecond)
 
 		go a.finalizeRiskKeep()
@@ -7722,7 +7751,7 @@ func (a *App) finalizeStripScan(sessionID int, reason string) {
 	// checks reflect recent hand removals/additions, then re-run coverage.
 	if tradeOpen {
 		// Under the strict lifecycle policy, avoid updating the frozen
-		// snapshot mid-trade — only update when no snapshot exists.
+		// snapshot mid-trade - only update when no snapshot exists.
 		if !strictTradeSnapshotLifecycle || !tradeHandSnapshotReady {
 			// captureTradeHandSnapshot will copy currentHandItems into tradeHandSnapshot
 			// and mark the snapshot ready for coverage comparisons.
@@ -7780,13 +7809,13 @@ func buildStripScanItems() []TradeItem {
 // the real Shockwave grouped format.
 // Each record groups all physical items of the same class:
 //
-//	Field 1 (until \x02): [mainItemId VL64][extraCount VL64]([extraItemId VL64]×N)[Pos VL64][S|I]
+//	Field 1 (until \x02): [mainItemId VL64][extraCount VL64]([extraItemId VL64]xN)[Pos VL64][S|I]
 //	Field 2 (until \x02): [templateId VL64][VL64][VL64][className string]
 //	Field 3 (until \x02): for "S": [DimX VL64][DimY VL64][Colors string]
 //	                       for "I": [Props string]
 //
 // Quantity per record = 1 + extraCount.
-// Returns: firstMainID (for wrap detection), record count, className→quantity map.
+// Returns: firstMainID (for wrap detection), record count, className->quantity map.
 func parseStripInfoPageRaw(data []byte) (firstMainID int, pageRecords int, classQtys map[string]int, classItemIDs map[string][]int) {
 	classQtys = map[string]int{}
 	classItemIDs = map[string][]int{}
@@ -8533,7 +8562,7 @@ func (a *App) notifyTradeQuantityCoverage() {
 		}
 	}
 
-	// No grace timer now — close immediately with a contextual message.
+	// No grace timer now - close immediately with a contextual message.
 	stopShortageMonitor()
 
 	// Build a human-friendly shortage message: distinguish "none available"
@@ -8759,7 +8788,7 @@ func (a *App) maybeAutoAcceptOnSnapshotReady(context string) {
 		return
 	}
 
-	// All checks passed — accept the trade now and mark as auto-accepted.
+	// All checks passed - accept the trade now and mark as auto-accepted.
 	ext.Send(out.TRADE_ACCEPT)
 	tradeAutoAccepted = true
 	tradeAutoAcceptPending = false
@@ -9911,9 +9940,9 @@ func (a *App) beginUO7ChoiceSequence() {
 		playerName = "Player"
 	}
 	// If a forced Over/Under variant is already in effect (pendingUoVariant=="uo"),
-	// do not offer the 7 option — fall back to the 2x Over/Under prompt.
+	// do not offer the 7 option - fall back to the 2x Over/Under prompt.
 	if pendingUoVariant == "uo" {
-		a.AddLogMsg("[GAME_SELECT] beginUO7ChoiceSequence suppressed; pendingUoVariant==\"uo\" — forcing Over/Under prompt")
+		a.AddLogMsg("[GAME_SELECT] beginUO7ChoiceSequence suppressed; pendingUoVariant==\"uo\" - forcing Over/Under prompt")
 		a.beginUOChoiceSequence()
 		return
 	}
@@ -10959,7 +10988,7 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 		mutex.Unlock()
 
 		if casinoReady {
-			a.AddLogMsg("[DICE_SETUP] dice setup complete — casinoReady=true")
+			a.AddLogMsg("[DICE_SETUP] dice setup complete - casinoReady=true")
 		}
 	}
 }
@@ -11326,7 +11355,7 @@ func (a *App) roll13Dice() {
 		return
 	}
 
-	// Do not close other dice before starting a 13 roll —
+	// Do not close other dice before starting a 13 roll ?
 	// closing can interfere with subsequent hit rolls. Keep slots available.
 	mutex.Lock()
 
@@ -12324,7 +12353,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		return
 	}
 
-	// Stop the game choice timeout monitor — player has responded.
+	// Stop the game choice timeout monitor - player has responded.
 	stopGameChoiceTimeoutMonitor()
 	awaitingGameChoice = false
 	gameChoiceUnreadableWarned = false
