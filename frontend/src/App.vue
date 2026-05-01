@@ -726,6 +726,18 @@
           <input v-model.number="rafflePrizeQtyInput" type="number" min="1" />
         </div>
 
+        <div class="game-guide-block">
+          <div class="game-guide-label">End Date & Time</div>
+          <input v-model="raffleEndInput" type="datetime-local" />
+        </div>
+
+        <div class="game-guide-block">
+          <div class="game-guide-label">End GMT</div>
+          <select v-model="raffleEndGmtInput">
+            <option v-for="o in gmtOffsets" :key="o" :value="o">{{ o }}</option>
+          </select>
+        </div>
+
         <div style="display:flex;gap:8px;margin-top:8px;">
           <button class="copy-btn" @click="createRaffle">Create</button>
         </div>
@@ -733,25 +745,28 @@
         <hr />
 
         <div v-if="raffles.length === 0" class="trade-empty">No raffles yet.</div>
-        <div v-else class="history-list">
-          <button
-            v-for="r in raffles"
-            :key="r.id"
-            type="button"
-            class="history-card"
-            :class="{ 'history-card-issue': r.status === 'drawn' }"
-            @click="selectRaffle(r)"
-          >
-            <div class="history-card-top">
-              <span class="history-player">{{ r.name || 'Unnamed' }}</span>
-              <span class="history-status" :class="historyStatusClass(r.status || '')">{{ r.status || '' }}</span>
-            </div>
-            <div class="history-meta-row">
-              <span>Prize: {{ r.prizeQty }}x {{ formatItemName(r.prizeName) }}</span>
-              <span v-if="r.winner">Winner: {{ r.winner }}</span>
-            </div>
-            <div class="game-card-action">Click for details</div>
-          </button>
+        <div v-else>
+          <input v-model="raffleSearch" type="text" class="raffle-search" placeholder="Search raffles by name, prize, or winner" />
+          <div class="history-list">
+            <button
+              v-for="r in filteredRaffles"
+              :key="r.id"
+              type="button"
+              class="history-card"
+              :class="{ 'history-card-issue': r.status === 'drawn' }"
+              @click="selectRaffle(r)"
+            >
+              <div class="history-card-top">
+                <span class="history-player">{{ r.name || 'Unnamed' }}</span>
+                <span class="history-status" :class="historyStatusClass(r.status || '')">{{ r.status || '' }}</span>
+              </div>
+              <div class="history-meta-row">
+                <span>Prize: {{ r.prizeQty }}x {{ formatItemName(r.prizeName) }}</span>
+                <span v-if="r.winner">Winner: {{ r.winner }}</span>
+              </div>
+              <div class="game-card-action">Click for details</div>
+            </button>
+          </div>
         </div>
 
         
@@ -964,6 +979,10 @@ export default {
       raffleAnnounceMsgPart2: '1 coin = 1 ticket. For every 5 coins you get 1 bonus ticket (e.g. 5 coins = 6 tickets, 10 coins = 12 tickets).',
       // Home-screen raffle mode toggle
       raffleModeEnabled: false,
+      // Raffle end inputs
+      raffleEndInput: '',
+      raffleEndGmtInput: 'GMT+0',
+      gmtOffsets: (function(){ const arr=[]; for(let i=-12;i<=14;i++){ const sign=i>=0?'+':''; arr.push(`GMT${sign}${i}`);} return arr; })(),
       // Dealer mode: when true, only Under/Over-7 is presented to players
       onlyUnderOverMode: false,
       // UI toggle: enable Under/Over-7 mode (allow '7' payout multiplier)
@@ -1012,6 +1031,7 @@ export default {
       eventsForDate: [],
       // Raffle UI state
       raffles: [],
+      raffleSearch: '',
       raffleNameInput: '',
       rafflePrizeNameInput: '',
       rafflePrizeQtyInput: 1,
@@ -1127,6 +1147,24 @@ export default {
       const presentPreferred = preferred.filter(k => keys.includes(k));
       const rest = keys.filter(k => !preferred.includes(k)).sort();
       return presentPreferred.concat(rest);
+    },
+    filteredRaffles() {
+      const q = String(this.raffleSearch || '').trim().toLowerCase();
+      let list = (this.raffles || []).slice();
+      if (q) {
+        list = list.filter((r) => {
+          const name = String(r.name || '').toLowerCase();
+          const prize = String(r.prizeName || '').toLowerCase();
+          const winner = String(r.winner || '').toLowerCase();
+          return name.includes(q) || prize.includes(q) || winner.includes(q);
+        });
+      }
+      list.sort((a, b) => {
+        const ta = new Date(a.createdAt || 0).getTime();
+        const tb = new Date(b.createdAt || 0).getTime();
+        return tb - ta;
+      });
+      return list;
     },
   },
   methods: {
@@ -2066,10 +2104,36 @@ export default {
     },
     async createRaffle() {
       try {
-        await window.go.main.App.CreateRaffle(String(this.raffleNameInput || ''), String(this.rafflePrizeNameInput || ''), Number(this.rafflePrizeQtyInput || 1));
+        let endRfc = '';
+        if (this.raffleEndInput) {
+          const m = (this.raffleEndGmtInput || '').match(/GMT([+-]?\d{1,2})/);
+          let offset = '+00:00';
+          if (m) {
+            const hours = parseInt(m[1], 10);
+            const sign = hours >= 0 ? '+' : '-';
+            const abs = String(Math.abs(hours)).padStart(2, '0');
+            offset = `${sign}${abs}:00`;
+          }
+          let dt = String(this.raffleEndInput || '');
+          // ensure seconds are present
+          if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(dt)) {
+            dt = dt + ':00';
+          }
+          endRfc = `${dt}${offset}`;
+        }
+
+        await window.go.main.App.CreateRaffle(
+          String(this.raffleNameInput || ''),
+          String(this.rafflePrizeNameInput || ''),
+          Number(this.rafflePrizeQtyInput || 1),
+          String(endRfc || ''),
+          String(this.raffleEndGmtInput || '')
+        );
         this.raffleNameInput = '';
         this.rafflePrizeNameInput = '';
         this.rafflePrizeQtyInput = 1;
+        this.raffleEndInput = '';
+        this.raffleEndGmtInput = 'GMT+0';
         await this.loadRaffles();
         this.addLogMsg('[RAFFLE] created');
       } catch (e) { console.error(e); }
@@ -3260,6 +3324,20 @@ input[type="text"]::placeholder {
 .history-list {
   display: grid;
   gap: 12px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+.raffle-search {
+  width: 100%;
+  padding: 8px;
+  margin-bottom: 8px;
+  background-color: #262626;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  color: #fff;
+  box-sizing: border-box;
 }
 
 .history-card {

@@ -388,8 +388,8 @@ var (
 	raffleAnnounceRepeatSeconds int = 45 // kept for compatibility but unused separately
 
 	// Message parts: both may use format verbs %s (raffle name), %s (prize name), %d (prize qty)
-	raffleAnnounceMsgPart1 string = "Raffle Open: %s — Prize: %s x%d"
-	raffleAnnounceMsgPart2 string = "1 coin = 1 ticket. For every 5 coins you get 1 bonus ticket (e.g. 5 coins = 6 tickets, 10 coins = 12 tickets)."
+	raffleAnnounceMsgPart1 string = "Raffle Open: %s — Prize: %s x%d - More Details Discord: yw9nmCcfED"
+	raffleAnnounceMsgPart2 string = "1 coin = 1 ticket. For every 5 coins you get 1 bonus ticket."
 
 	raffleAnnouncerMu        sync.Mutex
 	raffleAnnouncerStopChans map[string]chan struct{}
@@ -419,6 +419,8 @@ type Raffle struct {
 	Winner            string              `json:"winner,omitempty"`
 	CreatedAt         string              `json:"createdAt"`
 	EndedAt           string              `json:"endedAt,omitempty"`
+	EndAt             string              `json:"endAt,omitempty"`    // planned end (RFC3339 with offset)
+	EndAtGmt          string              `json:"endAtGmt,omitempty"` // user label like "GMT+2"
 }
 
 var (
@@ -2093,7 +2095,7 @@ func (a *App) GetRafflesJSON() string {
 }
 
 // CreateRaffle creates a new raffle and returns its JSON
-func (a *App) CreateRaffle(name string, prizeName string, prizeQty int) string {
+func (a *App) CreateRaffle(name string, prizeName string, prizeQty int, endAt string, endAtGmt string) string {
 	if strings.TrimSpace(name) == "" {
 		name = fmt.Sprintf("Raffle %d", time.Now().Unix())
 	}
@@ -2105,6 +2107,8 @@ func (a *App) CreateRaffle(name string, prizeName string, prizeQty int) string {
 		Status:       "created",
 		Participants: []RaffleParticipant{},
 		CreatedAt:    time.Now().Format(time.RFC3339),
+		EndAt:        strings.TrimSpace(endAt),
+		EndAtGmt:     strings.TrimSpace(endAtGmt),
 	}
 	rafflesMu.Lock()
 	raffles = append(raffles, r)
@@ -2818,21 +2822,21 @@ func (a *App) startRaffleAnnouncer(id string) {
 	msg1 := formatRaffleMsg(raffleAnnounceMsgPart1, r)
 	msg2 := formatRaffleMsg(raffleAnnounceMsgPart2, r)
 
-	// immediate shout
+	// immediate shout(s)
 	sendShout(msg1)
 	if strings.TrimSpace(msg2) != "" {
 		sendShout(msg2)
 	}
 
-	// Single ticker: repeat both messages every raffleAnnounceFirstSeconds
-	ticker := time.NewTicker(time.Duration(raffleAnnounceFirstSeconds) * time.Second)
+	// Main announcement ticker (existing behavior)
+	mainTicker := time.NewTicker(time.Duration(raffleAnnounceFirstSeconds) * time.Second)
 	go func() {
-		defer ticker.Stop()
+		defer mainTicker.Stop()
 		for {
 			select {
 			case <-stopCh:
 				return
-			case <-ticker.C:
+			case <-mainTicker.C:
 				// ensure raffle is still started
 				rafflesMu.Lock()
 				started := false
@@ -2853,6 +2857,49 @@ func (a *App) startRaffleAnnouncer(id string) {
 			}
 		}
 	}()
+
+	// Countdown ticker every 2 minutes (if EndAt provided and parseable)
+	endStr := strings.TrimSpace(r.EndAt)
+	if endStr != "" {
+		if endTime, err := time.Parse(time.RFC3339, endStr); err == nil {
+			countdownTicker := time.NewTicker(2 * time.Minute)
+			go func(end time.Time) {
+				defer countdownTicker.Stop()
+				for {
+					select {
+					case <-stopCh:
+						return
+					case <-countdownTicker.C:
+						rafflesMu.Lock()
+						started := false
+						for i := range raffles {
+							if raffles[i].ID == id && raffles[i].Status == "started" {
+								started = true
+								break
+							}
+						}
+						rafflesMu.Unlock()
+						if !started {
+							return
+						}
+						now := time.Now().UTC()
+						rem := end.Sub(now)
+						if rem <= 0 {
+							sendShout(fmt.Sprintf("Raffle %s ends now!", r.Name))
+							go a.EndRaffle(id)
+							return
+						}
+						mins := int(rem.Minutes())
+						tzLabel := r.EndAtGmt
+						if tzLabel == "" {
+							tzLabel = end.Format("-07:00")
+						}
+						sendShout(fmt.Sprintf("%s — ends at %s (%s) — in %d minutes", r.Name, end.Format("2006-01-02 15:04"), tzLabel, mins))
+					}
+				}
+			}(endTime)
+		}
+	}
 }
 
 // stopRaffleAnnouncer stops a running announcer for the given raffle id.
