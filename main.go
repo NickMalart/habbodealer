@@ -392,7 +392,7 @@ var (
 
 	// Message parts: both may use format verbs %s (raffle name), %s (prize name), %d (prize qty)
 	raffleAnnounceMsgPart1 string = "Raffle Open: %s - Prize: %s x%d - More Details Discord: {discord}"
-	raffleAnnounceMsgPart2 string = "1 coin = 1 ticket. For every 5 coins you get 1 bonus ticket."
+	raffleAnnounceMsgPart2 string = "1 coin = 1. 5 coins = 6 , Shout: My Tickets to see your tickets"
 
 	raffleAnnouncerMu        sync.Mutex
 	raffleAnnouncerStopChans map[string]chan struct{}
