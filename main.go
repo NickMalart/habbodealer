@@ -2291,6 +2291,13 @@ func (a *App) SetRaffleOpen(id string, open bool) string {
 }
 
 func (a *App) ResumeRaffle(id string) string {
+	// Keep global raffle-mode enabled when resuming so raffle deposits/trades
+	// and UI mode stay aligned with the resumed raffle state.
+	mutex.Lock()
+	acceptRaffleDeposits = true
+	raffleModeActive = true
+	mutex.Unlock()
+
 	rafflesMu.Lock()
 	defer rafflesMu.Unlock()
 	now := time.Now().Format(time.RFC3339)
@@ -2313,6 +2320,15 @@ func (a *App) ResumeRaffle(id string) string {
 			raffles[i].AcceptingDeposits = true
 			a.saveRafflesLocked()
 			go a.emitRafflesUpdate()
+			go a.sendOrUpdateRaffleDiscordMessage(id, false)
+			if a.ctx != nil {
+				payload := struct {
+					Accepting bool `json:"accepting"`
+				}{Accepting: true}
+				if b2, err := json.Marshal(payload); err == nil {
+					runtime.EventsEmit(a.ctx, "raffleModeUpdate", string(b2))
+				}
+			}
 			go a.startRaffleAnnouncer(id)
 			b, _ := json.Marshal(raffles[i])
 			return string(b)
