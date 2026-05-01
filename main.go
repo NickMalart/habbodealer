@@ -1870,6 +1870,61 @@ func dealerSnapshotReady() bool {
 	return tradeHandSnapshotReady
 }
 
+// resolveLockedPayoutRecipient returns the most reliable recipient for payout
+// based on the trade starter/stable identity captured when the trade opened.
+// Fallback to last-trade identity only when locked identity is unavailable.
+func resolveLockedPayoutRecipient() (int, string, bool) {
+	isUsableName := func(v string) bool {
+		v = strings.TrimSpace(v)
+		return v != "" && !strings.EqualFold(v, "Unknown")
+	}
+
+	id := 0
+	name := ""
+
+	if stableTradePartnerID > 0 {
+		id = stableTradePartnerID
+	}
+	if id <= 0 && tradeStarterTradeID > 0 {
+		id = tradeStarterTradeID
+	}
+	if id <= 0 && lastTradePartnerID > 0 {
+		id = lastTradePartnerID
+	}
+
+	if isUsableName(stableTradePartnerName) {
+		name = normalizeUsername(strings.TrimSpace(stableTradePartnerName))
+	} else if isUsableName(tradeStarterName) {
+		name = normalizeUsername(strings.TrimSpace(tradeStarterName))
+	} else if isUsableName(lastTradePartnerName) {
+		name = normalizeUsername(strings.TrimSpace(lastTradePartnerName))
+	}
+
+	if id <= 0 && isUsableName(name) {
+		if resolved, ok := lookupUsers28TradeIDByName(name); ok && resolved > 0 {
+			id = resolved
+		} else if resolved, ok := lookupUsers28RoomIndexByName(name); ok && resolved > 0 {
+			id = resolved
+		} else if resolved, ok := lookupRoomEntityIndexByName(name); ok && resolved > 0 {
+			id = resolved
+		}
+	}
+
+	if !isUsableName(name) && id > 0 {
+		if resolved, ok := lookupUsers28TradeID(id); ok {
+			name = normalizeUsername(strings.TrimSpace(resolved))
+		} else if resolved, ok := lookupRoomEntityNameByIndex(id); ok {
+			name = normalizeUsername(strings.TrimSpace(resolved))
+		}
+	}
+
+	if !isUsableName(name) {
+		name = "Player"
+	}
+
+	return id, name, id > 0
+}
+
 func dealerDiceReadyLocked() bool {
 	return fakeDiceTestingMode || len(diceList) >= getExpectedDiceCount()
 }
@@ -4024,8 +4079,13 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				incomingTraderID = id
 			}
 			expectedID, _ := lookupUsers28TradeIDByName(payoutTargetName)
-			a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] incoming trade-open while payout active: sent=%t target=%q targetID=%d expectedChatID=%d incomingChatID=%d matchedRecentOutgoing=%t", payoutTradeSent, payoutTargetName, payoutTargetID, expectedID, incomingTraderID, matchedRecentOutgoing))
-			if payoutTradeSent {
+			strictTargetID := payoutTargetID
+			if strictTargetID <= 0 {
+				strictTargetID = expectedID
+			}
+			strictMatch := strictTargetID > 0 && incomingTraderID > 0 && incomingTraderID == strictTargetID
+			a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] incoming trade-open while payout active: sent=%t target=%q targetID=%d expectedChatID=%d incomingChatID=%d matchedRecentOutgoing=%t strictTargetID=%d strictMatch=%t", payoutTradeSent, payoutTargetName, payoutTargetID, expectedID, incomingTraderID, matchedRecentOutgoing, strictTargetID, strictMatch))
+			if payoutTradeSent && strictMatch {
 				// Our outgoing TRADE_OPEN was accepted - this is the payout trade opening successfully
 				savedPayoutTargetID := payoutTargetID
 				savedPayoutTargetName := payoutTargetName
@@ -10357,8 +10417,13 @@ func (a *App) evaluateUnderOverRound() {
 		sendMessageWithDelay(winnerMsg)
 	}
 
-	payoutTargetID := lastTradePartnerID
-	payoutTargetName := playerName
+	payoutTargetID, payoutTargetName, payoutTargetOK := resolveLockedPayoutRecipient()
+	if !payoutTargetOK {
+		payoutTargetID = lastTradePartnerID
+	}
+	if strings.TrimSpace(payoutTargetName) == "" || strings.EqualFold(strings.TrimSpace(payoutTargetName), "Unknown") {
+		payoutTargetName = playerName
+	}
 	uoRoundActive = false
 
 	// clear any awaiting choice state and mark the UO round finished
@@ -10461,8 +10526,13 @@ func (a *App) finalize13Round(playerWins bool, reason string) {
 		sendMessageWithDelay(winnerMsg)
 	}
 
-	payoutTargetID := lastTradePartnerID
-	payoutTargetName := playerName
+	payoutTargetID, payoutTargetName, payoutTargetOK := resolveLockedPayoutRecipient()
+	if !payoutTargetOK {
+		payoutTargetID = lastTradePartnerID
+	}
+	if strings.TrimSpace(payoutTargetName) == "" || strings.EqualFold(strings.TrimSpace(payoutTargetName), "Unknown") {
+		payoutTargetName = playerName
+	}
 	reset13Sequence()
 
 	if playerWins && payoutTargetID > 0 {
@@ -10555,8 +10625,13 @@ func (a *App) finalizeTriRound() {
 		sendMessageWithDelay(winnerMsg)
 	}
 
-	payoutTargetID := lastTradePartnerID
-	payoutTargetName := playerName
+	payoutTargetID, payoutTargetName, payoutTargetOK := resolveLockedPayoutRecipient()
+	if !payoutTargetOK {
+		payoutTargetID = lastTradePartnerID
+	}
+	if strings.TrimSpace(payoutTargetName) == "" || strings.EqualFold(strings.TrimSpace(payoutTargetName), "Unknown") {
+		payoutTargetName = playerName
+	}
 	resetTriSequence()
 
 	if playerWins && payoutTargetID > 0 {

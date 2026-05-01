@@ -102,8 +102,13 @@ func (a *App) evaluatePokerHand() {
 			sendMessageWithDelay(winnerMsg)
 		}
 
-		payoutTargetID := lastTradePartnerID
-		payoutTargetName := playerName
+		payoutTargetID, payoutTargetName, payoutTargetOK := resolveLockedPayoutRecipient()
+		if !payoutTargetOK {
+			payoutTargetID = lastTradePartnerID
+		}
+		if strings.TrimSpace(payoutTargetName) == "" || strings.EqualFold(strings.TrimSpace(payoutTargetName), "Unknown") {
+			payoutTargetName = playerName
+		}
 		playerHand := pokerSequencePlayerHand
 		resetPokerSequence()
 
@@ -350,8 +355,13 @@ func (a *App) finalizeBlackjackRound(playerWins bool, reason string) {
 		sendMessageWithDelay(winnerMsg)
 	}
 
-	payoutTargetID := lastTradePartnerID
-	payoutTargetName := playerName
+	payoutTargetID, payoutTargetName, payoutTargetOK := resolveLockedPayoutRecipient()
+	if !payoutTargetOK {
+		payoutTargetID = lastTradePartnerID
+	}
+	if strings.TrimSpace(payoutTargetName) == "" || strings.EqualFold(strings.TrimSpace(payoutTargetName), "Unknown") {
+		payoutTargetName = playerName
+	}
 	resetBlackjackSequence()
 
 	if playerWins && payoutTargetID > 0 {
