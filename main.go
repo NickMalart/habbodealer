@@ -2822,7 +2822,42 @@ func (a *App) startRaffleAnnouncer(id string) {
 	msg1 := formatRaffleMsg(raffleAnnounceMsgPart1, r)
 	msg2 := formatRaffleMsg(raffleAnnounceMsgPart2, r)
 
-	// immediate shout(s)
+	// immediate shout(s) — append a single-unit remaining-time if EndAt provided
+	endStr := strings.TrimSpace(r.EndAt)
+	if endStr != "" {
+		if endTime, err := time.Parse(time.RFC3339, endStr); err == nil {
+			rem := endTime.Sub(time.Now().UTC())
+			if rem > 0 {
+				var suffix string
+				if rem >= time.Hour {
+					hrs := int(rem.Hours())
+					if hrs == 1 {
+						suffix = fmt.Sprintf("%d hour left", hrs)
+					} else {
+						suffix = fmt.Sprintf("%d hours left", hrs)
+					}
+				} else if rem >= time.Minute {
+					mins := int(rem.Minutes())
+					if mins == 1 {
+						suffix = fmt.Sprintf("%d minute left", mins)
+					} else {
+						suffix = fmt.Sprintf("%d minutes left", mins)
+					}
+				} else {
+					secs := int(rem.Seconds())
+					if secs == 1 {
+						suffix = fmt.Sprintf("%d second left", secs)
+					} else {
+						suffix = fmt.Sprintf("%d seconds left", secs)
+					}
+				}
+				if suffix != "" {
+					msg1 = fmt.Sprintf("%s — %s", msg1, suffix)
+				}
+			}
+		}
+	}
+
 	sendShout(msg1)
 	if strings.TrimSpace(msg2) != "" {
 		sendShout(msg2)
@@ -2850,7 +2885,24 @@ func (a *App) startRaffleAnnouncer(id string) {
 				if !started {
 					return
 				}
-				sendShout(formatRaffleMsg(raffleAnnounceMsgPart1, r))
+				// build main announcement and append a single-unit remaining-time when available
+				ann := formatRaffleMsg(raffleAnnounceMsgPart1, r)
+				endStr2 := strings.TrimSpace(r.EndAt)
+				if endStr2 != "" {
+					if endTime2, err := time.Parse(time.RFC3339, endStr2); err == nil {
+						rem2 := endTime2.Sub(time.Now().UTC())
+						if rem2 > 0 {
+							if rem2 >= time.Hour {
+								ann = fmt.Sprintf("%s — %d hours left", ann, int(rem2.Hours()))
+							} else if rem2 >= time.Minute {
+								ann = fmt.Sprintf("%s — %d minutes left", ann, int(rem2.Minutes()))
+							} else {
+								ann = fmt.Sprintf("%s — %d seconds left", ann, int(rem2.Seconds()))
+							}
+						}
+					}
+				}
+				sendShout(ann)
 				if strings.TrimSpace(raffleAnnounceMsgPart2) != "" {
 					sendShout(formatRaffleMsg(raffleAnnounceMsgPart2, r))
 				}
@@ -2858,18 +2910,28 @@ func (a *App) startRaffleAnnouncer(id string) {
 		}
 	}()
 
-	// Countdown ticker every 2 minutes (if EndAt provided and parseable)
-	endStr := strings.TrimSpace(r.EndAt)
+	// Auto-end at EndAt (no countdown shouts — Habbo disallows these).
+	endStr = strings.TrimSpace(r.EndAt)
 	if endStr != "" {
 		if endTime, err := time.Parse(time.RFC3339, endStr); err == nil {
-			countdownTicker := time.NewTicker(2 * time.Minute)
 			go func(end time.Time) {
-				defer countdownTicker.Stop()
 				for {
+					now := time.Now().UTC()
+					dur := end.Sub(now)
+					if dur <= 0 {
+						// End immediately without sending any public shout.
+						go a.EndRaffle(id)
+						return
+					}
+					timer := time.NewTimer(dur)
 					select {
 					case <-stopCh:
+						if !timer.Stop() {
+							<-timer.C
+						}
 						return
-					case <-countdownTicker.C:
+					case <-timer.C:
+						// Double-check raffle still started before ending.
 						rafflesMu.Lock()
 						started := false
 						for i := range raffles {
@@ -2879,22 +2941,10 @@ func (a *App) startRaffleAnnouncer(id string) {
 							}
 						}
 						rafflesMu.Unlock()
-						if !started {
-							return
-						}
-						now := time.Now().UTC()
-						rem := end.Sub(now)
-						if rem <= 0 {
-							sendShout(fmt.Sprintf("Raffle %s ends now!", r.Name))
+						if started {
 							go a.EndRaffle(id)
-							return
 						}
-						mins := int(rem.Minutes())
-						tzLabel := r.EndAtGmt
-						if tzLabel == "" {
-							tzLabel = end.Format("-07:00")
-						}
-						sendShout(fmt.Sprintf("%s — ends at %s (%s) — in %d minutes", r.Name, end.Format("2006-01-02 15:04"), tzLabel, mins))
+						return
 					}
 				}
 			}(endTime)
