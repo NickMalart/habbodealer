@@ -20,7 +20,7 @@ export function ClearGameHistory():Promise<void>;
 
 export function ClearTradeItems():Promise<void>;
 
-export function CreateRaffle(arg1:string,arg2:string,arg3:number,arg4:string,arg5:string,arg6:string):Promise<string>;
+export function CreateRaffle(arg1:string,arg2:string,arg3:number,arg4:string,arg5:string,arg6:string,arg7:string):Promise<string>;
 
 export function DeleteRaffle(arg1:string):Promise<string>;
 

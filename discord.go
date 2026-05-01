@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -611,6 +612,10 @@ func buildRaffleDiscordPayload(raffle Raffle, isCreate bool) map[string]interfac
 		{"name": "📣 Ticket Board", "value": truncateDiscordField(formatRaffleParticipantsForDiscord(raffle.Participants), 1020), "inline": false},
 	}
 
+	if strings.TrimSpace(raffle.RoomName) != "" {
+		fields = append(fields, map[string]interface{}{"name": "🏠 Room", "value": truncateDiscordField(raffle.RoomName, 250), "inline": true})
+	}
+
 	if strings.TrimSpace(raffle.EndedAt) != "" {
 		fields = append(fields, map[string]interface{}{"name": "🛑 Ended", "value": truncateDiscordField(formatRaffleDateTime(raffle.EndedAt, ""), 250), "inline": true})
 	}
@@ -634,7 +639,7 @@ func buildRaffleDiscordPayload(raffle Raffle, isCreate bool) map[string]interfac
 			"image":       map[string]interface{}{"url": strings.TrimSpace(raffle.PrizeImageURL)},
 		}
 		embeds = append(embeds, heroEmbed)
-	} else if isCreate && strings.TrimSpace(raffle.PrizeImagePath) != "" {
+	} else if strings.TrimSpace(raffle.PrizeImagePath) != "" {
 		heroEmbed := map[string]interface{}{
 			"title":       "🎁 WHAT'S UP FOR GRABS 🎁",
 			"description": heroDescription,
@@ -755,11 +760,29 @@ func doDiscordWebhookMultipartPost(urlStr string, payload map[string]interface{}
 	}{{Path: filePath, FieldName: fieldName, FileName: fileName}})
 }
 
+func lockRaffleWebhookSend(raffleID string) func() {
+	raffleWebhookSendMu.Lock()
+	if raffleWebhookSendLocks == nil {
+		raffleWebhookSendLocks = make(map[string]*sync.Mutex)
+	}
+	mu := raffleWebhookSendLocks[raffleID]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		raffleWebhookSendLocks[raffleID] = mu
+	}
+	raffleWebhookSendMu.Unlock()
+
+	mu.Lock()
+	return mu.Unlock
+}
+
 func (a *App) sendOrUpdateRaffleDiscordMessage(raffleID string, forceCreate bool) {
 	raffleID = strings.TrimSpace(raffleID)
 	if raffleID == "" {
 		return
 	}
+	unlock := lockRaffleWebhookSend(raffleID)
+	defer unlock()
 
 	webhookID, webhookToken, err := parseDiscordWebhookURL(raffleWebhookURL)
 	if err != nil {
@@ -782,6 +805,8 @@ func (a *App) sendOrUpdateRaffleDiscordMessage(raffleID string, forceCreate bool
 			}
 			if messageID == "" {
 				create = true
+			} else if strings.TrimSpace(raffles[i].DiscordWebhookID) == webhookID {
+				create = false
 			}
 			found = true
 			break
@@ -849,20 +874,21 @@ func (a *App) sendOrUpdateRaffleDiscordMessage(raffleID string, forceCreate bool
 	var status int
 	var body []byte
 	var reqErr error
-	patchFiles := []struct {
+	multipartFiles := []struct {
 		Path      string
 		FieldName string
 		FileName  string
 	}{}
 	if strings.TrimSpace(raffle.WinnerImagePath) != "" && strings.TrimSpace(raffle.WinnerImageURL) == "" {
-		patchFiles = append(patchFiles, struct {
+		idx := len(multipartFiles)
+		multipartFiles = append(multipartFiles, struct {
 			Path      string
 			FieldName string
 			FileName  string
-		}{Path: raffle.WinnerImagePath, FieldName: "files[0]", FileName: "winner_proof.png"})
+		}{Path: raffle.WinnerImagePath, FieldName: fmt.Sprintf("files[%d]", idx), FileName: "winner_proof.png"})
 	}
-	if len(patchFiles) > 0 {
-		status, body, reqErr = doDiscordWebhookMultipartRequest("PATCH", patchURL, payload, patchFiles)
+	if len(multipartFiles) > 0 {
+		status, body, reqErr = doDiscordWebhookMultipartRequest("PATCH", patchURL, payload, multipartFiles)
 	} else {
 		status, body, reqErr = doDiscordWebhookRequest("PATCH", patchURL, payload)
 	}
@@ -871,29 +897,32 @@ func (a *App) sendOrUpdateRaffleDiscordMessage(raffleID string, forceCreate bool
 		return
 	}
 	if status >= 200 && status < 300 {
-		if len(patchFiles) > 0 {
+		if len(multipartFiles) > 0 {
 			var resp struct {
 				Attachments []struct {
 					URL string `json:"url"`
 				} `json:"attachments"`
 			}
 			if err := json.Unmarshal(body, &resp); err == nil {
-				for _, att := range resp.Attachments {
-					url := strings.TrimSpace(att.URL)
-					if url == "" || !strings.Contains(strings.ToLower(url), "winner_proof") {
+				rafflesMu.Lock()
+				for i := range raffles {
+					if raffles[i].ID != raffleID {
 						continue
 					}
-					rafflesMu.Lock()
-					for i := range raffles {
-						if raffles[i].ID == raffleID {
+					for _, att := range resp.Attachments {
+						url := strings.TrimSpace(att.URL)
+						if url == "" {
+							continue
+						}
+						lower := strings.ToLower(url)
+						if strings.Contains(lower, "winner_proof") && raffles[i].WinnerImageURL == "" {
 							raffles[i].WinnerImageURL = url
-							a.saveRafflesLocked()
-							break
 						}
 					}
-					rafflesMu.Unlock()
+					a.saveRafflesLocked()
 					break
 				}
+				rafflesMu.Unlock()
 			}
 		}
 		a.AddLogMsg("[DISCORD_RAFFLE] patched raffle webhook message")

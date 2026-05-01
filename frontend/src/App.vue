@@ -730,6 +730,11 @@
         </div>
 
         <div class="game-guide-block">
+          <div class="game-guide-label">Room Name (optional)</div>
+          <input v-model="raffleRoomNameInput" type="text" placeholder="Room where the raffle guy is" />
+        </div>
+
+        <div class="game-guide-block">
           <div class="game-guide-label">Prize Item</div>
           <input v-model="rafflePrizeNameInput" type="text" placeholder="Item name (e.g. rare_chair)" />
         </div>
@@ -1054,6 +1059,7 @@ export default {
       raffles: [],
       raffleSearch: '',
       raffleNameInput: '',
+      raffleRoomNameInput: '',
       rafflePrizeNameInput: '',
       rafflePrizeQtyInput: 1,
       rafflePrizeImageData: '',
@@ -2203,9 +2209,11 @@ export default {
           Number(this.rafflePrizeQtyInput || 1),
           String(endRfc || ''),
           String(this.raffleEndGmtInput || ''),
-          String(this.rafflePrizeImageData || '')
+          String(this.rafflePrizeImageData || ''),
+          String(this.raffleRoomNameInput || '')
         );
         this.raffleNameInput = '';
+        this.raffleRoomNameInput = '';
         this.rafflePrizeNameInput = '';
         this.rafflePrizeQtyInput = 1;
         this.rafflePrizeImageData = '';

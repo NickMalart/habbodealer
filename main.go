@@ -3,11 +3,13 @@
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/big"
 	"math/rand"
 	"net/http"
 	"os"
@@ -393,6 +395,8 @@ var (
 
 	raffleAnnouncerMu        sync.Mutex
 	raffleAnnouncerStopChans map[string]chan struct{}
+	raffleWebhookSendMu      sync.Mutex
+	raffleWebhookSendLocks   map[string]*sync.Mutex
 )
 
 type TradeItem struct {
@@ -411,6 +415,7 @@ type RaffleParticipant struct {
 type Raffle struct {
 	ID                string              `json:"id"`
 	Name              string              `json:"name"`
+	RoomName          string              `json:"roomName,omitempty"`
 	PrizeName         string              `json:"prizeName"`
 	PrizeQty          int                 `json:"prizeQty"`
 	PrizeImagePath    string              `json:"prizeImagePath,omitempty"`
@@ -2101,7 +2106,7 @@ func (a *App) GetRafflesJSON() string {
 }
 
 // CreateRaffle creates a new raffle and returns its JSON
-func (a *App) CreateRaffle(name string, prizeName string, prizeQty int, endAt string, endAtGmt string, prizeImageData string) string {
+func (a *App) CreateRaffle(name string, prizeName string, prizeQty int, endAt string, endAtGmt string, prizeImageData string, roomName string) string {
 	if strings.TrimSpace(name) == "" {
 		name = fmt.Sprintf("Raffle %d", time.Now().Unix())
 	}
@@ -2117,6 +2122,7 @@ func (a *App) CreateRaffle(name string, prizeName string, prizeQty int, endAt st
 	r := Raffle{
 		ID:             id,
 		Name:           name,
+		RoomName:       strings.TrimSpace(roomName),
 		PrizeName:      prizeName,
 		PrizeQty:       prizeQty,
 		PrizeImagePath: prizeImagePath,
@@ -2267,7 +2273,12 @@ func (a *App) DrawRaffleWinner(id string) string {
 			if total == 0 {
 				return ""
 			}
-			choice := rand.Intn(total)
+			n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(total)))
+			if err != nil {
+				// Extremely unlikely; fall back to seeded math/rand
+				n = big.NewInt(int64(rand.Intn(total)))
+			}
+			choice := int(n.Int64())
 			cum := 0
 			winner := ""
 			for _, p := range r.Participants {
