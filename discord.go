@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -169,5 +170,299 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 		}
 	} else {
 		a.AddLogMsg(fmt.Sprintf("[DISCORD] webhook responded: %d body=%q", resp.StatusCode, respBody))
+	}
+}
+
+const raffleWebhookURL = "https://discordapp.com/api/webhooks/1499651607800057926/SLvv8HU_yG2vyW04MaXkZ2eVd_10qpddkJjBWDQ6GmB7LzUhJu7yZAgQInsg0eLOogJ9"
+
+func parseDiscordWebhookURL(webhookURL string) (string, string, error) {
+	u, err := url.Parse(strings.TrimSpace(webhookURL))
+	if err != nil {
+		return "", "", err
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	for i := 0; i < len(parts); i++ {
+		if parts[i] == "webhooks" && i+2 < len(parts) {
+			return parts[i+1], parts[i+2], nil
+		}
+	}
+	return "", "", fmt.Errorf("invalid webhook path: %s", u.Path)
+}
+
+func formatRaffleParticipantsForDiscord(parts []RaffleParticipant) string {
+	if len(parts) == 0 {
+		return "🎟️ No ticket purchases yet. Be the first to jump in!"
+	}
+	cp := make([]RaffleParticipant, len(parts))
+	copy(cp, parts)
+	sort.Slice(cp, func(i, j int) bool {
+		if cp[i].Tickets == cp[j].Tickets {
+			return strings.ToLower(cp[i].Name) < strings.ToLower(cp[j].Name)
+		}
+		return cp[i].Tickets > cp[j].Tickets
+	})
+
+	lines := make([]string, 0, len(cp))
+	for _, p := range cp {
+		line := fmt.Sprintf("🎟️ %s — %d ticket(s)", strings.TrimSpace(p.Name), p.Tickets)
+		lines = append(lines, line)
+	}
+	joined := strings.Join(lines, "\n")
+	if len(joined) > 1000 {
+		return joined[:1000] + "..."
+	}
+	return joined
+}
+
+func truncateDiscordField(v string, max int) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "N/A"
+	}
+	if len(v) > max {
+		return v[:max] + "..."
+	}
+	return v
+}
+
+func normalizeGMTLabel(label string) string {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return ""
+	}
+	upper := strings.ToUpper(label)
+	if strings.HasPrefix(upper, "GMT") {
+		return "GMT" + strings.TrimSpace(label[3:])
+	}
+	if strings.HasPrefix(label, "+") || strings.HasPrefix(label, "-") {
+		return "GMT" + label
+	}
+	return "GMT " + label
+}
+
+func formatGMTOffsetFromTime(t time.Time) string {
+	_, offset := t.Zone()
+	if offset == 0 {
+		return "GMT"
+	}
+	if offset < 0 {
+		offset = -offset
+		sign := "-"
+		h := offset / 3600
+		m := (offset % 3600) / 60
+		if m == 0 {
+			return fmt.Sprintf("GMT%s%d", sign, h)
+		}
+		return fmt.Sprintf("GMT%s%d:%02d", sign, h, m)
+	}
+	sign := "+"
+	h := offset / 3600
+	m := (offset % 3600) / 60
+	if m == 0 {
+		return fmt.Sprintf("GMT%s%d", sign, h)
+	}
+	return fmt.Sprintf("GMT%s%d:%02d", sign, h, m)
+}
+
+func formatRaffleDateTime(raw string, gmtOverride string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "N/A"
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return raw
+	}
+	gmt := normalizeGMTLabel(gmtOverride)
+	if gmt == "" {
+		gmt = formatGMTOffsetFromTime(t)
+	}
+	return fmt.Sprintf("%s %s %s", t.Format("02/01/2006"), t.Format("15:04"), gmt)
+}
+
+func buildRaffleDiscordPayload(raffle Raffle, isCreate bool) map[string]interface{} {
+	totalTickets := 0
+	for _, p := range raffle.Participants {
+		totalTickets += p.Tickets
+	}
+
+	headline := "🎉 NEW RAFFLE! 🎉"
+	if !isCreate {
+		headline = "🎟️ RAFFLE LIVE UPDATE 🎟️"
+	}
+	if strings.EqualFold(strings.TrimSpace(raffle.Status), "completed") && strings.TrimSpace(raffle.Winner) != "" {
+		headline = "🏆 RAFFLE WINNER LOCKED IN! 🏆"
+	}
+
+	statusEmoji := "🟢"
+	if strings.EqualFold(strings.TrimSpace(raffle.Status), "ended") {
+		statusEmoji = "🟠"
+	}
+	if strings.EqualFold(strings.TrimSpace(raffle.Status), "completed") {
+		statusEmoji = "✅"
+	}
+
+	winnerValue := "TBD"
+	if strings.TrimSpace(raffle.Winner) != "" {
+		winnerValue = "🏆 " + raffle.Winner
+	}
+
+	desc := fmt.Sprintf("%s %s\n🎁 Prize: %s x%d\n🎰 Raffle ID: %s", headline, raffle.Name, raffle.PrizeName, raffle.PrizeQty, raffle.ID)
+	if strings.TrimSpace(raffle.EndAt) != "" {
+		desc += fmt.Sprintf("\n⏰ Planned End: %s", formatRaffleDateTime(raffle.EndAt, raffle.EndAtGmt))
+	}
+
+	fields := []map[string]interface{}{
+		{"name": "📌 Status", "value": truncateDiscordField(fmt.Sprintf("%s %s", statusEmoji, raffle.Status), 250), "inline": true},
+		{"name": "👥 Participants", "value": fmt.Sprintf("%d", len(raffle.Participants)), "inline": true},
+		{"name": "🎟️ Total Tickets", "value": fmt.Sprintf("%d", totalTickets), "inline": true},
+		{"name": "🏆 Winner", "value": truncateDiscordField(winnerValue, 250), "inline": true},
+		{"name": "🕒 Created", "value": truncateDiscordField(formatRaffleDateTime(raffle.CreatedAt, ""), 250), "inline": true},
+		{"name": "📣 Ticket Board", "value": truncateDiscordField(formatRaffleParticipantsForDiscord(raffle.Participants), 1020), "inline": false},
+	}
+
+	if strings.TrimSpace(raffle.EndedAt) != "" {
+		fields = append(fields, map[string]interface{}{"name": "🛑 Ended", "value": truncateDiscordField(formatRaffleDateTime(raffle.EndedAt, ""), 250), "inline": true})
+	}
+
+	embed := map[string]interface{}{
+		"title":       "🎲 Gamba-Suite Raffle Tracker 🎲",
+		"description": desc,
+		"color":       15844367,
+		"fields":      fields,
+		"timestamp":   time.Now().UTC().Format(time.RFC3339),
+		"footer": map[string]interface{}{
+			"text": "✨ Auto-updated on every ticket buy and winner draw ✨",
+		},
+	}
+
+	content := fmt.Sprintf("%s %s | 🎁 %s x%d | 🎟️ %d total tickets", headline, raffle.Name, raffle.PrizeName, raffle.PrizeQty, totalTickets)
+	if strings.TrimSpace(raffle.Winner) != "" {
+		content += " | 🏆 Winner: " + raffle.Winner
+	}
+
+	return map[string]interface{}{
+		"username": "Gamba-Suite Raffles",
+		"content":  truncateDiscordField(content, 1800),
+		"embeds":   []interface{}{embed},
+		"allowed_mentions": map[string][]string{
+			"parse": {},
+		},
+	}
+}
+
+func doDiscordWebhookRequest(method string, urlStr string, payload map[string]interface{}) (int, []byte, error) {
+	jb, err := json.Marshal(payload)
+	if err != nil {
+		return 0, nil, err
+	}
+	req, err := http.NewRequest(method, urlStr, bytes.NewReader(jb))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Gamba-Suite/1.0")
+
+	client := &http.Client{Timeout: 7 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, body, nil
+}
+
+func (a *App) sendOrUpdateRaffleDiscordMessage(raffleID string, forceCreate bool) {
+	raffleID = strings.TrimSpace(raffleID)
+	if raffleID == "" {
+		return
+	}
+
+	webhookID, webhookToken, err := parseDiscordWebhookURL(raffleWebhookURL)
+	if err != nil {
+		a.AddLogMsg("[DISCORD_RAFFLE] parse webhook url failed: " + err.Error())
+		return
+	}
+
+	var raffle Raffle
+	messageID := ""
+	create := forceCreate
+
+	rafflesMu.Lock()
+	found := false
+	for i := range raffles {
+		if raffles[i].ID == raffleID {
+			raffle = raffles[i]
+			messageID = strings.TrimSpace(raffles[i].DiscordMessageID)
+			if strings.TrimSpace(raffles[i].DiscordWebhookID) != webhookID {
+				create = true
+			}
+			if messageID == "" {
+				create = true
+			}
+			found = true
+			break
+		}
+	}
+	rafflesMu.Unlock()
+
+	if !found {
+		return
+	}
+
+	if create {
+		payload := buildRaffleDiscordPayload(raffle, true)
+		postURL := raffleWebhookURL + "?wait=true"
+		status, body, reqErr := doDiscordWebhookRequest("POST", postURL, payload)
+		if reqErr != nil {
+			a.AddLogMsg("[DISCORD_RAFFLE] create message failed: " + reqErr.Error())
+			return
+		}
+		if status < 200 || status >= 300 {
+			a.AddLogMsg(fmt.Sprintf("[DISCORD_RAFFLE] create message responded %d body=%q", status, strings.TrimSpace(string(body))))
+			return
+		}
+		var resp struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			a.AddLogMsg("[DISCORD_RAFFLE] failed to parse created message id: " + err.Error())
+			return
+		}
+		if strings.TrimSpace(resp.ID) == "" {
+			a.AddLogMsg("[DISCORD_RAFFLE] created webhook message has empty id")
+			return
+		}
+
+		rafflesMu.Lock()
+		for i := range raffles {
+			if raffles[i].ID == raffleID {
+				raffles[i].DiscordWebhookID = webhookID
+				raffles[i].DiscordMessageID = resp.ID
+				a.saveRafflesLocked()
+				break
+			}
+		}
+		rafflesMu.Unlock()
+		a.AddLogMsg("[DISCORD_RAFFLE] created new raffle webhook message")
+		return
+	}
+
+	payload := buildRaffleDiscordPayload(raffle, false)
+	patchURL := fmt.Sprintf("https://discordapp.com/api/webhooks/%s/%s/messages/%s", webhookID, webhookToken, messageID)
+	status, body, reqErr := doDiscordWebhookRequest("PATCH", patchURL, payload)
+	if reqErr != nil {
+		a.AddLogMsg("[DISCORD_RAFFLE] patch message failed: " + reqErr.Error())
+		return
+	}
+	if status >= 200 && status < 300 {
+		a.AddLogMsg("[DISCORD_RAFFLE] patched raffle webhook message")
+		return
+	}
+
+	a.AddLogMsg(fmt.Sprintf("[DISCORD_RAFFLE] patch responded %d body=%q", status, strings.TrimSpace(string(body))))
+	if status == 404 {
+		a.sendOrUpdateRaffleDiscordMessage(raffleID, true)
 	}
 }

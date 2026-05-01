@@ -413,10 +413,12 @@ type Raffle struct {
 	Name              string              `json:"name"`
 	PrizeName         string              `json:"prizeName"`
 	PrizeQty          int                 `json:"prizeQty"`
-	Status            string              `json:"status"` // created|started|ended|drawn
+	Status            string              `json:"status"` // created|started|ended|completed
 	AcceptingDeposits bool                `json:"acceptingDeposits,omitempty"`
 	Participants      []RaffleParticipant `json:"participants"`
 	Winner            string              `json:"winner,omitempty"`
+	DiscordWebhookID  string              `json:"discordWebhookId,omitempty"`
+	DiscordMessageID  string              `json:"discordMessageId,omitempty"`
 	CreatedAt         string              `json:"createdAt"`
 	EndedAt           string              `json:"endedAt,omitempty"`
 	EndAt             string              `json:"endAt,omitempty"`    // planned end (RFC3339 with offset)
@@ -2152,6 +2154,7 @@ func (a *App) StartRaffle(id string) string {
 			raffles[i].AcceptingDeposits = true
 			a.saveRafflesLocked()
 			go a.emitRafflesUpdate()
+			go a.sendOrUpdateRaffleDiscordMessage(id, true)
 			// Notify UI about raffle-mode global flag if possible.
 			if a.ctx != nil {
 				payload := struct {
@@ -2181,6 +2184,7 @@ func (a *App) EndRaffle(id string) string {
 			a.saveRafflesLocked()
 			a.stopRaffleAnnouncer(id)
 			go a.emitRafflesUpdate()
+			go a.sendOrUpdateRaffleDiscordMessage(id, false)
 			b, _ := json.Marshal(raffles[i])
 			return string(b)
 		}
@@ -2260,10 +2264,11 @@ func (a *App) DrawRaffleWinner(id string) string {
 				}
 			}
 			r.Winner = winner
-			r.Status = "drawn"
+			r.Status = "completed"
 			r.EndedAt = time.Now().Format(time.RFC3339)
 			a.saveRafflesLocked()
 			go a.emitRafflesUpdate()
+			go a.sendOrUpdateRaffleDiscordMessage(r.ID, false)
 			out := map[string]string{"winner": winner}
 			b, _ := json.Marshal(out)
 			return string(b)
@@ -2304,6 +2309,7 @@ func (a *App) AddManualRaffleEntry(raffleID string, playerName string, coins int
 					raffles[i].Participants[j].Tickets += tickets
 					a.saveRafflesLocked()
 					go a.emitRafflesUpdate()
+					go a.sendOrUpdateRaffleDiscordMessage(raffles[i].ID, false)
 					b, _ := json.Marshal(raffles[i].Participants[j])
 					return string(b)
 				}
@@ -2312,6 +2318,7 @@ func (a *App) AddManualRaffleEntry(raffleID string, playerName string, coins int
 			raffles[i].Participants = append(raffles[i].Participants, p)
 			a.saveRafflesLocked()
 			go a.emitRafflesUpdate()
+			go a.sendOrUpdateRaffleDiscordMessage(raffles[i].ID, false)
 			b, _ := json.Marshal(p)
 			return string(b)
 		}
@@ -2369,6 +2376,7 @@ func (a *App) AddRaffleEntryFromTrade(playerName string, items []TradeItem) stri
 			raffles[idx].Participants[j].Tickets += tickets
 			a.saveRafflesLocked()
 			go a.emitRafflesUpdate()
+			go a.sendOrUpdateRaffleDiscordMessage(raffles[idx].ID, false)
 			b, _ := json.Marshal(raffles[idx].Participants[j])
 			return string(b)
 		}
@@ -2377,6 +2385,7 @@ func (a *App) AddRaffleEntryFromTrade(playerName string, items []TradeItem) stri
 	raffles[idx].Participants = append(raffles[idx].Participants, p)
 	a.saveRafflesLocked()
 	go a.emitRafflesUpdate()
+	go a.sendOrUpdateRaffleDiscordMessage(raffles[idx].ID, false)
 	b, _ := json.Marshal(p)
 	return string(b)
 }
@@ -3726,7 +3735,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 					}
 				}
 				rafflesMu.Unlock()
-				msg := fmt.Sprintf("%s purchased %d ticket(s) for raffle \"%s\" (%d coins)", p.Name, p.Tickets, raffleName, p.Coins)
+				msg := fmt.Sprintf("%s purchased %d ticket(s) for raffle \"%s\"", p.Name, p.Tickets, raffleName)
 				sendShout(msg)
 			}(currentRaffleID)
 
