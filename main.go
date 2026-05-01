@@ -1113,6 +1113,40 @@ func (a *App) ToggleRaffleMode(enabled bool) {
 
 	a.AddLogMsg(fmt.Sprintf("[RAFFLE_MODE] accepting raffle deposits = %t", enabled))
 
+	// When toggling raffle-mode from Home, auto-open/close any started raffle
+	// so the operator doesn't need to click the per-raffle "Open" control.
+	rafflesMu.Lock()
+	changed := false
+	if enabled {
+		// Enable accepting deposits for any currently started raffle.
+		for i := range raffles {
+			if raffles[i].Status == "started" {
+				if !raffles[i].AcceptingDeposits {
+					raffles[i].AcceptingDeposits = true
+					changed = true
+				}
+			}
+		}
+	} else {
+		// When disabling raffle-mode, close deposit acceptance for started raffles.
+		for i := range raffles {
+			if raffles[i].AcceptingDeposits {
+				raffles[i].AcceptingDeposits = false
+				changed = true
+			}
+		}
+	}
+	if changed {
+		a.saveRafflesLocked()
+		go a.emitRafflesUpdate()
+		if enabled {
+			a.AddLogMsg("[RAFFLE_MODE] auto-opened started raffle(s) for deposits")
+		} else {
+			a.AddLogMsg("[RAFFLE_MODE] auto-closed raffle deposits")
+		}
+	}
+	rafflesMu.Unlock()
+
 	if a.ctx != nil {
 		payload := struct {
 			Accepting bool `json:"accepting"`
@@ -2082,6 +2116,13 @@ func (a *App) CreateRaffle(name string, prizeName string, prizeQty int) string {
 }
 
 func (a *App) StartRaffle(id string) string {
+	// Ensure raffle-mode and accepting-of-deposits are enabled so a started
+	// raffle can immediately accept incoming raffle trades when started.
+	mutex.Lock()
+	acceptRaffleDeposits = true
+	raffleModeActive = true
+	mutex.Unlock()
+
 	rafflesMu.Lock()
 	defer rafflesMu.Unlock()
 	now := time.Now().Format(time.RFC3339)
@@ -2098,13 +2139,26 @@ func (a *App) StartRaffle(id string) string {
 		}
 	}
 
-	// Start the requested raffle
+	// Start the requested raffle and enable it for deposits.
 	for i := range raffles {
 		if raffles[i].ID == id {
 			raffles[i].Status = "started"
 			raffles[i].EndedAt = ""
+			// Auto-open deposits for this raffle so trades are allowed immediately.
+			raffles[i].AcceptingDeposits = true
 			a.saveRafflesLocked()
 			go a.emitRafflesUpdate()
+			// Notify UI about raffle-mode global flag if possible.
+			if a.ctx != nil {
+				payload := struct {
+					Accepting bool `json:"accepting"`
+				}{Accepting: true}
+				if b2, err := json.Marshal(payload); err == nil {
+					runtime.EventsEmit(a.ctx, "raffleModeUpdate", string(b2))
+				}
+			}
+			// Start announcer (start regardless of previous open state to
+			// ensure chat messages begin immediately).
 			go a.startRaffleAnnouncer(id)
 			b, _ := json.Marshal(raffles[i])
 			return string(b)
@@ -2167,6 +2221,7 @@ func (a *App) ResumeRaffle(id string) string {
 		if raffles[i].ID == id {
 			raffles[i].Status = "started"
 			raffles[i].EndedAt = ""
+			raffles[i].AcceptingDeposits = true
 			a.saveRafflesLocked()
 			go a.emitRafflesUpdate()
 			go a.startRaffleAnnouncer(id)
@@ -3026,6 +3081,26 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				coins += val * it.Quantity
 			}
 
+			// If parsing produced no partner items, attempt a local fallback by
+			// inspecting the last full TRADE_ITEMS snapshot we saw.
+			if coins == 0 {
+				tradeItemsMu.Lock()
+				fallback := make([]TradeItem, len(lastAllTradeItems))
+				copy(fallback, lastAllTradeItems)
+				tradeItemsMu.Unlock()
+				for _, it := range fallback {
+					if v, ok := raffleCurrencyValues[it.Name]; ok && it.Quantity > 0 {
+						coins += v * it.Quantity
+					}
+				}
+				if coins == 0 {
+					a.AddLogMsg("[RAFFLE] partner accepted but no raffle coins detected; closing trade")
+					ext.Send(out.TRADE_CLOSE)
+					sendShout("Sorry — this raffle only accepts the specified coin items; trade closed.")
+					return
+				}
+			}
+
 			ext.Send(out.TRADE_ACCEPT)
 			tradeAutoAccepted = true
 			a.AddLogMsg(fmt.Sprintf("[RAFFLE] accepted raffle trade from %q (%d coins)", normalizeUsername(lastTradePartnerName), coins))
@@ -3214,6 +3289,14 @@ func handleTradePacket(a *App, e *g.Intercept) {
 					coins += val * it.Quantity
 				}
 				if coins <= 0 {
+					// Do not tie raffle acceptance to the frozen hand snapshot.
+					// The server commonly emits an initial empty TRADE_ITEMS
+					// snapshot before the partner adds items; defer closing on
+					// that first snapshot so partners have a moment to add coins.
+					if len(prevAllCopy) == 0 {
+						a.AddLogMsg("[RAFFLE] initial TRADE_ITEMS contained no coins; deferring close to await partner items")
+						return
+					}
 					a.AddLogMsg("[RAFFLE] no raffle coins detected; closing trade")
 					ext.Send(out.TRADE_CLOSE)
 					go func() {
@@ -3262,13 +3345,20 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				}
 			}
 
-			handItemsMu.Lock()
-			ready := tradeHandSnapshotReady
-			handItemsMu.Unlock()
+			// For raffle deposits we intentionally avoid coupling to the
+			// frozen hand snapshot lifecycle — raffle acceptance is solely
+			// based on coin items. Only enforce snapshot readiness for
+			// non-raffle trades so normal game coverage checks continue to
+			// protect dealer payouts.
+			if !currentTradeIsRaffle {
+				handItemsMu.Lock()
+				ready := tradeHandSnapshotReady
+				handItemsMu.Unlock()
 
-			if !ready {
-				a.AddLogMsg("[TRADE_COVERAGE] snapshot not ready yet, skipping live trade check")
-				return
+				if !ready {
+					a.AddLogMsg("[TRADE_COVERAGE] snapshot not ready yet, skipping live trade check")
+					return
+				}
 			}
 
 			a.notifyTradeQuantityCoverage()
@@ -3391,6 +3481,69 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		tradeLimitWasActive = false
 		lastTradeLimitNotice = ""
 		stopTradeLimitMonitor()
+
+		// If this completed trade was a raffle deposit, record the entry and shout.
+		mutex.Lock()
+		isRaffle := currentTradeIsRaffle
+		raffleID := currentTradeRaffleID
+		mutex.Unlock()
+		if isRaffle {
+			tradeItemsMu.Lock()
+			var items []TradeItem
+			if len(lastAllTradeItems) > 0 {
+				items = make([]TradeItem, len(lastAllTradeItems))
+				copy(items, lastAllTradeItems)
+			} else {
+				items = make([]TradeItem, len(currentTradeItems))
+				copy(items, currentTradeItems)
+			}
+			tradeItemsMu.Unlock()
+
+			player := normalizeUsername(strings.TrimSpace(lastTradePartnerName))
+			if player == "" {
+				player = "Unknown"
+			}
+			// compute purchase delta before recording so we can announce both purchase and total
+			purchaseCoins := 0
+			for _, it := range items {
+				if v, ok := raffleCurrencyValues[it.Name]; ok {
+					purchaseCoins += v * it.Quantity
+				}
+			}
+			purchaseTickets := purchaseCoins + (purchaseCoins / 5)
+
+			res := a.AddRaffleEntryFromTrade(player, items)
+			if res != "" {
+				var p RaffleParticipant
+				if err := json.Unmarshal([]byte(res), &p); err == nil {
+					raffleName := ""
+					rafflesMu.Lock()
+					if raffleID != "" {
+						for i := len(raffles) - 1; i >= 0; i-- {
+							if raffles[i].ID == raffleID {
+								raffleName = raffles[i].Name
+								break
+							}
+						}
+					}
+					if raffleName == "" {
+						for i := len(raffles) - 1; i >= 0; i-- {
+							if raffles[i].Status == "started" {
+								raffleName = raffles[i].Name
+								break
+							}
+						}
+					}
+					rafflesMu.Unlock()
+
+					msg := fmt.Sprintf("%s bought %d tickets — total %d tickets for raffle \"%s\"",
+						p.Name, purchaseTickets, p.Tickets, raffleName)
+					sendShout(msg)
+				}
+			}
+			a.AddLogMsg("[RAFFLE] recorded raffle deposit on trade complete")
+			return
+		}
 		if payoutTradeActive {
 			stopPayoutResponseTimeoutMonitor()
 			resetPayoutRetryState()
@@ -3684,6 +3837,13 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				} else if !dealerAcceptingTrades {
 					reason = "dealer not accepting trades"
 				}
+
+				// Raffle/trade diagnostic snapshot
+				rafflesMu.Lock()
+				rj, _ := json.Marshal(raffles)
+				n := len(raffles)
+				rafflesMu.Unlock()
+				a.AddLogMsg(fmt.Sprintf("[RAFFLE_DEBUG] acceptRaffleDeposits=%t raffleModeActive=%t allowRaffle=%t currentTradeIsRaffle=%t currentTradeRaffleID=%q raffles_len=%d raffles=%s", acceptRaffleDeposits, raffleModeActive, allowRaffle, currentTradeIsRaffle, currentTradeRaffleID, n, string(rj)))
 
 				a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] blocking incoming trade open: %s", reason))
 
@@ -5616,7 +5776,12 @@ func scheduleAutoTradeAccept(a *App, payload string) {
 	if tradeAutoAccepted || tradeAutoAcceptPending {
 		return
 	}
-	if !payoutTradeActive {
+	// Snapshot raffle flag: raffle deposits do not require payout coverage checks.
+	mutex.Lock()
+	isRaffle := currentTradeIsRaffle
+	mutex.Unlock()
+
+	if !payoutTradeActive && !isRaffle {
 		if s := a.getTradeCoverageShortages(); s != nil && len(s) > 0 {
 			a.AddLogMsg("[TRADE_ACCEPT] skipped auto-accept due to insufficient payout stock")
 			return
@@ -5651,7 +5816,7 @@ func scheduleAutoTradeAccept(a *App, payload string) {
 		// that there are no coverage shortages before accepting. Treat a
 		// nil result from getTradeCoverageShortages() as "snapshot not
 		// ready" and wait briefly for it to become available.
-		if !payoutTradeActive {
+		if !payoutTradeActive && !isRaffle {
 			deadline := time.Now().Add(1 * time.Second)
 			for {
 				if flow != tradeAutoFlowID || strings.TrimSpace(lastTradePartnerToken) == "" {
@@ -5686,6 +5851,8 @@ func scheduleAutoTradeAccept(a *App, payload string) {
 				}
 				break
 			}
+		} else {
+			// Raffle deposits do not require a frozen hand snapshot or coverage checks.
 		}
 
 		ext.Send(out.TRADE_ACCEPT)
@@ -5705,7 +5872,12 @@ func scheduleAutoTradeConfirm(a *App, payload string) {
 	if tradeAutoConfirmed || tradeAutoConfirmPending {
 		return
 	}
-	if !payoutTradeActive {
+	// Snapshot raffle flag: raffle deposits do not require payout coverage checks.
+	mutex.Lock()
+	isRaffle := currentTradeIsRaffle
+	mutex.Unlock()
+
+	if !payoutTradeActive && !isRaffle {
 		if s := a.getTradeCoverageShortages(); s != nil && len(s) > 0 {
 			a.AddLogMsg("[TRADE_CONFIRM_ACCEPT] skipped auto-confirm due to insufficient payout stock")
 			return
@@ -5734,7 +5906,7 @@ func scheduleAutoTradeConfirm(a *App, payload string) {
 				return
 			}
 
-			if !payoutTradeActive {
+			if !payoutTradeActive && !isRaffle {
 				// Wait briefly for a valid hand snapshot (up to 1s). If still
 				// unavailable or shortages exist, cancel auto-confirm.
 				deadline := time.Now().Add(1 * time.Second)
@@ -5760,6 +5932,8 @@ func scheduleAutoTradeConfirm(a *App, payload string) {
 					}
 					break
 				}
+			} else {
+				// Raffle deposits: skip snapshot/coverage wait
 			}
 
 			ext.Send(g.Out.Id("TRADE_CONFIRM_ACCEPT"))
@@ -6596,8 +6770,41 @@ func (a *App) parseTradeItemsPacket(data []byte) []TradeItem {
 		}
 	}
 
+	// If parsing produced no structured items, attempt a targeted fallback
+	// that looks specifically for known raffle coin class names. This
+	// allows raffle deposits to be recognised even when the general parser
+	// can't normalise a brittle server payload (avoids coupling raffle
+	// acceptance to the frozen hand snapshot).
 	if len(counts) == 0 {
-		return []TradeItem{}
+		rawLower := strings.ToLower(string(data))
+		found := false
+		for class := range raffleCurrencyValues {
+			// Match occurrences of the class name with optional "*N" suffix
+			reStr := regexp.QuoteMeta(class) + `(?:\*(\d+))?`
+			re := regexp.MustCompile(reStr)
+			matches := re.FindAllStringSubmatch(rawLower, -1)
+			if len(matches) == 0 {
+				continue
+			}
+			found = true
+			totalQty := 0
+			for _, m := range matches {
+				qty := 1
+				if len(m) > 1 && m[1] != "" {
+					if q, err := strconv.Atoi(m[1]); err == nil && q > 0 {
+						qty = q
+					}
+				}
+				totalQty += qty
+			}
+			counts[class] = totalQty
+			if _, exists := rawByName[class]; !exists {
+				rawByName[class] = class
+			}
+		}
+		if !found {
+			return []TradeItem{}
+		}
 	}
 
 	names := make([]string, 0, len(counts))
@@ -7633,6 +7840,12 @@ func (a *App) emitHandItemsUpdate() {
 // sendLiveDealerSnapshot posts a hand snapshot to the configured live-dealer webhook.
 // Runs asynchronously and logs status via `AddLogMsg`.
 func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
+	// Do not send live-dealer snapshots until the dealer's dice are ready.
+	if !dealerDiceReady() {
+		a.AddLogMsg("[TRADE_HAND_SNAPSHOT] skipped send: dice not ready")
+		return
+	}
+
 	go func(snapshot []TradeItem) {
 		payload := LiveDealerStatusPayload{
 			LastSeenAt:         time.Now().UTC().Format(time.RFC3339),
@@ -7693,6 +7906,12 @@ func (a *App) sendLiveDealerStatus(open bool, dealerName string) {
 		return
 	}
 
+	// Also require the dealer's dice to be rolled/ready before sending API updates.
+	if !dealerDiceReady() {
+		a.AddLogMsg("[LIVE_DEALER_STATUS] skipped send: dice not ready")
+		return
+	}
+
 	go func(dealerOpen bool, name string) {
 		payload := LiveDealerStatusPayload{
 			LastSeenAt:         time.Now().UTC().Format(time.RFC3339),
@@ -7746,6 +7965,12 @@ func (a *App) sendLiveDealerStatus(open bool, dealerName string) {
 // to the configured live-dealer webhook. Never exposes the player name; winner
 // is mapped to "Player"/"Dealer"/"Unknown".
 func (a *App) sendLiveDealerGames(last int) {
+	// Only send completed-game summaries once dice are ready.
+	if !dealerDiceReady() {
+		a.AddLogMsg("[LIVE_DEALER_GAMES] skipped send: dice not ready")
+		return
+	}
+
 	go func(n int) {
 		type GameSummary struct {
 			ID          string      `json:"id"`
@@ -8030,6 +8255,19 @@ func (a *App) forceRefreshHandSnapshot(reason string) bool {
 }
 
 func (a *App) notifyTradeQuantityCoverage() {
+	// Skip coverage enforcement for raffle deposits (intake-only)
+	mutex.Lock()
+	isRaffle := currentTradeIsRaffle
+	mutex.Unlock()
+	if isRaffle {
+		a.AddLogMsg("[TRADE_COVERAGE] skipping coverage enforcement for raffle deposit")
+		// Clear any temporary shortage notices and stop shortage monitor.
+		stopShortageMonitor()
+		lastTradeCoverageNotice = ""
+		lastTradeBlockNotice = ""
+		return
+	}
+
 	// Compute shortages and notify partner if we cannot cover payout
 	shortages := a.getTradeCoverageShortages()
 	if len(shortages) == 0 {
@@ -8361,6 +8599,18 @@ func (a *App) getTradeCoverageShortages() []tradeShortage {
 // before the hand snapshot is ready and the scheduled auto-accept times out.
 func (a *App) maybeAutoAcceptOnSnapshotReady(context string) {
 	if !partnerTradeAccepted || tradeAutoAccepted || tradeAutoAcceptPending {
+		return
+	}
+
+	// If this is a raffle deposit, accept immediately when snapshot becomes ready
+	mutex.Lock()
+	isRaffle := currentTradeIsRaffle
+	mutex.Unlock()
+	if isRaffle && partnerTradeAccepted && !tradeAutoAccepted && !tradeAutoAcceptPending {
+		ext.Send(out.TRADE_ACCEPT)
+		tradeAutoAccepted = true
+		tradeAutoAcceptPending = false
+		a.AddLogMsg("[RAFFLE] auto-accepting raffle on snapshot ready")
 		return
 	}
 
