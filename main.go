@@ -413,6 +413,8 @@ type Raffle struct {
 	Name              string              `json:"name"`
 	PrizeName         string              `json:"prizeName"`
 	PrizeQty          int                 `json:"prizeQty"`
+	PrizeImagePath    string              `json:"prizeImagePath,omitempty"`
+	PrizeImageURL     string              `json:"prizeImageUrl,omitempty"`
 	Status            string              `json:"status"` // created|started|ended|completed
 	AcceptingDeposits bool                `json:"acceptingDeposits,omitempty"`
 	Participants      []RaffleParticipant `json:"participants"`
@@ -2097,20 +2099,30 @@ func (a *App) GetRafflesJSON() string {
 }
 
 // CreateRaffle creates a new raffle and returns its JSON
-func (a *App) CreateRaffle(name string, prizeName string, prizeQty int, endAt string, endAtGmt string) string {
+func (a *App) CreateRaffle(name string, prizeName string, prizeQty int, endAt string, endAtGmt string, prizeImageData string) string {
 	if strings.TrimSpace(name) == "" {
 		name = fmt.Sprintf("Raffle %d", time.Now().Unix())
 	}
+	id := fmt.Sprintf("%d", time.Now().UnixNano())
+	prizeImagePath := ""
+	if strings.TrimSpace(prizeImageData) != "" {
+		if p, err := saveTransparentRafflePrizeImage(id, prizeImageData); err == nil {
+			prizeImagePath = p
+		} else {
+			a.AddLogMsg("[RAFFLE_IMAGE] failed to process uploaded image: " + err.Error())
+		}
+	}
 	r := Raffle{
-		ID:           fmt.Sprintf("%d", time.Now().UnixNano()),
-		Name:         name,
-		PrizeName:    prizeName,
-		PrizeQty:     prizeQty,
-		Status:       "created",
-		Participants: []RaffleParticipant{},
-		CreatedAt:    time.Now().Format(time.RFC3339),
-		EndAt:        strings.TrimSpace(endAt),
-		EndAtGmt:     strings.TrimSpace(endAtGmt),
+		ID:             id,
+		Name:           name,
+		PrizeName:      prizeName,
+		PrizeQty:       prizeQty,
+		PrizeImagePath: prizeImagePath,
+		Status:         "created",
+		Participants:   []RaffleParticipant{},
+		CreatedAt:      time.Now().Format(time.RFC3339),
+		EndAt:          strings.TrimSpace(endAt),
+		EndAtGmt:       strings.TrimSpace(endAtGmt),
 	}
 	rafflesMu.Lock()
 	raffles = append(raffles, r)

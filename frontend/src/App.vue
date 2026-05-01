@@ -727,6 +727,14 @@
         </div>
 
         <div class="game-guide-block">
+          <div class="game-guide-label">Prize Photo (optional)</div>
+          <input type="file" accept="image/png,image/jpeg,image/jpg,image/gif" @change="onRafflePrizeImageChange" />
+          <div v-if="rafflePrizeImagePreview" style="margin-top:8px;">
+            <img :src="rafflePrizeImagePreview" alt="Prize preview" style="max-width:220px;max-height:220px;border:1px solid rgba(255,255,255,0.12);border-radius:6px;padding:4px;background:rgba(0,0,0,0.2);" />
+          </div>
+        </div>
+
+        <div class="game-guide-block">
           <div class="game-guide-label">End Date & Time</div>
           <input v-model="raffleEndInput" type="datetime-local" />
         </div>
@@ -753,7 +761,7 @@
               :key="r.id"
               type="button"
               class="history-card"
-              :class="{ 'history-card-issue': r.status === 'drawn' }"
+              :class="{ 'history-card-issue': r.status === 'completed' }"
               @click="selectRaffle(r)"
             >
               <div class="history-card-top">
@@ -1035,6 +1043,8 @@ export default {
       raffleNameInput: '',
       rafflePrizeNameInput: '',
       rafflePrizeQtyInput: 1,
+      rafflePrizeImageData: '',
+      rafflePrizeImagePreview: '',
       selectedRaffle: null,
       newParticipantName: '',
       newParticipantCoins: 0,
@@ -2102,6 +2112,30 @@ export default {
       this.selectedRaffle = r;
       this.showRaffleModal = true;
     },
+    onRafflePrizeImageChange(event) {
+      try {
+        const file = event && event.target && event.target.files && event.target.files[0] ? event.target.files[0] : null;
+        if (!file) {
+          this.rafflePrizeImageData = '';
+          this.rafflePrizeImagePreview = '';
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          const data = String(reader.result || '');
+          this.rafflePrizeImageData = data;
+          this.rafflePrizeImagePreview = data;
+        };
+        reader.onerror = () => {
+          this.rafflePrizeImageData = '';
+          this.rafflePrizeImagePreview = '';
+          this.addLogMsg('[RAFFLE] failed to read prize image');
+        };
+        reader.readAsDataURL(file);
+      } catch (e) {
+        console.error(e);
+      }
+    },
     async createRaffle() {
       try {
         let endRfc = '';
@@ -2127,11 +2161,14 @@ export default {
           String(this.rafflePrizeNameInput || ''),
           Number(this.rafflePrizeQtyInput || 1),
           String(endRfc || ''),
-          String(this.raffleEndGmtInput || '')
+          String(this.raffleEndGmtInput || ''),
+          String(this.rafflePrizeImageData || '')
         );
         this.raffleNameInput = '';
         this.rafflePrizeNameInput = '';
         this.rafflePrizeQtyInput = 1;
+        this.rafflePrizeImageData = '';
+        this.rafflePrizeImagePreview = '';
         this.raffleEndInput = '';
         this.raffleEndGmtInput = 'GMT+0';
         await this.loadRaffles();

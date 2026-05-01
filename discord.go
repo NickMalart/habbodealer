@@ -2,12 +2,20 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/gif"
+	"image/jpeg"
+	"image/png"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -117,7 +125,7 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 	}
 
 	payload := map[string]interface{}{
-		"username": "Gamba-Suite",
+		"username": "Roll Origins",
 		"embeds":   []interface{}{embed},
 		"allowed_mentions": map[string][]string{
 			"parse": []string{},
@@ -174,6 +182,141 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 }
 
 const raffleWebhookURL = "https://discordapp.com/api/webhooks/1499651607800057926/SLvv8HU_yG2vyW04MaXkZ2eVd_10qpddkJjBWDQ6GmB7LzUhJu7yZAgQInsg0eLOogJ9"
+
+func getRaffleImagesDir() string {
+	configDir, _ := os.UserConfigDir()
+	path := filepath.Join(configDir, "Gamba-Suite", "raffle_images")
+	_ = os.MkdirAll(path, 0700)
+	return path
+}
+
+func decodeRaffleImageDataURL(dataURL string) (image.Image, error) {
+	dataURL = strings.TrimSpace(dataURL)
+	if dataURL == "" {
+		return nil, fmt.Errorf("empty image data")
+	}
+	comma := strings.Index(dataURL, ",")
+	if comma < 0 {
+		return nil, fmt.Errorf("invalid data url")
+	}
+	head := dataURL[:comma]
+	body := dataURL[comma+1:]
+	raw, err := base64.StdEncoding.DecodeString(body)
+	if err != nil {
+		return nil, err
+	}
+	reader := bytes.NewReader(raw)
+	if strings.Contains(strings.ToLower(head), "image/png") {
+		return png.Decode(reader)
+	}
+	reader.Reset(raw)
+	if strings.Contains(strings.ToLower(head), "image/jpeg") || strings.Contains(strings.ToLower(head), "image/jpg") {
+		return jpeg.Decode(reader)
+	}
+	reader.Reset(raw)
+	if strings.Contains(strings.ToLower(head), "image/gif") {
+		return gif.Decode(reader)
+	}
+	reader.Reset(raw)
+	img, _, err := image.Decode(reader)
+	return img, err
+}
+
+func colorDistanceSq(aR, aG, aB, bR, bG, bB int) int {
+	dR := aR - bR
+	dG := aG - bG
+	dB := aB - bB
+	return dR*dR + dG*dG + dB*dB
+}
+
+// removeEdgeBackgroundToTransparent flood-fills from image borders and makes
+// near-background pixels transparent, preserving the central foreground item.
+func removeEdgeBackgroundToTransparent(src image.Image) *image.NRGBA {
+	b := src.Bounds()
+	out := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	for y := 0; y < b.Dy(); y++ {
+		for x := 0; x < b.Dx(); x++ {
+			out.SetNRGBA(x, y, color.NRGBAModel.Convert(src.At(b.Min.X+x, b.Min.Y+y)).(color.NRGBA))
+		}
+	}
+	if b.Dx() == 0 || b.Dy() == 0 {
+		return out
+	}
+
+	corners := [][2]int{{0, 0}, {b.Dx() - 1, 0}, {0, b.Dy() - 1}, {b.Dx() - 1, b.Dy() - 1}}
+	sumR, sumG, sumB := 0, 0, 0
+	for _, c := range corners {
+		px := out.NRGBAAt(c[0], c[1])
+		sumR += int(px.R)
+		sumG += int(px.G)
+		sumB += int(px.B)
+	}
+	bgR, bgG, bgB := sumR/4, sumG/4, sumB/4
+	thresholdSq := 38 * 38
+
+	width, height := b.Dx(), b.Dy()
+	visited := make([]bool, width*height)
+	idx := func(x, y int) int { return y*width + x }
+	queueX := make([]int, 0, width*2+height*2)
+	queueY := make([]int, 0, width*2+height*2)
+	push := func(x, y int) {
+		if x < 0 || y < 0 || x >= width || y >= height {
+			return
+		}
+		i := idx(x, y)
+		if visited[i] {
+			return
+		}
+		visited[i] = true
+		queueX = append(queueX, x)
+		queueY = append(queueY, y)
+	}
+
+	for x := 0; x < width; x++ {
+		push(x, 0)
+		push(x, height-1)
+	}
+	for y := 0; y < height; y++ {
+		push(0, y)
+		push(width-1, y)
+	}
+
+	for head := 0; head < len(queueX); head++ {
+		x := queueX[head]
+		y := queueY[head]
+		px := out.NRGBAAt(x, y)
+		d := colorDistanceSq(int(px.R), int(px.G), int(px.B), bgR, bgG, bgB)
+		if d > thresholdSq {
+			continue
+		}
+		px.A = 0
+		out.SetNRGBA(x, y, px)
+		push(x+1, y)
+		push(x-1, y)
+		push(x, y+1)
+		push(x, y-1)
+	}
+
+	return out
+}
+
+func saveTransparentRafflePrizeImage(raffleID string, dataURL string) (string, error) {
+	img, err := decodeRaffleImageDataURL(dataURL)
+	if err != nil {
+		return "", err
+	}
+	processed := removeEdgeBackgroundToTransparent(img)
+	outPath := filepath.Join(getRaffleImagesDir(), raffleID+".png")
+	f, err := os.Create(outPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if err := png.Encode(f, processed); err != nil {
+		return "", err
+	}
+	return outPath, nil
+}
 
 func parseDiscordWebhookURL(webhookURL string) (string, string, error) {
 	u, err := url.Parse(strings.TrimSpace(webhookURL))
@@ -335,6 +478,11 @@ func buildRaffleDiscordPayload(raffle Raffle, isCreate bool) map[string]interfac
 			"text": "✨ Auto-updated on every ticket buy and winner draw ✨",
 		},
 	}
+	if strings.TrimSpace(raffle.PrizeImageURL) != "" {
+		embed["image"] = map[string]interface{}{"url": strings.TrimSpace(raffle.PrizeImageURL)}
+	} else if isCreate && strings.TrimSpace(raffle.PrizeImagePath) != "" {
+		embed["image"] = map[string]interface{}{"url": "attachment://raffle_prize.png"}
+	}
 
 	content := fmt.Sprintf("%s %s | 🎁 %s x%d | 🎟️ %d total tickets", headline, raffle.Name, raffle.PrizeName, raffle.PrizeQty, totalTickets)
 	if strings.TrimSpace(raffle.Winner) != "" {
@@ -364,6 +512,48 @@ func doDiscordWebhookRequest(method string, urlStr string, payload map[string]in
 	req.Header.Set("User-Agent", "Gamba-Suite/1.0")
 
 	client := &http.Client{Timeout: 7 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, body, nil
+}
+
+func doDiscordWebhookMultipartPost(urlStr string, payload map[string]interface{}, filePath string, fieldName string, fileName string) (int, []byte, error) {
+	jb, err := json.Marshal(payload)
+	if err != nil {
+		return 0, nil, err
+	}
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	if err := w.WriteField("payload_json", string(jb)); err != nil {
+		return 0, nil, err
+	}
+	fileBytes, err := os.ReadFile(filePath)
+	if err != nil {
+		return 0, nil, err
+	}
+	part, err := w.CreateFormFile(fieldName, fileName)
+	if err != nil {
+		return 0, nil, err
+	}
+	if _, err := part.Write(fileBytes); err != nil {
+		return 0, nil, err
+	}
+	if err := w.Close(); err != nil {
+		return 0, nil, err
+	}
+
+	req, err := http.NewRequest("POST", urlStr, &buf)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("User-Agent", "Gamba-Suite/1.0")
+
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, nil, err
@@ -414,7 +604,14 @@ func (a *App) sendOrUpdateRaffleDiscordMessage(raffleID string, forceCreate bool
 	if create {
 		payload := buildRaffleDiscordPayload(raffle, true)
 		postURL := raffleWebhookURL + "?wait=true"
-		status, body, reqErr := doDiscordWebhookRequest("POST", postURL, payload)
+		var status int
+		var body []byte
+		var reqErr error
+		if strings.TrimSpace(raffle.PrizeImagePath) != "" && strings.TrimSpace(raffle.PrizeImageURL) == "" {
+			status, body, reqErr = doDiscordWebhookMultipartPost(postURL, payload, raffle.PrizeImagePath, "files[0]", "raffle_prize.png")
+		} else {
+			status, body, reqErr = doDiscordWebhookRequest("POST", postURL, payload)
+		}
 		if reqErr != nil {
 			a.AddLogMsg("[DISCORD_RAFFLE] create message failed: " + reqErr.Error())
 			return
@@ -424,7 +621,10 @@ func (a *App) sendOrUpdateRaffleDiscordMessage(raffleID string, forceCreate bool
 			return
 		}
 		var resp struct {
-			ID string `json:"id"`
+			ID          string `json:"id"`
+			Attachments []struct {
+				URL string `json:"url"`
+			} `json:"attachments"`
 		}
 		if err := json.Unmarshal(body, &resp); err != nil {
 			a.AddLogMsg("[DISCORD_RAFFLE] failed to parse created message id: " + err.Error())
@@ -440,6 +640,9 @@ func (a *App) sendOrUpdateRaffleDiscordMessage(raffleID string, forceCreate bool
 			if raffles[i].ID == raffleID {
 				raffles[i].DiscordWebhookID = webhookID
 				raffles[i].DiscordMessageID = resp.ID
+				if len(resp.Attachments) > 0 && strings.TrimSpace(resp.Attachments[0].URL) != "" {
+					raffles[i].PrizeImageURL = strings.TrimSpace(resp.Attachments[0].URL)
+				}
 				a.saveRafflesLocked()
 				break
 			}

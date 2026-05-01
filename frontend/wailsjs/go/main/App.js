@@ -38,8 +38,8 @@ export function ClearTradeItems() {
   return window['go']['main']['App']['ClearTradeItems']();
 }
 
-export function CreateRaffle(arg1, arg2, arg3, arg4, arg5) {
-  return window['go']['main']['App']['CreateRaffle'](arg1, arg2, arg3, arg4, arg5);
+export function CreateRaffle(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['CreateRaffle'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
 export function DeleteRaffle(arg1) {
