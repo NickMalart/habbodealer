@@ -118,7 +118,7 @@ export function SaveConfig(arg1:main.PokerDisplayConfig):Promise<void>;
 
 export function SaveDealerOpenConfig(arg1:boolean,arg2:number,arg3:number):Promise<main.DealerOpenConfig>;
 
-export function SaveRaffleAnnounceConfig(arg1:number,arg2:number,arg3:string,arg4:string):Promise<main.RaffleAnnounceConfig>;
+export function SaveRaffleAnnounceConfig(arg1:number,arg2:number,arg3:string,arg4:string,arg5:string):Promise<main.RaffleAnnounceConfig>;
 
 export function SetOnlyUnderOver(arg1:boolean):Promise<void>;
 

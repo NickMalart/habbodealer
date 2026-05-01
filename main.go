@@ -386,11 +386,12 @@ var (
 
 // Raffle announcer configuration - adjust these values (seconds)
 var (
-	raffleAnnounceFirstSeconds  int = 45 // unified interval: seconds between announces
-	raffleAnnounceRepeatSeconds int = 45 // kept for compatibility but unused separately
+	raffleAnnounceFirstSeconds  int    = 45 // unified interval: seconds between announces
+	raffleAnnounceRepeatSeconds int    = 45 // kept for compatibility but unused separately
+	raffleDiscordInvite         string = "vu3AGQA79M"
 
 	// Message parts: both may use format verbs %s (raffle name), %s (prize name), %d (prize qty)
-	raffleAnnounceMsgPart1 string = "Raffle Open: %s - Prize: %s x%d - More Details Discord: 7QeXEV6jp"
+	raffleAnnounceMsgPart1 string = "Raffle Open: %s - Prize: %s x%d - More Details Discord: {discord}"
 	raffleAnnounceMsgPart2 string = "1 coin = 1 ticket. For every 5 coins you get 1 bonus ticket."
 
 	raffleAnnouncerMu        sync.Mutex
@@ -733,6 +734,10 @@ type DealerOpenConfig struct {
 	AnnounceSeconds int  `json:"announceSeconds"`
 }
 
+type UtilitySettings struct {
+	RaffleDiscordInvite string `json:"raffleDiscordInvite"`
+}
+
 func NewApp(ext *g.Ext, assets embed.FS) *App {
 	a := &App{
 		ext:    ext,
@@ -799,6 +804,7 @@ func (a *App) getCurrentRoomName() string {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.loadUtilitySettings()
 	a.loadGameHistory()
 	// Raffle initialization
 	rand.Seed(time.Now().UnixNano())
@@ -996,6 +1002,7 @@ type RaffleAnnounceConfig struct {
 	RepeatSeconds int    `json:"repeatSeconds"`
 	MsgPart1      string `json:"msgPart1"`
 	MsgPart2      string `json:"msgPart2"`
+	DiscordInvite string `json:"discordInvite"`
 }
 
 // GetRaffleAnnounceConfig returns current raffle announcer settings.
@@ -1007,31 +1014,36 @@ func (a *App) GetRaffleAnnounceConfig() RaffleAnnounceConfig {
 		RepeatSeconds: raffleAnnounceRepeatSeconds,
 		MsgPart1:      raffleAnnounceMsgPart1,
 		MsgPart2:      raffleAnnounceMsgPart2,
+		DiscordInvite: raffleDiscordInvite,
 	}
 }
 
 // SaveRaffleAnnounceConfig updates raffle announcer timers and messages.
 // It restarts any active announcers so changes apply immediately.
-func (a *App) SaveRaffleAnnounceConfig(firstSeconds int, repeatSeconds int, msgPart1 string, msgPart2 string) RaffleAnnounceConfig {
+func (a *App) SaveRaffleAnnounceConfig(firstSeconds int, repeatSeconds int, msgPart1 string, msgPart2 string, discordInvite string) RaffleAnnounceConfig {
 	if firstSeconds < 1 {
 		firstSeconds = 1
 	}
 	if repeatSeconds < 1 {
 		repeatSeconds = 1
 	}
+	discordInvite = strings.TrimSpace(discordInvite)
 
 	raffleAnnouncerMu.Lock()
 	raffleAnnounceFirstSeconds = firstSeconds
 	raffleAnnounceRepeatSeconds = repeatSeconds
 	raffleAnnounceMsgPart1 = strings.TrimSpace(msgPart1)
 	raffleAnnounceMsgPart2 = strings.TrimSpace(msgPart2)
+	raffleDiscordInvite = discordInvite
 	raffleAnnouncerMu.Unlock()
+	a.saveUtilitySettings()
 
 	cfg := RaffleAnnounceConfig{
 		FirstSeconds:  raffleAnnounceFirstSeconds,
 		RepeatSeconds: raffleAnnounceRepeatSeconds,
 		MsgPart1:      raffleAnnounceMsgPart1,
 		MsgPart2:      raffleAnnounceMsgPart2,
+		DiscordInvite: raffleDiscordInvite,
 	}
 
 	if a.ctx != nil {
@@ -1887,11 +1899,60 @@ func getConfigFilePath() string {
 	return filepath.Join(configPath, "poker_display_config.json")
 }
 
+func getUtilitySettingsFilePath() string {
+	configDir, _ := os.UserConfigDir()
+	configPath := filepath.Join(configDir, "Roll Origins")
+	os.MkdirAll(configPath, 0700)
+	return filepath.Join(configPath, "utility_settings.json")
+}
+
 func getGameHistoryFilePath() string {
 	configDir, _ := os.UserConfigDir()
 	configPath := filepath.Join(configDir, "Roll Origins")
 	os.MkdirAll(configPath, 0700)
 	return filepath.Join(configPath, "game_history.json")
+}
+
+func (a *App) loadUtilitySettings() {
+	data, err := os.ReadFile(getUtilitySettingsFilePath())
+	if err != nil {
+		if !os.IsNotExist(err) {
+			a.AddLogMsg(fmt.Sprintf("[UTILITY] failed to read utility settings: %v", err))
+		}
+		return
+	}
+
+	var settings UtilitySettings
+	if err := json.Unmarshal(data, &settings); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[UTILITY] failed to parse utility settings: %v", err))
+		return
+	}
+
+	invite := strings.TrimSpace(settings.RaffleDiscordInvite)
+	if invite == "" {
+		return
+	}
+	raffleAnnouncerMu.Lock()
+	raffleDiscordInvite = invite
+	raffleAnnouncerMu.Unlock()
+}
+
+func (a *App) saveUtilitySettings() {
+	raffleAnnouncerMu.Lock()
+	settings := UtilitySettings{
+		RaffleDiscordInvite: strings.TrimSpace(raffleDiscordInvite),
+	}
+	raffleAnnouncerMu.Unlock()
+
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		a.AddLogMsg(fmt.Sprintf("[UTILITY] failed to encode utility settings: %v", err))
+		return
+	}
+
+	if err := os.WriteFile(getUtilitySettingsFilePath(), data, 0600); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[UTILITY] failed to save utility settings: %v", err))
+	}
 }
 
 func cloneTradeItems(items []TradeItem) []TradeItem {
@@ -2821,8 +2882,20 @@ func startShoutWorker() {
 // If the template contains no formatting verbs the raw template is returned
 // unchanged to avoid fmt.Sprintf adding "%!EXTRA" when extra args are passed.
 func formatRaffleMsg(tmpl string, r *Raffle) string {
+	applyDiscord := func(msg string) string {
+		raffleAnnouncerMu.Lock()
+		invite := strings.TrimSpace(raffleDiscordInvite)
+		raffleAnnouncerMu.Unlock()
+		if invite == "" {
+			invite = "vu3AGQA79M"
+		}
+		msg = strings.ReplaceAll(msg, "{discord}", invite)
+		msg = strings.ReplaceAll(msg, "7QeXEV6jp", invite)
+		return msg
+	}
+
 	if !strings.Contains(tmpl, "%") {
-		return tmpl
+		return applyDiscord(tmpl)
 	}
 	// Build args by scanning for '%' (simple heuristic) and assign known values
 	args := []interface{}{}
@@ -2845,9 +2918,9 @@ func formatRaffleMsg(tmpl string, r *Raffle) string {
 		}
 	}
 	if len(args) == 0 {
-		return tmpl
+		return applyDiscord(tmpl)
 	}
-	return fmt.Sprintf(tmpl, args...)
+	return applyDiscord(fmt.Sprintf(tmpl, args...))
 }
 
 // startRaffleAnnouncer launches a background announcer for a started raffle.

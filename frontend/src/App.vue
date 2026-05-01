@@ -243,6 +243,10 @@
             <label>Shout part 2</label>
             <input type="text" v-model="raffleAnnounceMsgPart2" placeholder="1 coin = 1 ticket; 5 coins = 6 tickets." />
           </div>
+          <div class="form-group">
+            <label>Discord invite/link</label>
+            <input type="text" v-model="raffleDiscordInvite" placeholder="vu3AGQA79M" />
+          </div>
           <div style="display:flex;gap:8px;justify-content:center;align-items:center;">
             <button class="save-button" @click="saveRaffleAnnounce">Save</button>
           </div>
@@ -1003,6 +1007,7 @@ export default {
       raffleAnnounceRepeatSeconds: 45,
       raffleAnnounceMsgPart1: 'Raffle Open: %s — Prize: %s x%d',
       raffleAnnounceMsgPart2: '1 coin = 1 ticket. For every 5 coins you get 1 bonus ticket (e.g. 5 coins = 6 tickets, 10 coins = 12 tickets).',
+      raffleDiscordInvite: 'vu3AGQA79M',
       // Home-screen raffle mode toggle
       raffleModeEnabled: false,
       // Raffle end inputs
@@ -1656,7 +1661,8 @@ export default {
           Number(this.raffleAnnounceFirstSeconds || 30),
           Number(this.raffleAnnounceRepeatSeconds || 60),
           String(this.raffleAnnounceMsgPart1 || ''),
-          String(this.raffleAnnounceMsgPart2 || '')
+          String(this.raffleAnnounceMsgPart2 || ''),
+          String(this.raffleDiscordInvite || '')
         );
 
         if (typeof cfg === 'string') {
@@ -1666,12 +1672,14 @@ export default {
             this.raffleAnnounceRepeatSeconds = parsed.repeatSeconds || 60;
             this.raffleAnnounceMsgPart1 = parsed.msgPart1 || '';
             this.raffleAnnounceMsgPart2 = parsed.msgPart2 || '';
+            this.raffleDiscordInvite = parsed.discordInvite || 'vu3AGQA79M';
           } catch (e) {}
         } else if (cfg) {
           this.raffleAnnounceFirstSeconds = cfg.firstSeconds || 30;
           this.raffleAnnounceRepeatSeconds = cfg.repeatSeconds || 60;
           this.raffleAnnounceMsgPart1 = cfg.msgPart1 || '';
           this.raffleAnnounceMsgPart2 = cfg.msgPart2 || '';
+          this.raffleDiscordInvite = cfg.discordInvite || 'vu3AGQA79M';
         }
         this.addLogMsg('[UI] Raffle announcer config saved');
       } catch (e) {
@@ -2572,12 +2580,14 @@ export default {
           this.raffleAnnounceRepeatSeconds = parsed.repeatSeconds || 60;
           this.raffleAnnounceMsgPart1 = parsed.msgPart1 || '';
           this.raffleAnnounceMsgPart2 = parsed.msgPart2 || '';
+          this.raffleDiscordInvite = parsed.discordInvite || 'vu3AGQA79M';
         } catch (e) {}
       } else if (rcfg) {
         this.raffleAnnounceFirstSeconds = rcfg.firstSeconds || 30;
         this.raffleAnnounceRepeatSeconds = rcfg.repeatSeconds || 60;
         this.raffleAnnounceMsgPart1 = rcfg.msgPart1 || '';
         this.raffleAnnounceMsgPart2 = rcfg.msgPart2 || '';
+        this.raffleDiscordInvite = rcfg.discordInvite || 'vu3AGQA79M';
       }
     } catch (e) {
       console.error('raffleAnnounce init', e);

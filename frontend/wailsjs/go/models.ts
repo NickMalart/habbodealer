@@ -435,6 +435,7 @@ export namespace main {
 	    repeatSeconds: number;
 	    msgPart1: string;
 	    msgPart2: string;
+	    discordInvite: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new RaffleAnnounceConfig(source);
@@ -446,6 +447,7 @@ export namespace main {
 	        this.repeatSeconds = source["repeatSeconds"];
 	        this.msgPart1 = source["msgPart1"];
 	        this.msgPart2 = source["msgPart2"];
+	        this.discordInvite = source["discordInvite"];
 	    }
 	}
 	
