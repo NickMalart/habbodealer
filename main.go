@@ -11526,6 +11526,52 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		go LogEvent("chat_incoming", map[string]interface{}{"type": chatType, "sender_index": index, "text": msg}, fmt.Sprintf("Incoming %s (index=%d)", chatType, index), nil)
 	}
 
+	// "My Tickets" command: user can query their tickets for the active raffle.
+	cleanedCmd := strings.TrimSpace(msg)
+	if strings.EqualFold(cleanedCmd, "my tickets") {
+		if !senderOk {
+			if shouldRefreshRoomUsers() {
+				go requestRoomUsers(a)
+			}
+			return
+		}
+
+		// Find an active raffle (Status == "started")
+		rafflesMu.Lock()
+		activeIndex := -1
+		for i := range raffles {
+			if raffles[i].Status == "started" {
+				activeIndex = i
+				break
+			}
+		}
+		if activeIndex == -1 {
+			rafflesMu.Unlock()
+			// No active raffle; ignore the command.
+			return
+		}
+
+		// Lookup participant by name (case-insensitive)
+		r := raffles[activeIndex]
+		count := 0
+		for _, p := range r.Participants {
+			if strings.EqualFold(strings.TrimSpace(p.Name), strings.TrimSpace(senderName)) {
+				count = p.Tickets
+				break
+			}
+		}
+		raffleName := r.Name
+		rafflesMu.Unlock()
+
+		reply := fmt.Sprintf("%s, you have %d tickets for raffle \"%s\"", senderName, count, raffleName)
+		e.Block()
+		go func(m string) {
+			time.Sleep(350 * time.Millisecond)
+			sendShout(m)
+		}(reply)
+		return
+	}
+
 	// Risk command parsing: case-insensitive, supports "r2", "r 2", "risk 2", and "keep"
 	if riskSessionActive {
 		// Ensure sender is the current risk partner
