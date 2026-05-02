@@ -113,10 +113,23 @@ func (a *App) evaluatePokerHand() {
 			a.AddLogMsg(fmt.Sprintf("[PAYOUT] player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
 			log.Printf("[PAYOUT] player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID)
 			resetPayoutRetryState()
-			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "Pkr", nil)
+			if isRiskEnabled {
+				if riskSessionActive {
+					go a.applyRiskOutcome(true)
+					return
+				}
+				go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "Pkr", nil)
+				return
+			}
+			startPayout(a, payoutTargetID, payoutTargetName)
+			return
 		} else {
 			a.setCurrentGameHistoryResults(playerHand, hand, a.getCurrentDealerName(), "Completed", true)
 			a.noteCurrentGameHistory(winnerMsg)
+			if isRiskEnabled && riskSessionActive {
+				go a.applyRiskOutcome(false)
+				return
+			}
 			go a.openDealerAfterRound()
 		}
 	}
@@ -360,12 +373,24 @@ func (a *App) finalizeBlackjackRound(playerWins bool, reason string) {
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT] 21 player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
 		log.Printf("[PAYOUT] 21 player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID)
 		resetPayoutRetryState()
+		if isRiskEnabled {
+			if riskSessionActive {
+				go a.applyRiskOutcome(true)
+				return
+			}
+			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "21", nil)
+			return
+		}
 		startPayout(a, payoutTargetID, payoutTargetName)
 		return
 	}
 
 	a.setCurrentGameHistoryResults(playerHand, dealerHand, a.getCurrentDealerName(), "Completed", true)
 	a.noteCurrentGameHistory(winnerMsg)
+	if isRiskEnabled && riskSessionActive {
+		go a.applyRiskOutcome(false)
+		return
+	}
 	go a.openDealerAfterRound()
 }
 
