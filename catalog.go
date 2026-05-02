@@ -61,7 +61,7 @@ func normalizeCatalogItems(items []CatalogItem) []CatalogItem {
 
 func getCatalogFilePath() string {
 	configDir, _ := os.UserConfigDir()
-	configPath := filepath.Join(configDir, "Gamba-Suite")
+	configPath := filepath.Join(configDir, "roll-origins")
 	os.MkdirAll(configPath, 0700)
 	return filepath.Join(configPath, "catalog.json")
 }

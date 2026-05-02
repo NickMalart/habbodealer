@@ -116,7 +116,7 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 	}
 
 	payload := map[string]interface{}{
-		"username": "Gamba-Suite",
+		"username": "roll-origins",
 		"embeds":   []interface{}{embed},
 		"allowed_mentions": map[string][]string{
 			"parse": []string{},
@@ -149,7 +149,7 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Gamba-Suite/1.0")
+	req.Header.Set("User-Agent", "roll-origins/1.0")
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)

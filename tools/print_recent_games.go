@@ -50,7 +50,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to get user config dir: %v\n", err)
 		os.Exit(1)
 	}
-	configPath := filepath.Join(configDir, "Gamba-Suite")
+	configPath := filepath.Join(configDir, "roll-origins")
 	_ = os.MkdirAll(configPath, 0700)
 	path := filepath.Join(configPath, "game_history.json")
 	data, err := os.ReadFile(path)

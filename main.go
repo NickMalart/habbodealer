@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"bytes"
@@ -1690,14 +1690,14 @@ func shouldAnnounceDealerOpen() bool {
 
 func getConfigFilePath() string {
 	configDir, _ := os.UserConfigDir()
-	configPath := filepath.Join(configDir, "Gamba-Suite")
+	configPath := filepath.Join(configDir, "roll-origins")
 	os.MkdirAll(configPath, 0700)
 	return filepath.Join(configPath, "poker_display_config.json")
 }
 
 func getGameHistoryFilePath() string {
 	configDir, _ := os.UserConfigDir()
-	configPath := filepath.Join(configDir, "Gamba-Suite")
+	configPath := filepath.Join(configDir, "roll-origins")
 	os.MkdirAll(configPath, 0700)
 	return filepath.Join(configPath, "game_history.json")
 }

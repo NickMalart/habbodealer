@@ -1,4 +1,4 @@
-name: Build GambaSuite for macOS
+name: Build roll-origins for macOS
 
 # Trigger the workflow on push to the main branch or on pull requests
 on:

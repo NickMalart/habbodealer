@@ -1,6 +1,6 @@
-# Gamba Suite
+# roll-origins
 
-Gamba Suite is a powerful tool for managing, rolling, and resetting dice with automated hand evaluation and game interaction.
+roll-origins is a powerful tool for managing, rolling, and resetting dice with automated hand evaluation and game interaction.
 
 ## Features
 
@@ -22,7 +22,7 @@ Gamba Suite is a powerful tool for managing, rolling, and resetting dice with au
    Open your terminal and clone the repository using the following command:
 
    ```bash
-   git clone https://github.com/JTD420/Gamba-Suite.git
+   git clone https://github.com/JTD420/roll-origins.git
    ```
 
 2. **Navigate to the project directory:**
@@ -30,7 +30,7 @@ Gamba Suite is a powerful tool for managing, rolling, and resetting dice with au
    Change your working directory to the project's directory:
 
    ```bash
-   cd Gamba-Suite
+   cd roll-origins
    ```
 
 3. **Build the project:**
@@ -46,7 +46,7 @@ Gamba Suite is a powerful tool for managing, rolling, and resetting dice with au
    After building, execute the project with:
 
    ```bash
-   ./Gamba-Suite
+   ./roll-origins
    ```
 
 ## Usage
@@ -55,7 +55,7 @@ Gamba Suite is a powerful tool for managing, rolling, and resetting dice with au
 
 1. **Run the Project:**
 
-   After executing `./Gamba-Suite`, the application will start running.
+   After executing `./roll-origins`, the application will start running.
 
 2. **Initialize Dice:**
 
@@ -63,7 +63,7 @@ Gamba Suite is a powerful tool for managing, rolling, and resetting dice with au
 
 3. **Customize Announcements:**
 
-    Gamba Suite allows you to personalize how the results of poker hands are announced in chat. The application’s GUI includes several text input fields, each corresponding to a different poker hand rank (e.g., One Pair, Two Pair, Three of a Kind, etc.).
+   roll-origins allows you to personalize how the results of poker hands are announced in chat. The application’s GUI includes several text input fields, each corresponding to a different poker hand rank (e.g., One Pair, Two Pair, Three of a Kind, etc.).
 
     **Default Values:**
     Here are the default values provided by the extension:
@@ -90,7 +90,7 @@ Gamba Suite is a powerful tool for managing, rolling, and resetting dice with au
     3. **Save Your Changes:**
     - After making your desired changes, press the **Save** button in the GUI. This will apply your customizations immediately and save them for future sessions.
     4. **Persistence Across Sessions:**
-    - Once saved, your customized announcements will persist across sessions. This means that every time you use Gamba Suite, your custom announcements will be used instead of the defaults.
+   - Once saved, your customized announcements will persist across sessions. This means that every time you use roll-origins, your custom announcements will be used instead of the defaults.
 
 
 
