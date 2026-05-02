@@ -9263,6 +9263,10 @@ func (a *App) finalize13Round(playerWins bool, reason string) {
 
 	a.setCurrentGameHistoryResults(playerHand, dealerHand, a.getCurrentDealerName(), "Completed", true)
 	a.noteCurrentGameHistory(winnerMsg)
+	if isRiskEnabled && riskSessionActive {
+		go a.applyRiskOutcome(false)
+		return
+	}
 	go a.openDealerAfterRound()
 }
 
@@ -9358,6 +9362,10 @@ func (a *App) finalizeTriRound() {
 
 	a.setCurrentGameHistoryResults(playerHand, dealerHand, "Dealer", "Completed", true)
 	a.noteCurrentGameHistory(winnerMsg)
+	if isRiskEnabled && riskSessionActive {
+		go a.applyRiskOutcome(false)
+		return
+	}
 	go a.openDealerAfterRound()
 }
 
