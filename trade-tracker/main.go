@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -41,10 +43,11 @@ type ParsedUsers28User struct {
 }
 
 type TradeEntry struct {
-	Timestamp      string `json:"timestamp"`
-	PartnerName    string `json:"partnerName"`
-	PartnerTradeID int    `json:"partnerTradeId"`
-	PayloadHex     string `json:"payloadHex"`
+	Timestamp      string      `json:"timestamp"`
+	PartnerName    string      `json:"partnerName"`
+	PartnerTradeID int         `json:"partnerTradeId"`
+	PayloadHex     string      `json:"payloadHex"`
+	FurniItems     []TradeItem `json:"furniItems,omitempty"`
 }
 
 type TradeSession struct {
@@ -74,10 +77,21 @@ type App struct {
 	sessions       []TradeSession
 	usersByTradeID map[int]string
 	db             *pgxpool.Pool
+	ownerKey       string
+
+	// Trade lifecycle tracking (per-active-trade)
+	currentTradePartnerID   int
+	currentTradePartnerName string
+	lastAllTradeItems       []TradeItem
+	partnerAcceptedSnapshot []TradeItem
+	partnerAccepted         bool
+	ourAccepted             bool
+	tradeRecorded           bool
 }
 
 type DBConfig struct {
 	DatabaseURL string `json:"databaseUrl"`
+	OwnerKey    string `json:"ownerKey,omitempty"`
 }
 
 func NewApp() *App {
@@ -173,8 +187,9 @@ func (a *App) StartTracking() TrackerState {
 		var dbSessionID int64
 		err := db.QueryRow(
 			ctx,
-			`INSERT INTO trade_sessions (started_at) VALUES ($1) RETURNING id`,
+			`INSERT INTO trade_sessions (started_at, owner_key) VALUES ($1, $2) RETURNING id`,
 			now,
+			a.ownerKey,
 		).Scan(&dbSessionID)
 		if err != nil {
 			log.Printf("[DB] failed to create trade session: %v", err)
@@ -214,9 +229,10 @@ func (a *App) StopTracking() TrackerState {
 
 		if _, err := db.Exec(
 			ctx,
-			`UPDATE trade_sessions SET ended_at = $1 WHERE id = $2`,
+			`UPDATE trade_sessions SET ended_at = $1 WHERE id = $2 AND owner_key = $3`,
 			now,
 			dbSessionID,
+			a.ownerKey,
 		); err != nil {
 			log.Printf("[DB] failed to close trade session %d: %v", dbSessionID, err)
 		}
@@ -252,66 +268,189 @@ func decodeLeadingVL64(data []byte) (int, bool) {
 	return v, true
 }
 
+type TradeItem struct {
+	Name     string `json:"name"`
+	Quantity int    `json:"quantity"`
+	Raw      string `json:"raw,omitempty"`
+}
+
+func (a *App) parseTradeItemsSimple(data []byte) []TradeItem {
+	counts := map[string]int{}
+	rawByName := map[string]string{}
+
+	fields := bytes.Split(data, []byte{0x02})
+	for _, field := range fields {
+		if len(field) == 0 {
+			continue
+		}
+		s := strings.TrimSpace(string(field))
+		raw := s
+
+		var cand string
+		if idx := strings.Index(s, "{"); idx != -1 {
+			cand = s[idx+1:]
+		} else if idx := strings.LastIndex(s, "|"); idx != -1 {
+			cand = s[idx+1:]
+		} else {
+			cand = s
+		}
+
+		qty := 1
+		if star := strings.LastIndex(cand, "*"); star != -1 {
+			num := cand[star+1:]
+			if n, err := strconv.Atoi(num); err == nil && n > 0 {
+				qty = n
+				cand = cand[:star]
+			}
+		}
+
+		cand = strings.TrimSpace(cand)
+		if cand == "" {
+			continue
+		}
+		name := strings.ToLower(cand)
+		counts[name] += qty
+		if _, ok := rawByName[name]; !ok {
+			rawByName[name] = raw
+		}
+	}
+
+	if len(counts) == 0 {
+		return []TradeItem{}
+	}
+
+	names := make([]string, 0, len(counts))
+	for n := range counts {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	items := make([]TradeItem, 0, len(names))
+	for _, n := range names {
+		items = append(items, TradeItem{Name: n, Quantity: counts[n], Raw: rawByName[n]})
+	}
+
+	return items
+}
+
 func (a *App) handleIncomingTradeOpen(e *g.Intercept) {
 	if e == nil || e.Packet == nil {
 		return
 	}
-	if e.Packet.Header.Dir != g.In || e.Packet.Header.Value != 104 {
+	// Handle relevant trade headers: 104 (open), 108 (items), 109 (partner accept), 69 (our accept outgoing)
+	hdr := e.Packet.Header
+
+	// TRADE_OPEN incoming 104: record partner id/name in-memory for the upcoming trade
+	if hdr.Dir == g.In && hdr.Value == 104 {
+		tradeID, _ := decodeLeadingVL64(e.Packet.Data)
+
+		a.mu.Lock()
+		if !a.running || a.currentSession == nil {
+			a.mu.Unlock()
+			return
+		}
+
+		a.currentTradePartnerID = tradeID
+		if tradeID > 0 {
+			if name, ok := a.usersByTradeID[tradeID]; ok && strings.TrimSpace(name) != "" {
+				a.currentTradePartnerName = name
+			} else {
+				a.currentTradePartnerName = fmt.Sprintf("Unknown (#%d)", tradeID)
+			}
+		} else {
+			a.currentTradePartnerName = "Unknown"
+		}
+		// Reset per-trade state
+		a.partnerAccepted = false
+		a.ourAccepted = false
+		a.tradeRecorded = false
+		a.partnerAcceptedSnapshot = nil
+		a.lastAllTradeItems = nil
+		a.mu.Unlock()
+
+		a.emitUpdate()
 		return
 	}
 
-	tradeID, _ := decodeLeadingVL64(e.Packet.Data)
-
-	a.mu.Lock()
-	if !a.running || a.currentSession == nil {
+	// TRADE_ITEMS incoming 108: parse and keep latest full trade snapshot
+	if hdr.Dir == g.In && hdr.Value == 108 {
+		items := a.parseTradeItemsSimple(e.Packet.Data)
+		a.mu.Lock()
+		a.lastAllTradeItems = items
 		a.mu.Unlock()
 		return
 	}
 
-	partnerName := "Unknown"
-	if tradeID > 0 {
-		if name, ok := a.usersByTradeID[tradeID]; ok && strings.TrimSpace(name) != "" {
-			partnerName = name
+	// TRADE_ACCEPT incoming 109: partner accepted current state. Snapshot partner side.
+	if hdr.Dir == g.In && hdr.Value == 109 {
+		a.mu.Lock()
+		a.partnerAccepted = true
+		if len(a.lastAllTradeItems) > 0 {
+			a.partnerAcceptedSnapshot = make([]TradeItem, len(a.lastAllTradeItems))
+			copy(a.partnerAcceptedSnapshot, a.lastAllTradeItems)
 		} else {
-			partnerName = fmt.Sprintf("Unknown (#%d)", tradeID)
+			a.partnerAcceptedSnapshot = nil
 		}
-	}
+		ourAccepted := a.ourAccepted
+		recorded := a.tradeRecorded
+		db := a.db
+		dbSessionID := int64(0)
+		if a.currentSession != nil {
+			dbSessionID = a.currentSession.DBID
+		}
+		partnerName := a.currentTradePartnerName
+		partnerTradeID := a.currentTradePartnerID
+		a.mu.Unlock()
 
-	entry := TradeEntry{
-		Timestamp:      time.Now().UTC().Format(time.RFC3339),
-		PartnerName:    partnerName,
-		PartnerTradeID: tradeID,
-		PayloadHex:     fmt.Sprintf("% X", e.Packet.Data),
-	}
-	a.currentSession.Entries = append(a.currentSession.Entries, entry)
-	dbSessionID := a.currentSession.DBID
-	db := a.db
-	a.mu.Unlock()
-
-	if db != nil && dbSessionID > 0 {
-		occurredAt, err := time.Parse(time.RFC3339, entry.Timestamp)
-		if err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-			_, err = db.Exec(
-				ctx,
-				`INSERT INTO trade_entries (session_id, occurred_at, partner_name, partner_trade_id, payload_hex)
-				 VALUES ($1, $2, $3, $4, $5)`,
-				dbSessionID,
-				occurredAt,
-				entry.PartnerName,
-				entry.PartnerTradeID,
-				entry.PayloadHex,
-			)
-			cancel()
-			if err != nil {
-				log.Printf("[DB] failed to persist trade entry: %v", err)
+		if db != nil && dbSessionID > 0 && ourAccepted && !recorded {
+			if err := a.persistTradeEntry(dbSessionID, partnerName, partnerTradeID, a.partnerAcceptedSnapshot, fmt.Sprintf("% X", e.Packet.Data)); err != nil {
+				log.Printf("[DB] failed to persist final trade entry: %v", err)
+			} else {
+				a.mu.Lock()
+				a.tradeRecorded = true
+				a.partnerAccepted = false
+				a.ourAccepted = false
+				a.partnerAcceptedSnapshot = nil
+				a.lastAllTradeItems = nil
+				a.mu.Unlock()
+				a.emitUpdate()
 			}
-		} else {
-			log.Printf("[DB] failed to parse entry timestamp %q: %v", entry.Timestamp, err)
 		}
+		return
 	}
 
-	a.emitUpdate()
+	// Our outgoing TRADE_ACCEPT is header 69 (observe outgoing packets)
+	if hdr.Dir == g.Out && hdr.Value == 69 {
+		a.mu.Lock()
+		a.ourAccepted = true
+		partnerAccepted := a.partnerAccepted
+		recorded := a.tradeRecorded
+		db := a.db
+		dbSessionID := int64(0)
+		if a.currentSession != nil {
+			dbSessionID = a.currentSession.DBID
+		}
+		partnerName := a.currentTradePartnerName
+		partnerTradeID := a.currentTradePartnerID
+		partnerSnap := a.partnerAcceptedSnapshot
+		a.mu.Unlock()
+
+		if db != nil && dbSessionID > 0 && partnerAccepted && !recorded {
+			if err := a.persistTradeEntry(dbSessionID, partnerName, partnerTradeID, partnerSnap, fmt.Sprintf("% X", e.Packet.Data)); err != nil {
+				log.Printf("[DB] failed to persist final trade entry: %v", err)
+			} else {
+				a.mu.Lock()
+				a.tradeRecorded = true
+				a.partnerAccepted = false
+				a.ourAccepted = false
+				a.partnerAcceptedSnapshot = nil
+				a.lastAllTradeItems = nil
+				a.mu.Unlock()
+				a.emitUpdate()
+			}
+		}
+		return
+	}
 }
 
 func loadDBConfig() (*DBConfig, error) {
@@ -392,8 +531,22 @@ func (a *App) initDatabase() {
 		return
 	}
 
+	// Determine owner key: env -> config -> hostname fallback
+	owner := strings.TrimSpace(os.Getenv("TRADE_TRACKER_OWNER_KEY"))
+	if owner == "" {
+		owner = strings.TrimSpace(cfg.OwnerKey)
+	}
+	if owner == "" {
+		if h, err := os.Hostname(); err == nil {
+			owner = h
+		} else {
+			owner = "local"
+		}
+	}
+
 	a.mu.Lock()
 	a.db = db
+	a.ownerKey = owner
 	a.mu.Unlock()
 
 	if err := a.ensureTables(); err != nil {
@@ -404,6 +557,53 @@ func (a *App) initDatabase() {
 	if err := a.loadSessionsFromDB(); err != nil {
 		log.Printf("[DB] failed to load sessions: %v", err)
 	}
+}
+
+func (a *App) persistTradeEntry(dbSessionID int64, partnerName string, partnerTradeID int, items []TradeItem, payload string) error {
+	if a.db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+
+	occurredAt := time.Now().UTC()
+	itemsJSON, _ := json.Marshal(items)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	if _, err := a.db.Exec(ctx, `INSERT INTO trade_entries (session_id, occurred_at, partner_name, partner_trade_id, payload_hex, furni_items, owner_key) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		dbSessionID,
+		occurredAt,
+		partnerName,
+		partnerTradeID,
+		payload,
+		itemsJSON,
+		a.ownerKey,
+	); err != nil {
+		return err
+	}
+
+	// Append to in-memory session entries when possible
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	te := TradeEntry{
+		Timestamp:      occurredAt.Format(time.RFC3339),
+		PartnerName:    partnerName,
+		PartnerTradeID: partnerTradeID,
+		PayloadHex:     payload,
+		FurniItems:     items,
+	}
+	if a.currentSession != nil && a.currentSession.DBID == dbSessionID {
+		a.currentSession.Entries = append(a.currentSession.Entries, te)
+		return nil
+	}
+	for i := range a.sessions {
+		if a.sessions[i].DBID == dbSessionID {
+			a.sessions[i].Entries = append(a.sessions[i].Entries, te)
+			return nil
+		}
+	}
+
+	return nil
 }
 
 func (a *App) ensureTables() error {
@@ -423,6 +623,7 @@ func (a *App) ensureTables() error {
 			id BIGSERIAL PRIMARY KEY,
 			started_at TIMESTAMPTZ NOT NULL,
 			ended_at TIMESTAMPTZ NULL,
+			owner_key TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
 		`CREATE TABLE IF NOT EXISTS trade_entries (
@@ -432,13 +633,29 @@ func (a *App) ensureTables() error {
 			partner_name TEXT NOT NULL,
 			partner_trade_id INTEGER NOT NULL,
 			payload_hex TEXT NOT NULL,
+			furni_items JSONB DEFAULT '[]'::jsonb,
+			owner_key TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_trade_entries_session_id ON trade_entries(session_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_trade_entries_occurred_at ON trade_entries(occurred_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_trade_sessions_owner_key ON trade_sessions(owner_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_trade_entries_owner_key ON trade_entries(owner_key)`,
 	}
 
 	for _, q := range queries {
+		if _, err := db.Exec(ctx, q); err != nil {
+			return err
+		}
+	}
+
+	// Ensure older tables get new columns if they existed before this version
+	alterQueries := []string{
+		`ALTER TABLE trade_sessions ADD COLUMN IF NOT EXISTS owner_key TEXT DEFAULT ''`,
+		`ALTER TABLE trade_entries ADD COLUMN IF NOT EXISTS owner_key TEXT DEFAULT ''`,
+		`ALTER TABLE trade_entries ADD COLUMN IF NOT EXISTS furni_items JSONB DEFAULT '[]'::jsonb`,
+	}
+	for _, q := range alterQueries {
 		if _, err := db.Exec(ctx, q); err != nil {
 			return err
 		}
@@ -467,11 +684,13 @@ func (a *App) loadSessionsFromDB() error {
 			e.occurred_at,
 			e.partner_name,
 			e.partner_trade_id,
-			e.payload_hex
+			e.payload_hex,
+			e.furni_items
 		FROM trade_sessions s
 		LEFT JOIN trade_entries e ON e.session_id = s.id
+		WHERE s.owner_key = $1
 		ORDER BY s.id ASC, e.occurred_at ASC, e.id ASC
-	`)
+	`, a.ownerKey)
 	if err != nil {
 		return err
 	}
@@ -485,6 +704,7 @@ func (a *App) loadSessionsFromDB() error {
 		partnerName    *string
 		partnerTradeID *int
 		payloadHex     *string
+		furniJSON      *string
 	}
 
 	orderedIDs := make([]int64, 0)
@@ -501,6 +721,7 @@ func (a *App) loadSessionsFromDB() error {
 			&r.partnerName,
 			&r.partnerTradeID,
 			&r.payloadHex,
+			&r.furniJSON,
 		); err != nil {
 			return err
 		}
@@ -524,12 +745,19 @@ func (a *App) loadSessionsFromDB() error {
 		}
 
 		if r.entryOccurred != nil && r.partnerName != nil && r.partnerTradeID != nil && r.payloadHex != nil {
-			s.Entries = append(s.Entries, TradeEntry{
+			te := TradeEntry{
 				Timestamp:      r.entryOccurred.UTC().Format(time.RFC3339),
 				PartnerName:    *r.partnerName,
 				PartnerTradeID: *r.partnerTradeID,
 				PayloadHex:     *r.payloadHex,
-			})
+			}
+			if r.furniJSON != nil && strings.TrimSpace(*r.furniJSON) != "" {
+				var items []TradeItem
+				if err := json.Unmarshal([]byte(*r.furniJSON), &items); err == nil {
+					te.FurniItems = items
+				}
+			}
+			s.Entries = append(s.Entries, te)
 		}
 	}
 
