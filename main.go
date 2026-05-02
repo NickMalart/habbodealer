@@ -5016,7 +5016,7 @@ func (a *App) autoAddPayoutItems() {
 		}
 	}
 
-	go a.verifyAndRetryPayoutAdds(plannedIDs)
+	go a.verifyAndRetryPayoutAdds(plannedIDs, required)
 }
 
 // handlePlayerWinRisk records an initial win into the internal Risk state
@@ -5065,17 +5065,8 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 		riskPartnerName = playerName
 	}
 
-	// Compute payout multiplier: support UO7 configured multiplier when applicable.
+	// Compute payout multiplier: UO7 is excluded from risk routing, so keep Risk at 2x.
 	mult := 2
-	if strings.EqualFold(game, "UO7") {
-		if v, ok := params["uoChoice"].(string); ok {
-			if strings.TrimSpace(strings.ToLower(v)) == "7" {
-				mutex.Lock()
-				mult = underOver7PayoutMultiplier
-				mutex.Unlock()
-			}
-		}
-	}
 	// Record the per-risk-session multiplier so re-rolls and finalization honor it.
 	riskSessionPayoutMultiplier = mult
 	payout := betQty * mult
@@ -5531,6 +5522,17 @@ func formatMissingCounts(missing map[string]int) string {
 	return strings.Join(parts, ", ")
 }
 
+func cloneIntMap(src map[string]int) map[string]int {
+	if len(src) == 0 {
+		return map[string]int{}
+	}
+	out := make(map[string]int, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
 func ownTradeOfferTotal() int {
 	tradeItemsMu.Lock()
 	defer tradeItemsMu.Unlock()
@@ -5608,12 +5610,15 @@ func (a *App) tryAcceptPayoutTrade(required map[string]int, source string) bool 
 	return true
 }
 
-func (a *App) verifyAndRetryPayoutAdds(plannedIDs []int) {
+func (a *App) verifyAndRetryPayoutAdds(plannedIDs []int, required map[string]int) {
 	if len(plannedIDs) == 0 {
 		return
 	}
 
-	required := payoutRequirementsFromBetItemsMult(gameBetItems, payoutMultiplierForRound)
+	required = cloneIntMap(required)
+	if len(required) == 0 {
+		required = payoutRequirementsFromBetItemsMult(gameBetItems, payoutMultiplierForRound)
+	}
 	if len(required) == 0 {
 		a.AddLogMsg("[PAYOUT_DEBUG] no payout requirements found while verifying add")
 		return
@@ -10568,6 +10573,10 @@ func (a *App) finalize13Round(playerWins bool, reason string) {
 
 	a.setCurrentGameHistoryResults(playerHand, dealerHand, a.getCurrentDealerName(), "Completed", true)
 	a.noteCurrentGameHistory(winnerMsg)
+	if isRiskEnabled && riskSessionActive {
+		go a.applyRiskOutcome(false)
+		return
+	}
 	go a.openDealerAfterRound()
 }
 
@@ -10668,6 +10677,10 @@ func (a *App) finalizeTriRound() {
 
 	a.setCurrentGameHistoryResults(playerHand, dealerHand, "Dealer", "Completed", true)
 	a.noteCurrentGameHistory(winnerMsg)
+	if isRiskEnabled && riskSessionActive {
+		go a.applyRiskOutcome(false)
+		return
+	}
 	go a.openDealerAfterRound()
 }
 
@@ -10733,29 +10746,8 @@ func (a *App) StartCasinoSetup(dealerName string, roomName string, maxUniqueItem
 	// Reset state first (this will lock/unlock internally)
 	resetDiceState()
 
-	// Apply risk mode flag from frontend
-	mutex.Lock()
-	isRiskEnabled = riskEnabled
-	if riskEnabled {
-		// clear any previous risk session metadata so the new session is clean
-		riskInitialized = false
-		riskSnapshotTaken = false
-		// clear any dedicated risk snapshot
-		riskHandSnapshot = nil
-		riskHandSnapshotReady = false
-		dealerSnapshotQty = 0
-		dealerRisk = 0
-		playerRisk = 0
-		riskSessionActive = false
-		riskSessionGame = ""
-		riskSessionParams = nil
-		riskPendingBet = 0
-		riskPartnerID = 0
-		riskPartnerName = ""
-		riskPayoutRequired = nil
-		riskPayoutActive = false
-	}
-	mutex.Unlock()
+	// Apply risk mode via guarded setter so UO7 cannot coexist with Risk.
+	a.SetRiskEnabled(riskEnabled)
 
 	mutex.Lock()
 	diceSetupActive = true
