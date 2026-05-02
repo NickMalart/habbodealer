@@ -27,13 +27,15 @@
         radial-gradient(circle at 80% 70%, #162636 0%, transparent 40%),
         var(--bg);
       min-height: 100vh;
-      display: grid;
-      place-items: center;
+      display: block;
       padding: 10px;
+      overflow: auto;
     }
 
     .card {
       width: 100%;
+      max-width: 440px;
+      margin: 0 auto;
       border: 1px solid var(--border);
       background: linear-gradient(180deg, #1f2a35 0%, #19222c 100%);
       border-radius: 12px;
@@ -94,6 +96,11 @@
       color: #1c0b0b;
     }
 
+    button.manual {
+      background: linear-gradient(90deg, #7ed9ff, #4ec0ff);
+      color: #05131e;
+    }
+
     .status {
       margin-top: 8px;
       font-size: 12px;
@@ -108,7 +115,7 @@
 
     <div class="row">
       <label for="minutes">Interval (minutes)</label>
-      <input id="minutes" type="number" min="0.2" max="240" step="0.1" value="5" />
+      <input id="minutes" type="number" step="any" value="5" />
     </div>
 
     <div class="row">
@@ -117,6 +124,7 @@
     </div>
 
     <button id="toggle">Start Wave</button>
+    <button id="manual" class="manual">Send Wave Now</button>
     <div class="status" id="status">Waiting for G-Earth connection...</div>
   </div>
 
@@ -133,6 +141,7 @@
     const minutesEl = document.getElementById("minutes");
     const humanizeEl = document.getElementById("humanize");
     const toggleEl = document.getElementById("toggle");
+    const manualEl = document.getElementById("manual");
     const statusEl = document.getElementById("status");
 
     function backend() {
@@ -195,9 +204,18 @@
       applyUI();
     }
 
+    async function sendWaveNow() {
+      const api = backend();
+      if (!api || !api.SendWaveNow) return;
+      const cfg = await api.SendWaveNow();
+      Object.assign(state, cfg || {});
+      applyUI();
+    }
+
     minutesEl.addEventListener("change", pushConfig);
     humanizeEl.addEventListener("change", pushConfig);
     toggleEl.addEventListener("click", toggleWave);
+    manualEl.addEventListener("click", sendWaveNow);
 
     setInterval(pullConfig, 1000);
 

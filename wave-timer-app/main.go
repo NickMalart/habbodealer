@@ -107,12 +107,6 @@ func clampMinutes(v float64) float64 {
 	if math.IsNaN(v) || math.IsInf(v, 0) {
 		return 5
 	}
-	if v < 0.2 {
-		return 0.2
-	}
-	if v > 240 {
-		return 240
-	}
 	return v
 }
 
@@ -168,9 +162,6 @@ func (a *App) stopLoop() {
 
 func (a *App) computeDelayLocked(rng *rand.Rand) time.Duration {
 	base := time.Duration(a.minutes * float64(time.Minute))
-	if base < 12*time.Second {
-		base = 12 * time.Second
-	}
 
 	if !a.humanize {
 		return base
@@ -193,10 +184,6 @@ func (a *App) computeDelayLocked(rng *rand.Rand) time.Duration {
 			sign = -1
 		}
 		delay += time.Duration(sign*(45+rng.Intn(46))) * time.Second
-	}
-
-	if delay < 12*time.Second {
-		delay = 12 * time.Second
 	}
 	return delay
 }
@@ -244,6 +231,11 @@ func (a *App) sendWave() {
 	a.emitConfigUpdate()
 }
 
+func (a *App) SendWaveNow() WaveConfig {
+	a.sendWave()
+	return a.GetConfig()
+}
+
 func setupExt(a *App) {
 	ext.Initialized(func(e g.InitArgs) {
 		log.Printf("initialized (connected=%t)", e.Connected)
@@ -279,12 +271,12 @@ func main() {
 
 	err := wails.Run(&options.App{
 		Title:             "Wave Timer",
-		Width:             360,
-		Height:            230,
-		MinWidth:          360,
-		MaxWidth:          360,
-		MinHeight:         230,
-		MaxHeight:         230,
+		Width:             460,
+		Height:            340,
+		MinWidth:          460,
+		MaxWidth:          460,
+		MinHeight:         340,
+		MaxHeight:         340,
 		DisableResize:     true,
 		StartHidden:       true,
 		HideWindowOnClose: true,
