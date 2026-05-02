@@ -62,6 +62,17 @@ func knownBuildTargets() []buildTarget {
 			},
 			OutExe: filepath.Join("wave-timer-app", "build", "bin", "wave-timer-app.exe"),
 		},
+		{
+			ID:        "trade-tracker",
+			Name:      "Trade Tracker",
+			SrcDir:    "trade-tracker",
+			BuildType: "wails",
+			CleanPaths: []string{
+				filepath.Join("trade-tracker", "build", "bin", "trade-tracker.exe"),
+				filepath.Join("trade-tracker", "trade-tracker.exe"),
+			},
+			OutExe: filepath.Join("trade-tracker", "build", "bin", "trade-tracker.exe"),
+		},
 	}
 }
 

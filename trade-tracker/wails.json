@@ -1,0 +1,14 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "trade-tracker",
+  "outputfilename": "trade-tracker",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "",
+  "frontend:dev:serverUrlAutoOpen": "",
+  "author": {
+    "name": "Dubbo",
+    "email": ""
+  }
+}

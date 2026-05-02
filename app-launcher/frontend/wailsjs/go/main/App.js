@@ -18,12 +18,20 @@ export function GetBuildTargets() {
   return window['go']['main']['App']['GetBuildTargets']();
 }
 
+export function GetGEarthStatus() {
+  return window['go']['main']['App']['GetGEarthStatus']();
+}
+
 export function IsBuilding() {
   return window['go']['main']['App']['IsBuilding']();
 }
 
 export function LaunchApp(arg1, arg2) {
   return window['go']['main']['App']['LaunchApp'](arg1, arg2);
+}
+
+export function LaunchGEarth() {
+  return window['go']['main']['App']['LaunchGEarth']();
 }
 
 export function RefreshApps() {

@@ -1,3 +1,5 @@
 build/bin
 node_modules
 frontend/dist
+db.local.json
+trade-tracker/db.local.json
