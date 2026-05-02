@@ -257,11 +257,7 @@ func (a *App) gEarthExePath() string {
 
 func (a *App) GetGEarthStatus() GEarthStatus {
 	exePath := a.gEarthExePath()
-	status := GEarthStatus{Exists: fileExists(exePath)}
-	a.mu.Lock()
-	status.Running = a.hasRunningInstanceLocked("g-earth")
-	a.mu.Unlock()
-	return status
+	return GEarthStatus{Exists: fileExists(exePath), Running: false}
 }
 
 // 笏笏 Launch 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
@@ -353,30 +349,15 @@ func (a *App) LaunchGEarth() string {
 		return "G-Earth.exe not found at G-Earth.windows-x64/G-Earth.exe"
 	}
 
-	instanceKey := buildInstanceKey("g-earth", "")
-	a.mu.Lock()
-	if p, ok := a.processes[instanceKey]; ok && p != nil {
-		a.mu.Unlock()
-		return "G-Earth is already running"
-	}
-	a.mu.Unlock()
-
 	cmd := exec.Command(exePath)
 	cmd.Dir = filepath.Dir(exePath)
 	if err := cmd.Start(); err != nil {
 		return fmt.Sprintf("failed to launch G-Earth: %v", err)
 	}
 
-	a.mu.Lock()
-	a.processes[instanceKey] = cmd.Process
-	a.mu.Unlock()
-
-	go func(key string, c *exec.Cmd) {
+	go func(c *exec.Cmd) {
 		_ = c.Wait()
-		a.mu.Lock()
-		delete(a.processes, key)
-		a.mu.Unlock()
-	}(instanceKey, cmd)
+	}(cmd)
 
 	return "ok"
 }

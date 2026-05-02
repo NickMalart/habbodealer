@@ -46,7 +46,7 @@ function setBuilding(v){building=v;document.getElementById('btnBuildAll').disabl
 function log(line,kind){const el=document.getElementById('log');const d=document.createElement('div');d.className='log-'+(kind||'info');d.textContent=line;el.appendChild(d);el.scrollTop=el.scrollHeight;}
 function clearLog(){document.getElementById('log').innerHTML='';}
 function setStatus(msg){document.getElementById('status').textContent=msg;}
-function updateGEarthButton(){const btn=document.getElementById('btnGEarth');if(!btn)return;btn.disabled=!gEarthState.exists||gEarthState.running;btn.textContent=gEarthState.running?'G-Earth Running':'Launch G-Earth';btn.title=gEarthState.exists?'':'Missing: G-Earth.windows-x64/G-Earth.exe';}
+function updateGEarthButton(){const btn=document.getElementById('btnGEarth');if(!btn)return;btn.disabled=!gEarthState.exists;btn.textContent='Launch G-Earth';btn.title=gEarthState.exists?'':'Missing: G-Earth.windows-x64/G-Earth.exe';}
 async function refreshGEarth(){try{gEarthState=await GetGEarthStatus();}catch{gEarthState={exists:false,running:false};}updateGEarthButton();}
 async function launchGEarth(){const r=await LaunchGEarth();setStatus(r==='ok'?'':r);await refreshGEarth();}
 EventsOn('buildLog',data=>{log(data.line,data.kind);if(data.kind==='success'&&(data.line.includes('complete')||data.line.includes('done'))){setTimeout(()=>{setBuilding(false);setStatus('');refresh();},200);}});
