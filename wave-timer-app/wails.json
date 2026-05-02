@@ -1,0 +1,14 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "wave-timer-app",
+  "outputfilename": "wave-timer-app",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "",
+  "frontend:dev:serverUrlAutoOpen": "",
+  "author": {
+    "name": "Dubbo",
+    "email": ""
+  }
+}

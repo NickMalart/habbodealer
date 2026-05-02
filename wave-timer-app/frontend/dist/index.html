@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wave Timer</title>
+  <style>
+    :root {
+      --bg: #11171e;
+      --panel: #1d2732;
+      --text: #e8f0f8;
+      --muted: #8ea4b8;
+      --accent: #4ec0ff;
+      --accent-2: #27d084;
+      --danger: #ef6666;
+      --border: #2f3c4a;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Segoe UI, Tahoma, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 10% 10%, #233042 0%, transparent 40%),
+        radial-gradient(circle at 80% 70%, #162636 0%, transparent 40%),
+        var(--bg);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 10px;
+    }
+
+    .card {
+      width: 100%;
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, #1f2a35 0%, #19222c 100%);
+      border-radius: 12px;
+      padding: 12px;
+      box-shadow: 0 10px 28px rgba(0,0,0,0.36);
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 16px;
+      letter-spacing: 0.4px;
+      color: var(--accent);
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 8px 0;
+      gap: 8px;
+    }
+
+    label { font-size: 13px; color: var(--muted); }
+
+    input[type="number"] {
+      width: 110px;
+      background: #10161d;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 8px;
+    }
+
+    input[type="checkbox"] {
+      transform: scale(1.15);
+      accent-color: var(--accent-2);
+    }
+
+    button {
+      width: 100%;
+      margin-top: 10px;
+      border: 0;
+      border-radius: 9px;
+      padding: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      color: #081017;
+      background: linear-gradient(90deg, #4ec0ff, #27d084);
+      cursor: pointer;
+      transition: transform 120ms ease, filter 120ms ease;
+    }
+
+    button:hover { filter: brightness(1.08); }
+    button:active { transform: scale(0.99); }
+
+    button.running {
+      background: linear-gradient(90deg, #ffb34e, #ef6666);
+      color: #1c0b0b;
+    }
+
+    .status {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--muted);
+      min-height: 18px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Wave Timer</h1>
+
+    <div class="row">
+      <label for="minutes">Interval (minutes)</label>
+      <input id="minutes" type="number" min="0.2" max="240" step="0.1" value="5" />
+    </div>
+
+    <div class="row">
+      <label for="humanize">Humanize timing</label>
+      <input id="humanize" type="checkbox" checked />
+    </div>
+
+    <button id="toggle">Start Wave</button>
+    <div class="status" id="status">Waiting for G-Earth connection...</div>
+  </div>
+
+  <script>
+    const state = {
+      minutes: 5,
+      humanize: true,
+      running: false,
+      connected: false,
+      nextWaveInMs: 0,
+      lastWaveAt: ""
+    };
+
+    const minutesEl = document.getElementById("minutes");
+    const humanizeEl = document.getElementById("humanize");
+    const toggleEl = document.getElementById("toggle");
+    const statusEl = document.getElementById("status");
+
+    function backend() {
+      return window.go && window.go.main && window.go.main.App;
+    }
+
+    function fmtCountdown(ms) {
+      if (!ms || ms <= 0) return "soon";
+      const total = Math.ceil(ms / 1000);
+      const mins = Math.floor(total / 60);
+      const secs = total % 60;
+      return `${mins}:${secs.toString().padStart(2, "0")}`;
+    }
+
+    function applyUI() {
+      minutesEl.value = state.minutes;
+      humanizeEl.checked = state.humanize;
+
+      if (state.running) {
+        toggleEl.textContent = "Stop Wave";
+        toggleEl.classList.add("running");
+      } else {
+        toggleEl.textContent = "Start Wave";
+        toggleEl.classList.remove("running");
+      }
+
+      if (!state.connected) {
+        statusEl.textContent = "Not connected to G-Earth";
+      } else if (!state.running) {
+        statusEl.textContent = "Connected. Timer stopped.";
+      } else {
+        const next = fmtCountdown(state.nextWaveInMs);
+        statusEl.textContent = `Connected. Next wave in ${next}`;
+      }
+    }
+
+    async function pullConfig() {
+      const api = backend();
+      if (!api || !api.GetConfig) return;
+      const cfg = await api.GetConfig();
+      Object.assign(state, cfg || {});
+      applyUI();
+    }
+
+    async function pushConfig() {
+      const api = backend();
+      if (!api || !api.SetConfig) return;
+      const minutes = Number(minutesEl.value || 5);
+      const humanize = !!humanizeEl.checked;
+      const cfg = await api.SetConfig(minutes, humanize);
+      Object.assign(state, cfg || {});
+      applyUI();
+    }
+
+    async function toggleWave() {
+      const api = backend();
+      if (!api || !api.ToggleWave) return;
+      const cfg = await api.ToggleWave();
+      Object.assign(state, cfg || {});
+      applyUI();
+    }
+
+    minutesEl.addEventListener("change", pushConfig);
+    humanizeEl.addEventListener("change", pushConfig);
+    toggleEl.addEventListener("click", toggleWave);
+
+    setInterval(pullConfig, 1000);
+
+    window.addEventListener("load", async () => {
+      await pullConfig();
+
+      if (window.runtime && window.runtime.EventsOn) {
+        window.runtime.EventsOn("waveConfigUpdate", (cfg) => {
+          Object.assign(state, cfg || {});
+          applyUI();
+        });
+      }
+    });
+  </script>
+</body>
+</html>
