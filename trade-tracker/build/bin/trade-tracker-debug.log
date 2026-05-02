@@ -1,0 +1,172 @@
+2026/05/03 09:32:57 [TRADE_TRACKER_DEBUG] logging to C:\Users\Dubbo\habbodealer\habbodealer\trade-tracker\build\bin\trade-tracker-debug.log
+2026/05/03 09:32:57 [WebView2] Environment created successfully
+2026/05/03 09:32:58 [TRADE_TRACKER_DEBUG] db init connected: ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:32:58 [DB] migration failed: ERROR: column "owner_key" does not exist (SQLSTATE 42703)
+2026/05/03 09:32:58 [TRADE_TRACKER_DEBUG] db init failed at ensureTables: ERROR: column "owner_key" does not exist (SQLSTATE 42703)
+2026/05/03 09:32:58 initialized (connected=true)
+2026/05/03 09:32:58 connected (game-ous.habbo.com:40001)
+2026/05/03 09:33:02 activated
+2026/05/03 09:33:35 [TRADE_TRACKER_DEBUG] logging to C:\Users\Dubbo\habbodealer\habbodealer\trade-tracker\build\bin\trade-tracker-debug.log
+2026/05/03 09:33:35 [WebView2] Environment created successfully
+2026/05/03 09:33:35 [TRADE_TRACKER_DEBUG] db init connected: ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:33:35 [DB] migration failed: ERROR: column "owner_key" does not exist (SQLSTATE 42703)
+2026/05/03 09:33:35 [TRADE_TRACKER_DEBUG] db init failed at ensureTables: ERROR: column "owner_key" does not exist (SQLSTATE 42703)
+2026/05/03 09:33:35 initialized (connected=true)
+2026/05/03 09:33:35 connected (game-ous.habbo.com:40001)
+2026/05/03 09:33:36 activated
+2026/05/03 09:33:38 [TRADE_TRACKER_DEBUG] start requested: opened in-memory session id=1 startedAt=2026-05-02T23:33:38Z
+2026/05/03 09:33:38 [DB] failed to create trade session: ERROR: column "owner_key" of relation "trade_sessions" does not exist (SQLSTATE 42703)
+2026/05/03 09:33:38 [TRADE_TRACKER_DEBUG] session insert failed: sessionID=1 ownerKey="DESKTOP-T5V9BP5" err=ERROR: column "owner_key" of relation "trade_sessions" does not exist (SQLSTATE 42703)
+2026/05/03 09:33:41 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=104 running=true hasSession=true dbReady=true sessionDBID=0
+2026/05/03 09:33:41 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=108 running=true hasSession=true dbReady=true sessionDBID=0
+2026/05/03 09:33:44 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=108 running=true hasSession=true dbReady=true sessionDBID=0
+2026/05/03 09:33:46 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=109 running=true hasSession=true dbReady=true sessionDBID=0
+2026/05/03 09:33:46 [TRADE_TRACKER_DEBUG] incoming partner accept: ourAccepted=false recorded=false dbReady=true dbSessionID=0 partner="Unknown (#228007)" tradeID=228007 items=5
+2026/05/03 09:33:46 [TRADE_TRACKER_DEBUG] persist skipped on partner accept: dbReady=true dbSessionID=0 ourAccepted=false recorded=false
+2026/05/03 09:33:49 [TRADE_TRACKER_DEBUG] packet seen: dir=outgoing header=69 running=true hasSession=true dbReady=true sessionDBID=0
+2026/05/03 09:33:49 [TRADE_TRACKER_DEBUG] outgoing our accept: partnerAccepted=true recorded=false dbReady=true dbSessionID=0 partner="Unknown (#228007)" tradeID=228007 items=5
+2026/05/03 09:33:49 [TRADE_TRACKER_DEBUG] persist skipped on outgoing accept: dbReady=true dbSessionID=0 partnerAccepted=true recorded=false
+2026/05/03 09:33:49 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=109 running=true hasSession=true dbReady=true sessionDBID=0
+2026/05/03 09:33:49 [TRADE_TRACKER_DEBUG] incoming partner accept: ourAccepted=true recorded=false dbReady=true dbSessionID=0 partner="Unknown (#228007)" tradeID=228007 items=5
+2026/05/03 09:33:49 [TRADE_TRACKER_DEBUG] persist skipped on partner accept: dbReady=true dbSessionID=0 ourAccepted=true recorded=false
+2026/05/03 09:33:58 [TRADE_TRACKER_DEBUG] stop requested: closed current session dbSessionID=0
+2026/05/03 09:33:58 [TRADE_TRACKER_DEBUG] stop requested without DB close update: dbNil=false dbSessionID=0
+2026/05/03 09:35:00 [TRADE_TRACKER_DEBUG] logging to C:\Users\Dubbo\habbodealer\habbodealer\trade-tracker\build\bin\trade-tracker-debug.log
+2026/05/03 09:35:00 [WebView2] Environment created successfully
+2026/05/03 09:35:01 [TRADE_TRACKER_DEBUG] db init connected: ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:35:01 [TRADE_TRACKER_DEBUG] db tables ensured
+2026/05/03 09:35:01 [TRADE_TRACKER_DEBUG] db session preload completed
+2026/05/03 09:35:01 initialized (connected=true)
+2026/05/03 09:35:01 connected (game-ous.habbo.com:40001)
+2026/05/03 09:35:02 activated
+2026/05/03 09:35:03 [TRADE_TRACKER_DEBUG] start requested: opened in-memory session id=1 startedAt=2026-05-02T23:35:03Z
+2026/05/03 09:35:03 [TRADE_TRACKER_DEBUG] session insert ok: sessionID=1 dbSessionID=1 ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:35:06 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=104 running=true hasSession=true dbReady=true sessionDBID=1
+2026/05/03 09:35:06 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=108 running=true hasSession=true dbReady=true sessionDBID=1
+2026/05/03 09:35:10 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=108 running=true hasSession=true dbReady=true sessionDBID=1
+2026/05/03 09:35:11 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=109 running=true hasSession=true dbReady=true sessionDBID=1
+2026/05/03 09:35:11 [TRADE_TRACKER_DEBUG] incoming partner accept: ourAccepted=false recorded=false dbReady=true dbSessionID=1 partner="Unknown (#228007)" tradeID=228007 items=5
+2026/05/03 09:35:11 [TRADE_TRACKER_DEBUG] persist skipped on partner accept: dbReady=true dbSessionID=1 ourAccepted=false recorded=false
+2026/05/03 09:35:11 [TRADE_TRACKER_DEBUG] persist insert attempt: dbSessionID=1 partner="Unknown (#228007)" tradeID=228007 items=5 ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:35:11 [TRADE_TRACKER_DEBUG] persist insert ok: dbSessionID=1
+2026/05/03 09:35:11 [TRADE_TRACKER_DEBUG] fallback persist (partner accept only) succeeded: dbSessionID=1
+2026/05/03 09:35:13 [TRADE_TRACKER_DEBUG] packet seen: dir=outgoing header=69 running=true hasSession=true dbReady=true sessionDBID=1
+2026/05/03 09:35:13 [TRADE_TRACKER_DEBUG] outgoing our accept: partnerAccepted=false recorded=true dbReady=true dbSessionID=1 partner="Unknown (#228007)" tradeID=228007 items=0
+2026/05/03 09:35:13 [TRADE_TRACKER_DEBUG] persist skipped on outgoing accept: dbReady=true dbSessionID=1 partnerAccepted=false recorded=true
+2026/05/03 09:35:14 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=109 running=true hasSession=true dbReady=true sessionDBID=1
+2026/05/03 09:35:14 [TRADE_TRACKER_DEBUG] incoming partner accept: ourAccepted=true recorded=true dbReady=true dbSessionID=1 partner="Unknown (#228007)" tradeID=228007 items=0
+2026/05/03 09:35:14 [TRADE_TRACKER_DEBUG] persist skipped on partner accept: dbReady=true dbSessionID=1 ourAccepted=true recorded=true
+2026/05/03 09:35:23 [TRADE_TRACKER_DEBUG] stop requested: closed current session dbSessionID=1
+2026/05/03 09:35:23 [TRADE_TRACKER_DEBUG] session close update ok: dbSessionID=1 ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:42:01 [TRADE_TRACKER_DEBUG] logging to C:\Users\Dubbo\habbodealer\habbodealer\trade-tracker\build\bin\trade-tracker-debug.log
+2026/05/03 09:42:01 [WebView2] Environment created successfully
+2026/05/03 09:42:02 [TRADE_TRACKER_DEBUG] db init connected: ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:42:02 [TRADE_TRACKER_DEBUG] db tables ensured
+2026/05/03 09:42:02 [TRADE_TRACKER_DEBUG] db session preload completed
+2026/05/03 09:42:02 initialized (connected=true)
+2026/05/03 09:42:02 connected (game-ous.habbo.com:40001)
+2026/05/03 09:42:03 activated
+2026/05/03 09:42:06 [TRADE_TRACKER_DEBUG] start requested: opened in-memory session id=2 startedAt=2026-05-02T23:42:06Z
+2026/05/03 09:42:06 [TRADE_TRACKER_DEBUG] session insert ok: sessionID=2 dbSessionID=2 ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:42:09 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=104 running=true hasSession=true dbReady=true sessionDBID=2
+2026/05/03 09:42:09 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=108 running=true hasSession=true dbReady=true sessionDBID=2
+2026/05/03 09:42:17 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=108 running=true hasSession=true dbReady=true sessionDBID=2
+2026/05/03 09:42:19 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=109 running=true hasSession=true dbReady=true sessionDBID=2
+2026/05/03 09:42:19 [TRADE_TRACKER_DEBUG] incoming partner accept: ourAccepted=false recorded=false dbReady=true dbSessionID=2 partner="Unknown (#228007)" tradeID=228007 items=5
+2026/05/03 09:42:19 [TRADE_TRACKER_DEBUG] persist skipped on partner accept: dbReady=true dbSessionID=2 ourAccepted=false recorded=false
+2026/05/03 09:42:19 [TRADE_TRACKER_DEBUG] persist insert attempt: dbSessionID=2 partner="Unknown (#228007)" tradeID=228007 items=5 ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:42:19 [TRADE_TRACKER_DEBUG] persist insert ok: dbSessionID=2
+2026/05/03 09:42:19 [TRADE_TRACKER_DEBUG] fallback persist (partner accept only) succeeded: dbSessionID=2
+2026/05/03 09:42:23 [TRADE_TRACKER_DEBUG] packet seen: dir=outgoing header=69 running=true hasSession=true dbReady=true sessionDBID=2
+2026/05/03 09:42:23 [TRADE_TRACKER_DEBUG] outgoing our accept: partnerAccepted=false recorded=true dbReady=true dbSessionID=2 partner="Unknown (#228007)" tradeID=228007 items=0
+2026/05/03 09:42:23 [TRADE_TRACKER_DEBUG] persist skipped on outgoing accept: dbReady=true dbSessionID=2 partnerAccepted=false recorded=true
+2026/05/03 09:42:23 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=109 running=true hasSession=true dbReady=true sessionDBID=2
+2026/05/03 09:42:23 [TRADE_TRACKER_DEBUG] incoming partner accept: ourAccepted=true recorded=true dbReady=true dbSessionID=2 partner="Unknown (#228007)" tradeID=228007 items=0
+2026/05/03 09:42:23 [TRADE_TRACKER_DEBUG] persist skipped on partner accept: dbReady=true dbSessionID=2 ourAccepted=true recorded=true
+2026/05/03 09:42:35 [TRADE_TRACKER_DEBUG] stop requested: closed current session dbSessionID=2
+2026/05/03 09:42:35 [TRADE_TRACKER_DEBUG] session close update ok: dbSessionID=2 ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:43:24 [USERS28] parser failed: parse_users28.py not found
+2026/05/03 09:43:30 [TRADE_TRACKER_DEBUG] start requested: opened in-memory session id=3 startedAt=2026-05-02T23:43:30Z
+2026/05/03 09:43:31 [TRADE_TRACKER_DEBUG] session insert ok: sessionID=3 dbSessionID=3 ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:43:35 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=104 running=true hasSession=true dbReady=true sessionDBID=3
+2026/05/03 09:43:35 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=108 running=true hasSession=true dbReady=true sessionDBID=3
+2026/05/03 09:43:38 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=108 running=true hasSession=true dbReady=true sessionDBID=3
+2026/05/03 09:43:39 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=109 running=true hasSession=true dbReady=true sessionDBID=3
+2026/05/03 09:43:39 [TRADE_TRACKER_DEBUG] incoming partner accept: ourAccepted=false recorded=false dbReady=true dbSessionID=3 partner="Unknown (#229473)" tradeID=229473 items=5
+2026/05/03 09:43:39 [TRADE_TRACKER_DEBUG] persist skipped on partner accept: dbReady=true dbSessionID=3 ourAccepted=false recorded=false
+2026/05/03 09:43:39 [TRADE_TRACKER_DEBUG] persist insert attempt: dbSessionID=3 partner="Unknown (#229473)" tradeID=229473 items=5 ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:43:39 [TRADE_TRACKER_DEBUG] persist insert ok: dbSessionID=3
+2026/05/03 09:43:39 [TRADE_TRACKER_DEBUG] fallback persist (partner accept only) succeeded: dbSessionID=3
+2026/05/03 09:43:42 [TRADE_TRACKER_DEBUG] packet seen: dir=outgoing header=69 running=true hasSession=true dbReady=true sessionDBID=3
+2026/05/03 09:43:42 [TRADE_TRACKER_DEBUG] outgoing our accept: partnerAccepted=false recorded=true dbReady=true dbSessionID=3 partner="Unknown (#229473)" tradeID=229473 items=0
+2026/05/03 09:43:42 [TRADE_TRACKER_DEBUG] persist skipped on outgoing accept: dbReady=true dbSessionID=3 partnerAccepted=false recorded=true
+2026/05/03 09:43:42 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=109 running=true hasSession=true dbReady=true sessionDBID=3
+2026/05/03 09:43:42 [TRADE_TRACKER_DEBUG] incoming partner accept: ourAccepted=true recorded=true dbReady=true dbSessionID=3 partner="Unknown (#229473)" tradeID=229473 items=0
+2026/05/03 09:43:42 [TRADE_TRACKER_DEBUG] persist skipped on partner accept: dbReady=true dbSessionID=3 ourAccepted=true recorded=true
+2026/05/03 09:43:53 [TRADE_TRACKER_DEBUG] stop requested: closed current session dbSessionID=3
+2026/05/03 09:43:53 [TRADE_TRACKER_DEBUG] session close update ok: dbSessionID=3 ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:47:44 [TRADE_TRACKER_DEBUG] logging to C:\Users\Dubbo\habbodealer\habbodealer\trade-tracker\build\bin\trade-tracker-debug.log
+2026/05/03 09:47:44 [WebView2] Environment created successfully
+2026/05/03 09:47:45 [TRADE_TRACKER_DEBUG] db init connected: ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:47:45 [TRADE_TRACKER_DEBUG] db tables ensured
+2026/05/03 09:47:45 [TRADE_TRACKER_DEBUG] db session preload completed
+2026/05/03 09:47:45 initialized (connected=true)
+2026/05/03 09:47:45 connected (game-ous.habbo.com:40001)
+2026/05/03 09:47:46 activated
+2026/05/03 09:47:48 [TRADE_TRACKER_DEBUG] start requested: opened in-memory session id=4 startedAt=2026-05-02T23:47:48Z
+2026/05/03 09:47:48 [TRADE_TRACKER_DEBUG] session insert ok: sessionID=4 dbSessionID=4 ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:47:51 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=104 running=true hasSession=true dbReady=true sessionDBID=4
+2026/05/03 09:47:51 [TRADE_TRACKER_DEBUG] requesting room users to resolve partner tradeID=228007
+2026/05/03 09:47:51 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=108 running=true hasSession=true dbReady=true sessionDBID=4
+2026/05/03 09:47:51 [TRADE_TRACKER_DEBUG] USERS packet received: 144 bytes
+2026/05/03 09:47:51 [USERS28] parser failed: parse_users28.py not found
+2026/05/03 09:47:52 [TRADE_TRACKER_DEBUG] partner name still unresolved after 1500ms: tradeID=228007
+2026/05/03 09:47:57 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=108 running=true hasSession=true dbReady=true sessionDBID=4
+2026/05/03 09:48:00 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=109 running=true hasSession=true dbReady=true sessionDBID=4
+2026/05/03 09:48:00 [TRADE_TRACKER_DEBUG] incoming partner accept: ourAccepted=false recorded=false dbReady=true dbSessionID=4 partner="Unknown (#228007)" tradeID=228007 items=5
+2026/05/03 09:48:00 [TRADE_TRACKER_DEBUG] persist skipped on partner accept: dbReady=true dbSessionID=4 ourAccepted=false recorded=false
+2026/05/03 09:48:00 [TRADE_TRACKER_DEBUG] persist insert attempt: dbSessionID=4 partner="Unknown (#228007)" tradeID=228007 items=5 ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:48:00 [TRADE_TRACKER_DEBUG] persist insert ok: dbSessionID=4
+2026/05/03 09:48:00 [TRADE_TRACKER_DEBUG] fallback persist (partner accept only) succeeded: dbSessionID=4
+2026/05/03 09:48:03 [TRADE_TRACKER_DEBUG] packet seen: dir=outgoing header=69 running=true hasSession=true dbReady=true sessionDBID=4
+2026/05/03 09:48:03 [TRADE_TRACKER_DEBUG] outgoing our accept: partnerAccepted=false recorded=true dbReady=true dbSessionID=4 partner="Unknown (#228007)" tradeID=228007 items=0
+2026/05/03 09:48:03 [TRADE_TRACKER_DEBUG] persist skipped on outgoing accept: dbReady=true dbSessionID=4 partnerAccepted=false recorded=true
+2026/05/03 09:48:03 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=109 running=true hasSession=true dbReady=true sessionDBID=4
+2026/05/03 09:48:03 [TRADE_TRACKER_DEBUG] incoming partner accept: ourAccepted=true recorded=true dbReady=true dbSessionID=4 partner="Unknown (#228007)" tradeID=228007 items=0
+2026/05/03 09:48:03 [TRADE_TRACKER_DEBUG] persist skipped on partner accept: dbReady=true dbSessionID=4 ourAccepted=true recorded=true
+2026/05/03 09:48:11 [TRADE_TRACKER_DEBUG] stop requested: closed current session dbSessionID=4
+2026/05/03 09:48:11 [TRADE_TRACKER_DEBUG] session close update ok: dbSessionID=4 ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:51:19 [TRADE_TRACKER_DEBUG] logging to C:\Users\Dubbo\habbodealer\habbodealer\trade-tracker\build\bin\trade-tracker-debug.log
+2026/05/03 09:51:19 [WebView2] Environment created successfully
+2026/05/03 09:51:20 [TRADE_TRACKER_DEBUG] db init connected: ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:51:20 [TRADE_TRACKER_DEBUG] db tables ensured
+2026/05/03 09:51:20 [TRADE_TRACKER_DEBUG] db session preload completed
+2026/05/03 09:51:20 initialized (connected=true)
+2026/05/03 09:51:20 connected (game-ous.habbo.com:40001)
+2026/05/03 09:51:21 activated
+2026/05/03 09:51:22 [TRADE_TRACKER_DEBUG] start requested: opened in-memory session id=5 startedAt=2026-05-02T23:51:22Z
+2026/05/03 09:51:22 [TRADE_TRACKER_DEBUG] session insert ok: sessionID=5 dbSessionID=5 ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:51:25 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=104 running=true hasSession=true dbReady=true sessionDBID=5
+2026/05/03 09:51:25 [TRADE_TRACKER_DEBUG] requesting room users to resolve partner tradeID=228007
+2026/05/03 09:51:25 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=108 running=true hasSession=true dbReady=true sessionDBID=5
+2026/05/03 09:51:25 [TRADE_TRACKER_DEBUG] USERS packet received: 144 bytes
+2026/05/03 09:51:25 [USERS28] using script: C:\Users\Dubbo\habbodealer\habbodealer\scripts\parse_users28.py
+2026/05/03 09:51:26 [TRADE_TRACKER_DEBUG] partner name still unresolved after 1500ms: tradeID=228007
+2026/05/03 09:51:42 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=104 running=true hasSession=true dbReady=true sessionDBID=5
+2026/05/03 09:51:42 [TRADE_TRACKER_DEBUG] requesting room users to resolve partner tradeID=229473
+2026/05/03 09:51:42 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=108 running=true hasSession=true dbReady=true sessionDBID=5
+2026/05/03 09:51:42 [TRADE_TRACKER_DEBUG] USERS packet received: 144 bytes
+2026/05/03 09:51:42 [USERS28] using script: C:\Users\Dubbo\habbodealer\habbodealer\scripts\parse_users28.py
+2026/05/03 09:51:49 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=108 running=true hasSession=true dbReady=true sessionDBID=5
+2026/05/03 09:51:51 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=109 running=true hasSession=true dbReady=true sessionDBID=5
+2026/05/03 09:51:51 [TRADE_TRACKER_DEBUG] incoming partner accept: ourAccepted=false recorded=false dbReady=true dbSessionID=5 partner="ShannonNoll" tradeID=229473 items=5
+2026/05/03 09:51:51 [TRADE_TRACKER_DEBUG] persist skipped on partner accept: dbReady=true dbSessionID=5 ourAccepted=false recorded=false
+2026/05/03 09:51:51 [TRADE_TRACKER_DEBUG] persist insert attempt: dbSessionID=5 partner="ShannonNoll" tradeID=229473 items=5 ownerKey="DESKTOP-T5V9BP5"
+2026/05/03 09:51:51 [TRADE_TRACKER_DEBUG] persist insert ok: dbSessionID=5
+2026/05/03 09:51:51 [TRADE_TRACKER_DEBUG] fallback persist (partner accept only) succeeded: dbSessionID=5
+2026/05/03 09:51:56 [TRADE_TRACKER_DEBUG] packet seen: dir=outgoing header=69 running=true hasSession=true dbReady=true sessionDBID=5
+2026/05/03 09:51:56 [TRADE_TRACKER_DEBUG] outgoing our accept: partnerAccepted=false recorded=true dbReady=true dbSessionID=5 partner="ShannonNoll" tradeID=229473 items=0
+2026/05/03 09:51:56 [TRADE_TRACKER_DEBUG] persist skipped on outgoing accept: dbReady=true dbSessionID=5 partnerAccepted=false recorded=true
+2026/05/03 09:51:56 [TRADE_TRACKER_DEBUG] packet seen: dir=incoming header=109 running=true hasSession=true dbReady=true sessionDBID=5
+2026/05/03 09:51:56 [TRADE_TRACKER_DEBUG] incoming partner accept: ourAccepted=true recorded=true dbReady=true dbSessionID=5 partner="ShannonNoll" tradeID=229473 items=0
+2026/05/03 09:51:56 [TRADE_TRACKER_DEBUG] persist skipped on partner accept: dbReady=true dbSessionID=5 ourAccepted=true recorded=true

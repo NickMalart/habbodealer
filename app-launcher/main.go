@@ -439,14 +439,120 @@ func (a *App) runCmd(dir string, args ...string) error {
 	return err
 }
 
+func (a *App) killTrackedProcessesForApp(appID string) int {
+	a.mu.Lock()
+	keys := make([]string, 0)
+	procs := make([]*os.Process, 0)
+	for key, proc := range a.processes {
+		if proc != nil && strings.HasPrefix(key, appID+"|") {
+			keys = append(keys, key)
+			procs = append(procs, proc)
+		}
+	}
+	a.mu.Unlock()
+
+	killed := 0
+	for i, p := range procs {
+		if p == nil {
+			continue
+		}
+		if err := p.Kill(); err == nil {
+			killed++
+		} else {
+			a.emitLog(fmt.Sprintf("  warn: could not kill tracked process %s: %v", keys[i], err), "error")
+		}
+	}
+
+	a.mu.Lock()
+	for _, key := range keys {
+		delete(a.processes, key)
+	}
+	a.mu.Unlock()
+
+	return killed
+}
+
+func (a *App) stopProcessByExePath(exePath string) {
+	if runtime.GOOS != "windows" || strings.TrimSpace(exePath) == "" {
+		return
+	}
+
+	escaped := strings.ReplaceAll(exePath, "'", "''")
+	ps := fmt.Sprintf("Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '%s' } | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }", escaped)
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", ps)
+	_ = cmd.Run()
+}
+
+func (a *App) stopProcessByExeName(exePath string) {
+	if runtime.GOOS != "windows" || strings.TrimSpace(exePath) == "" {
+		return
+	}
+
+	name := filepath.Base(exePath)
+	if strings.TrimSpace(name) == "" {
+		return
+	}
+	cmd := exec.Command("taskkill", "/F", "/IM", name)
+	_ = cmd.Run()
+}
+
+func (a *App) closeBuildTargetProcesses(t buildTarget, root string) {
+	killedTracked := a.killTrackedProcessesForApp(t.ID)
+	if killedTracked > 0 {
+		a.emitLog(fmt.Sprintf("  stopped %d tracked instance(s) for %s", killedTracked, t.Name), "info")
+	}
+
+	seen := map[string]struct{}{}
+	paths := make([]string, 0)
+	if t.OutExe != "" {
+		full := filepath.Join(root, t.OutExe)
+		paths = append(paths, full)
+		seen[strings.ToLower(full)] = struct{}{}
+	}
+	for _, rel := range t.CleanPaths {
+		full := filepath.Join(root, rel)
+		low := strings.ToLower(full)
+		if _, ok := seen[low]; ok {
+			continue
+		}
+		seen[low] = struct{}{}
+		paths = append(paths, full)
+	}
+
+	for _, p := range paths {
+		a.stopProcessByExePath(p)
+		a.stopProcessByExeName(p)
+	}
+}
+
+func (a *App) removeWithRetries(full string) error {
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err := os.Remove(full); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+
+		// Try to release any file lock from still-running instances.
+		a.stopProcessByExePath(full)
+		a.stopProcessByExeName(full)
+		time.Sleep(150 * time.Millisecond)
+	}
+	return lastErr
+}
+
 func (a *App) buildOne(t buildTarget, root string) error {
+	a.closeBuildTargetProcesses(t, root)
+
 	// Delete old exes before building
 	for _, rel := range t.CleanPaths {
 		full := filepath.Join(root, rel)
 		if fileExists(full) {
 			a.emitLog(fmt.Sprintf("  rm  %s", rel), "info")
-			if err := os.Remove(full); err != nil {
+			if err := a.removeWithRetries(full); err != nil {
 				a.emitLog(fmt.Sprintf("  warn: could not remove %s: %v", rel, err), "error")
+				a.emitLog("  hint: run App Launcher as Administrator if process permissions block cleanup", "error")
 			}
 		}
 	}

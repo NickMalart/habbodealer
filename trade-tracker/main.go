@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -25,6 +27,7 @@ import (
 	g "xabbo.b7c.io/goearth"
 	gencoding "xabbo.b7c.io/goearth/encoding"
 	in "xabbo.b7c.io/goearth/shockwave/in"
+	out "xabbo.b7c.io/goearth/shockwave/out"
 )
 
 //go:embed all:frontend/dist
@@ -36,6 +39,31 @@ var ext = g.NewExt(g.ExtInfo{
 	Version:     "1.0.0",
 	Author:      "Dubbo",
 })
+
+func setupFileLogging() {
+	logPath := ""
+	if cwd, err := os.Getwd(); err == nil {
+		logPath = filepath.Join(cwd, "trade-tracker-debug.log")
+	}
+	if logPath == "" {
+		if exePath, err := os.Executable(); err == nil {
+			logPath = filepath.Join(filepath.Dir(exePath), "trade-tracker-debug.log")
+		}
+	}
+	if strings.TrimSpace(logPath) == "" {
+		log.Printf("[TRADE_TRACKER_DEBUG] could not resolve debug log path")
+		return
+	}
+
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		log.Printf("[TRADE_TRACKER_DEBUG] failed to open debug log file %q: %v", logPath, err)
+		return
+	}
+
+	log.SetOutput(io.MultiWriter(os.Stdout, f))
+	log.Printf("[TRADE_TRACKER_DEBUG] logging to %s", logPath)
+}
 
 type ParsedUsers28User struct {
 	Username string `json:"username"`
@@ -83,11 +111,16 @@ type App struct {
 	currentTradePartnerID   int
 	currentTradePartnerName string
 	lastAllTradeItems       []TradeItem
+	ownTradeItems           []TradeItem // items we have added to the trade
 	partnerAcceptedSnapshot []TradeItem
 	partnerAccepted         bool
 	ourAccepted             bool
 	tradeRecorded           bool
 }
+
+// lastAddWasOurs is set atomically when we send TRADE_ADDITEM (outgoing #72)
+// so TRADE_ITEMS parsing can attribute the new items to the correct side.
+var lastAddWasOurs int32 // 1 = our add, 0 = partner add
 
 type DBConfig struct {
 	DatabaseURL string `json:"databaseUrl"`
@@ -119,6 +152,70 @@ func (a *App) shutdown(context.Context) {
 
 func (a *App) runExt() {
 	ext.Run()
+}
+
+func (a *App) logDebug(format string, args ...interface{}) {
+	log.Printf("[TRADE_TRACKER_DEBUG] "+format, args...)
+}
+
+// normalizeUsername strips known parser artefacts (e.g. "adfAmaver1995" → "Amaver1995").
+func normalizeUsername(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if len(raw) >= 4 {
+		maxPrefix := 4
+		if len(raw)-3 < maxPrefix {
+			maxPrefix = len(raw) - 3
+		}
+		for i := 1; i <= maxPrefix; i++ {
+			prefixOK := true
+			for j := 0; j < i; j++ {
+				if raw[j] < 'a' || raw[j] > 'z' {
+					prefixOK = false
+					break
+				}
+			}
+			if !prefixOK {
+				continue
+			}
+			if raw[i] < 'A' || raw[i] > 'Z' {
+				continue
+			}
+			if i+1 < len(raw) && (raw[i+1] < 'a' || raw[i+1] > 'z') {
+				continue
+			}
+			return raw[i:]
+		}
+	}
+	return raw
+}
+
+// diffItems subtracts own items from the combined TRADE_ITEMS list to get partner-only items.
+func diffItems(all []TradeItem, subtract []TradeItem) []TradeItem {
+	subtractQty := make(map[string]int, len(subtract))
+	for _, item := range subtract {
+		subtractQty[item.Name] += item.Quantity
+	}
+	qtys := make(map[string]int, len(all))
+	rawByName := make(map[string]string, len(all))
+	names := make([]string, 0, len(all))
+	for _, item := range all {
+		if qtys[item.Name] == 0 {
+			names = append(names, item.Name)
+		}
+		qtys[item.Name] += item.Quantity
+		if rawByName[item.Name] == "" {
+			rawByName[item.Name] = item.Raw
+		}
+	}
+	sort.Strings(names)
+	result := make([]TradeItem, 0)
+	for _, name := range names {
+		remaining := qtys[name] - subtractQty[name]
+		if remaining > 0 {
+			result = append(result, TradeItem{Name: name, Quantity: remaining, Raw: rawByName[name]})
+		}
+	}
+	return result
 }
 
 func copySession(s *TradeSession) *TradeSession {
@@ -176,9 +273,18 @@ func (a *App) StartTracking() TrackerState {
 			StartedAt: sessionStartedAt,
 			Entries:   []TradeEntry{},
 		}
+		a.logDebug("start requested: opened in-memory session id=%d startedAt=%s", sessionID, sessionStartedAt)
 	}
 	db := a.db
 	a.mu.Unlock()
+
+	if sessionID == 0 {
+		a.logDebug("start requested while already running: no new session created")
+	}
+
+	if db == nil {
+		a.logDebug("start requested with db=nil: Neon writes disabled until DB init succeeds")
+	}
 
 	if db != nil && sessionID > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -193,12 +299,14 @@ func (a *App) StartTracking() TrackerState {
 		).Scan(&dbSessionID)
 		if err != nil {
 			log.Printf("[DB] failed to create trade session: %v", err)
+			a.logDebug("session insert failed: sessionID=%d ownerKey=%q err=%v", sessionID, a.ownerKey, err)
 		} else {
 			a.mu.Lock()
 			if a.currentSession != nil && a.currentSession.ID == sessionID {
 				a.currentSession.DBID = dbSessionID
 			}
 			a.mu.Unlock()
+			a.logDebug("session insert ok: sessionID=%d dbSessionID=%d ownerKey=%q", sessionID, dbSessionID, a.ownerKey)
 		}
 	}
 
@@ -218,6 +326,7 @@ func (a *App) StopTracking() TrackerState {
 			dbSessionID = a.currentSession.DBID
 			a.sessions = append(a.sessions, *a.currentSession)
 			a.currentSession = nil
+			a.logDebug("stop requested: closed current session dbSessionID=%d", dbSessionID)
 		}
 	}
 	db := a.db
@@ -235,7 +344,12 @@ func (a *App) StopTracking() TrackerState {
 			a.ownerKey,
 		); err != nil {
 			log.Printf("[DB] failed to close trade session %d: %v", dbSessionID, err)
+			a.logDebug("session close update failed: dbSessionID=%d ownerKey=%q err=%v", dbSessionID, a.ownerKey, err)
+		} else {
+			a.logDebug("session close update ok: dbSessionID=%d ownerKey=%q", dbSessionID, a.ownerKey)
 		}
+	} else {
+		a.logDebug("stop requested without DB close update: dbNil=%t dbSessionID=%d", db == nil, dbSessionID)
 	}
 
 	a.emitUpdate()
@@ -339,6 +453,18 @@ func (a *App) handleIncomingTradeOpen(e *g.Intercept) {
 	}
 	// Handle relevant trade headers: 104 (open), 108 (items), 109 (partner accept), 69 (our accept outgoing)
 	hdr := e.Packet.Header
+	if hdr.Value == 104 || hdr.Value == 108 || hdr.Value == 109 || hdr.Value == 69 {
+		a.mu.Lock()
+		running := a.running
+		hasSession := a.currentSession != nil
+		dbReady := a.db != nil
+		sessionDBID := int64(0)
+		if a.currentSession != nil {
+			sessionDBID = a.currentSession.DBID
+		}
+		a.mu.Unlock()
+		a.logDebug("packet seen: dir=%v header=%d running=%t hasSession=%t dbReady=%t sessionDBID=%d", hdr.Dir, hdr.Value, running, hasSession, dbReady, sessionDBID)
+	}
 
 	// TRADE_OPEN incoming 104: record partner id/name in-memory for the upcoming trade
 	if hdr.Dir == g.In && hdr.Value == 104 {
@@ -360,23 +486,105 @@ func (a *App) handleIncomingTradeOpen(e *g.Intercept) {
 		} else {
 			a.currentTradePartnerName = "Unknown"
 		}
+		// Try to resolve name late in case USERS packet arrived after this trade open
+		if strings.HasPrefix(a.currentTradePartnerName, "Unknown") && tradeID > 0 {
+			if name, ok := a.usersByTradeID[tradeID]; ok && strings.TrimSpace(name) != "" {
+				a.currentTradePartnerName = normalizeUsername(name)
+			}
+		}
 		// Reset per-trade state
 		a.partnerAccepted = false
 		a.ourAccepted = false
 		a.tradeRecorded = false
 		a.partnerAcceptedSnapshot = nil
 		a.lastAllTradeItems = nil
+		a.ownTradeItems = nil
 		a.mu.Unlock()
+
+		// Request a fresh USERS packet from the server, then wait for the
+		// partner's name to arrive before giving up.
+		if tradeID > 0 {
+			go func(tid int) {
+				a.logDebug("requesting room users to resolve partner tradeID=%d", tid)
+				ext.Send(out.G_USRS)
+				ext.Send(out.GETSPACENODEUSERS)
+				deadline := time.Now().Add(1500 * time.Millisecond)
+				for time.Now().Before(deadline) {
+					time.Sleep(75 * time.Millisecond)
+					a.mu.Lock()
+					name, ok := a.usersByTradeID[tid]
+					a.mu.Unlock()
+					if ok && strings.TrimSpace(name) != "" {
+						a.mu.Lock()
+						// Only update if the trade is still the same one
+						if a.currentTradePartnerID == tid && strings.HasPrefix(a.currentTradePartnerName, "Unknown") {
+							a.currentTradePartnerName = normalizeUsername(name)
+							a.logDebug("resolved partner name via wait-poll: tradeID=%d name=%q", tid, a.currentTradePartnerName)
+							a.mu.Unlock()
+							a.emitUpdate()
+						} else {
+							a.mu.Unlock()
+						}
+						return
+					}
+				}
+				a.logDebug("partner name still unresolved after 1500ms: tradeID=%d", tid)
+			}(tradeID)
+		}
 
 		a.emitUpdate()
 		return
 	}
 
-	// TRADE_ITEMS incoming 108: parse and keep latest full trade snapshot
+	// TRADE_ADDITEM outgoing 72: we added an item, flag so next TRADE_ITEMS is attributed to us.
+	if hdr.Dir == g.Out && hdr.Value == 72 {
+		atomic.StoreInt32(&lastAddWasOurs, 1)
+		return
+	}
+
+	// TRADE_ITEMS incoming 108: parse full snapshot and track own vs partner items.
 	if hdr.Dir == g.In && hdr.Value == 108 {
-		items := a.parseTradeItemsSimple(e.Packet.Data)
+		allItems := a.parseTradeItemsSimple(e.Packet.Data)
+		wasOurs := atomic.SwapInt32(&lastAddWasOurs, 0) == 1
+
 		a.mu.Lock()
-		a.lastAllTradeItems = items
+		prevAll := make(map[string]int, len(a.lastAllTradeItems))
+		for _, it := range a.lastAllTradeItems {
+			prevAll[it.Name] += it.Quantity
+		}
+		allMap := make(map[string]int, len(allItems))
+		for _, it := range allItems {
+			allMap[it.Name] += it.Quantity
+		}
+		// Compute added quantities in this packet vs last
+		for name, q := range allMap {
+			delta := q - prevAll[name]
+			if delta > 0 && wasOurs {
+				// Find or create own entry
+				found := false
+				for i := range a.ownTradeItems {
+					if a.ownTradeItems[i].Name == name {
+						a.ownTradeItems[i].Quantity += delta
+						found = true
+						break
+					}
+				}
+				if !found {
+					a.ownTradeItems = append(a.ownTradeItems, TradeItem{Name: name, Quantity: delta})
+				}
+			}
+		}
+		// Clamp own items to actual totals in case items were removed
+		for i := range a.ownTradeItems {
+			if total, ok := allMap[a.ownTradeItems[i].Name]; ok {
+				if a.ownTradeItems[i].Quantity > total {
+					a.ownTradeItems[i].Quantity = total
+				}
+			} else {
+				a.ownTradeItems[i].Quantity = 0
+			}
+		}
+		a.lastAllTradeItems = allItems
 		a.mu.Unlock()
 		return
 	}
@@ -386,10 +594,17 @@ func (a *App) handleIncomingTradeOpen(e *g.Intercept) {
 		a.mu.Lock()
 		a.partnerAccepted = true
 		if len(a.lastAllTradeItems) > 0 {
-			a.partnerAcceptedSnapshot = make([]TradeItem, len(a.lastAllTradeItems))
-			copy(a.partnerAcceptedSnapshot, a.lastAllTradeItems)
+			// Snapshot only partner-side items (all minus our own adds)
+			partnerOnly := diffItems(a.lastAllTradeItems, a.ownTradeItems)
+			a.partnerAcceptedSnapshot = partnerOnly
 		} else {
 			a.partnerAcceptedSnapshot = nil
+		}
+		// Late-resolve name in case USERS packet arrived after TRADE_OPEN
+		if strings.HasPrefix(a.currentTradePartnerName, "Unknown") && a.currentTradePartnerID > 0 {
+			if name, ok := a.usersByTradeID[a.currentTradePartnerID]; ok && strings.TrimSpace(name) != "" {
+				a.currentTradePartnerName = normalizeUsername(name)
+			}
 		}
 		ourAccepted := a.ourAccepted
 		recorded := a.tradeRecorded
@@ -401,10 +616,12 @@ func (a *App) handleIncomingTradeOpen(e *g.Intercept) {
 		partnerName := a.currentTradePartnerName
 		partnerTradeID := a.currentTradePartnerID
 		a.mu.Unlock()
+		a.logDebug("incoming partner accept: ourAccepted=%t recorded=%t dbReady=%t dbSessionID=%d partner=%q tradeID=%d items=%d", ourAccepted, recorded, db != nil, dbSessionID, partnerName, partnerTradeID, len(a.partnerAcceptedSnapshot))
 
 		if db != nil && dbSessionID > 0 && ourAccepted && !recorded {
 			if err := a.persistTradeEntry(dbSessionID, partnerName, partnerTradeID, a.partnerAcceptedSnapshot, fmt.Sprintf("% X", e.Packet.Data)); err != nil {
 				log.Printf("[DB] failed to persist final trade entry: %v", err)
+				a.logDebug("persist attempt from partner accept failed: dbSessionID=%d err=%v", dbSessionID, err)
 			} else {
 				a.mu.Lock()
 				a.tradeRecorded = true
@@ -413,7 +630,26 @@ func (a *App) handleIncomingTradeOpen(e *g.Intercept) {
 				a.partnerAcceptedSnapshot = nil
 				a.lastAllTradeItems = nil
 				a.mu.Unlock()
+				a.logDebug("persist attempt from partner accept succeeded: dbSessionID=%d", dbSessionID)
 				a.emitUpdate()
+			}
+		} else {
+			a.logDebug("persist skipped on partner accept: dbReady=%t dbSessionID=%d ourAccepted=%t recorded=%t", db != nil, dbSessionID, ourAccepted, recorded)
+			// Fallback: persist on partner accept only, for cases where outgoing accept packet is not intercepted.
+			if db != nil && dbSessionID > 0 && !recorded {
+				if err := a.persistTradeEntry(dbSessionID, partnerName, partnerTradeID, a.partnerAcceptedSnapshot, "PARTNER_ACCEPT_ONLY "+fmt.Sprintf("% X", e.Packet.Data)); err != nil {
+					a.logDebug("fallback persist (partner accept only) failed: dbSessionID=%d err=%v", dbSessionID, err)
+				} else {
+					a.mu.Lock()
+					a.tradeRecorded = true
+					a.partnerAccepted = false
+					a.ourAccepted = false
+					a.partnerAcceptedSnapshot = nil
+					a.lastAllTradeItems = nil
+					a.mu.Unlock()
+					a.logDebug("fallback persist (partner accept only) succeeded: dbSessionID=%d", dbSessionID)
+					a.emitUpdate()
+				}
 			}
 		}
 		return
@@ -423,6 +659,12 @@ func (a *App) handleIncomingTradeOpen(e *g.Intercept) {
 	if hdr.Dir == g.Out && hdr.Value == 69 {
 		a.mu.Lock()
 		a.ourAccepted = true
+		// Late-resolve name in case USERS packet arrived after TRADE_OPEN
+		if strings.HasPrefix(a.currentTradePartnerName, "Unknown") && a.currentTradePartnerID > 0 {
+			if name, ok := a.usersByTradeID[a.currentTradePartnerID]; ok && strings.TrimSpace(name) != "" {
+				a.currentTradePartnerName = normalizeUsername(name)
+			}
+		}
 		partnerAccepted := a.partnerAccepted
 		recorded := a.tradeRecorded
 		db := a.db
@@ -434,10 +676,12 @@ func (a *App) handleIncomingTradeOpen(e *g.Intercept) {
 		partnerTradeID := a.currentTradePartnerID
 		partnerSnap := a.partnerAcceptedSnapshot
 		a.mu.Unlock()
+		a.logDebug("outgoing our accept: partnerAccepted=%t recorded=%t dbReady=%t dbSessionID=%d partner=%q tradeID=%d items=%d", partnerAccepted, recorded, db != nil, dbSessionID, partnerName, partnerTradeID, len(partnerSnap))
 
 		if db != nil && dbSessionID > 0 && partnerAccepted && !recorded {
 			if err := a.persistTradeEntry(dbSessionID, partnerName, partnerTradeID, partnerSnap, fmt.Sprintf("% X", e.Packet.Data)); err != nil {
 				log.Printf("[DB] failed to persist final trade entry: %v", err)
+				a.logDebug("persist attempt from outgoing accept failed: dbSessionID=%d err=%v", dbSessionID, err)
 			} else {
 				a.mu.Lock()
 				a.tradeRecorded = true
@@ -446,7 +690,26 @@ func (a *App) handleIncomingTradeOpen(e *g.Intercept) {
 				a.partnerAcceptedSnapshot = nil
 				a.lastAllTradeItems = nil
 				a.mu.Unlock()
+				a.logDebug("persist attempt from outgoing accept succeeded: dbSessionID=%d", dbSessionID)
 				a.emitUpdate()
+			}
+		} else {
+			a.logDebug("persist skipped on outgoing accept: dbReady=%t dbSessionID=%d partnerAccepted=%t recorded=%t", db != nil, dbSessionID, partnerAccepted, recorded)
+			// Fallback: persist on our accept only, for cases where incoming partner accept packet is missed.
+			if db != nil && dbSessionID > 0 && !recorded {
+				if err := a.persistTradeEntry(dbSessionID, partnerName, partnerTradeID, partnerSnap, "OUTGOING_ACCEPT_ONLY "+fmt.Sprintf("% X", e.Packet.Data)); err != nil {
+					a.logDebug("fallback persist (outgoing accept only) failed: dbSessionID=%d err=%v", dbSessionID, err)
+				} else {
+					a.mu.Lock()
+					a.tradeRecorded = true
+					a.partnerAccepted = false
+					a.ourAccepted = false
+					a.partnerAcceptedSnapshot = nil
+					a.lastAllTradeItems = nil
+					a.mu.Unlock()
+					a.logDebug("fallback persist (outgoing accept only) succeeded: dbSessionID=%d", dbSessionID)
+					a.emitUpdate()
+				}
 			}
 		}
 		return
@@ -513,6 +776,7 @@ func (a *App) initDatabase() {
 	cfg, err := loadDBConfig()
 	if err != nil {
 		log.Printf("[DB] config not loaded: %v", err)
+		a.logDebug("db init failed at config load: %v", err)
 		return
 	}
 
@@ -522,11 +786,13 @@ func (a *App) initDatabase() {
 	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
 	if err != nil {
 		log.Printf("[DB] connection setup failed: %v", err)
+		a.logDebug("db init failed at pool creation: %v", err)
 		return
 	}
 
 	if err := db.Ping(ctx); err != nil {
 		log.Printf("[DB] ping failed: %v", err)
+		a.logDebug("db init failed at ping: %v", err)
 		db.Close()
 		return
 	}
@@ -548,19 +814,26 @@ func (a *App) initDatabase() {
 	a.db = db
 	a.ownerKey = owner
 	a.mu.Unlock()
+	a.logDebug("db init connected: ownerKey=%q", owner)
 
 	if err := a.ensureTables(); err != nil {
 		log.Printf("[DB] migration failed: %v", err)
+		a.logDebug("db init failed at ensureTables: %v", err)
 		return
 	}
+	a.logDebug("db tables ensured")
 
 	if err := a.loadSessionsFromDB(); err != nil {
 		log.Printf("[DB] failed to load sessions: %v", err)
+		a.logDebug("db session preload failed: %v", err)
+	} else {
+		a.logDebug("db session preload completed")
 	}
 }
 
 func (a *App) persistTradeEntry(dbSessionID int64, partnerName string, partnerTradeID int, items []TradeItem, payload string) error {
 	if a.db == nil {
+		a.logDebug("persist aborted: db not initialized")
 		return fmt.Errorf("db not initialized")
 	}
 
@@ -569,6 +842,7 @@ func (a *App) persistTradeEntry(dbSessionID int64, partnerName string, partnerTr
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
+	a.logDebug("persist insert attempt: dbSessionID=%d partner=%q tradeID=%d items=%d ownerKey=%q", dbSessionID, partnerName, partnerTradeID, len(items), a.ownerKey)
 
 	if _, err := a.db.Exec(ctx, `INSERT INTO trade_entries (session_id, occurred_at, partner_name, partner_trade_id, payload_hex, furni_items, owner_key) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 		dbSessionID,
@@ -579,8 +853,10 @@ func (a *App) persistTradeEntry(dbSessionID int64, partnerName string, partnerTr
 		itemsJSON,
 		a.ownerKey,
 	); err != nil {
+		a.logDebug("persist insert failed: dbSessionID=%d err=%v", dbSessionID, err)
 		return err
 	}
+	a.logDebug("persist insert ok: dbSessionID=%d", dbSessionID)
 
 	// Append to in-memory session entries when possible
 	a.mu.Lock()
@@ -618,7 +894,7 @@ func (a *App) ensureTables() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 
-	queries := []string{
+	createQueries := []string{
 		`CREATE TABLE IF NOT EXISTS trade_sessions (
 			id BIGSERIAL PRIMARY KEY,
 			started_at TIMESTAMPTZ NOT NULL,
@@ -637,13 +913,9 @@ func (a *App) ensureTables() error {
 			owner_key TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_trade_entries_session_id ON trade_entries(session_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_trade_entries_occurred_at ON trade_entries(occurred_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_trade_sessions_owner_key ON trade_sessions(owner_key)`,
-		`CREATE INDEX IF NOT EXISTS idx_trade_entries_owner_key ON trade_entries(owner_key)`,
 	}
 
-	for _, q := range queries {
+	for _, q := range createQueries {
 		if _, err := db.Exec(ctx, q); err != nil {
 			return err
 		}
@@ -656,6 +928,18 @@ func (a *App) ensureTables() error {
 		`ALTER TABLE trade_entries ADD COLUMN IF NOT EXISTS furni_items JSONB DEFAULT '[]'::jsonb`,
 	}
 	for _, q := range alterQueries {
+		if _, err := db.Exec(ctx, q); err != nil {
+			return err
+		}
+	}
+
+	indexQueries := []string{
+		`CREATE INDEX IF NOT EXISTS idx_trade_entries_session_id ON trade_entries(session_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_trade_entries_occurred_at ON trade_entries(occurred_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_trade_sessions_owner_key ON trade_sessions(owner_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_trade_entries_owner_key ON trade_entries(owner_key)`,
+	}
+	for _, q := range indexQueries {
 		if _, err := db.Exec(ctx, q); err != nil {
 			return err
 		}
@@ -785,6 +1069,7 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 	if e == nil || e.Packet == nil || len(e.Packet.Data) == 0 {
 		return
 	}
+	a.logDebug("USERS packet received: %d bytes", len(e.Packet.Data))
 
 	users, err := runUsers28PythonParser(e.Packet.Data)
 	if err != nil {
@@ -792,38 +1077,53 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 		return
 	}
 
-	resolved := make(map[int]string)
+	a.mu.Lock()
 	for _, u := range users {
-		name := strings.TrimSpace(u.Username)
+		name := normalizeUsername(strings.TrimSpace(u.Username))
 		if u.TradeID > 0 && name != "" {
-			resolved[u.TradeID] = name
+			a.usersByTradeID[u.TradeID] = name
 		}
 	}
-	if len(resolved) == 0 {
-		return
+	// If we have an active trade partner still marked Unknown, try to resolve now
+	if strings.HasPrefix(a.currentTradePartnerName, "Unknown") && a.currentTradePartnerID > 0 {
+		if name, ok := a.usersByTradeID[a.currentTradePartnerID]; ok && name != "" {
+			a.currentTradePartnerName = name
+			a.logDebug("late-resolved partner name from USERS packet: tradeID=%d name=%q", a.currentTradePartnerID, name)
+		}
 	}
-
-	a.mu.Lock()
-	a.usersByTradeID = resolved
 	a.mu.Unlock()
 }
 
 func runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, error) {
+	// Resolve relative to the executable so the script is always found
+	// regardless of working directory (e.g. when launched by app-launcher).
+	exePath, _ := os.Executable()
+	exeDir := filepath.Dir(exePath)
+
 	scriptCandidates := []string{
+		// Primary: exe is at trade-tracker/build/bin/ → 3 levels up = workspace root
+		filepath.Join(exeDir, "..", "..", "..", "scripts", "parse_users28.py"),
+		// Fallbacks for go run / dev workflows
 		filepath.Join("..", "scripts", "parse_users28.py"),
 		filepath.Join("scripts", "parse_users28.py"),
 	}
 
 	scriptPath := ""
 	for _, c := range scriptCandidates {
-		if _, err := os.Stat(c); err == nil {
-			scriptPath = c
+		abs, _ := filepath.Abs(c)
+		if _, err := os.Stat(abs); err == nil {
+			scriptPath = abs
 			break
 		}
 	}
 	if scriptPath == "" {
-		return nil, fmt.Errorf("parse_users28.py not found")
+		attempted := make([]string, len(scriptCandidates))
+		for i, c := range scriptCandidates {
+			attempted[i], _ = filepath.Abs(c)
+		}
+		return nil, fmt.Errorf("parse_users28.py not found; tried: %v", attempted)
 	}
+	log.Printf("[USERS28] using script: %s", scriptPath)
 
 	pythonExec := ""
 	if p, err := exec.LookPath("python3"); err == nil {
@@ -903,6 +1203,7 @@ func setupExt(a *App) {
 }
 
 func main() {
+	setupFileLogging()
 	app := NewApp()
 	setupExt(app)
 
