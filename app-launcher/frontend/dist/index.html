@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>App Launcher</title>
+  <style>
+    :root {
+      --bg: #0e1219;
+      --panel: #161d29;
+      --panel2: #1a2331;
+      --text: #e9eff8;
+      --muted: #93a8bf;
+      --line: #2a3546;
+      --accent: #5cd0b7;
+      --accent2: #6ea8ff;
+      --warn: #ff7c7c;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Segoe UI, Tahoma, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1200px 400px at -10% -10%, #23344f88, transparent 60%),
+        radial-gradient(800px 500px at 120% 120%, #1e434388, transparent 60%),
+        var(--bg);
+      overflow: auto;
+    }
+
+    .wrap {
+      max-width: 900px;
+      margin: 20px auto;
+      padding: 14px;
+    }
+
+    .card {
+      background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 100%);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 16px 30px rgba(0,0,0,0.35);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      color: var(--accent2);
+    }
+
+    .sub {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .toolbar {
+      margin-top: 12px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      color: #061620;
+      background: linear-gradient(90deg, var(--accent2), var(--accent));
+      transition: transform 100ms ease, filter 120ms ease;
+    }
+
+    button:hover { filter: brightness(1.06); }
+    button:active { transform: scale(0.99); }
+
+    button.ghost {
+      color: var(--text);
+      background: #223044;
+      border: 1px solid #34435b;
+    }
+
+    .list {
+      margin-top: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      background: #172131;
+    }
+
+    .row:nth-child(2n) {
+      background: #16202f;
+    }
+
+    .row:last-child {
+      border-bottom: 0;
+    }
+
+    .name {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .meta {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      word-break: break-all;
+    }
+
+    .status {
+      margin-top: 12px;
+      min-height: 18px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .ok { color: var(--accent); }
+    .bad { color: var(--warn); }
+
+    @media (max-width: 640px) {
+      .row {
+        grid-template-columns: 1fr;
+      }
+      button {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>App Launcher</h1>
+      <div class="sub">Run one menu app, then launch the tool you want.</div>
+
+      <div class="toolbar">
+        <button id="refresh" class="ghost">Refresh Apps</button>
+      </div>
+
+      <div id="apps" class="list"></div>
+      <div id="status" class="status">Loading apps...</div>
+    </div>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const appsEl = document.getElementById("apps");
+    const refreshBtn = document.getElementById("refresh");
+
+    function api() {
+      return window.go && window.go.main && window.go.main.App;
+    }
+
+    function setStatus(text, ok = true) {
+      statusEl.textContent = text;
+      statusEl.classList.toggle("ok", ok);
+      statusEl.classList.toggle("bad", !ok);
+    }
+
+    function rowTemplate(app) {
+      const existsText = app.exists ? (app.running ? "Running" : "Ready") : "Not Found";
+      const actionDisabled = app.exists ? "" : "disabled";
+      const buttonText = app.running ? "Already Running" : "Open";
+
+      return `
+        <div class="row">
+          <div>
+            <div class="name">${app.name}</div>
+            <div class="meta">${app.path || "Executable not found yet"}</div>
+            <div class="meta">Status: ${existsText}</div>
+          </div>
+          <div>
+            <button data-id="${app.id}" ${actionDisabled}>${buttonText}</button>
+          </div>
+        </div>
+      `;
+    }
+
+    async function renderApps() {
+      const backend = api();
+      if (!backend || !backend.GetApps) {
+        setStatus("Backend not ready", false);
+        return;
+      }
+
+      const apps = await backend.GetApps();
+      if (!apps || apps.length === 0) {
+        appsEl.innerHTML = "";
+        setStatus("No apps discovered yet. Build your tools first.", false);
+        return;
+      }
+
+      appsEl.innerHTML = apps.map(rowTemplate).join("");
+
+      appsEl.querySelectorAll("button[data-id]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const id = btn.getAttribute("data-id");
+          if (!id) return;
+          const res = await backend.LaunchApp(id);
+          if (res === "ok") {
+            setStatus("Launched successfully.");
+          } else {
+            setStatus(res, false);
+          }
+          await refreshApps();
+        });
+      });
+
+      setStatus("Ready");
+    }
+
+    async function refreshApps() {
+      const backend = api();
+      if (!backend || !backend.RefreshApps) {
+        setStatus("Backend not ready", false);
+        return;
+      }
+      await backend.RefreshApps();
+      await renderApps();
+    }
+
+    refreshBtn.addEventListener("click", refreshApps);
+
+    window.addEventListener("load", async () => {
+      await refreshApps();
+    });
+  </script>
+</body>
+</html>
