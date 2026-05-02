@@ -349,6 +349,17 @@ func (a *App) LaunchGEarth() string {
 		return "G-Earth.exe not found at G-Earth.windows-x64/G-Earth.exe"
 	}
 
+	if runtime.GOOS == "windows" {
+		exeEscaped := strings.ReplaceAll(exePath, "'", "''")
+		dirEscaped := strings.ReplaceAll(filepath.Dir(exePath), "'", "''")
+		psCmd := fmt.Sprintf("Start-Process -FilePath '%s' -WorkingDirectory '%s' -Verb RunAs", exeEscaped, dirEscaped)
+		cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
+		if err := cmd.Run(); err != nil {
+			return fmt.Sprintf("failed to launch G-Earth as admin: %v", err)
+		}
+		return "ok"
+	}
+
 	cmd := exec.Command(exePath)
 	cmd.Dir = filepath.Dir(exePath)
 	if err := cmd.Start(); err != nil {
