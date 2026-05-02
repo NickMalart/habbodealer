@@ -176,14 +176,23 @@ func (a *App) computeDelayLocked(rng *rand.Rand) time.Duration {
 		return base
 	}
 
-	jitter := 0.82 + rng.Float64()*0.36 // 82% to 118%
-	delay := time.Duration(float64(base) * jitter)
+	// Humanized timing centered around the selected minutes value.
+	// Example: at 5 minutes, sends may happen before or after 5:00.
+	jitter := (rng.Float64() * 0.50) - 0.25 // -25% to +25%
+	delay := time.Duration(float64(base) * (1 + jitter))
 
-	if rng.Float64() < 0.18 {
-		delay += time.Duration(10+rng.Intn(31)) * time.Second
+	// Small occasional drift in either direction (negative = earlier, positive = later).
+	if rng.Float64() < 0.45 {
+		delay += time.Duration(rng.Intn(31)-15) * time.Second
 	}
-	if rng.Float64() < 0.08 {
-		delay += time.Duration(8+rng.Intn(18)) * time.Second
+
+	// Rare larger drift to avoid robotic consistency.
+	if rng.Float64() < 0.12 {
+		sign := 1
+		if rng.Intn(2) == 0 {
+			sign = -1
+		}
+		delay += time.Duration(sign*(45+rng.Intn(46))) * time.Second
 	}
 
 	if delay < 12*time.Second {
