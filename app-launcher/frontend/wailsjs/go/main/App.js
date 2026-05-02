@@ -22,8 +22,8 @@ export function IsBuilding() {
   return window['go']['main']['App']['IsBuilding']();
 }
 
-export function LaunchApp(arg1) {
-  return window['go']['main']['App']['LaunchApp'](arg1);
+export function LaunchApp(arg1, arg2) {
+  return window['go']['main']['App']['LaunchApp'](arg1, arg2);
 }
 
 export function RefreshApps() {
