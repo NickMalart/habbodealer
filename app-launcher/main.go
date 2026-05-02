@@ -75,6 +75,11 @@ type LaunchAppItem struct {
 	Running bool   `json:"running"`
 }
 
+type GEarthStatus struct {
+	Exists  bool `json:"exists"`
+	Running bool `json:"running"`
+}
+
 type App struct {
 	ctx       context.Context
 	mu        sync.Mutex
@@ -229,6 +234,36 @@ func (a *App) findAppByID(id string) (LaunchAppItem, error) {
 	return LaunchAppItem{}, errors.New("app not found")
 }
 
+func (a *App) gEarthExePath() string {
+	root := a.resolveWorkspaceRoot()
+	exePath, _ := os.Executable()
+	exeDir := filepath.Dir(exePath)
+
+	candidates := []string{
+		filepath.Join(root, "G-Earth.windows-x64", "G-Earth.exe"),
+		filepath.Join(root, "app-launcher", "G-Earth.windows-x64", "G-Earth.exe"),
+		filepath.Join(exeDir, "G-Earth.windows-x64", "G-Earth.exe"),
+	}
+
+	for _, c := range candidates {
+		if fileExists(c) {
+			return c
+		}
+	}
+
+	// Default expected location when it is not present yet.
+	return candidates[0]
+}
+
+func (a *App) GetGEarthStatus() GEarthStatus {
+	exePath := a.gEarthExePath()
+	status := GEarthStatus{Exists: fileExists(exePath)}
+	a.mu.Lock()
+	status.Running = a.hasRunningInstanceLocked("g-earth")
+	a.mu.Unlock()
+	return status
+}
+
 // 笏笏 Launch 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
 
 func buildInstanceKey(appID, port string) string {
@@ -309,6 +344,40 @@ func (a *App) LaunchApp(appID string, port string) string {
 	}(instanceKey, cmd)
 
 	a.RefreshApps()
+	return "ok"
+}
+
+func (a *App) LaunchGEarth() string {
+	exePath := a.gEarthExePath()
+	if !fileExists(exePath) {
+		return "G-Earth.exe not found at G-Earth.windows-x64/G-Earth.exe"
+	}
+
+	instanceKey := buildInstanceKey("g-earth", "")
+	a.mu.Lock()
+	if p, ok := a.processes[instanceKey]; ok && p != nil {
+		a.mu.Unlock()
+		return "G-Earth is already running"
+	}
+	a.mu.Unlock()
+
+	cmd := exec.Command(exePath)
+	cmd.Dir = filepath.Dir(exePath)
+	if err := cmd.Start(); err != nil {
+		return fmt.Sprintf("failed to launch G-Earth: %v", err)
+	}
+
+	a.mu.Lock()
+	a.processes[instanceKey] = cmd.Process
+	a.mu.Unlock()
+
+	go func(key string, c *exec.Cmd) {
+		_ = c.Wait()
+		a.mu.Lock()
+		delete(a.processes, key)
+		a.mu.Unlock()
+	}(instanceKey, cmd)
+
 	return "ok"
 }
 
