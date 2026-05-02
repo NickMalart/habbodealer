@@ -12,11 +12,12 @@ if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED' -ForegroundColor Red } else { W
 Pop-Location
 
 Write-Host ('
-=== [2/3] wave-timer-app (go build) ===') -ForegroundColor Cyan
+=== [2/3] wave-timer-app (wails build) ===') -ForegroundColor Cyan
+Remove-Item (Join-Path $root 'wave-timer-app\build\bin\wave-timer-app.exe') -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $root 'wave-timer-app\wave-timer-app.exe') -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $root 'wave-timer-app\wave-timer.exe') -Force -ErrorAction SilentlyContinue
 Push-Location (Join-Path $root 'wave-timer-app')
-go build .
+wails build
 if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED' -ForegroundColor Red } else { Write-Host '  OK' -ForegroundColor Green }
 Pop-Location
 

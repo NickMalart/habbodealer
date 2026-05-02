@@ -25,7 +25,7 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-// ── Build target definitions ──────────────────────────────────────────────────
+// 笏笏 Build target definitions 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
 
 type buildTarget struct {
 	ID         string
@@ -54,17 +54,18 @@ func knownBuildTargets() []buildTarget {
 			ID:        "wave-timer",
 			Name:      "Wave Timer",
 			SrcDir:    "wave-timer-app",
-			BuildType: "go",
+			BuildType: "wails",
 			CleanPaths: []string{
+				filepath.Join("wave-timer-app", "build", "bin", "wave-timer-app.exe"),
 				filepath.Join("wave-timer-app", "wave-timer-app.exe"),
 				filepath.Join("wave-timer-app", "wave-timer.exe"),
 			},
-			OutExe: filepath.Join("wave-timer-app", "wave-timer-app.exe"),
+			OutExe: filepath.Join("wave-timer-app", "build", "bin", "wave-timer-app.exe"),
 		},
 	}
 }
 
-// ── App types ─────────────────────────────────────────────────────────────────
+// 笏笏 App types 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
 
 type LaunchAppItem struct {
 	ID      string `json:"id"`
@@ -91,7 +92,7 @@ func (a *App) startup(ctx context.Context) {
 	a.RefreshApps()
 }
 
-// ── Workspace root detection ──────────────────────────────────────────────────
+// 笏笏 Workspace root detection 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
 
 func (a *App) resolveWorkspaceRoot() string {
 	cwd, _ := os.Getwd()
@@ -149,7 +150,7 @@ func canonicalNameFromPath(path string) string {
 	return strings.Join(words, " ")
 }
 
-// ── App discovery ─────────────────────────────────────────────────────────────
+// 笏笏 App discovery 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
 
 func (a *App) discoverApps() []LaunchAppItem {
 	root := a.resolveWorkspaceRoot()
@@ -228,7 +229,7 @@ func (a *App) findAppByID(id string) (LaunchAppItem, error) {
 	return LaunchAppItem{}, errors.New("app not found")
 }
 
-// ── Launch ────────────────────────────────────────────────────────────────────
+// 笏笏 Launch 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
 
 func buildInstanceKey(appID, port string) string {
 	if strings.TrimSpace(port) == "" {
@@ -265,7 +266,7 @@ func (a *App) LaunchApp(appID string, port string) string {
 		return err.Error()
 	}
 	if !item.Exists || strings.TrimSpace(item.Path) == "" {
-		return "executable not found — build it first"
+		return "executable not found 窶・build it first"
 	}
 
 	normalizedPort, err := normalizePort(port)
@@ -311,7 +312,7 @@ func (a *App) LaunchApp(appID string, port string) string {
 	return "ok"
 }
 
-// ── Build helpers ─────────────────────────────────────────────────────────────
+// 笏笏 Build helpers 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
 
 func (a *App) emitLog(line, kind string) {
 	if a.ctx == nil {
@@ -410,22 +411,22 @@ func (a *App) BuildAll() string {
 			a.building = false
 			a.mu.Unlock()
 			a.RefreshApps()
-			a.emitLog("════ All builds complete ════", "success")
+			a.emitLog("笊絶武笊絶武 All builds complete 笊絶武笊絶武", "success")
 		}()
 
 		root := a.resolveWorkspaceRoot()
 		targets := knownBuildTargets()
 
 		a.emitLog(fmt.Sprintf("Root: %s", root), "info")
-		a.emitLog(fmt.Sprintf("Building %d app(s)…", len(targets)), "info")
+		a.emitLog(fmt.Sprintf("Building %d app(s)窶ｦ", len(targets)), "info")
 
 		for _, t := range targets {
-			a.emitLog(fmt.Sprintf("▶ [%s]", t.Name), "info")
+			a.emitLog(fmt.Sprintf("笆ｶ [%s]", t.Name), "info")
 			start := time.Now()
 			if err := a.buildOne(t, root); err != nil {
-				a.emitLog(fmt.Sprintf("✗ [%s] FAILED: %v", t.Name, err), "error")
+				a.emitLog(fmt.Sprintf("笨・[%s] FAILED: %v", t.Name, err), "error")
 			} else {
-				a.emitLog(fmt.Sprintf("✓ [%s] done (%.1fs)", t.Name, time.Since(start).Seconds()), "success")
+				a.emitLog(fmt.Sprintf("笨・[%s] done (%.1fs)", t.Name, time.Since(start).Seconds()), "success")
 			}
 		}
 	}()
@@ -463,15 +464,15 @@ func (a *App) BuildSingle(appID string) string {
 			a.building = false
 			a.mu.Unlock()
 			a.RefreshApps()
-			a.emitLog("════ Build complete ════", "success")
+			a.emitLog("笊絶武笊絶武 Build complete 笊絶武笊絶武", "success")
 		}()
 
-		a.emitLog(fmt.Sprintf("▶ [%s]", t.Name), "info")
+		a.emitLog(fmt.Sprintf("笆ｶ [%s]", t.Name), "info")
 		start := time.Now()
 		if err := a.buildOne(t, root); err != nil {
-			a.emitLog(fmt.Sprintf("✗ [%s] FAILED: %v", t.Name, err), "error")
+			a.emitLog(fmt.Sprintf("笨・[%s] FAILED: %v", t.Name, err), "error")
 		} else {
-			a.emitLog(fmt.Sprintf("✓ [%s] done (%.1fs)", t.Name, time.Since(start).Seconds()), "success")
+			a.emitLog(fmt.Sprintf("笨・[%s] done (%.1fs)", t.Name, time.Since(start).Seconds()), "success")
 		}
 	}(*found)
 
@@ -495,7 +496,7 @@ func (a *App) IsBuilding() bool {
 	return a.building
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// 笏笏 Main 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
 
 func main() {
 	app := NewApp()
