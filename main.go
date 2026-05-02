@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bytes"
@@ -3303,6 +3303,13 @@ func handleTradePacket(a *App, e *g.Intercept) {
 	// Allow raffle deposit flows to be processed even when the casino
 	// frontend hasn't been started if `acceptRaffleDeposits` is enabled.
 	if !casinoReady && !acceptRaffleDeposits {
+		return
+	}
+
+	// If neither the casino dealer nor any raffle is currently active and no
+	// game/payout is in progress, leave all trade packets completely untouched
+	// so the user can trade freely without the bot interfering.
+	if !dealerAcceptingTrades && !raffleModeActive && !dealerGameActive() && !payoutActive && !payoutTradeActive {
 		return
 	}
 
