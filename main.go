@@ -4100,6 +4100,20 @@ func startPayout(a *App, targetID int, targetName string) {
 		// Small delay so the winner shout clears Habbo's rate limiter first
 		time.Sleep(1200 * time.Millisecond)
 
+		// Outgoing TRADE_OPEN must use a room/chat index domain. Keep payout
+		// target IDs in that same domain to avoid retry oscillation.
+		if targetID > 512 && strings.TrimSpace(targetName) != "" {
+			if idx, ok := waitForRoomEntityIndexByName(targetName, 900*time.Millisecond); ok && idx > 0 {
+				a.AddLogMsg(fmt.Sprintf("[PAYOUT] normalized large target id %d -> room index %d for %s", targetID, idx, targetName))
+				targetID = idx
+				payoutTargetID = idx
+			} else if idx, ok := waitForUsers28RoomIndexByName(targetName, 700*time.Millisecond); ok && idx > 0 {
+				a.AddLogMsg(fmt.Sprintf("[PAYOUT] normalized large target id %d -> USERS28 room index %d for %s", targetID, idx, targetName))
+				targetID = idx
+				payoutTargetID = idx
+			}
+		}
+
 		for attempt := 1; attempt <= 5; attempt++ {
 			if sessionID != payoutSessionID {
 				return
@@ -4120,11 +4134,11 @@ func startPayout(a *App, targetID int, targetName string) {
 					a.AddLogMsg(fmt.Sprintf("[PAYOUT] refreshed %s target from ROOM_USERS index %d -> %d", targetName, targetID, resolvedID))
 					targetID = resolvedID
 					payoutTargetID = resolvedID
-				} else if resolvedID, ok := waitForUsers28TradeIDByName(targetName, 700*time.Millisecond); ok && resolvedID > 0 && resolvedID != targetID {
-					a.AddLogMsg(fmt.Sprintf("[PAYOUT] refreshed %s target from USERS28 trade id %d -> %d", targetName, targetID, resolvedID))
+				} else if resolvedID, ok := waitForUsers28RoomIndexByName(targetName, 700*time.Millisecond); ok && resolvedID > 0 && resolvedID != targetID {
+					a.AddLogMsg(fmt.Sprintf("[PAYOUT] refreshed %s target from USERS28 room index %d -> %d", targetName, targetID, resolvedID))
 					targetID = resolvedID
 					payoutTargetID = resolvedID
-				} else if resolvedID, ok := waitForUsers28NameIndex(targetName, 700*time.Millisecond); ok {
+				} else if resolvedID, ok := waitForUsers28NameIndex(targetName, 700*time.Millisecond); ok && resolvedID > 0 && resolvedID != targetID {
 					a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] generic USERS28 name->index fallback produced %d for %s (current target %d)", resolvedID, targetName, targetID))
 					// Use the resolved room/users28 index as the outgoing target
 					targetID = resolvedID
