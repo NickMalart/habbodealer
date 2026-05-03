@@ -7248,28 +7248,20 @@ func (a *App) openDealerAfterRound() {
 	tradeStarterToken = ""
 	tradeStarterLocked = false
 
-	ok := a.forceRefreshHandSnapshot("openDealerAfterRound")
+	// Move hand refresh to background so dealer opens immediately without waiting
+	go func() {
+		a.forceRefreshHandSnapshot("openDealerAfterRound")
+		if shouldRefreshRoomUsers() {
+			requestRoomUsers(a)
+		}
+		// Refresh dedicated risk snapshot to reflect post-payout inventory.
+		if isRiskEnabled {
+			time.Sleep(250 * time.Millisecond)
+			a.captureRiskSnapshot(true)
+		}
+	}()
 
 	dealerResyncInProgress = false
-	if shouldRefreshRoomUsers() {
-		requestRoomUsers(a)
-	}
-
-	// Refresh dedicated risk snapshot to reflect post-payout inventory.
-	if isRiskEnabled {
-		go func() {
-			// small settle to ensure hand snapshot is ready
-			time.Sleep(250 * time.Millisecond)
-			_a := a
-			_a.captureRiskSnapshot(true)
-		}()
-	}
-
-	if !ok {
-		a.AddLogMsg("[DEALER_REOPEN] refusing to announce dealer open because forced hand refresh failed")
-		return
-	}
-
 	awaitingTradeOpen = true
 	dealerAcceptingTrades = true
 	if shouldAnnounceDealerOpen() {
