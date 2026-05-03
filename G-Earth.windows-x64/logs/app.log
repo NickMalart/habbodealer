@@ -1,2 +1,49 @@
 2026-05-03 16:28:48.125 INFO  gearth.app.GEarth - Starting G-Earth 1.5.4-beta-22 from repository G-Realm/G-Earth
 2026-05-03 16:28:48.139 INFO  ROOT - Logging level set to INFO
+2026-05-03 16:28:49.051 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 1}
+2026-05-03 16:28:49.051 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 2}
+2026-05-03 16:28:49.776 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbodealer\habbodealer\G-Earth.windows-x64\Extensions\G-Programmer_1.4.0
+2026-05-03 16:28:49.938 INFO  gearth.app.misc.JavaLocator - Searching for Java installations on Windows in C:\Program Files\Java
+2026-05-03 16:28:49.938 WARN  gearth.app.misc.JavaLocator - No java installation not found in C:\Program Files\Java
+2026-05-03 16:28:49.940 WARN  gearth.app.misc.JavaLocator - No valid Java installation found
+2026-05-03 16:28:49.941 WARN  g.a.s.e.e.i.n.e.NormalExtensionRunner - No Java 1.8 installation found, cannot run extension jar file C:\Users\Dubbo\habbodealer\habbodealer\G-Earth.windows-x64\Extensions\G-Programmer_1.4.0\extension\GProgrammer.jar
+2026-05-03 16:28:49.952 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbodealer\habbodealer\G-Earth.windows-x64\Extensions\G-Trigger_0.2.4
+2026-05-03 16:28:49.952 ERROR g.a.s.i.e.tools.StoreExtensionTools - Failed to execute extension
+java.nio.file.NoSuchFileException: C:\Users\Dubbo\habbodealer\habbodealer\G-Earth.windows-x64\Extensions\G-Trigger_0.2.4\command.txt
+	at java.base/sun.nio.fs.WindowsException.translateToIOException(Unknown Source)
+	at java.base/sun.nio.fs.WindowsException.rethrowAsIOException(Unknown Source)
+	at java.base/sun.nio.fs.WindowsException.rethrowAsIOException(Unknown Source)
+	at java.base/sun.nio.fs.WindowsFileSystemProvider.newByteChannel(Unknown Source)
+	at java.base/java.nio.file.Files.newByteChannel(Unknown Source)
+	at java.base/java.nio.file.Files.newByteChannel(Unknown Source)
+	at java.base/java.nio.file.spi.FileSystemProvider.newInputStream(Unknown Source)
+	at java.base/java.nio.file.Files.newInputStream(Unknown Source)
+	at org.apache.commons.io.FileUtils.lambda$readFileToString$14(FileUtils.java:2771)
+	at org.apache.commons.io.IOUtils.toString(IOUtils.java:3204)
+	at org.apache.commons.io.IOUtils.toString(IOUtils.java:3179)
+	at org.apache.commons.io.FileUtils.readFileToString(FileUtils.java:2771)
+	at org.apache.commons.io.FileUtils.readFileToString(FileUtils.java:2787)
+	at gearth.app.services.internal_extensions.extensionstore.tools.StoreExtensionTools.executeExtension(StoreExtensionTools.java:47)
+	at gearth.app.services.extension_handler.extensions.implementations.network.executer.NormalExtensionRunner.tryRunExtension(NormalExtensionRunner.java:84)
+	at gearth.app.services.extension_handler.extensions.implementations.network.executer.NormalExtensionRunner.runAllExtensions(NormalExtensionRunner.java:47)
+	at gearth.app.ui.subforms.extensions.ExtensionsController.onParentSet(ExtensionsController.java:75)
+	at gearth.app.ui.SubForm.setParentController(SubForm.java:13)
+	at gearth.app.ui.GEarthController.trySetController(GEarthController.java:100)
+	at gearth.app.ui.GEarthController.setStage(GEarthController.java:92)
+	at gearth.app.GEarth.start(GEarth.java:79)
+	at javafx.graphics/com.sun.javafx.application.LauncherImpl.lambda$launchApplication1$9(Unknown Source)
+	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runAndWait$12(Unknown Source)
+	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runLater$10(Unknown Source)
+	at java.base/java.security.AccessController.doPrivileged(Unknown Source)
+	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runLater$11(Unknown Source)
+	at javafx.graphics/com.sun.glass.ui.InvokeLaterDispatcher$Future.run(Unknown Source)
+	at javafx.graphics/com.sun.glass.ui.win.WinApplication._runLoop(Native Method)
+	at javafx.graphics/com.sun.glass.ui.win.WinApplication.lambda$runLoop$3(Unknown Source)
+	at java.base/java.lang.Thread.run(Unknown Source)
+2026-05-03 16:28:49.954 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbodealer\habbodealer\G-Earth.windows-x64\Extensions\main-193856529808.py
+2026-05-03 16:28:49.974 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbodealer\habbodealer\G-Earth.windows-x64\Extensions\main-214337305396.py
+2026-05-03 16:29:23.450 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
+2026-05-03 16:29:31.127 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
+2026-05-03 16:29:31.127 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 35.71.185.64:40001
+2026-05-03 16:29:32.253 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
+2026-05-03 16:30:29.354 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@373ad1f4
