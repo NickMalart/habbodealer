@@ -47,3 +47,4 @@ java.nio.file.NoSuchFileException: C:\Users\Dubbo\habbodealer\habbodealer\G-Eart
 2026-05-03 16:29:31.127 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 35.71.185.64:40001
 2026-05-03 16:29:32.253 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
 2026-05-03 16:30:29.354 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@373ad1f4
+2026-05-03 16:33:43.789 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
