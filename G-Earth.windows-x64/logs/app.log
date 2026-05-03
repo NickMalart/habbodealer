@@ -147,3 +147,4 @@ java.net.SocketException: Connection reset
 2026-05-03 14:08:30.450 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@2ad954b1
 2026-05-03 14:10:11.542 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@537ad7f5
 2026-05-03 14:14:51.616 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@7dc7030b
+2026-05-03 14:20:51.691 WARN  g.a.p.c.p.shockwave.ShockwaveProxy - Aborting shockwave proxy.

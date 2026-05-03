@@ -680,7 +680,28 @@ func (a *App) initUsers28ParserCommand() {
 		return
 	}
 	if strings.TrimSpace(a.users28ParserScript) == "" {
-		a.users28ParserScript = filepath.Join("scripts", "parse_users28.py")
+		// Resolve relative to the executable so the script is always found
+		// regardless of working directory (e.g. when launched by app-launcher).
+		exePath, _ := os.Executable()
+		exeDir := filepath.Dir(exePath)
+		scriptCandidates := []string{
+			// Primary: exe is at build/bin/ → two levels up = workspace root
+			filepath.Join(exeDir, "..", "..", "scripts", "parse_users28.py"),
+			// Fallback for go run from workspace root
+			filepath.Join("..", "scripts", "parse_users28.py"),
+			filepath.Join("scripts", "parse_users28.py"),
+		}
+		for _, c := range scriptCandidates {
+			abs, _ := filepath.Abs(c)
+			if _, err := os.Stat(abs); err == nil {
+				a.users28ParserScript = abs
+				break
+			}
+		}
+		if a.users28ParserScript == "" {
+			// Last resort: keep a relative path and let the runner report the error
+			a.users28ParserScript = filepath.Join("scripts", "parse_users28.py")
+		}
 	}
 	if strings.TrimSpace(a.users28PythonExec) != "" {
 		return
