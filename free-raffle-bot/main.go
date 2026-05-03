@@ -74,6 +74,8 @@ type RaffleSession struct {
 	WinnerMethod     string              `json:"winnerMethod,omitempty"`
 	WinnerSummary    string              `json:"winnerSummary,omitempty"`
 	WinnerProofURL   string              `json:"winnerProofUrl,omitempty"`
+	WinnerProofID    string              `json:"-"`
+	WinnerProofFile  string              `json:"-"`
 	DBID             int64               `json:"-"`
 	CursorAt         time.Time           `json:"-"`
 	CursorEntry      string              `json:"-"`
@@ -280,6 +282,8 @@ func copySession(s *RaffleSession) *RaffleSession {
 		WinnerMethod:     s.WinnerMethod,
 		WinnerSummary:    s.WinnerSummary,
 		WinnerProofURL:   s.WinnerProofURL,
+		WinnerProofID:    s.WinnerProofID,
+		WinnerProofFile:  s.WinnerProofFile,
 		DBID:             s.DBID,
 		CursorAt:         s.CursorAt,
 		CursorEntry:      s.CursorEntry,
@@ -837,6 +841,9 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	if strings.TrimSpace(session.WinnerProofURL) != "" {
 		trackerEmbed["image"] = map[string]interface{}{"url": strings.TrimSpace(session.WinnerProofURL)}
 	}
+	if strings.TrimSpace(session.WinnerProofID) != "" && strings.TrimSpace(session.WinnerProofFile) != "" {
+		trackerEmbed["image"] = map[string]interface{}{"url": "attachment://" + strings.TrimSpace(session.WinnerProofFile)}
+	}
 
 	if heroImageURL != "" {
 		promoEmbed["image"] = map[string]interface{}{"url": heroImageURL}
@@ -855,6 +862,12 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	proofBytes := a.pendingProofBytes
 	proofFileName := strings.TrimSpace(a.pendingProofFileName)
 	heroAttachmentID := strings.TrimSpace(a.raffleHeroAttachmentID)
+	existingProofAttachmentID := ""
+	existingProofFileName := ""
+	if session != nil {
+		existingProofAttachmentID = strings.TrimSpace(session.WinnerProofID)
+		existingProofFileName = strings.TrimSpace(session.WinnerProofFile)
+	}
 	a.mu.Unlock()
 
 	if proofBytes != nil && proofFileName != "" {
@@ -871,14 +884,12 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 
 		var patchReq *http.Request
 		if proofBytes != nil && proofFileName != "" {
-			// Build attachments list: keep existing hero image + add new proof
+			// Keep the hero attachment and replace the proof attachment in-place.
 			attachmentsList := []map[string]interface{}{}
 			nextFileIdx := 0
 			if heroAttachmentID != "" {
-				// Keep the existing hero image attachment by its snowflake ID
 				attachmentsList = append(attachmentsList, map[string]interface{}{"id": heroAttachmentID})
 			}
-			// New proof file — Discord identifies new files by their multipart index
 			attachmentsList = append(attachmentsList, map[string]interface{}{"id": strconv.Itoa(nextFileIdx), "filename": proofFileName})
 
 			payload["attachments"] = attachmentsList
@@ -908,6 +919,16 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			}
 			patchReq.Header.Set("Content-Type", mpWriter.FormDataContentType())
 		} else {
+			if existingProofAttachmentID != "" && existingProofFileName != "" {
+				payload["attachments"] = []map[string]interface{}{
+					{"id": existingProofAttachmentID, "filename": existingProofFileName},
+				}
+				if heroAttachmentID != "" {
+					payload["attachments"] = append(payload["attachments"].([]map[string]interface{}), map[string]interface{}{"id": heroAttachmentID})
+				}
+			} else if heroAttachmentID != "" {
+				payload["attachments"] = []map[string]interface{}{{"id": heroAttachmentID}}
+			}
 			jb, err := json.Marshal(payload)
 			if err != nil {
 				return err
@@ -924,27 +945,37 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			defer resp.Body.Close()
 			patchBody, _ := io.ReadAll(resp.Body)
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				if proofBytes != nil {
+				if proofBytes != nil || existingProofAttachmentID != "" {
 					var patchResp struct {
 						Attachments []struct {
+							ID       string `json:"id"`
 							Filename string `json:"filename"`
 							URL      string `json:"url"`
 						} `json:"attachments"`
 					}
 					_ = json.Unmarshal(patchBody, &patchResp)
 					cdnURL := ""
+					proofAttachmentID := ""
+					proofAttachmentFile := ""
 					for _, att := range patchResp.Attachments {
-						if strings.EqualFold(att.Filename, proofFileName) {
+						if strings.EqualFold(att.Filename, proofFileName) || (proofFileName == "" && strings.EqualFold(att.Filename, existingProofFileName)) {
 							cdnURL = strings.TrimSpace(att.URL)
+							proofAttachmentID = strings.TrimSpace(att.ID)
+							proofAttachmentFile = strings.TrimSpace(att.Filename)
 							break
 						}
 					}
-					if cdnURL == "" && len(patchResp.Attachments) > 0 {
-						cdnURL = strings.TrimSpace(patchResp.Attachments[len(patchResp.Attachments)-1].URL)
+					if cdnURL == "" && proofBytes != nil && len(patchResp.Attachments) > 0 {
+						last := patchResp.Attachments[len(patchResp.Attachments)-1]
+						cdnURL = strings.TrimSpace(last.URL)
+						proofAttachmentID = strings.TrimSpace(last.ID)
+						proofAttachmentFile = strings.TrimSpace(last.Filename)
 					}
 					a.mu.Lock()
 					if cdnURL != "" && a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
 						a.currentSession.WinnerProofURL = cdnURL
+						a.currentSession.WinnerProofID = proofAttachmentID
+						a.currentSession.WinnerProofFile = proofAttachmentFile
 					}
 					a.pendingProofBytes = nil
 					a.pendingProofFileName = ""
