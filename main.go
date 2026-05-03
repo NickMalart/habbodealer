@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sirupsen/logrus"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	g "xabbo.b7c.io/goearth"
@@ -629,11 +630,19 @@ type App struct {
 	gameHistory          []GameHistoryEntry
 	gameHistoryMu        sync.Mutex
 	currentGameHistoryID string
+	historyDB            *pgxpool.Pool
+	historyOwnerKey      string
+	historyDBMu          sync.Mutex
 	ctx                  context.Context
 	currentDealerName    string
 	currentRoomName      string
 	users28PythonExec    string
 	users28ParserScript  string
+}
+
+type DBConfig struct {
+	DatabaseURL string `json:"databaseUrl"`
+	OwnerKey    string `json:"ownerKey"`
 }
 
 type PokerDisplayConfig struct {
@@ -749,6 +758,7 @@ func (a *App) getCurrentRoomName() string {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.initHistoryDatabase()
 	a.loadGameHistory()
 	rand.Seed(time.Now().UnixNano())
 	a.setupExt()
@@ -842,6 +852,16 @@ func (a *App) startup(ctx context.Context) {
 		}
 	}()
 
+}
+
+func (a *App) shutdown(context.Context) {
+	a.historyDBMu.Lock()
+	db := a.historyDB
+	a.historyDB = nil
+	a.historyDBMu.Unlock()
+	if db != nil {
+		db.Close()
+	}
 }
 
 func (a *App) LoadConfig() *PokerDisplayConfig {
@@ -1729,6 +1749,429 @@ func cloneTradeItems(items []TradeItem) []TradeItem {
 	return copyItems
 }
 
+func cloneGameHistoryEntries(entries []GameHistoryEntry) []GameHistoryEntry {
+	out := make([]GameHistoryEntry, len(entries))
+	for i := range entries {
+		out[i] = entries[i]
+		out[i].BetItems = cloneTradeItems(entries[i].BetItems)
+		out[i].PayoutItems = cloneTradeItems(entries[i].PayoutItems)
+		out[i].Notes = append([]string(nil), entries[i].Notes...)
+	}
+	return out
+}
+
+func normalizeGameHistoryWinners(entries []GameHistoryEntry) int {
+	modified := 0
+	for i := range entries {
+		w := strings.TrimSpace(entries[i].Winner)
+		if w == "" {
+			continue
+		}
+		if strings.EqualFold(w, "Dealer") {
+			continue
+		}
+		if entries[i].PlayerName != "" && strings.EqualFold(w, entries[i].PlayerName) {
+			entries[i].Winner = entries[i].PlayerName
+			continue
+		}
+		entries[i].Winner = "Dealer"
+		modified++
+	}
+	return modified
+}
+
+func loadDBConfig() (*DBConfig, error) {
+	searchDirs := []string{}
+	if cwd, err := os.Getwd(); err == nil {
+		searchDirs = append(searchDirs, cwd)
+	}
+	if exePath, err := os.Executable(); err == nil {
+		searchDirs = append(searchDirs, filepath.Dir(exePath))
+	}
+
+	seenDirs := map[string]struct{}{}
+	candidates := []string{}
+
+	for _, dir := range searchDirs {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			continue
+		}
+
+		for {
+			if _, ok := seenDirs[abs]; !ok {
+				seenDirs[abs] = struct{}{}
+				candidates = append(candidates, filepath.Join(abs, "db.local.json"))
+			}
+			parent := filepath.Dir(abs)
+			if parent == abs {
+				break
+			}
+			abs = parent
+		}
+	}
+
+	for _, candidate := range candidates {
+		data, err := os.ReadFile(candidate)
+		if err != nil {
+			continue
+		}
+
+		var cfg DBConfig
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return nil, fmt.Errorf("failed to parse %s: %w", candidate, err)
+		}
+		if strings.TrimSpace(cfg.DatabaseURL) == "" {
+			return nil, fmt.Errorf("databaseUrl is empty in %s", candidate)
+		}
+		return &cfg, nil
+	}
+
+	return nil, fmt.Errorf("db.local.json not found in cwd/exe parent paths")
+}
+
+func (a *App) initHistoryDatabase() {
+	cfg, err := loadDBConfig()
+	if err != nil {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] config not loaded: %v", err))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] pool creation failed: %v", err))
+		return
+	}
+	if err := db.Ping(ctx); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] ping failed: %v", err))
+		db.Close()
+		return
+	}
+
+	owner := strings.TrimSpace(os.Getenv("ROLL_ORIGINS_OWNER_KEY"))
+	if owner == "" {
+		owner = strings.TrimSpace(os.Getenv("TRADE_TRACKER_OWNER_KEY"))
+	}
+	if owner == "" {
+		owner = strings.TrimSpace(cfg.OwnerKey)
+	}
+	if owner == "" {
+		if h, err := os.Hostname(); err == nil {
+			owner = h
+		} else {
+			owner = "local"
+		}
+	}
+
+	a.historyDBMu.Lock()
+	a.historyDB = db
+	a.historyOwnerKey = owner
+	a.historyDBMu.Unlock()
+
+	if err := a.ensureGameHistoryTables(); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] migration failed: %v", err))
+		return
+	}
+
+	a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] connected (owner=%s)", owner))
+}
+
+func (a *App) getHistoryDB() (*pgxpool.Pool, string) {
+	a.historyDBMu.Lock()
+	defer a.historyDBMu.Unlock()
+	return a.historyDB, a.historyOwnerKey
+}
+
+func (a *App) ensureGameHistoryTables() error {
+	db, _ := a.getHistoryDB()
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	queries := []string{
+		`CREATE TABLE IF NOT EXISTS game_history_entries (
+			id TEXT NOT NULL,
+			owner_key TEXT NOT NULL DEFAULT '',
+			player_name TEXT NOT NULL DEFAULT '',
+			started_at TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL DEFAULT '',
+			completed_at TEXT NOT NULL DEFAULT '',
+			game TEXT NOT NULL DEFAULT '',
+			winner TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			issue BOOLEAN NOT NULL DEFAULT FALSE,
+			issue_reason TEXT NOT NULL DEFAULT '',
+			player_result TEXT NOT NULL DEFAULT '',
+			dealer_result TEXT NOT NULL DEFAULT '',
+			notes JSONB NOT NULL DEFAULT '[]'::jsonb,
+			choice TEXT NOT NULL DEFAULT '',
+			choice_shout TEXT NOT NULL DEFAULT '',
+			payout_multiplier INTEGER NOT NULL DEFAULT 0,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_db_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (id, owner_key)
+		)`,
+		`CREATE TABLE IF NOT EXISTS game_history_items (
+			entry_id TEXT NOT NULL,
+			owner_key TEXT NOT NULL DEFAULT '',
+			item_type TEXT NOT NULL,
+			item_index INTEGER NOT NULL,
+			item_name TEXT NOT NULL DEFAULT '',
+			quantity INTEGER NOT NULL DEFAULT 1,
+			raw_data TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (entry_id, owner_key, item_type, item_index),
+			FOREIGN KEY (entry_id, owner_key)
+				REFERENCES game_history_entries(id, owner_key)
+				ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_game_history_owner_started ON game_history_entries(owner_key, started_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_game_history_items_owner_entry ON game_history_items(owner_key, entry_id, item_type, item_index)`,
+	}
+
+	for _, q := range queries {
+		if _, err := db.Exec(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *App) loadGameHistoryFromDB() ([]GameHistoryEntry, error) {
+	db, owner := a.getHistoryDB()
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	rows, err := db.Query(ctx, `
+		SELECT
+			id,
+			player_name,
+			started_at,
+			updated_at,
+			completed_at,
+			game,
+			winner,
+			status,
+			issue,
+			issue_reason,
+			player_result,
+			dealer_result,
+			notes,
+			choice,
+			choice_shout,
+			payout_multiplier
+		FROM game_history_entries
+		WHERE owner_key = $1
+		ORDER BY started_at DESC, id DESC
+	`, owner)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	entries := make([]GameHistoryEntry, 0)
+	for rows.Next() {
+		var e GameHistoryEntry
+		var notesRaw []byte
+		if err := rows.Scan(
+			&e.ID,
+			&e.PlayerName,
+			&e.StartedAt,
+			&e.UpdatedAt,
+			&e.CompletedAt,
+			&e.Game,
+			&e.Winner,
+			&e.Status,
+			&e.Issue,
+			&e.IssueReason,
+			&e.PlayerResult,
+			&e.DealerResult,
+			&notesRaw,
+			&e.Choice,
+			&e.ChoiceShout,
+			&e.PayoutMultiplier,
+		); err != nil {
+			return nil, err
+		}
+		if len(notesRaw) > 0 {
+			_ = json.Unmarshal(notesRaw, &e.Notes)
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	itemRows, err := db.Query(ctx, `
+		SELECT entry_id, item_type, item_name, quantity, raw_data
+		FROM game_history_items
+		WHERE owner_key = $1
+		ORDER BY entry_id, item_type, item_index
+	`, owner)
+	if err != nil {
+		return nil, err
+	}
+	defer itemRows.Close()
+
+	entryByID := make(map[string]*GameHistoryEntry, len(entries))
+	for i := range entries {
+		entryByID[entries[i].ID] = &entries[i]
+	}
+
+	for itemRows.Next() {
+		var entryID string
+		var itemType string
+		var item TradeItem
+		if err := itemRows.Scan(&entryID, &itemType, &item.Name, &item.Quantity, &item.RawData); err != nil {
+			return nil, err
+		}
+		e := entryByID[entryID]
+		if e == nil {
+			continue
+		}
+		if strings.EqualFold(itemType, "bet") {
+			e.BetItems = append(e.BetItems, item)
+		} else {
+			e.PayoutItems = append(e.PayoutItems, item)
+		}
+	}
+	if err := itemRows.Err(); err != nil {
+		return nil, err
+	}
+
+	return entries, nil
+}
+
+func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
+	db, owner := a.getHistoryDB()
+	if db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	ids := make([]string, 0, len(entries))
+	for _, e := range entries {
+		ids = append(ids, e.ID)
+		notesJSON, _ := json.Marshal(e.Notes)
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO game_history_entries (
+				id, owner_key, player_name, started_at, updated_at, completed_at,
+				game, winner, status, issue, issue_reason, player_result, dealer_result,
+				notes, choice, choice_shout, payout_multiplier, updated_db_at
+			) VALUES (
+				$1,$2,$3,$4,$5,$6,
+				$7,$8,$9,$10,$11,$12,$13,
+				$14,$15,$16,$17,NOW()
+			)
+			ON CONFLICT (id, owner_key) DO UPDATE SET
+				player_name = EXCLUDED.player_name,
+				started_at = EXCLUDED.started_at,
+				updated_at = EXCLUDED.updated_at,
+				completed_at = EXCLUDED.completed_at,
+				game = EXCLUDED.game,
+				winner = EXCLUDED.winner,
+				status = EXCLUDED.status,
+				issue = EXCLUDED.issue,
+				issue_reason = EXCLUDED.issue_reason,
+				player_result = EXCLUDED.player_result,
+				dealer_result = EXCLUDED.dealer_result,
+				notes = EXCLUDED.notes,
+				choice = EXCLUDED.choice,
+				choice_shout = EXCLUDED.choice_shout,
+				payout_multiplier = EXCLUDED.payout_multiplier,
+				updated_db_at = NOW()
+		`,
+			e.ID,
+			owner,
+			e.PlayerName,
+			e.StartedAt,
+			e.UpdatedAt,
+			e.CompletedAt,
+			e.Game,
+			e.Winner,
+			e.Status,
+			e.Issue,
+			e.IssueReason,
+			e.PlayerResult,
+			e.DealerResult,
+			notesJSON,
+			e.Choice,
+			e.ChoiceShout,
+			e.PayoutMultiplier,
+		); err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec(ctx, `DELETE FROM game_history_items WHERE entry_id = $1 AND owner_key = $2`, e.ID, owner); err != nil {
+			return err
+		}
+
+		for i, item := range e.BetItems {
+			qty := item.Quantity
+			if qty <= 0 {
+				qty = 1
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO game_history_items (entry_id, owner_key, item_type, item_index, item_name, quantity, raw_data)
+				VALUES ($1,$2,'bet',$3,$4,$5,$6)
+			`, e.ID, owner, i, item.Name, qty, item.RawData); err != nil {
+				return err
+			}
+		}
+
+		for i, item := range e.PayoutItems {
+			qty := item.Quantity
+			if qty <= 0 {
+				qty = 1
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO game_history_items (entry_id, owner_key, item_type, item_index, item_name, quantity, raw_data)
+				VALUES ($1,$2,'payout',$3,$4,$5,$6)
+			`, e.ID, owner, i, item.Name, qty, item.RawData); err != nil {
+				return err
+			}
+		}
+	}
+
+	if len(ids) == 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM game_history_entries WHERE owner_key = $1`, owner); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.Exec(ctx, `DELETE FROM game_history_entries WHERE owner_key = $1 AND NOT (id = ANY($2::text[]))`, owner, ids); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
 // getRecentGameSummaries returns the last n completed games as anonymized
 // summaries suitable for public status APIs. Player names are not exposed —
 // winners are mapped to "Player"/"Dealer"/"Unknown".
@@ -1788,6 +2231,22 @@ func gameHistoryTimestamp() string {
 }
 
 func (a *App) loadGameHistory() {
+	if entries, err := a.loadGameHistoryFromDB(); err == nil && len(entries) > 0 {
+		modified := normalizeGameHistoryWinners(entries)
+		a.gameHistoryMu.Lock()
+		a.gameHistory = entries
+		if modified > 0 {
+			a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY] normalized %d winner fields to 'Dealer'", modified))
+			a.saveGameHistoryLocked()
+		}
+		a.gameHistoryMu.Unlock()
+		a.emitGameHistoryUpdate()
+		a.AddLogMsg("[GAME_HISTORY][DB] loaded game history from database")
+		return
+	} else if err != nil {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] load failed, using file fallback: %v", err))
+	}
+
 	path := getGameHistoryFilePath()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1807,25 +2266,7 @@ func (a *App) loadGameHistory() {
 	// name (when the player won) or the literal "Dealer". Historically the
 	// dealer's real username (e.g. "Gymbox") could be stored; convert those
 	// to the canonical "Dealer" value so frontends and exports are stable.
-	modified := 0
-	for i := range entries {
-		w := strings.TrimSpace(entries[i].Winner)
-		if w == "" {
-			continue
-		}
-		// Already normalized
-		if strings.EqualFold(w, "Dealer") {
-			continue
-		}
-		// If the winner string matches the recorded player name, keep it as
-		// the player's name (player win). Otherwise treat as dealer.
-		if entries[i].PlayerName != "" && strings.EqualFold(w, entries[i].PlayerName) {
-			entries[i].Winner = entries[i].PlayerName
-			continue
-		}
-		entries[i].Winner = "Dealer"
-		modified++
-	}
+	modified := normalizeGameHistoryWinners(entries)
 
 	a.gameHistoryMu.Lock()
 	a.gameHistory = entries
@@ -1835,6 +2276,9 @@ func (a *App) loadGameHistory() {
 		a.saveGameHistoryLocked()
 	}
 	a.gameHistoryMu.Unlock()
+	if err := a.persistGameHistoryToDB(cloneGameHistoryEntries(entries)); err == nil && len(entries) > 0 {
+		a.AddLogMsg("[GAME_HISTORY][DB] migrated file history into database")
+	}
 	a.emitGameHistoryUpdate()
 }
 
@@ -1858,6 +2302,9 @@ func (a *App) ClearGameHistory() {
 	a.gameHistoryMu.Unlock()
 
 	_ = os.Remove(getGameHistoryFilePath())
+	if err := a.persistGameHistoryToDB(nil); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] clear failed: %v", err))
+	}
 	a.emitGameHistoryUpdate()
 	a.AddLogMsg("[GAME_HISTORY] cleared all saved game history")
 }
@@ -1889,10 +2336,15 @@ func (a *App) syncGameHistory() {
 	// Save a copy of the history to disk without holding the mutex while
 	// performing heavier work (like emitting stats which may re-lock).
 	a.gameHistoryMu.Lock()
-	jsonData, err := json.MarshalIndent(a.gameHistory, "", "  ")
+	snapshot := cloneGameHistoryEntries(a.gameHistory)
+	jsonData, err := json.MarshalIndent(snapshot, "", "  ")
 	a.gameHistoryMu.Unlock()
 	if err == nil {
 		_ = os.WriteFile(getGameHistoryFilePath(), jsonData, 0600)
+	}
+
+	if err := a.persistGameHistoryToDB(snapshot); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] sync save failed: %v", err))
 	}
 
 	if a.ctx == nil {
