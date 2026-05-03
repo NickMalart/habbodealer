@@ -4927,6 +4927,7 @@ func (a *App) finalizeRiskKeep() {
 	riskSessionParams = nil
 	riskPendingBet = 0
 	playerRisk = 0
+	riskInitialized = false
 	// reset multiplier to default
 	riskSessionPayoutMultiplier = 2
 	mutex.Unlock()
