@@ -170,6 +170,10 @@ export function PauseCasinoSetup() {
   return window['go']['main']['App']['PauseCasinoSetup']();
 }
 
+export function PostDealerOpenAnnouncement(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8) {
+  return window['go']['main']['App']['PostDealerOpenAnnouncement'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
+}
+
 export function ReadEventFileJSON(arg1, arg2) {
   return window['go']['main']['App']['ReadEventFileJSON'](arg1, arg2);
 }

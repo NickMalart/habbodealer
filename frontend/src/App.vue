@@ -36,6 +36,125 @@
         <div v-if="casinoStatusKey !== 'stopped'" class="trade-limits-home">Trade limits: max {{ maxUniqueItemsInput }} unique items, max {{ maxQuantityPerItemInput }} per item</div>
       </div>
 
+      <div class="dealer-post-panel">
+        <div class="dealer-post-bg dealer-post-bg-a"></div>
+        <div class="dealer-post-bg dealer-post-bg-b"></div>
+        <div class="dealer-post-bg dealer-post-bg-c"></div>
+
+        <div class="dealer-post-head">
+          <div class="dealer-post-icon-wrap" aria-hidden="true">
+            <svg viewBox="0 0 24 24" class="dealer-post-icon" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 11v2"></path>
+              <path d="M6 9l9-4v14l-9-4z"></path>
+              <path d="M6 15v4"></path>
+              <path d="M17 8c2 1 3 2.5 3 4s-1 3-3 4"></path>
+            </svg>
+          </div>
+
+          <div class="dealer-post-head-copy">
+            <h3 class="dealer-post-title">Dealer Open Blast</h3>
+            <p class="dealer-post-subtitle">Launch hype announcements with room details and screenshot embeds</p>
+          </div>
+
+          <div class="dealer-post-badges">
+            <span class="dealer-post-badge pulse">Live Alert</span>
+            <span class="dealer-post-badge">Image Ready</span>
+            <span class="dealer-post-badge">2 Channels</span>
+          </div>
+        </div>
+
+        <div class="dealer-post-chip-row">
+          <span class="dealer-post-chip">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M8 10h8"></path><path d="M8 14h4"></path></svg>
+            Room Stamp
+          </span>
+          <span class="dealer-post-chip">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"></rect><circle cx="9" cy="9" r="1.5"></circle><path d="M20 15l-4-4-7 7"></path></svg>
+            Screenshot Embed
+          </span>
+          <span class="dealer-post-chip">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"></path><path d="M3 12h18"></path></svg>
+            Channel Split
+          </span>
+        </div>
+
+        <div class="dealer-post-row">
+          <label class="dealer-post-label">Room/Game to post</label>
+          <input
+            v-model="postRoomGameInput"
+            type="text"
+            placeholder="Example: Bobba Dice Arena"
+            class="dealer-post-input"
+          />
+        </div>
+
+        <div class="dealer-post-row">
+          <label class="dealer-post-label">Add screenshot/image (optional)</label>
+          <input type="file" accept="image/*" @change="onDealerPostImageChange" class="dealer-post-file" />
+        </div>
+
+        <div class="dealer-post-raffle-toggle">
+          <label class="dealer-post-raffle-label">
+            <input type="checkbox" v-model="raffleEnabled" />
+            Enable free draw promo block
+          </label>
+        </div>
+
+        <div v-if="raffleEnabled" class="dealer-post-raffle-panel">
+          <div class="dealer-post-row">
+            <label class="dealer-post-label">Raffle item name</label>
+            <input
+              v-model="raffleItemName"
+              type="text"
+              placeholder="Example: HC Sofa"
+              class="dealer-post-input"
+            />
+          </div>
+
+          <div class="dealer-post-row">
+            <label class="dealer-post-label">Raffle item image (big highlight)</label>
+            <input type="file" accept="image/*" @change="onRaffleImageChange" class="dealer-post-file" />
+          </div>
+
+          <div v-if="raffleImagePreview" class="dealer-post-preview-wrap">
+            <div class="dealer-post-preview-frame raffle">
+              <img :src="raffleImagePreview" class="dealer-post-preview raffle" alt="Raffle preview" />
+              <div class="dealer-post-preview-cap">Raffle prize spotlight image</div>
+            </div>
+            <button type="button" class="copy-btn" @click="clearRaffleImage">Remove raffle image</button>
+          </div>
+        </div>
+
+        <div v-if="postImagePreview" class="dealer-post-preview-wrap">
+          <div class="dealer-post-preview-frame">
+            <img :src="postImagePreview" class="dealer-post-preview" alt="Preview" />
+            <div class="dealer-post-preview-cap">Image loaded and ready to post</div>
+          </div>
+          <button type="button" class="copy-btn" @click="clearDealerPostImage">Remove image</button>
+        </div>
+
+        <div class="dealer-post-actions">
+          <button type="button" class="dealer-post-btn general" :disabled="dealerPostBusy" @click="postDealerOpen('general')">
+            <span class="dealer-post-btn-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11v2"></path><path d="M6 9l9-4v14l-9-4z"></path><path d="M17 8c2 1 3 2.5 3 4s-1 3-3 4"></path></svg>
+            </span>
+            <span class="dealer-post-btn-copy">
+              <strong>Post to General</strong>
+              <small>Main announcements channel</small>
+            </span>
+          </button>
+          <button type="button" class="dealer-post-btn dice" :disabled="dealerPostBusy" @click="postDealerOpen('dice-gamesd')">
+            <span class="dealer-post-btn-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"></rect><circle cx="9" cy="9" r="1"></circle><circle cx="15" cy="9" r="1"></circle><circle cx="9" cy="15" r="1"></circle><circle cx="15" cy="15" r="1"></circle></svg>
+            </span>
+            <span class="dealer-post-btn-copy">
+              <strong>Post to dice-gamesd</strong>
+              <small>Dice-focused room updates</small>
+            </span>
+          </button>
+        </div>
+      </div>
+
     </div>
 
       <div class="dice-setup-modal-backdrop" v-if="showDiceSetupModal" @click="showDiceSetupModal = false">
@@ -800,6 +919,16 @@ export default {
       showDealerNameModal: false,
       dealerNameInput: '',
       roomNameInput: '',
+      postRoomGameInput: '',
+      postImageDataUrl: '',
+      postImageName: '',
+      postImagePreview: '',
+      raffleEnabled: false,
+      raffleItemName: '',
+      raffleImageDataUrl: '',
+      raffleImageName: '',
+      raffleImagePreview: '',
+      dealerPostBusy: false,
       maxUniqueItemsInput: 5,
       maxQuantityPerItemInput: 50,
       diceSetup: [],
@@ -993,6 +1122,81 @@ export default {
     closeGameGuide() {
       this.activeGameGuide = null;
     },
+      onDealerPostImageChange(evt) {
+        const file = evt && evt.target && evt.target.files ? evt.target.files[0] : null;
+        if (!file) return;
+
+        this.postImageName = file.name || 'dealer-open.png';
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = String(reader.result || '');
+          this.postImageDataUrl = dataUrl;
+          this.postImagePreview = dataUrl;
+        };
+        reader.readAsDataURL(file);
+      },
+
+      clearDealerPostImage() {
+        this.postImageDataUrl = '';
+        this.postImageName = '';
+        this.postImagePreview = '';
+      },
+
+      onRaffleImageChange(evt) {
+        const file = evt && evt.target && evt.target.files ? evt.target.files[0] : null;
+        if (!file) return;
+
+        this.raffleImageName = file.name || 'raffle-item.png';
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = String(reader.result || '');
+          this.raffleImageDataUrl = dataUrl;
+          this.raffleImagePreview = dataUrl;
+        };
+        reader.readAsDataURL(file);
+      },
+
+      clearRaffleImage() {
+        this.raffleImageDataUrl = '';
+        this.raffleImageName = '';
+        this.raffleImagePreview = '';
+      },
+
+      async postDealerOpen(channel) {
+        try {
+          if (this.dealerPostBusy) return;
+          this.dealerPostBusy = true;
+
+          const room = (this.postRoomGameInput || this.roomNameInput || '').trim();
+          if (!room) {
+            this.addLogMsg('[UI] Post cancelled: no room/game entered');
+            return;
+          }
+
+          const result = await window.go.main.App.PostDealerOpenAnnouncement(
+            channel,
+            room,
+            this.postImageDataUrl || '',
+            this.postImageName || '',
+            !!this.raffleEnabled,
+            (this.raffleItemName || '').trim(),
+            this.raffleImageDataUrl || '',
+            this.raffleImageName || ''
+          );
+
+          if (String(result || '').toLowerCase() === 'ok') {
+            this.addLogMsg('[UI] Dealer open post sent to ' + channel + ' (' + room + ')');
+          } else {
+            this.addLogMsg('[UI] Dealer open post failed: ' + result);
+          }
+        } catch (err) {
+          this.addLogMsg('[UI] Dealer open post error');
+          console.error(err);
+        } finally {
+          this.dealerPostBusy = false;
+        }
+      },
+
       async startCasino() {
         try {
           if (this.casinoStatusKey === 'stopped') {
@@ -2712,6 +2916,368 @@ input[type="text"]::placeholder {
   background: #141414;
   border: 1px solid #2f2f2f;
   border-radius: 8px;
+}
+
+.dealer-post-panel {
+  position: relative;
+  overflow: hidden;
+  margin-top: 16px;
+  padding: 20px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 214, 128, 0.7);
+  background:
+    radial-gradient(100% 140% at 0% 0%, rgba(255, 196, 0, 0.18) 0%, transparent 42%),
+    radial-gradient(90% 110% at 100% 100%, rgba(27, 182, 255, 0.22) 0%, transparent 46%),
+    linear-gradient(130deg, #251500 0%, #4d2300 42%, #003649 100%);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.38), inset 0 0 46px rgba(255, 173, 51, 0.11);
+}
+
+.dealer-post-bg {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(1px);
+  opacity: 0.3;
+  pointer-events: none;
+  animation: floatPulse 6s ease-in-out infinite;
+}
+
+.dealer-post-bg-a {
+  width: 190px;
+  height: 190px;
+  top: -55px;
+  right: -55px;
+  background: radial-gradient(circle, rgba(255, 198, 11, 1) 0%, rgba(255, 198, 11, 0) 74%);
+}
+
+.dealer-post-bg-b {
+  width: 220px;
+  height: 220px;
+  bottom: -95px;
+  left: -80px;
+  background: radial-gradient(circle, rgba(0, 188, 255, 0.9) 0%, rgba(0, 188, 255, 0) 72%);
+  animation-delay: 1.2s;
+}
+
+.dealer-post-bg-c {
+  width: 150px;
+  height: 150px;
+  top: 46%;
+  left: 53%;
+  background: radial-gradient(circle, rgba(255, 76, 76, 0.5) 0%, rgba(255, 76, 76, 0) 72%);
+  animation-delay: 2.1s;
+}
+
+.dealer-post-head {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.dealer-post-icon-wrap {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #ffd36a, #ff7b38);
+  color: #2a1000;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+  animation: pulseRing 2.4s ease-in-out infinite;
+}
+
+.dealer-post-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.dealer-post-head-copy {
+  min-width: 0;
+}
+
+.dealer-post-title {
+  margin: 0;
+  color: #fff2ca;
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 0.4px;
+  text-shadow: 0 2px 18px rgba(255, 204, 51, 0.25);
+}
+
+.dealer-post-subtitle {
+  margin: 5px 0 0;
+  color: #ffe0a6;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.dealer-post-badges {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.dealer-post-badge {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.35px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #ffecc2;
+  border: 1px solid rgba(255, 236, 194, 0.45);
+  background: rgba(10, 10, 10, 0.24);
+}
+
+.dealer-post-badge.pulse {
+  color: #2c1300;
+  background: linear-gradient(135deg, #ffd878, #ff9e43);
+  border-color: rgba(255, 211, 122, 0.72);
+}
+
+.dealer-post-chip-row {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 14px 0 12px;
+}
+
+.dealer-post-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffe5b7;
+  border: 1px solid rgba(255, 229, 183, 0.35);
+  background: rgba(8, 8, 8, 0.26);
+}
+
+.dealer-post-chip svg {
+  width: 14px;
+  height: 14px;
+}
+
+.dealer-post-row {
+  position: relative;
+  z-index: 2;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dealer-post-label {
+  text-align: left;
+  color: #ffe2b0;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.dealer-post-input,
+.dealer-post-file {
+  width: 100%;
+  max-width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 220, 150, 0.5);
+  background: rgba(8, 8, 8, 0.42);
+  color: #fff;
+  padding: 10px 12px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.dealer-post-input:focus,
+.dealer-post-file:focus {
+  outline: none;
+  border-color: #ffd36a;
+  box-shadow: 0 0 0 2px rgba(255, 211, 106, 0.3);
+}
+
+.dealer-post-raffle-toggle {
+  position: relative;
+  z-index: 2;
+  margin: 8px 0 10px;
+}
+
+.dealer-post-raffle-label {
+  margin: 0;
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: #ffefc8;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.dealer-post-raffle-panel {
+  position: relative;
+  z-index: 2;
+  margin: 4px 0 12px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 222, 157, 0.45);
+  background: linear-gradient(135deg, rgba(0, 0, 0, 0.35), rgba(34, 14, 0, 0.35));
+}
+
+.dealer-post-preview-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  margin-bottom: 12px;
+  position: relative;
+  z-index: 2;
+  flex-wrap: wrap;
+}
+
+.dealer-post-preview-frame {
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 229, 167, 0.55);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.dealer-post-preview {
+  width: 220px;
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+.dealer-post-preview-frame.raffle {
+  border-color: rgba(255, 199, 92, 0.75);
+  box-shadow: 0 10px 26px rgba(255, 153, 0, 0.2);
+}
+
+.dealer-post-preview.raffle {
+  width: 340px;
+}
+
+.dealer-post-preview-cap {
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffdca6;
+  padding: 7px 10px;
+  border-top: 1px solid rgba(255, 220, 150, 0.35);
+  background: rgba(12, 12, 12, 0.52);
+}
+
+.dealer-post-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 12px;
+  position: relative;
+  z-index: 2;
+}
+
+.dealer-post-btn {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  padding: 12px 10px;
+  font-weight: 800;
+  cursor: pointer;
+  color: #111;
+  transition: transform 0.18s ease, filter 0.18s ease, box-shadow 0.18s ease;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.dealer-post-btn:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.08);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.28);
+}
+
+.dealer-post-btn-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.dealer-post-btn-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.dealer-post-btn-copy {
+  display: inline-flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.dealer-post-btn-copy strong {
+  font-size: 14px;
+}
+
+.dealer-post-btn-copy small {
+  font-size: 11px;
+  color: rgba(17, 17, 17, 0.75);
+}
+
+.dealer-post-btn.general {
+  background: linear-gradient(135deg, #ffd166, #ff9f1c 55%, #ff7b2c);
+}
+
+.dealer-post-btn.dice {
+  background: linear-gradient(135deg, #9fe8f4, #00b4d8 55%, #0d89da);
+}
+
+.dealer-post-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+@keyframes floatPulse {
+  0% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-6px) scale(1.03); }
+  100% { transform: translateY(0) scale(1); }
+}
+
+@keyframes pulseRing {
+  0% { box-shadow: 0 0 0 0 rgba(255, 214, 128, 0.45), 0 8px 18px rgba(0, 0, 0, 0.35); }
+  70% { box-shadow: 0 0 0 12px rgba(255, 214, 128, 0), 0 8px 18px rgba(0, 0, 0, 0.35); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 214, 128, 0), 0 8px 18px rgba(0, 0, 0, 0.35); }
+}
+
+@media (max-width: 640px) {
+  .dealer-post-head {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .dealer-post-badges {
+    justify-content: flex-start;
+  }
+
+  .dealer-post-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .dealer-post-preview {
+    width: 100%;
+  }
+
+  .dealer-post-preview.raffle {
+    width: 100%;
+  }
 }
 
 .casino-panel-inner {

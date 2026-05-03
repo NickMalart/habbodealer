@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"os/exec"
@@ -7527,6 +7530,264 @@ func (a *App) sendLiveDealerStatus(open bool, dealerName string) {
 			a.AddLogMsg("[LIVE_DEALER_STATUS] webhook sent to " + url)
 		}
 	}(open, dealerName)
+}
+
+func decodeImageDataURL(dataURL string) ([]byte, string, error) {
+	s := strings.TrimSpace(dataURL)
+	if !strings.HasPrefix(s, "data:") {
+		return nil, "", fmt.Errorf("missing data URL prefix")
+	}
+
+	parts := strings.SplitN(s, ",", 2)
+	if len(parts) != 2 {
+		return nil, "", fmt.Errorf("invalid data URL")
+	}
+
+	meta := strings.TrimPrefix(parts[0], "data:")
+	b64 := parts[1]
+	mimeType := "image/png"
+	metaParts := strings.Split(meta, ";")
+	if len(metaParts) > 0 {
+		if mt := strings.TrimSpace(metaParts[0]); mt != "" {
+			mimeType = mt
+		}
+	}
+
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return raw, mimeType, nil
+}
+
+// PostDealerOpenAnnouncement posts a manual dealer-open announcement to one
+// of two configured Discord webhook channels. Supports optional room image and
+// optional raffle block with item name + item image.
+func (a *App) PostDealerOpenAnnouncement(
+	channel string,
+	roomGame string,
+	imageDataURL string,
+	imageFileName string,
+	raffleEnabled bool,
+	raffleItemName string,
+	raffleImageDataURL string,
+	raffleImageFileName string,
+) string {
+	var webhookURL string
+	switch strings.ToLower(strings.TrimSpace(channel)) {
+	case "general":
+		webhookURL = "https://discordapp.com/api/webhooks/1500410995716395038/-F9mhhM4YA9rDIDYkmhAqzChZrHiLTCP0BWg1QtYRRCQdej0uedKHcH-QImUZUnzKwBA"
+	case "dice-gamesd":
+		webhookURL = "https://discordapp.com/api/webhooks/1500411179821170738/qbb-w4LcFR3WmOVYLigTmk0DtCOiQcEjf3CUxRM-wIAoPO_CbUnLJyT2OXQQYFNUYBHq"
+	default:
+		return "invalid channel"
+	}
+
+	room := strings.TrimSpace(roomGame)
+	if room == "" {
+		room = strings.TrimSpace(a.getCurrentRoomName())
+	}
+	if room == "" {
+		room = "Unknown room"
+	}
+
+	dealer := strings.TrimSpace(a.getCurrentDealerName())
+	if dealer == "" {
+		dealer = "Dealer"
+	}
+
+	now := time.Now().UTC()
+
+	headline := fmt.Sprintf("🎉 DEALER OPEN! 🎉 %s is LIVE! 🎲", room)
+	content := headline
+
+	baseEmbed := map[string]interface{}{
+		"title":       "🎁 WHAT'S LIVE RIGHT NOW 🎁",
+		"description": fmt.Sprintf("🔥 **%s**\n🎲 **Dealer:** %s\n🚀 Come and bet now before the room gets packed!", room, dealer),
+		"color":       16763955,
+		"fields": []map[string]interface{}{
+			{"name": "🎯 Status", "value": "🟢 Open and accepting bets", "inline": true},
+			{"name": "🎮 Room/Game", "value": room, "inline": true},
+			{"name": "👤 Dealer", "value": dealer, "inline": true},
+		},
+		"footer": map[string]interface{}{
+			"text": "✨ Live dealer update • Jump in now",
+		},
+		"timestamp": now.Format(time.RFC3339),
+	}
+
+	embeds := []interface{}{baseEmbed}
+
+	if raffleEnabled {
+		item := strings.TrimSpace(raffleItemName)
+		if item == "" {
+			item = "Mystery prize"
+		}
+
+		raffleEmbed := map[string]interface{}{
+			"title":       "🎁 FREE DRAW TO WIN! 🎁",
+			"description": fmt.Sprintf("🔥 If you come and bet, you go into a free draw to WIN: **%s**\n\n📢 Please check the raffle channel for updates, end dates, and who is in the draw.", item),
+			"color":       16744448,
+			"fields": []map[string]interface{}{
+				{"name": "🏆 Prize Item", "value": item, "inline": false},
+				{"name": "🎟️ How To Enter", "value": "Come and place a bet to be entered into the draw.", "inline": false},
+				{"name": "📌 Important", "value": "Check the raffle channel for updates, end dates, and entries.", "inline": false},
+			},
+			"footer": map[string]interface{}{
+				"text": "Raffle entries and status are tracked in the raffle channel",
+			},
+			"timestamp": now.Format(time.RFC3339),
+		}
+		embeds = append(embeds, raffleEmbed)
+		content = headline + fmt.Sprintf(" 🎁 FREE DRAW: %s", item)
+	}
+
+	payload := map[string]interface{}{
+		"username": "roll-origins",
+		"content":  content,
+		"embeds":   embeds,
+		"allowed_mentions": map[string]interface{}{
+			"parse": []string{},
+		},
+	}
+
+	client := &http.Client{Timeout: 8 * time.Second}
+	hasRoomImage := strings.TrimSpace(imageDataURL) != ""
+	hasRaffleImage := raffleEnabled && strings.TrimSpace(raffleImageDataURL) != ""
+	hasAnyImage := hasRoomImage || hasRaffleImage
+
+	if !hasAnyImage {
+		jb, err := json.Marshal(payload)
+		if err != nil {
+			return "marshal error: " + err.Error()
+		}
+
+		req, err := http.NewRequest("POST", webhookURL, bytes.NewReader(jb))
+		if err != nil {
+			return "request error: " + err.Error()
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return "post error: " + err.Error()
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			b, _ := io.ReadAll(resp.Body)
+			return fmt.Sprintf("discord status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		}
+
+		a.AddLogMsg("[DEALER_POST] sent dealer-open announcement to " + channel)
+		return "ok"
+	}
+
+	type uploadFile struct {
+		Field string
+		Name  string
+		Bytes []byte
+	}
+	uploads := make([]uploadFile, 0, 2)
+
+	if hasRoomImage {
+		raw, mimeType, err := decodeImageDataURL(imageDataURL)
+		if err != nil {
+			return "image decode error: " + err.Error()
+		}
+		fileName := strings.TrimSpace(imageFileName)
+		if fileName == "" {
+			switch mimeType {
+			case "image/jpeg":
+				fileName = "dealer-open.jpg"
+			case "image/gif":
+				fileName = "dealer-open.gif"
+			case "image/webp":
+				fileName = "dealer-open.webp"
+			default:
+				fileName = "dealer-open.png"
+			}
+		}
+		baseEmbed["image"] = map[string]interface{}{"url": "attachment://" + fileName}
+		uploads = append(uploads, uploadFile{Field: "files[0]", Name: fileName, Bytes: raw})
+	}
+
+	if hasRaffleImage {
+		raw, mimeType, err := decodeImageDataURL(raffleImageDataURL)
+		if err != nil {
+			return "raffle image decode error: " + err.Error()
+		}
+		fileName := strings.TrimSpace(raffleImageFileName)
+		if fileName == "" {
+			switch mimeType {
+			case "image/jpeg":
+				fileName = "raffle-item.jpg"
+			case "image/gif":
+				fileName = "raffle-item.gif"
+			case "image/webp":
+				fileName = "raffle-item.webp"
+			default:
+				fileName = "raffle-item.png"
+			}
+		}
+		if raffleEnabled && len(embeds) > 1 {
+			if raffleEmbed, ok := embeds[1].(map[string]interface{}); ok {
+				raffleEmbed["image"] = map[string]interface{}{"url": "attachment://" + fileName}
+			}
+		}
+		field := "files[1]"
+		if len(uploads) == 0 {
+			field = "files[0]"
+		}
+		uploads = append(uploads, uploadFile{Field: field, Name: fileName, Bytes: raw})
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return "marshal error: " + err.Error()
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	if err := writer.WriteField("payload_json", string(payloadJSON)); err != nil {
+		return "multipart payload error: " + err.Error()
+	}
+
+	for _, f := range uploads {
+		part, err := writer.CreateFormFile(f.Field, f.Name)
+		if err != nil {
+			return "multipart file error: " + err.Error()
+		}
+		if _, err := part.Write(f.Bytes); err != nil {
+			return "multipart write error: " + err.Error()
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		return "multipart close error: " + err.Error()
+	}
+
+	req, err := http.NewRequest("POST", webhookURL, &body)
+	if err != nil {
+		return "request error: " + err.Error()
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "post error: " + err.Error()
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Sprintf("discord status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+
+	a.AddLogMsg("[DEALER_POST] sent dealer-open announcement with image content to " + channel)
+	return "ok"
 }
 
 // sendLiveDealerGames posts an anonymized summary of the last N completed games

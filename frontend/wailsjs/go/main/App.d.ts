@@ -86,6 +86,8 @@ export function OpenLastTrade():Promise<void>;
 
 export function PauseCasinoSetup():Promise<void>;
 
+export function PostDealerOpenAnnouncement(arg1:string,arg2:string,arg3:string,arg4:string,arg5:boolean,arg6:string,arg7:string,arg8:string):Promise<string>;
+
 export function ReadEventFileJSON(arg1:string,arg2:string):Promise<string>;
 
 export function ResumeCasinoSetup():Promise<void>;
