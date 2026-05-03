@@ -637,6 +637,7 @@ type App struct {
 	historyOwnerKey      string
 	historyDBMu          sync.Mutex
 	historyInitMu        sync.Mutex
+	historyPersistMu     sync.Mutex
 	ctx                  context.Context
 	currentDealerName    string
 	currentRoomName      string
@@ -2135,6 +2136,9 @@ func (a *App) loadGameHistoryFromDB() ([]GameHistoryEntry, error) {
 }
 
 func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
+	a.historyPersistMu.Lock()
+	defer a.historyPersistMu.Unlock()
+
 	for attempt := 1; attempt <= 2; attempt++ {
 		if err := a.ensureHistoryDatabaseConnected(); err != nil {
 			dbDiagLog(fmt.Sprintf("persistGameHistoryToDB: db connect failed attempt=%d err=%v", attempt, err))
@@ -2271,7 +2275,9 @@ func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
 		}
 
 		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] persist attempt %d failed: %v", attempt, err))
-		a.resetHistoryDB()
+		if strings.Contains(strings.ToLower(err.Error()), "closed pool") {
+			a.resetHistoryDB()
+		}
 	}
 
 	return fmt.Errorf("game history persist failed after retry")
