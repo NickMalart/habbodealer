@@ -1781,6 +1781,16 @@ func normalizeGameHistoryWinners(entries []GameHistoryEntry) int {
 }
 
 func loadDBConfig() (*DBConfig, error) {
+	// Allow full config via environment variable — useful on machines where
+	// db.local.json is not present (e.g. a VM or CI that cloned from git).
+	if envURL := strings.TrimSpace(os.Getenv("ROLL_ORIGINS_DB_URL")); envURL != "" {
+		ownerKey := strings.TrimSpace(os.Getenv("ROLL_ORIGINS_OWNER_KEY"))
+		if ownerKey == "" {
+			ownerKey = strings.TrimSpace(os.Getenv("TRADE_TRACKER_OWNER_KEY"))
+		}
+		return &DBConfig{DatabaseURL: envURL, OwnerKey: ownerKey}, nil
+	}
+
 	searchDirs := []string{}
 	if cwd, err := os.Getwd(); err == nil {
 		searchDirs = append(searchDirs, cwd)
