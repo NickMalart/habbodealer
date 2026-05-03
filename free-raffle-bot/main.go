@@ -472,6 +472,52 @@ func (a *App) StopRaffle() RaffleState {
 	return a.GetState()
 }
 
+func (a *App) ResumeSession(dbID int64) (RaffleState, error) {
+	a.mu.Lock()
+	if a.currentSession != nil {
+		a.mu.Unlock()
+		return a.GetState(), fmt.Errorf("a session is already active; stop it first")
+	}
+	// Find the session in the closed list
+	idx := -1
+	for i := range a.sessions {
+		if a.sessions[i].DBID == dbID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		a.mu.Unlock()
+		return a.GetState(), fmt.Errorf("session %d not found", dbID)
+	}
+	// Move it out of closed list and make it current (clear EndedAt so it's live)
+	s := a.sessions[idx]
+	a.sessions = append(a.sessions[:idx], a.sessions[idx+1:]...)
+	s.EndedAt = ""
+	a.currentSession = &s
+	db := a.db
+	owner := a.ownerKey
+	a.enabled = true
+	a.mu.Unlock()
+
+	// Reopen in DB (clear ended_at)
+	if db != nil && dbID > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		if _, err := db.Exec(ctx,
+			`UPDATE raffle_sessions SET ended_at = NULL WHERE id = $1 AND owner_key = $2`,
+			dbID, owner,
+		); err != nil {
+			a.logDebug("resume session db update failed: %v", err)
+		}
+	}
+
+	a.logDebug("resumed session dbID=%d participants=%d", dbID, len(s.Participants))
+	a.emitUpdate()
+	go a.processNewBets()
+	return a.GetState(), nil
+}
+
 func (a *App) ClearSessions() RaffleState {
 	a.mu.Lock()
 	a.sessions = nil
