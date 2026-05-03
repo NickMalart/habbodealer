@@ -1,14 +1,14 @@
-2026-04-26 07:57:16.012 INFO  gearth.app.GEarth - Starting G-Earth 1.5.4-beta-22 from repository G-Realm/G-Earth
-2026-04-26 07:57:16.043 INFO  ROOT - Logging level set to INFO
-2026-04-26 07:57:17.057 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 1}
-2026-04-26 07:57:17.058 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 2}
-2026-04-26 07:57:17.858 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Programmer_1.4.0
-2026-04-26 07:57:18.030 INFO  gearth.app.misc.JavaLocator - Searching for Java installations on Windows in C:\Program Files\Java
-2026-04-26 07:57:18.031 WARN  gearth.app.misc.JavaLocator - No java installation not found in C:\Program Files\Java
-2026-04-26 07:57:18.034 WARN  gearth.app.misc.JavaLocator - No valid Java installation found
-2026-04-26 07:57:18.034 WARN  g.a.s.e.e.i.n.e.NormalExtensionRunner - No Java 1.8 installation found, cannot run extension jar file C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Programmer_1.4.0\extension\GProgrammer.jar
-2026-04-26 07:57:18.045 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Trigger_0.2.4
-2026-04-26 07:57:18.045 ERROR g.a.s.i.e.tools.StoreExtensionTools - Failed to execute extension
+2026-04-30 16:19:32.974 INFO  gearth.app.GEarth - Starting G-Earth 1.5.4-beta-22 from repository G-Realm/G-Earth
+2026-04-30 16:19:33.016 INFO  ROOT - Logging level set to INFO
+2026-04-30 16:19:34.379 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 1}
+2026-04-30 16:19:34.382 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 2}
+2026-04-30 16:19:35.630 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Programmer_1.4.0
+2026-04-30 16:19:35.869 INFO  gearth.app.misc.JavaLocator - Searching for Java installations on Windows in C:\Program Files\Java
+2026-04-30 16:19:35.870 WARN  gearth.app.misc.JavaLocator - No java installation not found in C:\Program Files\Java
+2026-04-30 16:19:35.874 WARN  gearth.app.misc.JavaLocator - No valid Java installation found
+2026-04-30 16:19:35.874 WARN  g.a.s.e.e.i.n.e.NormalExtensionRunner - No Java 1.8 installation found, cannot run extension jar file C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Programmer_1.4.0\extension\GProgrammer.jar
+2026-04-30 16:19:35.891 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Trigger_0.2.4
+2026-04-30 16:19:35.892 ERROR g.a.s.i.e.tools.StoreExtensionTools - Failed to execute extension
 java.nio.file.NoSuchFileException: C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Trigger_0.2.4\command.txt
 	at java.base/sun.nio.fs.WindowsException.translateToIOException(Unknown Source)
 	at java.base/sun.nio.fs.WindowsException.rethrowAsIOException(Unknown Source)
@@ -40,86 +40,49 @@ java.nio.file.NoSuchFileException: C:\Users\Dubbo\habbo games\G-Earth.windows-x6
 	at javafx.graphics/com.sun.glass.ui.win.WinApplication._runLoop(Native Method)
 	at javafx.graphics/com.sun.glass.ui.win.WinApplication.lambda$runLoop$3(Unknown Source)
 	at java.base/java.lang.Thread.run(Unknown Source)
-2026-04-26 07:57:18.046 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\main-193856529808.py
-2026-04-26 07:57:18.076 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\main-214337305396.py
-2026-04-26 08:04:34.117 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
-2026-04-26 08:04:37.211 WARN  g.a.p.c.p.shockwave.ShockwaveProxy - Aborting shockwave proxy.
-2026-04-26 08:08:23.840 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
-2026-04-26 08:08:36.304 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
-2026-04-26 08:08:36.305 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 15.197.201.180:40001
-2026-04-26 08:08:37.529 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
-2026-04-26 08:23:45.824 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@41353fd7
-2026-04-26 08:30:02.417 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
-2026-04-26 08:31:24.563 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
-2026-04-26 08:31:57.326 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
-2026-04-26 08:31:57.327 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 15.197.201.180:40001
-2026-04-26 08:31:58.417 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
-2026-04-26 08:37:56.324 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@5f4d6ea7
-2026-04-26 08:56:47.104 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@163a1ae4
-2026-04-26 09:04:06.727 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
-2026-04-26 11:52:07.195 INFO  gearth.app.GEarth - Starting G-Earth 1.5.4-beta-22 from repository G-Realm/G-Earth
-2026-04-26 11:52:07.212 INFO  ROOT - Logging level set to INFO
-2026-04-26 11:52:08.108 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 0}
-2026-04-26 11:52:08.109 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 1}
-2026-04-26 11:52:08.109 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 2}
-2026-04-26 11:52:08.109 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 3}
-2026-04-26 11:52:08.109 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 4}
-2026-04-26 11:52:08.109 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 5}
-2026-04-26 11:52:08.109 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 6}
-2026-04-26 11:52:08.109 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 7}
-2026-04-26 11:52:08.109 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 8}
-2026-04-26 11:52:08.109 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 9}
-2026-04-26 11:52:08.859 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Programmer_1.4.0
-2026-04-26 11:52:09.042 INFO  gearth.app.misc.JavaLocator - Searching for Java installations on Windows in C:\Program Files\Java
-2026-04-26 11:52:09.043 WARN  gearth.app.misc.JavaLocator - No java installation not found in C:\Program Files\Java
-2026-04-26 11:52:09.045 WARN  gearth.app.misc.JavaLocator - No valid Java installation found
-2026-04-26 11:52:09.046 WARN  g.a.s.e.e.i.n.e.NormalExtensionRunner - No Java 1.8 installation found, cannot run extension jar file C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Programmer_1.4.0\extension\GProgrammer.jar
-2026-04-26 11:52:09.056 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Trigger_0.2.4
-2026-04-26 11:52:09.056 ERROR g.a.s.i.e.tools.StoreExtensionTools - Failed to execute extension
-java.nio.file.NoSuchFileException: C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Trigger_0.2.4\command.txt
-	at java.base/sun.nio.fs.WindowsException.translateToIOException(Unknown Source)
-	at java.base/sun.nio.fs.WindowsException.rethrowAsIOException(Unknown Source)
-	at java.base/sun.nio.fs.WindowsException.rethrowAsIOException(Unknown Source)
-	at java.base/sun.nio.fs.WindowsFileSystemProvider.newByteChannel(Unknown Source)
-	at java.base/java.nio.file.Files.newByteChannel(Unknown Source)
-	at java.base/java.nio.file.Files.newByteChannel(Unknown Source)
-	at java.base/java.nio.file.spi.FileSystemProvider.newInputStream(Unknown Source)
-	at java.base/java.nio.file.Files.newInputStream(Unknown Source)
-	at org.apache.commons.io.FileUtils.lambda$readFileToString$14(FileUtils.java:2771)
-	at org.apache.commons.io.IOUtils.toString(IOUtils.java:3204)
-	at org.apache.commons.io.IOUtils.toString(IOUtils.java:3179)
-	at org.apache.commons.io.FileUtils.readFileToString(FileUtils.java:2771)
-	at org.apache.commons.io.FileUtils.readFileToString(FileUtils.java:2787)
-	at gearth.app.services.internal_extensions.extensionstore.tools.StoreExtensionTools.executeExtension(StoreExtensionTools.java:47)
-	at gearth.app.services.extension_handler.extensions.implementations.network.executer.NormalExtensionRunner.tryRunExtension(NormalExtensionRunner.java:84)
-	at gearth.app.services.extension_handler.extensions.implementations.network.executer.NormalExtensionRunner.runAllExtensions(NormalExtensionRunner.java:47)
-	at gearth.app.ui.subforms.extensions.ExtensionsController.onParentSet(ExtensionsController.java:75)
-	at gearth.app.ui.SubForm.setParentController(SubForm.java:13)
-	at gearth.app.ui.GEarthController.trySetController(GEarthController.java:100)
-	at gearth.app.ui.GEarthController.setStage(GEarthController.java:92)
-	at gearth.app.GEarth.start(GEarth.java:79)
-	at javafx.graphics/com.sun.javafx.application.LauncherImpl.lambda$launchApplication1$9(Unknown Source)
-	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runAndWait$12(Unknown Source)
-	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runLater$10(Unknown Source)
-	at java.base/java.security.AccessController.doPrivileged(Unknown Source)
-	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runLater$11(Unknown Source)
-	at javafx.graphics/com.sun.glass.ui.InvokeLaterDispatcher$Future.run(Unknown Source)
-	at javafx.graphics/com.sun.glass.ui.win.WinApplication._runLoop(Native Method)
-	at javafx.graphics/com.sun.glass.ui.win.WinApplication.lambda$runLoop$3(Unknown Source)
-	at java.base/java.lang.Thread.run(Unknown Source)
-2026-04-26 11:52:09.058 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\main-193856529808.py
-2026-04-26 11:52:09.087 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\main-214337305396.py
-2026-04-26 11:52:26.383 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
-2026-04-26 11:52:43.477 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
-2026-04-26 11:52:43.478 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 35.71.185.64:40001
-2026-04-26 11:52:44.697 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
-2026-04-26 11:52:52.891 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@22708c3d
-2026-04-26 11:52:56.789 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
-2026-04-26 11:53:05.924 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
-2026-04-26 11:53:05.925 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 15.197.201.180:40001
-2026-04-26 11:53:08.257 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
-2026-04-26 11:53:11.510 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@35229b88
-2026-04-26 11:53:23.518 ERROR g.a.s.e.e.i.n.NetworkExtensionServer - Channel exception caught (channel=[id: 0x80165801, L:/127.0.0.1:9093 - R:/127.0.0.1:57432]), closing channel
+2026-04-30 16:19:35.894 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\main-193856529808.py
+2026-04-30 16:19:35.949 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\main-214337305396.py
+2026-04-30 16:30:39.380 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
+2026-04-30 16:30:52.001 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
+2026-04-30 16:30:52.001 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 15.197.201.180:40001
+2026-04-30 16:30:53.059 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
+2026-04-30 16:32:53.432 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@10fe3002
+2026-04-30 16:43:30.838 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@61bf5be6
+2026-04-30 16:43:36.875 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@5c0ca987
+2026-04-30 16:47:41.470 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@1d992831
+2026-04-30 17:17:43.854 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@2f11bcd3
+2026-04-30 17:34:27.080 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@3c32dced
+2026-04-30 18:04:56.884 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@25cd9b74
+2026-04-30 18:05:24.833 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@3cf6d791
+2026-04-30 18:11:53.130 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@62dbcb91
+2026-04-30 18:57:31.834 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@11754e01
+2026-04-30 19:03:54.136 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@6e9abf5c
+2026-04-30 19:16:08.359 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@1fa3fe76
+2026-04-30 19:22:27.482 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@78f9238
+2026-04-30 19:29:56.894 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@500538d9
+2026-04-30 19:37:12.072 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@548ea2bd
+2026-04-30 20:01:28.687 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@38f3a4eb
+2026-04-30 20:08:46.681 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@7327f3c3
+2026-04-30 21:01:47.284 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@2c53dc78
+2026-04-30 21:11:02.547 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@4ff4fece
+2026-04-30 21:21:26.675 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@22708c3d
+2026-04-30 21:26:33.819 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@55519e58
+2026-04-30 21:36:54.808 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@3f4e233f
+2026-04-30 21:43:50.882 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@5eb6650d
+2026-04-30 21:49:53.165 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@6d1a921a
+2026-04-30 21:53:37.074 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@85fc561
+2026-04-30 21:58:49.378 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@6ee6b7d3
+2026-04-30 22:11:52.152 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@6636d863
+2026-04-30 22:12:57.289 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@576f7f97
+2026-04-30 22:15:44.703 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@1e6d8803
+2026-04-30 22:22:18.678 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@5d90ed5d
+2026-04-30 22:36:23.320 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@6508e03e
+2026-04-30 22:43:09.447 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@5f0bd091
+2026-04-30 22:47:02.056 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@ea6e520
+2026-04-30 22:56:12.889 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@449226fa
+2026-05-01 01:32:30.353 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
+2026-05-01 07:00:05.937 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@7921d32d
+2026-05-01 07:00:17.992 ERROR g.a.s.e.e.i.n.NetworkExtensionServer - Channel exception caught (channel=[id: 0x5f6f9430, L:/127.0.0.1:9092 - R:/127.0.0.1:59730]), closing channel
 java.net.SocketException: Connection reset
 	at java.base/sun.nio.ch.SocketChannelImpl.throwConnectionReset(Unknown Source)
 	at java.base/sun.nio.ch.SocketChannelImpl.read(Unknown Source)
@@ -139,232 +102,33 @@ java.net.SocketException: Connection reset
 	at io.netty.util.internal.ThreadExecutorMap$2.run(ThreadExecutorMap.java:74)
 	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
 	at java.base/java.lang.Thread.run(Unknown Source)
-2026-04-26 11:54:42.547 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@7e65589b
-2026-04-26 12:12:11.787 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@3b850bd2
-2026-04-26 12:22:57.569 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@3aa4e652
-2026-04-26 12:29:20.093 INFO  gearth.app.GEarth - Starting G-Earth 1.5.4-beta-22 from repository G-Realm/G-Earth
-2026-04-26 12:29:20.127 INFO  ROOT - Logging level set to INFO
-2026-04-26 12:29:21.067 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 0}
-2026-04-26 12:29:21.068 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 1}
-2026-04-26 12:29:21.068 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 2}
-2026-04-26 12:29:21.068 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 3}
-2026-04-26 12:29:21.068 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 4}
-2026-04-26 12:29:21.068 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 5}
-2026-04-26 12:29:21.068 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 6}
-2026-04-26 12:29:21.068 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 7}
-2026-04-26 12:29:21.068 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 8}
-2026-04-26 12:29:21.068 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 9}
-2026-04-26 12:29:21.860 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Programmer_1.4.0
-2026-04-26 12:29:22.027 INFO  gearth.app.misc.JavaLocator - Searching for Java installations on Windows in C:\Program Files\Java
-2026-04-26 12:29:22.027 WARN  gearth.app.misc.JavaLocator - No java installation not found in C:\Program Files\Java
-2026-04-26 12:29:22.030 WARN  gearth.app.misc.JavaLocator - No valid Java installation found
-2026-04-26 12:29:22.031 WARN  g.a.s.e.e.i.n.e.NormalExtensionRunner - No Java 1.8 installation found, cannot run extension jar file C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Programmer_1.4.0\extension\GProgrammer.jar
-2026-04-26 12:29:22.042 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Trigger_0.2.4
-2026-04-26 12:29:22.042 ERROR g.a.s.i.e.tools.StoreExtensionTools - Failed to execute extension
-java.nio.file.NoSuchFileException: C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Trigger_0.2.4\command.txt
-	at java.base/sun.nio.fs.WindowsException.translateToIOException(Unknown Source)
-	at java.base/sun.nio.fs.WindowsException.rethrowAsIOException(Unknown Source)
-	at java.base/sun.nio.fs.WindowsException.rethrowAsIOException(Unknown Source)
-	at java.base/sun.nio.fs.WindowsFileSystemProvider.newByteChannel(Unknown Source)
-	at java.base/java.nio.file.Files.newByteChannel(Unknown Source)
-	at java.base/java.nio.file.Files.newByteChannel(Unknown Source)
-	at java.base/java.nio.file.spi.FileSystemProvider.newInputStream(Unknown Source)
-	at java.base/java.nio.file.Files.newInputStream(Unknown Source)
-	at org.apache.commons.io.FileUtils.lambda$readFileToString$14(FileUtils.java:2771)
-	at org.apache.commons.io.IOUtils.toString(IOUtils.java:3204)
-	at org.apache.commons.io.IOUtils.toString(IOUtils.java:3179)
-	at org.apache.commons.io.FileUtils.readFileToString(FileUtils.java:2771)
-	at org.apache.commons.io.FileUtils.readFileToString(FileUtils.java:2787)
-	at gearth.app.services.internal_extensions.extensionstore.tools.StoreExtensionTools.executeExtension(StoreExtensionTools.java:47)
-	at gearth.app.services.extension_handler.extensions.implementations.network.executer.NormalExtensionRunner.tryRunExtension(NormalExtensionRunner.java:84)
-	at gearth.app.services.extension_handler.extensions.implementations.network.executer.NormalExtensionRunner.runAllExtensions(NormalExtensionRunner.java:47)
-	at gearth.app.ui.subforms.extensions.ExtensionsController.onParentSet(ExtensionsController.java:75)
-	at gearth.app.ui.SubForm.setParentController(SubForm.java:13)
-	at gearth.app.ui.GEarthController.trySetController(GEarthController.java:100)
-	at gearth.app.ui.GEarthController.setStage(GEarthController.java:92)
-	at gearth.app.GEarth.start(GEarth.java:79)
-	at javafx.graphics/com.sun.javafx.application.LauncherImpl.lambda$launchApplication1$9(Unknown Source)
-	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runAndWait$12(Unknown Source)
-	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runLater$10(Unknown Source)
-	at java.base/java.security.AccessController.doPrivileged(Unknown Source)
-	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runLater$11(Unknown Source)
-	at javafx.graphics/com.sun.glass.ui.InvokeLaterDispatcher$Future.run(Unknown Source)
-	at javafx.graphics/com.sun.glass.ui.win.WinApplication._runLoop(Native Method)
-	at javafx.graphics/com.sun.glass.ui.win.WinApplication.lambda$runLoop$3(Unknown Source)
-	at java.base/java.lang.Thread.run(Unknown Source)
-2026-04-26 12:29:22.044 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\main-193856529808.py
-2026-04-26 12:29:22.071 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\main-214337305396.py
-2026-04-26 12:29:30.585 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
-2026-04-26 12:29:37.555 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
-2026-04-26 12:29:37.555 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 15.197.201.180:40001
-2026-04-26 12:29:38.746 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
-2026-04-26 12:29:47.184 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@52324d53
-2026-04-26 12:34:49.672 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@56c02011
-2026-04-26 13:24:41.412 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@55c1e421
-2026-04-26 13:37:21.482 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@3a65b0fa
-2026-04-26 13:43:29.284 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@106a04fb
-2026-04-26 13:48:20.024 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@14d30053
-2026-04-26 13:56:24.032 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@376bc3b6
-2026-04-26 13:59:42.343 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@50c81a6e
-2026-04-26 14:05:39.648 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
-2026-04-26 14:06:52.490 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
-2026-04-26 14:07:05.182 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
-2026-04-26 14:07:05.182 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 35.71.185.64:40001
-2026-04-26 14:07:06.279 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
-2026-04-26 14:09:34.208 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
-2026-04-26 14:26:47.672 INFO  gearth.app.GEarth - Starting G-Earth 1.5.4-beta-22 from repository G-Realm/G-Earth
-2026-04-26 14:26:47.689 INFO  ROOT - Logging level set to INFO
-2026-04-26 14:26:48.759 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 0}
-2026-04-26 14:26:48.759 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 1}
-2026-04-26 14:26:48.760 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 2}
-2026-04-26 14:26:48.760 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 3}
-2026-04-26 14:26:48.760 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 4}
-2026-04-26 14:26:48.761 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 5}
-2026-04-26 14:26:48.761 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 6}
-2026-04-26 14:26:48.762 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 7}
-2026-04-26 14:26:48.762 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 8}
-2026-04-26 14:26:48.762 WARN  c.t.k.windows.WindowsProvider - Could not register hotkey: HotKey{shift ctrl 9}
-2026-04-26 14:26:49.524 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Programmer_1.4.0
-2026-04-26 14:26:49.677 INFO  gearth.app.misc.JavaLocator - Searching for Java installations on Windows in C:\Program Files\Java
-2026-04-26 14:26:49.678 WARN  gearth.app.misc.JavaLocator - No java installation not found in C:\Program Files\Java
-2026-04-26 14:26:49.681 WARN  gearth.app.misc.JavaLocator - No valid Java installation found
-2026-04-26 14:26:49.682 WARN  g.a.s.e.e.i.n.e.NormalExtensionRunner - No Java 1.8 installation found, cannot run extension jar file C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Programmer_1.4.0\extension\GProgrammer.jar
-2026-04-26 14:26:49.694 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Trigger_0.2.4
-2026-04-26 14:26:49.695 ERROR g.a.s.i.e.tools.StoreExtensionTools - Failed to execute extension
-java.nio.file.NoSuchFileException: C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\G-Trigger_0.2.4\command.txt
-	at java.base/sun.nio.fs.WindowsException.translateToIOException(Unknown Source)
-	at java.base/sun.nio.fs.WindowsException.rethrowAsIOException(Unknown Source)
-	at java.base/sun.nio.fs.WindowsException.rethrowAsIOException(Unknown Source)
-	at java.base/sun.nio.fs.WindowsFileSystemProvider.newByteChannel(Unknown Source)
-	at java.base/java.nio.file.Files.newByteChannel(Unknown Source)
-	at java.base/java.nio.file.Files.newByteChannel(Unknown Source)
-	at java.base/java.nio.file.spi.FileSystemProvider.newInputStream(Unknown Source)
-	at java.base/java.nio.file.Files.newInputStream(Unknown Source)
-	at org.apache.commons.io.FileUtils.lambda$readFileToString$14(FileUtils.java:2771)
-	at org.apache.commons.io.IOUtils.toString(IOUtils.java:3204)
-	at org.apache.commons.io.IOUtils.toString(IOUtils.java:3179)
-	at org.apache.commons.io.FileUtils.readFileToString(FileUtils.java:2771)
-	at org.apache.commons.io.FileUtils.readFileToString(FileUtils.java:2787)
-	at gearth.app.services.internal_extensions.extensionstore.tools.StoreExtensionTools.executeExtension(StoreExtensionTools.java:47)
-	at gearth.app.services.extension_handler.extensions.implementations.network.executer.NormalExtensionRunner.tryRunExtension(NormalExtensionRunner.java:84)
-	at gearth.app.services.extension_handler.extensions.implementations.network.executer.NormalExtensionRunner.runAllExtensions(NormalExtensionRunner.java:47)
-	at gearth.app.ui.subforms.extensions.ExtensionsController.onParentSet(ExtensionsController.java:75)
-	at gearth.app.ui.SubForm.setParentController(SubForm.java:13)
-	at gearth.app.ui.GEarthController.trySetController(GEarthController.java:100)
-	at gearth.app.ui.GEarthController.setStage(GEarthController.java:92)
-	at gearth.app.GEarth.start(GEarth.java:79)
-	at javafx.graphics/com.sun.javafx.application.LauncherImpl.lambda$launchApplication1$9(Unknown Source)
-	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runAndWait$12(Unknown Source)
-	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runLater$10(Unknown Source)
-	at java.base/java.security.AccessController.doPrivileged(Unknown Source)
-	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runLater$11(Unknown Source)
-	at javafx.graphics/com.sun.glass.ui.InvokeLaterDispatcher$Future.run(Unknown Source)
-	at javafx.graphics/com.sun.glass.ui.win.WinApplication._runLoop(Native Method)
-	at javafx.graphics/com.sun.glass.ui.win.WinApplication.lambda$runLoop$3(Unknown Source)
-	at java.base/java.lang.Thread.run(Unknown Source)
-2026-04-26 14:26:49.696 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\main-193856529808.py
-2026-04-26 14:26:49.723 INFO  g.a.s.e.e.i.n.e.NormalExtensionRunner - Running extension C:\Users\Dubbo\habbo games\G-Earth.windows-x64\Extensions\main-214337305396.py
-2026-04-26 14:27:22.005 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
-2026-04-26 14:27:28.825 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
-2026-04-26 14:27:28.826 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 15.197.201.180:40001
-2026-04-26 14:27:29.878 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
-2026-04-26 16:51:17.700 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
-2026-04-26 17:00:21.358 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
-2026-04-26 17:00:23.690 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
-2026-04-26 17:00:23.690 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 35.71.185.64:40001
-2026-04-26 17:00:24.871 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
-2026-04-26 17:00:29.685 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@31a9c89b
-2026-04-26 19:01:11.994 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@7d857166
-2026-04-26 19:01:24.024 ERROR g.a.s.e.e.i.n.NetworkExtensionServer - Channel exception caught (channel=[id: 0x2f5b37f3, L:/127.0.0.1:9092 - R:/127.0.0.1:50914]), closing channel
-java.net.SocketException: Connection reset
-	at java.base/sun.nio.ch.SocketChannelImpl.throwConnectionReset(Unknown Source)
-	at java.base/sun.nio.ch.SocketChannelImpl.read(Unknown Source)
-	at io.netty.buffer.AdaptivePoolingAllocator$AdaptiveByteBuf.setBytes(AdaptivePoolingAllocator.java:1301)
-	at io.netty.buffer.AbstractByteBuf.writeBytes(AbstractByteBuf.java:1132)
-	at io.netty.channel.socket.nio.NioSocketChannel.doReadBytes(NioSocketChannel.java:350)
-	at io.netty.channel.nio.AbstractNioByteChannel$NioByteUnsafe.read(AbstractNioByteChannel.java:152)
-	at io.netty.channel.nio.AbstractNioChannel$AbstractNioUnsafe.handle(AbstractNioChannel.java:445)
-	at io.netty.channel.nio.NioIoHandler$DefaultNioRegistration.handle(NioIoHandler.java:383)
-	at io.netty.channel.nio.NioIoHandler.processSelectedKey(NioIoHandler.java:577)
-	at io.netty.channel.nio.NioIoHandler.processSelectedKeysOptimized(NioIoHandler.java:552)
-	at io.netty.channel.nio.NioIoHandler.processSelectedKeys(NioIoHandler.java:493)
-	at io.netty.channel.nio.NioIoHandler.run(NioIoHandler.java:470)
-	at io.netty.channel.SingleThreadIoEventLoop.runIo(SingleThreadIoEventLoop.java:204)
-	at io.netty.channel.SingleThreadIoEventLoop.run(SingleThreadIoEventLoop.java:175)
-	at io.netty.util.concurrent.SingleThreadEventExecutor$5.run(SingleThreadEventExecutor.java:1073)
-	at io.netty.util.internal.ThreadExecutorMap$2.run(ThreadExecutorMap.java:74)
-	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
-	at java.base/java.lang.Thread.run(Unknown Source)
-2026-04-26 19:02:37.405 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
-2026-04-26 19:02:47.118 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
-2026-04-26 19:02:47.119 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 15.197.201.180:40001
-2026-04-26 19:02:48.132 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
-2026-04-26 19:03:26.434 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@627c4e75
-2026-04-26 19:07:29.780 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@12b702a2
-2026-04-26 19:15:31.682 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@27640d0c
-2026-04-26 20:24:29.355 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
-2026-04-26 20:26:18.920 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
-2026-04-26 20:26:32.119 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
-2026-04-26 20:26:32.120 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 35.71.185.64:40001
-2026-04-26 20:26:33.062 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
-2026-04-26 20:27:04.302 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@271b1ca0
-2026-04-26 20:27:10.222 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@7034410b
-2026-04-26 20:27:18.427 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@71772137
-2026-04-26 20:27:22.243 ERROR g.a.s.e.e.i.n.NetworkExtensionServer - Channel exception caught (channel=[id: 0xbded8f9a, L:/127.0.0.1:9093 - R:/127.0.0.1:53673]), closing channel
-java.net.SocketException: Connection reset
-	at java.base/sun.nio.ch.SocketChannelImpl.throwConnectionReset(Unknown Source)
-	at java.base/sun.nio.ch.SocketChannelImpl.read(Unknown Source)
-	at io.netty.buffer.AdaptivePoolingAllocator$AdaptiveByteBuf.setBytes(AdaptivePoolingAllocator.java:1301)
-	at io.netty.buffer.AbstractByteBuf.writeBytes(AbstractByteBuf.java:1132)
-	at io.netty.channel.socket.nio.NioSocketChannel.doReadBytes(NioSocketChannel.java:350)
-	at io.netty.channel.nio.AbstractNioByteChannel$NioByteUnsafe.read(AbstractNioByteChannel.java:152)
-	at io.netty.channel.nio.AbstractNioChannel$AbstractNioUnsafe.handle(AbstractNioChannel.java:445)
-	at io.netty.channel.nio.NioIoHandler$DefaultNioRegistration.handle(NioIoHandler.java:383)
-	at io.netty.channel.nio.NioIoHandler.processSelectedKey(NioIoHandler.java:577)
-	at io.netty.channel.nio.NioIoHandler.processSelectedKeysOptimized(NioIoHandler.java:552)
-	at io.netty.channel.nio.NioIoHandler.processSelectedKeys(NioIoHandler.java:493)
-	at io.netty.channel.nio.NioIoHandler.run(NioIoHandler.java:470)
-	at io.netty.channel.SingleThreadIoEventLoop.runIo(SingleThreadIoEventLoop.java:204)
-	at io.netty.channel.SingleThreadIoEventLoop.run(SingleThreadIoEventLoop.java:175)
-	at io.netty.util.concurrent.SingleThreadEventExecutor$5.run(SingleThreadEventExecutor.java:1073)
-	at io.netty.util.internal.ThreadExecutorMap$2.run(ThreadExecutorMap.java:74)
-	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
-	at java.base/java.lang.Thread.run(Unknown Source)
-2026-04-27 01:04:48.615 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
-2026-04-27 06:58:11.406 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
-2026-04-27 06:58:59.171 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
-2026-04-27 06:59:01.090 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
-2026-04-27 06:59:01.090 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 15.197.201.180:40001
-2026-04-27 06:59:02.079 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
-2026-04-27 15:21:23.706 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
-2026-04-27 15:21:30.862 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
-2026-04-27 15:21:30.863 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 15.197.201.180:40001
-2026-04-27 15:21:31.940 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
-2026-04-27 15:21:49.129 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@2596030
-2026-04-27 15:21:52.539 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
-2026-04-27 15:22:11.951 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
-2026-04-27 15:22:11.952 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 35.71.185.64:40001
-2026-04-27 15:22:20.357 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@4f4eff34
-2026-04-27 21:57:40.985 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
-2026-04-28 07:20:12.220 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
-2026-04-28 07:20:13.250 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
-2026-04-28 07:20:14.820 WARN  g.a.p.c.p.shockwave.ShockwaveProxy - Aborting shockwave proxy.
-2026-04-28 07:20:16.213 WARN  g.a.p.c.p.shockwave.ShockwaveProxy - Aborting shockwave proxy.
-2026-04-28 07:20:23.651 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
-2026-04-28 07:51:32.397 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
-2026-04-28 07:51:42.948 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
-2026-04-28 07:51:42.949 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 15.197.201.180:40001
-2026-04-28 07:51:44.111 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
-2026-04-28 08:24:39.884 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@663810f9
-2026-04-28 08:34:30.089 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@60f98c8d
-2026-04-28 08:37:08.462 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@3bf91b3f
-2026-04-28 08:40:34.231 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@5f0e3b6b
-2026-04-28 08:56:06.894 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@3cdee0d3
-2026-04-28 09:01:15.640 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@627d7b9d
-2026-04-28 09:17:19.379 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@7cc59578
-2026-04-28 09:28:45.384 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@24d91bd4
-2026-04-28 09:41:26.707 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@51f9b957
-2026-04-28 10:35:03.618 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@3427edf2
-2026-04-28 10:55:41.075 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
-2026-04-28 10:55:42.721 WARN  g.a.p.c.p.shockwave.ShockwaveProxy - Aborting shockwave proxy.
-2026-04-28 10:56:02.502 WARN  g.a.p.c.p.shockwave.ShockwaveProxy - Aborting shockwave proxy.
+2026-05-01 07:01:02.003 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
+2026-05-01 07:01:13.055 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
+2026-05-01 07:01:13.055 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 15.197.201.180:40001
+2026-05-01 07:01:14.250 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
+2026-05-01 07:01:54.705 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@14cc8e1c
+2026-05-01 07:11:37.976 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@e72a697
+2026-05-01 07:24:50.064 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@48036b74
+2026-05-01 15:08:16.144 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@51e5d172
+2026-05-01 15:09:55.823 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@19dbb124
+2026-05-01 15:14:14.989 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@4e89cad5
+2026-05-01 15:18:22.095 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@34583d04
+2026-05-01 15:23:27.584 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@1a796053
+2026-05-01 15:31:13.761 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@3a8e9ca9
+2026-05-01 15:45:37.608 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@7385bc3d
+2026-05-01 15:54:06.170 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@2458c905
+2026-05-01 15:58:44.947 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@47e50ee5
+2026-05-01 16:06:31.820 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@626db472
+2026-05-01 16:10:30.831 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@2015f68c
+2026-05-01 16:14:02.854 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@7e05aa29
+2026-05-01 16:21:04.161 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@68ab6857
+2026-05-01 16:22:21.793 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@3e3a1a67
+2026-05-01 16:25:08.658 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@2cdce163
+2026-05-01 16:27:01.974 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@1cd63474
+2026-05-01 16:32:56.444 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@5c927027
+2026-05-01 16:38:48.479 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@7ba70ce4
+2026-05-01 16:41:43.586 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@5bd722ea
+2026-05-01 16:52:58.976 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@2c323524
+2026-05-01 16:57:04.423 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@431ba58e
+2026-05-01 17:06:36.437 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@7ba60aad
+2026-05-01 17:23:58.456 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.

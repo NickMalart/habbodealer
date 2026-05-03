@@ -1833,26 +1833,48 @@ func loadDBConfig() (*DBConfig, error) {
 	return nil, fmt.Errorf("db.local.json not found in cwd/exe parent paths")
 }
 
-func (a *App) initHistoryDatabase() {
-	cfg, err := loadDBConfig()
+func dbDiagLog(msg string) {
+	path := filepath.Join(os.TempDir(), "roll-origins-db.log")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
-		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] config not loaded: %v", err))
 		return
 	}
+	defer f.Close()
+	_, _ = fmt.Fprintf(f, "[%s] %s\n", time.Now().Format("15:04:05"), msg)
+}
+
+func (a *App) initHistoryDatabase() {
+	cwd, _ := os.Getwd()
+	exe, _ := os.Executable()
+	dbDiagLog(fmt.Sprintf("initHistoryDatabase called cwd=%s exe=%s", cwd, exe))
+
+	cfg, err := loadDBConfig()
+	if err != nil {
+		msg := fmt.Sprintf("[GAME_HISTORY][DB] config not loaded: %v", err)
+		a.AddLogMsg(msg)
+		dbDiagLog(msg)
+		return
+	}
+	dbDiagLog(fmt.Sprintf("config loaded, url length=%d owner=%q", len(cfg.DatabaseURL), cfg.OwnerKey))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
 	if err != nil {
-		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] pool creation failed: %v", err))
+		msg := fmt.Sprintf("[GAME_HISTORY][DB] pool creation failed: %v", err)
+		a.AddLogMsg(msg)
+		dbDiagLog(msg)
 		return
 	}
 	if err := db.Ping(ctx); err != nil {
-		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] ping failed: %v", err))
+		msg := fmt.Sprintf("[GAME_HISTORY][DB] ping failed: %v", err)
+		a.AddLogMsg(msg)
+		dbDiagLog(msg)
 		db.Close()
 		return
 	}
+	dbDiagLog("ping OK")
 
 	owner := strings.TrimSpace(os.Getenv("ROLL_ORIGINS_OWNER_KEY"))
 	if owner == "" {
@@ -1875,11 +1897,14 @@ func (a *App) initHistoryDatabase() {
 	a.historyDBMu.Unlock()
 
 	if err := a.ensureGameHistoryTables(); err != nil {
-		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] migration failed: %v", err))
+		msg := fmt.Sprintf("[GAME_HISTORY][DB] migration failed: %v", err)
+		a.AddLogMsg(msg)
+		dbDiagLog(msg)
 		return
 	}
 
 	a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] connected (owner=%s)", owner))
+	dbDiagLog(fmt.Sprintf("READY owner=%s", owner))
 }
 
 func (a *App) getHistoryDB() (*pgxpool.Pool, string) {
@@ -2058,8 +2083,10 @@ func (a *App) loadGameHistoryFromDB() ([]GameHistoryEntry, error) {
 func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
 	db, owner := a.getHistoryDB()
 	if db == nil {
+		dbDiagLog("persistGameHistoryToDB: db is nil")
 		return fmt.Errorf("database not initialized")
 	}
+	dbDiagLog(fmt.Sprintf("persistGameHistoryToDB: owner=%s entries=%d", owner, len(entries)))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
