@@ -4639,6 +4639,107 @@ func (a *App) handleRiskBet(n int, sender string) {
 	a.startGameChoiceTimeoutMonitor()
 }
 
+func buildRiskBetItems(base []TradeItem, riskQty int) []TradeItem {
+	if riskQty <= 0 {
+		return cloneTradeItems(base)
+	}
+
+	if len(base) == 0 {
+		return []TradeItem{{Name: "risk_bet", Quantity: riskQty}}
+	}
+
+	baseQty := map[string]int{}
+	rawByName := map[string]string{}
+	names := make([]string, 0)
+	for _, it := range base {
+		name := strings.TrimSpace(it.Name)
+		if name == "" || it.Quantity <= 0 {
+			continue
+		}
+		if _, ok := baseQty[name]; !ok {
+			names = append(names, name)
+		}
+		baseQty[name] += it.Quantity
+		if rawByName[name] == "" {
+			rawByName[name] = it.RawData
+		}
+	}
+	if len(baseQty) == 0 {
+		return []TradeItem{{Name: "risk_bet", Quantity: riskQty}}
+	}
+
+	sort.Strings(names)
+	baseTotal := 0
+	for _, n := range names {
+		baseTotal += baseQty[n]
+	}
+	if baseTotal <= 0 {
+		return []TradeItem{{Name: "risk_bet", Quantity: riskQty}}
+	}
+
+	mult := riskQty / baseTotal
+	rem := riskQty % baseTotal
+	outQty := map[string]int{}
+	for _, n := range names {
+		outQty[n] = baseQty[n] * mult
+	}
+	for i := 0; rem > 0; i++ {
+		n := names[i%len(names)]
+		outQty[n]++
+		rem--
+	}
+
+	out := make([]TradeItem, 0, len(names))
+	for _, n := range names {
+		if outQty[n] <= 0 {
+			continue
+		}
+		out = append(out, TradeItem{Name: n, Quantity: outQty[n], RawData: rawByName[n]})
+	}
+	if len(out) == 0 {
+		return []TradeItem{{Name: "risk_bet", Quantity: riskQty}}
+	}
+
+	return out
+}
+
+func (a *App) beginRiskRoundHistory(choice string, rawShout string, gameLabel string) {
+	// Close any open entry in this chain before starting a new risk-game row.
+	a.gameHistoryMu.Lock()
+	if a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+		if strings.TrimSpace(entry.CompletedAt) == "" {
+			entry.Status = "Risk Continued"
+			entry.CompletedAt = gameHistoryTimestamp()
+			entry.Notes = append(entry.Notes, "Risk chain continued into a new game")
+		}
+	}) {
+		a.currentGameHistoryID = ""
+	}
+	a.gameHistoryMu.Unlock()
+
+	partnerName := normalizeUsername(strings.TrimSpace(riskPartnerName))
+	if partnerName == "" {
+		partnerName = normalizeUsername(strings.TrimSpace(lastTradePartnerName))
+	}
+	if partnerName == "" {
+		partnerName = "Player"
+	}
+
+	mutex.Lock()
+	pending := riskPendingBet
+	mutex.Unlock()
+
+	riskBetItems := buildRiskBetItems(cloneTradeItems(gameBetItems), pending)
+	a.beginGameHistory(partnerName, riskBetItems)
+	a.setCurrentGameHistoryChoice(choice, rawShout)
+	if strings.TrimSpace(gameLabel) != "" {
+		a.setCurrentGameHistoryGame(gameLabel)
+	}
+	if pending > 0 {
+		a.noteCurrentGameHistory(fmt.Sprintf("Risk stake: %d", pending))
+	}
+}
+
 // executeRiskRound performs the same game roll for the active risk session.
 // It sets minimal game state then invokes the normal roll path so evaluation
 // still runs through the existing finalize/evaluate functions which will
@@ -11698,9 +11799,6 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		}
 		awaitingUOChoice = false
 		a.AddLogMsg(fmt.Sprintf("[UO_DEBUG] accepted choice=%q from sender=%q index=%d (expectedName=%q expectedIndex=%d)", cleaned, senderName, index, awaitingUOChoicePartnerName, awaitingUOChoicePartnerID))
-		// Record normalized choice and raw shout into game history
-		a.setCurrentGameHistoryChoice(cleaned, msg)
-
 		// If this UO choice is being made as part of an active risk session,
 		// record the selected choice and multiplier on the risk session and
 		// execute the risk roll path instead of starting a normal round.
@@ -11726,7 +11824,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			}
 			mutex.Unlock()
 
-			a.setCurrentGameHistoryGame(gameLabel)
+			a.beginRiskRoundHistory(cleaned, msg, gameLabel)
 			ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay("uo7"))
 			a.AddLogMsg(fmt.Sprintf("[UO_DEBUG] risk re-roll choice=%q variant=%s mult=%d; executing risk roll", cleaned, variant, riskSessionPayoutMultiplier))
 			sendShout(ack)
@@ -11736,6 +11834,9 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			}()
 			return
 		}
+
+		// Record normalized choice and raw shout into game history
+		a.setCurrentGameHistoryChoice(cleaned, msg)
 
 		if cleaned == "over" {
 			a.beginUnderOverRound("over")
@@ -11776,8 +11877,16 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		e.Block()
 		awaitingTriChoice = false
 		a.AddLogMsg(fmt.Sprintf("[TRI_DEBUG] accepted choice=%q from sender=%q index=%d (expectedName=%q expectedIndex=%d)", cleaned, senderName, index, awaitingTriChoicePartnerName, awaitingTriChoicePartnerID))
-		// Record normalized choice and raw shout into game history
-		a.setCurrentGameHistoryChoice(cleaned, msg)
+		if riskSessionActive {
+			gameLabel := "TriL"
+			if cleaned == "high" {
+				gameLabel = "TriH"
+			}
+			a.beginRiskRoundHistory(cleaned, msg, gameLabel)
+		} else {
+			// Record normalized choice and raw shout into game history
+			a.setCurrentGameHistoryChoice(cleaned, msg)
+		}
 
 		if cleaned == "high" {
 			a.beginTriRound("high")
@@ -11940,9 +12049,6 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			awaitingGameChoicePartnerID = 0
 			awaitingGameChoicePartnerName = ""
 
-			// Record the immediate selection and raw shout into game history
-			a.setCurrentGameHistoryChoice("7", msg)
-
 			// If this selection is part of an active risk session, record the
 			// chosen variant and multiplier on the risk session and execute
 			// the risk roll path instead of starting a normal round.
@@ -11968,7 +12074,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 				}
 				mutex.Unlock()
 
-				a.setCurrentGameHistoryGame(gameLabel)
+				a.beginRiskRoundHistory("7", msg, gameLabel)
 				ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay("uo7"))
 				a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] risk re-roll selected -> 7 (variant=%s mult=%d); executing risk roll", variant, riskSessionPayoutMultiplier))
 				sendShout(ack)
@@ -11978,6 +12084,9 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 				}()
 				return
 			}
+
+			// Record the immediate selection and raw shout into game history
+			a.setCurrentGameHistoryChoice("7", msg)
 
 			// If we have previously forced Over/Under for this trade, do not
 			// acknowledge a shouted '7' with a "Starting" ack. Instead,
@@ -12073,9 +12182,13 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	if choice != "tri" && choice != "uo" {
 		// Combine the standard "Starting" ack with the player-roll prompt
 		ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay(choice))
-		// Record normalized choice and raw shout into game history
-		a.setCurrentGameHistoryChoice(choice, msg)
-		a.setCurrentGameHistoryGame(gameChoiceDisplay(choice))
+		if riskSessionActive {
+			a.beginRiskRoundHistory(choice, msg, gameChoiceDisplay(choice))
+		} else {
+			// Record normalized choice and raw shout into game history
+			a.setCurrentGameHistoryChoice(choice, msg)
+			a.setCurrentGameHistoryGame(gameChoiceDisplay(choice))
+		}
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", ack))
 		sendShout(ack)
 	} else {

@@ -61,12 +61,13 @@ type RaffleSession struct {
 }
 
 type RaffleState struct {
-	Connected      bool            `json:"connected"`
-	InRoom         bool            `json:"inRoom"`
-	Enabled        bool            `json:"enabled"`
-	BonusEvery     int             `json:"bonusEvery"`
-	CurrentSession *RaffleSession  `json:"currentSession,omitempty"`
-	Sessions       []RaffleSession `json:"sessions"`
+	Connected             bool            `json:"connected"`
+	InRoom                bool            `json:"inRoom"`
+	Enabled               bool            `json:"enabled"`
+	BonusEvery            int             `json:"bonusEvery"`
+	TicketAnnounceEnabled bool            `json:"ticketAnnounceEnabled"`
+	CurrentSession        *RaffleSession  `json:"currentSession,omitempty"`
+	Sessions              []RaffleSession `json:"sessions"`
 }
 
 type App struct {
@@ -76,22 +77,23 @@ type App struct {
 	processMu sync.Mutex
 	debugMu   sync.Mutex
 
-	connected      bool
-	inRoom         bool
-	enabled        bool
-	bonusEvery     int
-	nextSessionID  int
-	currentSession *RaffleSession
-	sessions       []RaffleSession
-	db             *pgxpool.Pool
-	ownerKey       string
-	pollCancel     context.CancelFunc
-	listenCancel   context.CancelFunc
-	debugLines     []string
-	lastNotifyAt   string
-	lastNotifyRaw  string
-	lastQueryRows  int
-	lastShout      string
+	connected             bool
+	inRoom                bool
+	enabled               bool
+	bonusEvery            int
+	ticketAnnounceEnabled bool
+	nextSessionID         int
+	currentSession        *RaffleSession
+	sessions              []RaffleSession
+	db                    *pgxpool.Pool
+	ownerKey              string
+	pollCancel            context.CancelFunc
+	listenCancel          context.CancelFunc
+	debugLines            []string
+	lastNotifyAt          string
+	lastNotifyRaw         string
+	lastQueryRows         int
+	lastShout             string
 }
 
 func NewApp() *App {
@@ -162,6 +164,9 @@ func (a *App) GetDebugSnapshot() string {
 	lines = append(lines, fmt.Sprintf("last_notify_payload: %s", strings.TrimSpace(a.lastNotifyRaw)))
 	lines = append(lines, fmt.Sprintf("last_query_rows: %d", a.lastQueryRows))
 	lines = append(lines, fmt.Sprintf("last_shout: %s", strings.TrimSpace(a.lastShout)))
+	a.mu.Lock()
+	lines = append(lines, fmt.Sprintf("connected: %t  inRoom: %t  ticketAnnounce: %t", a.connected, a.inRoom, a.ticketAnnounceEnabled))
+	a.mu.Unlock()
 	lines = append(lines, "")
 	lines = append(lines, "--- Recent Logs ---")
 	lines = append(lines, a.debugLines...)
@@ -241,11 +246,12 @@ func (a *App) GetState() RaffleState {
 	defer a.mu.Unlock()
 
 	state := RaffleState{
-		Connected:  a.connected,
-		InRoom:     a.inRoom,
-		Enabled:    a.enabled,
-		BonusEvery: a.bonusEvery,
-		Sessions:   make([]RaffleSession, len(a.sessions)),
+		Connected:             a.connected,
+		InRoom:                a.inRoom,
+		Enabled:               a.enabled,
+		BonusEvery:            a.bonusEvery,
+		TicketAnnounceEnabled: a.ticketAnnounceEnabled,
+		Sessions:              make([]RaffleSession, len(a.sessions)),
 	}
 	for i := range a.sessions {
 		state.Sessions[i] = *copySession(&a.sessions[i])
@@ -267,6 +273,20 @@ func (a *App) SetEnabled(v bool) RaffleState {
 	a.mu.Unlock()
 	a.emitUpdate()
 	return a.GetState()
+}
+
+func (a *App) SetTicketAnnounceEnabled(v bool) RaffleState {
+	a.mu.Lock()
+	a.ticketAnnounceEnabled = v
+	a.mu.Unlock()
+	a.emitUpdate()
+	return a.GetState()
+}
+
+func (a *App) GetTicketAnnounceEnabled() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.ticketAnnounceEnabled
 }
 
 func (a *App) SetBonusEvery(v int) RaffleState {
@@ -701,6 +721,11 @@ func (a *App) processNewBets() {
 
 	upserts := make([]RaffleParticipant, 0, len(batch))
 	newEntrants := make([]string, 0, len(batch))
+	type ticketAnnounce struct {
+		name    string
+		tickets int
+	}
+	ticketAnnounces := make([]ticketAnnounce, 0, len(batch))
 	lastCursorAt := cursorAt
 	lastCursorEntry := cursorEntry
 
@@ -709,6 +734,8 @@ func (a *App) processNewBets() {
 		a.mu.Unlock()
 		return
 	}
+
+	announceEnabled := a.ticketAnnounceEnabled
 
 	for _, row := range batch {
 		name := normalizeUsername(row.Player)
@@ -737,15 +764,20 @@ func (a *App) processNewBets() {
 			}
 			a.currentSession.Participants = append(a.currentSession.Participants, p)
 			upserts = append(upserts, p)
-			if a.connected && a.inRoom {
-				newEntrants = append(newEntrants, p.Username)
+			newEntrants = append(newEntrants, p.Username)
+			if announceEnabled {
+				ticketAnnounces = append(ticketAnnounces, ticketAnnounce{name: p.Username, tickets: p.Tickets})
 			}
 		} else {
 			p := &a.currentSession.Participants[idx]
+			oldTickets := p.Tickets
 			p.BetCount++
 			p.Tickets = ticketsForBetCount(p.BetCount, a.currentSession.BonusEvery)
 			p.LastBet = row.EventAt.UTC().Format(time.RFC3339)
 			upserts = append(upserts, *p)
+			if announceEnabled && p.Tickets > oldTickets {
+				ticketAnnounces = append(ticketAnnounces, ticketAnnounce{name: p.Username, tickets: p.Tickets})
+			}
 		}
 
 		lastCursorAt = row.EventAt.UTC()
@@ -768,6 +800,10 @@ func (a *App) processNewBets() {
 		a.shoutEntrant(name)
 	}
 
+	for _, ta := range ticketAnnounces {
+		a.shoutTicketCount(ta.name, ta.tickets)
+	}
+
 	if len(upserts) > 0 {
 		if err := a.persistParticipants(sessionDBID, upserts); err != nil {
 			a.logDebug("participant upsert failed: %v", err)
@@ -787,12 +823,30 @@ func (a *App) shoutEntrant(name string) {
 	if trimmed == "" {
 		return
 	}
-	msg := fmt.Sprintf("%s entered the raffle!", trimmed)
+	msg := fmt.Sprintf("Contradultions %s you have entered the raffle! see Disc for more info!", trimmed)
 	ext.Send(out.SHOUT, msg)
 	a.debugMu.Lock()
 	a.lastShout = msg
 	a.debugMu.Unlock()
 	a.logDebug("shout sent: %s", msg)
+}
+
+func (a *App) shoutTicketCount(name string, tickets int) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return
+	}
+	var msg string
+	if tickets == 1 {
+		msg = fmt.Sprintf("%s now has 1 raffle ticket!", trimmed)
+	} else {
+		msg = fmt.Sprintf("%s now has %d raffle tickets!", trimmed, tickets)
+	}
+	ext.Send(out.SHOUT, msg)
+	a.debugMu.Lock()
+	a.lastShout = msg
+	a.debugMu.Unlock()
+	a.logDebug("ticket shout sent: %s", msg)
 }
 
 func (a *App) persistSessionCursor(sessionDBID int64, at time.Time, entryID string) error {
@@ -1240,6 +1294,19 @@ func setupExt(a *App) {
 		a.inRoom = true
 		a.mu.Unlock()
 		a.emitUpdate()
+	})
+
+	// Set inRoom from USERS packets too — fires even if already in a room when the ext opens
+	ext.Intercept(in.USERS, in.SPACENODEUSERS).With(func(e *g.Intercept) {
+		a.mu.Lock()
+		if !a.inRoom {
+			a.inRoom = true
+			a.mu.Unlock()
+			a.logDebug("inRoom set via USERS packet")
+			a.emitUpdate()
+		} else {
+			a.mu.Unlock()
+		}
 	})
 }
 

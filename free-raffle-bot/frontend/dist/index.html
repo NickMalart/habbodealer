@@ -143,6 +143,9 @@
         <button id="enableBtn">Enable</button>
         <button class="alt" id="sessionBtn">Start Raffle Session</button>
         <button class="alt" id="refreshBtn">Refresh</button>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" id="ticketAnnounceChk"> Announce tickets
+        </label>
       </div>
       <div class="row" style="margin-top: 12px;">
         <label for="startAt">Raffle start</label>
@@ -219,6 +222,11 @@
       const bonusInput = document.getElementById('bonus');
       if (state.bonusEvery > 0 && document.activeElement !== bonusInput) {
         bonusInput.value = state.bonusEvery;
+      }
+
+      const ticketChk = document.getElementById('ticketAnnounceChk');
+      if (document.activeElement !== ticketChk) {
+        ticketChk.checked = !!state.ticketAnnounceEnabled;
       }
 
       const tbody = document.getElementById('participants');
@@ -320,6 +328,10 @@
       const state = await call('GetState');
       await call('SetEnabled', !(state && state.enabled));
       await refresh();
+    });
+
+    document.getElementById('ticketAnnounceChk').addEventListener('change', async (e) => {
+      await call('SetTicketAnnounceEnabled', e.target.checked);
     });
 
     document.getElementById('saveBonus').addEventListener('click', async () => {

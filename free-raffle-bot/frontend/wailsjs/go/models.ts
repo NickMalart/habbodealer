@@ -65,6 +65,7 @@ export namespace main {
 	    inRoom: boolean;
 	    enabled: boolean;
 	    bonusEvery: number;
+	    ticketAnnounceEnabled: boolean;
 	    currentSession?: RaffleSession;
 	    sessions: RaffleSession[];
 	
@@ -78,6 +79,7 @@ export namespace main {
 	        this.inRoom = source["inRoom"];
 	        this.enabled = source["enabled"];
 	        this.bonusEvery = source["bonusEvery"];
+	        this.ticketAnnounceEnabled = source["ticketAnnounceEnabled"];
 	        this.currentSession = this.convertValues(source["currentSession"], RaffleSession);
 	        this.sessions = this.convertValues(source["sessions"], RaffleSession);
 	    }

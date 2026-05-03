@@ -18,12 +18,20 @@ export function GetState() {
   return window['go']['main']['App']['GetState']();
 }
 
+export function GetTicketAnnounceEnabled() {
+  return window['go']['main']['App']['GetTicketAnnounceEnabled']();
+}
+
 export function SetBonusEvery(arg1) {
   return window['go']['main']['App']['SetBonusEvery'](arg1);
 }
 
 export function SetEnabled(arg1) {
   return window['go']['main']['App']['SetEnabled'](arg1);
+}
+
+export function SetTicketAnnounceEnabled(arg1) {
+  return window['go']['main']['App']['SetTicketAnnounceEnabled'](arg1);
 }
 
 export function StartRaffle() {

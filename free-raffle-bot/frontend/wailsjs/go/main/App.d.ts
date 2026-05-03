@@ -10,9 +10,13 @@ export function GetDebugSnapshot():Promise<string>;
 
 export function GetState():Promise<main.RaffleState>;
 
+export function GetTicketAnnounceEnabled():Promise<boolean>;
+
 export function SetBonusEvery(arg1:number):Promise<main.RaffleState>;
 
 export function SetEnabled(arg1:boolean):Promise<main.RaffleState>;
+
+export function SetTicketAnnounceEnabled(arg1:boolean):Promise<main.RaffleState>;
 
 export function StartRaffle():Promise<main.RaffleState>;
 
