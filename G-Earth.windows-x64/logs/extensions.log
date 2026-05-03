@@ -38,3 +38,19 @@
 2026-05-03 09:24:27.147 ERROR [G-Programmer_1.4.0] - 	at java.base/jdk.internal.loader.ClassLoaders$AppClassLoader.loadClass(Unknown Source)
 2026-05-03 09:24:27.147 ERROR [G-Programmer_1.4.0] - 	at java.base/java.lang.ClassLoader.loadClass(Unknown Source)
 2026-05-03 09:24:27.147 ERROR [G-Programmer_1.4.0] - 	... 17 more
+2026-05-03 14:08:28.701 INFO  [] - Launching Trade Tracker_2.0...
+2026-05-03 14:08:29.074 ERROR [Trade Tracker_2.0] - panic: unhandled error: failed to resolve incoming header: "TRADE_COMPLETED_2"
+2026-05-03 14:08:29.074 ERROR [Trade Tracker_2.0] - 
+2026-05-03 14:08:29.074 ERROR [Trade Tracker_2.0] - goroutine 1 [running]:
+2026-05-03 14:08:29.074 ERROR [Trade Tracker_2.0] - xabbo.b7c.io/goearth.(*Ext).Run(...)
+2026-05-03 14:08:29.074 ERROR [Trade Tracker_2.0] - 	xabbo.b7c.io/goearth@v0.4.0/extension.go:292
+2026-05-03 14:08:29.074 ERROR [Trade Tracker_2.0] - main.main()
+2026-05-03 14:08:29.074 ERROR [Trade Tracker_2.0] - 	github.com/thauanvargas/arcade-tracker/main.go:82 +0x787
+2026-05-03 14:08:30.419 INFO  [] - Launching Trade Tracker_2.0...
+2026-05-03 14:08:30.470 ERROR [Trade Tracker_2.0] - panic: unhandled error: failed to resolve incoming header: "TRADE_COMPLETED_2"
+2026-05-03 14:08:30.470 ERROR [Trade Tracker_2.0] - 
+2026-05-03 14:08:30.470 ERROR [Trade Tracker_2.0] - goroutine 1 [running]:
+2026-05-03 14:08:30.470 ERROR [Trade Tracker_2.0] - xabbo.b7c.io/goearth.(*Ext).Run(...)
+2026-05-03 14:08:30.470 ERROR [Trade Tracker_2.0] - 	xabbo.b7c.io/goearth@v0.4.0/extension.go:292
+2026-05-03 14:08:30.470 ERROR [Trade Tracker_2.0] - main.main()
+2026-05-03 14:08:30.470 ERROR [Trade Tracker_2.0] - 	github.com/thauanvargas/arcade-tracker/main.go:82 +0x787

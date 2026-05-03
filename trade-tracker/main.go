@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"embed"
@@ -8,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -121,6 +124,96 @@ type App struct {
 // lastAddWasOurs is set atomically when we send TRADE_ADDITEM (outgoing #72)
 // so TRADE_ITEMS parsing can attribute the new items to the correct side.
 var lastAddWasOurs int32 // 1 = our add, 0 = partner add
+
+var itemClassMu sync.RWMutex
+var knownItemClasses = map[string]struct{}{}
+var knownItemClassList []string
+
+func hasKnownItemClasses() bool {
+	itemClassMu.RLock()
+	n := len(knownItemClasses)
+	itemClassMu.RUnlock()
+	return n > 0
+}
+
+func isKnownItemClass(name string) bool {
+	itemClassMu.RLock()
+	_, ok := knownItemClasses[strings.ToLower(strings.TrimSpace(name))]
+	itemClassMu.RUnlock()
+	return ok
+}
+
+func setKnownItemClasses(next map[string]struct{}) {
+	list := make([]string, 0, len(next))
+	for k := range next {
+		list = append(list, k)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		return len(list[i]) > len(list[j])
+	})
+
+	itemClassMu.Lock()
+	knownItemClasses = next
+	knownItemClassList = list
+	itemClassMu.Unlock()
+}
+
+func loadExternalTexts(gameHost string) error {
+	url := "https://origins-gamedata.habbo.com/external_texts/1"
+	switch strings.ToLower(strings.TrimSpace(gameHost)) {
+	case "game-obr.habbo.com":
+		url = "https://origins-gamedata.habbo.com.br/external_texts/1"
+	case "game-oes.habbo.com":
+		url = "https://origins-gamedata.habbo.es/external_texts/1"
+	}
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("external_texts http status %d", resp.StatusCode)
+	}
+
+	classes := map[string]struct{}{}
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(parts[0]))
+
+		if strings.HasPrefix(key, "furni_") && strings.HasSuffix(key, "_name") {
+			class := strings.TrimSuffix(strings.TrimPrefix(key, "furni_"), "_name")
+			if class != "" {
+				classes[class] = struct{}{}
+			}
+			continue
+		}
+
+		if strings.HasPrefix(key, "wallitem_") && strings.HasSuffix(key, "_name") {
+			class := strings.TrimSuffix(strings.TrimPrefix(key, "wallitem_"), "_name")
+			if class != "" {
+				classes[class] = struct{}{}
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	if len(classes) == 0 {
+		return fmt.Errorf("external_texts parsed with zero known item classes")
+	}
+
+	setKnownItemClasses(classes)
+	log.Printf("[TRADE_TRACKER_DEBUG] loaded %d known item classes from external_texts", len(classes))
+	return nil
+}
 
 type DBConfig struct {
 	DatabaseURL string `json:"databaseUrl"`
@@ -388,6 +481,54 @@ type TradeItem struct {
 	Raw      string `json:"raw,omitempty"`
 }
 
+// Accept candidate tokens containing lowercase letters, digits and underscores.
+var itemClassRe = regexp.MustCompile(`[a-z0-9_]+`)
+
+func normalizeTradeClassToken(raw string) string {
+	token := strings.ToLower(strings.TrimSpace(raw))
+	if token == "" {
+		return ""
+	}
+
+	matches := itemClassRe.FindAllString(token, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+
+	itemClassMu.RLock()
+	list := append([]string(nil), knownItemClassList...)
+	itemClassMu.RUnlock()
+
+	// Prefer known classes first (same spirit as tracker external_texts resolution).
+	for _, m := range matches {
+		if isKnownItemClass(m) {
+			return m
+		}
+	}
+
+	// Some packets prepend noisy prefixes to the class. Try suffix/underscore-joined matches.
+	for _, m := range matches {
+		for _, cls := range list {
+			if m == cls || strings.HasSuffix(m, cls) || strings.Contains(m, "_"+cls) {
+				return cls
+			}
+		}
+	}
+
+	// If no known classes loaded (network issue), fallback to previous behavior.
+	if !hasKnownItemClasses() {
+		best := ""
+		for _, m := range matches {
+			if len(m) > len(best) {
+				best = m
+			}
+		}
+		return best
+	}
+
+	return ""
+}
+
 func (a *App) parseTradeItemsSimple(data []byte) []TradeItem {
 	counts := map[string]int{}
 	rawByName := map[string]string{}
@@ -422,7 +563,10 @@ func (a *App) parseTradeItemsSimple(data []byte) []TradeItem {
 		if cand == "" {
 			continue
 		}
-		name := strings.ToLower(cand)
+		name := normalizeTradeClassToken(cand)
+		if name == "" {
+			continue
+		}
 		counts[name] += qty
 		if _, ok := rawByName[name]; !ok {
 			rawByName[name] = raw
@@ -546,6 +690,10 @@ func (a *App) handleIncomingTradeOpen(e *g.Intercept) {
 	if hdr.Dir == g.In && hdr.Value == 108 {
 		allItems := a.parseTradeItemsSimple(e.Packet.Data)
 		wasOurs := atomic.SwapInt32(&lastAddWasOurs, 0) == 1
+		a.logDebug("TRADE_ITEMS parsed: total=%d wasOurs=%t", len(allItems), wasOurs)
+		for _, it := range allItems {
+			a.logDebug("  item: name=%q qty=%d", it.Name, it.Quantity)
+		}
 
 		a.mu.Lock()
 		prevAll := make(map[string]int, len(a.lastAllTradeItems))
@@ -616,6 +764,9 @@ func (a *App) handleIncomingTradeOpen(e *g.Intercept) {
 		partnerName := a.currentTradePartnerName
 		partnerTradeID := a.currentTradePartnerID
 		a.mu.Unlock()
+		for _, it := range a.partnerAcceptedSnapshot {
+			a.logDebug("partner snapshot item: name=%q qty=%d", it.Name, it.Quantity)
+		}
 		a.logDebug("incoming partner accept: ourAccepted=%t recorded=%t dbReady=%t dbSessionID=%d partner=%q tradeID=%d items=%d", ourAccepted, recorded, db != nil, dbSessionID, partnerName, partnerTradeID, len(a.partnerAcceptedSnapshot))
 
 		if db != nil && dbSessionID > 0 && ourAccepted && !recorded {
@@ -844,7 +995,17 @@ func (a *App) persistTradeEntry(dbSessionID int64, partnerName string, partnerTr
 	defer cancel()
 	a.logDebug("persist insert attempt: dbSessionID=%d partner=%q tradeID=%d items=%d ownerKey=%q", dbSessionID, partnerName, partnerTradeID, len(items), a.ownerKey)
 
-	if _, err := a.db.Exec(ctx, `INSERT INTO trade_entries (session_id, occurred_at, partner_name, partner_trade_id, payload_hex, furni_items, owner_key) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		a.logDebug("persist begin tx failed: dbSessionID=%d err=%v", dbSessionID, err)
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	var tradeEntryID int64
+	if err := tx.QueryRow(ctx, `INSERT INTO trade_entries (session_id, occurred_at, partner_name, partner_trade_id, payload_hex, furni_items, owner_key) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
 		dbSessionID,
 		occurredAt,
 		partnerName,
@@ -852,8 +1013,33 @@ func (a *App) persistTradeEntry(dbSessionID int64, partnerName string, partnerTr
 		payload,
 		itemsJSON,
 		a.ownerKey,
-	); err != nil {
+	).Scan(&tradeEntryID); err != nil {
 		a.logDebug("persist insert failed: dbSessionID=%d err=%v", dbSessionID, err)
+		return err
+	}
+
+	for _, item := range items {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			continue
+		}
+		qty := item.Quantity
+		if qty <= 0 {
+			qty = 1
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO trade_entry_items (trade_entry_id, item_name, quantity, raw_data, owner_key)
+			VALUES ($1,$2,$3,$4,$5)
+			ON CONFLICT (trade_entry_id, item_name)
+			DO UPDATE SET quantity = EXCLUDED.quantity, raw_data = EXCLUDED.raw_data
+		`, tradeEntryID, name, qty, item.Raw, a.ownerKey); err != nil {
+			a.logDebug("persist item row failed: tradeEntryID=%d item=%q qty=%d err=%v", tradeEntryID, name, qty, err)
+			return err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		a.logDebug("persist commit failed: tradeEntryID=%d err=%v", tradeEntryID, err)
 		return err
 	}
 	a.logDebug("persist insert ok: dbSessionID=%d", dbSessionID)
@@ -913,6 +1099,16 @@ func (a *App) ensureTables() error {
 			owner_key TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
+		`CREATE TABLE IF NOT EXISTS trade_entry_items (
+			id BIGSERIAL PRIMARY KEY,
+			trade_entry_id BIGINT NOT NULL REFERENCES trade_entries(id) ON DELETE CASCADE,
+			item_name TEXT NOT NULL,
+			quantity INTEGER NOT NULL DEFAULT 1,
+			raw_data TEXT NOT NULL DEFAULT '',
+			owner_key TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (trade_entry_id, item_name)
+		)`,
 	}
 
 	for _, q := range createQueries {
@@ -926,6 +1122,9 @@ func (a *App) ensureTables() error {
 		`ALTER TABLE trade_sessions ADD COLUMN IF NOT EXISTS owner_key TEXT DEFAULT ''`,
 		`ALTER TABLE trade_entries ADD COLUMN IF NOT EXISTS owner_key TEXT DEFAULT ''`,
 		`ALTER TABLE trade_entries ADD COLUMN IF NOT EXISTS furni_items JSONB DEFAULT '[]'::jsonb`,
+		`ALTER TABLE trade_entry_items ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE trade_entry_items ADD COLUMN IF NOT EXISTS raw_data TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE trade_entry_items ADD COLUMN IF NOT EXISTS owner_key TEXT DEFAULT ''`,
 	}
 	for _, q := range alterQueries {
 		if _, err := db.Exec(ctx, q); err != nil {
@@ -938,11 +1137,31 @@ func (a *App) ensureTables() error {
 		`CREATE INDEX IF NOT EXISTS idx_trade_entries_occurred_at ON trade_entries(occurred_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_trade_sessions_owner_key ON trade_sessions(owner_key)`,
 		`CREATE INDEX IF NOT EXISTS idx_trade_entries_owner_key ON trade_entries(owner_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_trade_entry_items_entry_id ON trade_entry_items(trade_entry_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_trade_entry_items_owner_key ON trade_entry_items(owner_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_trade_entry_items_name ON trade_entry_items(item_name)`,
 	}
 	for _, q := range indexQueries {
 		if _, err := db.Exec(ctx, q); err != nil {
 			return err
 		}
+	}
+
+	// Backfill normalized rows from existing JSON payloads.
+	if _, err := db.Exec(ctx, `
+		INSERT INTO trade_entry_items (trade_entry_id, item_name, quantity, raw_data, owner_key)
+		SELECT
+			e.id,
+			COALESCE(elem->>'name', ''),
+			GREATEST(COALESCE((elem->>'quantity')::int, 1), 1),
+			COALESCE(elem->>'raw', ''),
+			e.owner_key
+		FROM trade_entries e
+		CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.furni_items, '[]'::jsonb)) elem
+		WHERE COALESCE(elem->>'name', '') <> ''
+		ON CONFLICT (trade_entry_id, item_name) DO NOTHING
+	`); err != nil {
+		return err
 	}
 
 	return nil
@@ -1184,6 +1403,11 @@ func setupExt(a *App) {
 
 	ext.Connected(func(e g.ConnectArgs) {
 		log.Printf("connected (%s:%d)", e.Host, e.Port)
+		go func(host string) {
+			if err := loadExternalTexts(host); err != nil {
+				log.Printf("[TRADE_TRACKER_DEBUG] external_texts load failed: host=%s err=%v", host, err)
+			}
+		}(e.Host)
 		a.mu.Lock()
 		a.connected = true
 		a.mu.Unlock()

@@ -120,6 +120,21 @@
       background: #121b24;
     }
 
+    .item.clickable {
+      cursor: pointer;
+      transition: border-color 120ms ease, background 120ms ease;
+    }
+
+    .item.clickable:hover {
+      border-color: #3f566c;
+      background: #162330;
+    }
+
+    .item.active {
+      border-color: var(--accent);
+      background: #172737;
+    }
+
     .item strong {
       color: #f2fbff;
     }
@@ -129,6 +144,27 @@
       color: var(--muted);
       margin-top: 4px;
       word-break: break-all;
+    }
+
+    .items {
+      margin-top: 8px;
+      border-top: 1px dashed var(--border);
+      padding-top: 8px;
+    }
+
+    .items .line {
+      font-size: 12px;
+      color: #d9ebfa;
+      margin-bottom: 4px;
+    }
+
+    .section-title {
+      margin-top: 10px;
+      margin-bottom: 6px;
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.7px;
     }
 
     .empty {
@@ -157,8 +193,7 @@
         <span id="run" class="badge idle">Idle</span>
       </div>
       <div class="row">
-        <button id="start" class="start">Start Trade Tracker</button>
-        <button id="stop" class="stop">Stop Tracker</button>
+        <button id="toggle" class="start">Start Trade Tracker</button>
         <button id="clear" class="clear">Clear Saved Sessions</button>
       </div>
     </div>
@@ -171,8 +206,13 @@
       </div>
 
       <div class="card">
-        <h1 style="font-size:16px">Past Sessions</h1>
+        <h1 style="font-size:16px">History</h1>
         <div id="pastList" class="list"></div>
+        <div class="section-title">Selected Session Trades</div>
+        <div id="historyMeta" class="muted">Pick a session to inspect trades.</div>
+        <div id="historyTrades" class="list"></div>
+        <div class="section-title">Selected Trade Details</div>
+        <div id="tradeDetail" class="list"></div>
       </div>
     </div>
   </div>
@@ -190,6 +230,13 @@
     const currentMetaEl = document.getElementById("currentMeta");
     const currentListEl = document.getElementById("currentList");
     const pastListEl = document.getElementById("pastList");
+    const toggleEl = document.getElementById("toggle");
+    const historyMetaEl = document.getElementById("historyMeta");
+    const historyTradesEl = document.getElementById("historyTrades");
+    const tradeDetailEl = document.getElementById("tradeDetail");
+
+    let selectedSessionId = null;
+    let selectedTradeKey = null;
 
     function backend() {
       return window.go && window.go.main && window.go.main.App;
@@ -223,16 +270,89 @@
       currentListEl.innerHTML = rows.length ? rows.join("") : '<div class="empty">Waiting for incoming trades...</div>';
     }
 
+    function getSessionById(id) {
+      const sessions = state.sessions || [];
+      return sessions.find((s) => Number(s.id) === Number(id)) || null;
+    }
+
+    function renderHistoryDetails() {
+      const selected = selectedSessionId != null ? getSessionById(selectedSessionId) : null;
+      if (!selected) {
+        historyMetaEl.textContent = "Pick a session to inspect trades.";
+        historyTradesEl.innerHTML = '<div class="empty">No session selected.</div>';
+        tradeDetailEl.innerHTML = '<div class="empty">Choose a trade to see partner, time, and items.</div>';
+        return;
+      }
+
+      const entries = (selected.entries || []).slice().reverse();
+      historyMetaEl.textContent = "Session #" + selected.id + " | Trades: " + entries.length;
+
+      historyTradesEl.innerHTML = entries.length
+        ? entries.map((e, idx) => {
+            const key = selected.id + ":" + (e.timestamp || "") + ":" + idx;
+            const active = selectedTradeKey === key ? " active" : "";
+            return [
+              '<div class="item clickable' + active + '" data-trade-key="' + escapeHtml(key) + '">',
+              '<strong>' + escapeHtml(e.partnerName || "Unknown") + '</strong>',
+              '<div class="tiny">At: ' + escapeHtml(e.timestamp || "") + '</div>',
+              '<div class="tiny">Trade ID: ' + escapeHtml(String(e.partnerTradeId || 0)) + '</div>',
+              '</div>'
+            ].join("");
+          }).join("")
+        : '<div class="empty">No trades in this session.</div>';
+
+      historyTradesEl.querySelectorAll(".item.clickable").forEach((el) => {
+        el.addEventListener("click", () => {
+          selectedTradeKey = el.getAttribute("data-trade-key");
+          renderHistoryDetails();
+        });
+      });
+
+      let selectedEntry = null;
+      if (selectedTradeKey) {
+        for (let i = 0; i < entries.length; i += 1) {
+          const key = selected.id + ":" + (entries[i].timestamp || "") + ":" + i;
+          if (key === selectedTradeKey) {
+            selectedEntry = entries[i];
+            break;
+          }
+        }
+      }
+
+      if (!selectedEntry) {
+        tradeDetailEl.innerHTML = '<div class="empty">Choose a trade to see exact items for that time.</div>';
+        return;
+      }
+
+      const items = selectedEntry.furniItems || [];
+      const itemRows = items.length
+        ? items.map((it) => '<div class="line">' + escapeHtml(it.name || "") + ' x' + escapeHtml(String(it.quantity || 1)) + '</div>').join("")
+        : '<div class="line">No item details captured.</div>';
+
+      tradeDetailEl.innerHTML = [
+        '<div class="item">',
+        '<strong>' + escapeHtml(selectedEntry.partnerName || "Unknown") + '</strong>',
+        '<div class="tiny">At: ' + escapeHtml(selectedEntry.timestamp || "") + '</div>',
+        '<div class="tiny">Trade ID: ' + escapeHtml(String(selectedEntry.partnerTradeId || 0)) + '</div>',
+        '<div class="items">' + itemRows + '</div>',
+        '</div>'
+      ].join("");
+    }
+
     function renderPast() {
       const sessions = state.sessions || [];
       if (!sessions.length) {
         pastListEl.innerHTML = '<div class="empty">No saved sessions yet.</div>';
+        selectedSessionId = null;
+        selectedTradeKey = null;
+        renderHistoryDetails();
         return;
       }
 
       const rows = sessions.map((s) => {
+        const active = Number(selectedSessionId) === Number(s.id) ? " active" : "";
         return [
-          '<div class="item">',
+          '<div class="item clickable' + active + '" data-session-id="' + s.id + '">',
           '<strong>Session #' + s.id + '</strong>',
           '<div class="tiny">Start: ' + escapeHtml(s.startedAt || "") + '</div>',
           '<div class="tiny">End: ' + escapeHtml(s.endedAt || "") + '</div>',
@@ -242,11 +362,29 @@
       }).reverse();
 
       pastListEl.innerHTML = rows.join("");
+
+      if (selectedSessionId == null && sessions.length) {
+        selectedSessionId = sessions[sessions.length - 1].id;
+      }
+
+      pastListEl.querySelectorAll(".item.clickable").forEach((el) => {
+        el.addEventListener("click", () => {
+          selectedSessionId = Number(el.getAttribute("data-session-id"));
+          selectedTradeKey = null;
+          renderPast();
+        });
+      });
+
+      renderHistoryDetails();
     }
 
     function applyUI() {
       applyBadge(connEl, state.connected ? "Connected" : "Not connected", state.connected ? "ok" : "bad");
       applyBadge(runEl, state.running ? "Tracking" : "Idle", state.running ? "run" : "idle");
+
+      toggleEl.textContent = state.running ? "Stop Trade Tracker" : "Start Trade Tracker";
+      toggleEl.className = state.running ? "stop" : "start";
+
       renderCurrent();
       renderPast();
     }
@@ -290,6 +428,14 @@
       applyUI();
     }
 
+    async function toggleTracking() {
+      if (state.running) {
+        await stopTracking();
+      } else {
+        await startTracking();
+      }
+    }
+
     async function clearSessions() {
       const api = backend();
       if (!api || !api.ClearSessions) {
@@ -300,8 +446,7 @@
       applyUI();
     }
 
-    document.getElementById("start").addEventListener("click", startTracking);
-    document.getElementById("stop").addEventListener("click", stopTracking);
+    document.getElementById("toggle").addEventListener("click", toggleTracking);
     document.getElementById("clear").addEventListener("click", clearSessions);
 
     setInterval(pullState, 1000);

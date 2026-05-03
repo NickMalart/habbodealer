@@ -321,17 +321,9 @@ func (a *App) LaunchApp(appID string, port string) string {
 		args = []string{"-p", normalizedPort}
 	}
 
-	instanceKey := buildInstanceKey(item.ID, normalizedPort)
-
-	a.mu.Lock()
-	if p, ok := a.processes[instanceKey]; ok && p != nil {
-		a.mu.Unlock()
-		if normalizedPort == "" {
-			return "default instance is already running"
-		}
-		return "that port is already running for this app"
-	}
-	a.mu.Unlock()
+	// Always allow launching a new instance when user clicks Run.
+	// Use a unique key so stale/default entries never block future launches.
+	instanceKey := fmt.Sprintf("%s|%s|%d", item.ID, normalizedPort, time.Now().UnixNano())
 
 	cmd := exec.Command(item.Path, args...)
 	cmd.Dir = filepath.Dir(item.Path)
