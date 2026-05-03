@@ -292,6 +292,27 @@ func parseOptionalRFC3339(raw string) (time.Time, bool, error) {
 	return t.UTC(), true, nil
 }
 
+func parseHistoryStartedAt(raw string) (time.Time, bool) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return time.Time{}, false
+	}
+
+	layouts := []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05Z07:00",
+		"2006-01-02 15:04:05",
+	}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, v); err == nil {
+			return t.UTC(), true
+		}
+	}
+
+	return time.Time{}, false
+}
+
 func (a *App) StartRaffle() RaffleState {
 	state, err := a.StartRaffleWithWindow("", "")
 	if err != nil {
@@ -588,15 +609,15 @@ func (a *App) processNewBets() {
 
 	rows, err := db.Query(ctx, `
 		SELECT
-			t.id::text,
-			t.partner_name,
-			t.occurred_at
-		FROM trade_entries t
-		WHERE t.owner_key = $1
-		  AND t.occurred_at >= $2
-		ORDER BY t.occurred_at ASC, t.id ASC
+			e.id::text,
+			e.player_name,
+			e.started_at
+		FROM game_history_entries e
+		WHERE e.owner_key = $1
+		  AND trim(COALESCE(e.started_at, '')) <> ''
+		ORDER BY e.started_at ASC, e.id ASC
 		LIMIT 500
-	`, owner, sessionStartedAt)
+	`, owner)
 	if err != nil {
 		a.logDebug("poll query failed: %v", err)
 		return
@@ -604,9 +625,9 @@ func (a *App) processNewBets() {
 	defer rows.Close()
 
 	type dbBetRow struct {
-		EntryID    string
-		Player     string
-		OccurredAt time.Time
+		EntryID   string
+		Player    string
+		StartedAt string
 	}
 	type betRow struct {
 		EntryID string
@@ -614,18 +635,26 @@ func (a *App) processNewBets() {
 		EventAt time.Time
 	}
 	scannedCount := 0
+	skippedInvalidTime := 0
 	latestSeenAt := time.Time{}
 	latestSeenEntry := ""
 	batch := make([]betRow, 0)
 	for rows.Next() {
 		var raw dbBetRow
-		if err := rows.Scan(&raw.EntryID, &raw.Player, &raw.OccurredAt); err != nil {
+		if err := rows.Scan(&raw.EntryID, &raw.Player, &raw.StartedAt); err != nil {
 			a.logDebug("poll scan failed: %v", err)
 			return
 		}
 		scannedCount++
 
-		eventAt := raw.OccurredAt.UTC()
+		eventAt, ok := parseHistoryStartedAt(raw.StartedAt)
+		if !ok {
+			skippedInvalidTime++
+			continue
+		}
+		if eventAt.Before(sessionStartedAt) {
+			continue
+		}
 		if latestSeenAt.IsZero() || eventAt.After(latestSeenAt) || (eventAt.Equal(latestSeenAt) && raw.EntryID > latestSeenEntry) {
 			latestSeenAt = eventAt
 			latestSeenEntry = raw.EntryID
@@ -650,9 +679,10 @@ func (a *App) processNewBets() {
 		latestSeenAtText = latestSeenAt.Format(time.RFC3339)
 	}
 	a.logDebug(
-		"poll inspected=%d accepted=%d sessionStart=%s cursorAt=%s cursorEntry=%q latestSeenAt=%s latestSeenEntry=%q",
+		"poll inspected=%d accepted=%d skippedInvalidTime=%d sessionStart=%s cursorAt=%s cursorEntry=%q latestSeenAt=%s latestSeenEntry=%q",
 		scannedCount,
 		len(batch),
+		skippedInvalidTime,
 		sessionStartedAt.Format(time.RFC3339),
 		cursorAt.Format(time.RFC3339),
 		cursorEntry,
@@ -998,25 +1028,6 @@ func (a *App) ensureTables() error {
 			RETURN NEW;
 		END;
 		$$ LANGUAGE plpgsql`,
-		`CREATE OR REPLACE FUNCTION notify_raffle_game_finished_from_items()
-		RETURNS TRIGGER AS $$
-		BEGIN
-			IF NEW.item_type <> 'bet' THEN
-				RETURN NEW;
-			END IF;
-
-			PERFORM pg_notify(
-				'raffle_game_finished',
-				json_build_object(
-					'owner_key', NEW.owner_key,
-					'entry_id', NEW.entry_id,
-					'source', 'items'
-				)::text
-			);
-
-			RETURN NEW;
-		END;
-		$$ LANGUAGE plpgsql`,
 		`CREATE OR REPLACE FUNCTION notify_raffle_trade_entry_insert()
 		RETURNS TRIGGER AS $$
 		BEGIN
@@ -1039,16 +1050,6 @@ func (a *App) ensureTables() error {
 				AFTER INSERT OR UPDATE ON game_history_entries
 				FOR EACH ROW
 				EXECUTE FUNCTION notify_raffle_game_finished_from_entries();
-			END IF;
-		END $$`,
-		`DO $$
-		BEGIN
-			IF to_regclass('public.game_history_items') IS NOT NULL THEN
-				DROP TRIGGER IF EXISTS trg_raffle_game_finished_items ON game_history_items;
-				CREATE TRIGGER trg_raffle_game_finished_items
-				AFTER INSERT OR UPDATE ON game_history_items
-				FOR EACH ROW
-				EXECUTE FUNCTION notify_raffle_game_finished_from_items();
 			END IF;
 		END $$`,
 		`DO $$
