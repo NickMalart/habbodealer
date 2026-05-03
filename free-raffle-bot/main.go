@@ -58,6 +58,7 @@ type RaffleSession struct {
 	DBID           int64               `json:"-"`
 	CursorAt       time.Time           `json:"-"`
 	CursorEntry    string              `json:"-"`
+	ResumedAt      time.Time           `json:"-"` // zero if never resumed; bets before this time skip shouts
 }
 
 type RaffleState struct {
@@ -494,6 +495,7 @@ func (a *App) ResumeSession(dbID int64) (RaffleState, error) {
 	s := a.sessions[idx]
 	a.sessions = append(a.sessions[:idx], a.sessions[idx+1:]...)
 	s.EndedAt = ""
+	s.ResumedAt = time.Now().UTC()
 	a.currentSession = &s
 	db := a.db
 	owner := a.ownerKey
@@ -527,6 +529,130 @@ func (a *App) ClearSessions() RaffleState {
 	a.mu.Unlock()
 	a.emitUpdate()
 	return a.GetState()
+}
+
+type TallyItem struct {
+	Name    string `json:"name"`
+	WonQty  int    `json:"wonQty"`
+	LostQty int    `json:"lostQty"`
+	NetQty  int    `json:"netQty"`
+}
+
+type SessionTally struct {
+	SessionDBID int64       `json:"sessionDbId"`
+	StartedAt   string      `json:"startedAt"`
+	EndedAt     string      `json:"endedAt"`
+	Games       int         `json:"games"`
+	Items       []TallyItem `json:"items"`
+}
+
+// GetSessionTally fetches item win/loss totals from game_history_items for the given session's time window.
+func (a *App) GetSessionTally(dbID int64) (SessionTally, error) {
+	a.mu.Lock()
+	db := a.db
+	owner := a.ownerKey
+	// Find session (current or closed)
+	var startedAt, endedAt string
+	if a.currentSession != nil && a.currentSession.DBID == dbID {
+		startedAt = a.currentSession.StartedAt
+		endedAt = a.currentSession.EndedAt
+	} else {
+		for _, s := range a.sessions {
+			if s.DBID == dbID {
+				startedAt = s.StartedAt
+				endedAt = s.EndedAt
+				break
+			}
+		}
+	}
+	a.mu.Unlock()
+
+	tally := SessionTally{SessionDBID: dbID, StartedAt: startedAt, EndedAt: endedAt}
+
+	if db == nil || startedAt == "" {
+		return tally, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// started_at is TEXT with mixed formats — parse via parseHistoryStartedAt and cast in SQL
+	startTime, ok := parseHistoryStartedAt(startedAt)
+	if !ok {
+		return tally, fmt.Errorf("invalid startedAt: %q", startedAt)
+	}
+	var endClause string
+	var args []interface{}
+	args = append(args, owner, startTime)
+	if endedAt != "" {
+		if endTime, ok := parseHistoryStartedAt(endedAt); ok {
+			args = append(args, endTime)
+			endClause = fmt.Sprintf("AND to_timestamp(trim(e.started_at), 'YYYY-MM-DD\"T\"HH24:MI:SS') AT TIME ZONE 'UTC' <= $%d", len(args))
+		}
+	}
+
+	// Sum bet items (won by dealer = came in) and payout items (lost by dealer = went out)
+	// Cast the TEXT started_at to timestamptz for proper comparison
+	query := fmt.Sprintf(`
+		SELECT
+			i.item_name,
+			SUM(CASE WHEN i.item_type = 'bet'    THEN i.quantity ELSE 0 END) AS won_qty,
+			SUM(CASE WHEN i.item_type = 'payout' THEN i.quantity ELSE 0 END) AS lost_qty,
+			COUNT(DISTINCT e.id) AS games
+		FROM game_history_entries e
+		JOIN game_history_items i ON i.entry_id = e.id AND i.owner_key = e.owner_key
+		WHERE e.owner_key = $1
+		  AND trim(COALESCE(e.started_at, '')) <> ''
+		  AND to_timestamp(trim(e.started_at), 'YYYY-MM-DD"T"HH24:MI:SS') AT TIME ZONE 'UTC' >= $2
+		  %s
+		  AND e.status = 'Completed'
+		GROUP BY i.item_name
+		ORDER BY (SUM(CASE WHEN i.item_type = 'bet' THEN i.quantity ELSE 0 END) -
+		          SUM(CASE WHEN i.item_type = 'payout' THEN i.quantity ELSE 0 END)) DESC,
+		         i.item_name
+	`, endClause)
+
+	rows, err := db.Query(ctx, query, args...)
+	if err != nil {
+		return tally, err
+	}
+	defer rows.Close()
+
+	totalGames := 0
+	items := make([]TallyItem, 0)
+	for rows.Next() {
+		var t TallyItem
+		var g int
+		if err := rows.Scan(&t.Name, &t.WonQty, &t.LostQty, &g); err != nil {
+			return tally, err
+		}
+		t.NetQty = t.WonQty - t.LostQty
+		items = append(items, t)
+		if g > totalGames {
+			totalGames = g
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return tally, err
+	}
+
+	// Fetch total distinct games in window separately (items query only counts games that had items)
+	var totalGamesRow int
+	_ = db.QueryRow(ctx, fmt.Sprintf(`
+		SELECT COUNT(*) FROM game_history_entries
+		WHERE owner_key = $1
+		  AND trim(COALESCE(started_at, '')) <> ''
+		  AND to_timestamp(trim(started_at), 'YYYY-MM-DD"T"HH24:MI:SS') AT TIME ZONE 'UTC' >= $2
+		  %s
+		  AND status = 'Completed'
+	`, endClause), args...).Scan(&totalGamesRow)
+	if totalGamesRow > totalGames {
+		totalGames = totalGamesRow
+	}
+
+	tally.Games = totalGames
+	tally.Items = items
+	return tally, nil
 }
 
 func (a *App) startPoller() {
@@ -766,10 +892,10 @@ func (a *App) processNewBets() {
 	a.debugMu.Unlock()
 
 	upserts := make([]RaffleParticipant, 0, len(batch))
-	newEntrants := make([]string, 0, len(batch))
 	type ticketAnnounce struct {
 		name    string
 		tickets int
+		isNew   bool
 	}
 	ticketAnnounces := make([]ticketAnnounce, 0, len(batch))
 	lastCursorAt := cursorAt
@@ -782,6 +908,7 @@ func (a *App) processNewBets() {
 	}
 
 	announceEnabled := a.ticketAnnounceEnabled
+	resumedAt := a.currentSession.ResumedAt
 
 	for _, row := range batch {
 		name := normalizeUsername(row.Player)
@@ -810,9 +937,9 @@ func (a *App) processNewBets() {
 			}
 			a.currentSession.Participants = append(a.currentSession.Participants, p)
 			upserts = append(upserts, p)
-			newEntrants = append(newEntrants, p.Username)
-			if announceEnabled {
-				ticketAnnounces = append(ticketAnnounces, ticketAnnounce{name: p.Username, tickets: p.Tickets})
+			// New entrant: use combined shout, but suppress if this bet predates a resume
+			if resumedAt.IsZero() || row.EventAt.UTC().After(resumedAt) {
+				ticketAnnounces = append(ticketAnnounces, ticketAnnounce{name: p.Username, tickets: p.Tickets, isNew: true})
 			}
 		} else {
 			p := &a.currentSession.Participants[idx]
@@ -821,7 +948,7 @@ func (a *App) processNewBets() {
 			p.Tickets = ticketsForBetCount(p.BetCount, a.currentSession.BonusEvery)
 			p.LastBet = row.EventAt.UTC().Format(time.RFC3339)
 			upserts = append(upserts, *p)
-			if announceEnabled && p.Tickets > oldTickets {
+			if announceEnabled && p.Tickets > oldTickets && (resumedAt.IsZero() || row.EventAt.UTC().After(resumedAt)) {
 				ticketAnnounces = append(ticketAnnounces, ticketAnnounce{name: p.Username, tickets: p.Tickets})
 			}
 		}
@@ -842,12 +969,12 @@ func (a *App) processNewBets() {
 	bonusEvery := a.currentSession.BonusEvery
 	a.mu.Unlock()
 
-	for _, name := range newEntrants {
-		a.shoutEntrant(name)
-	}
-
 	for _, ta := range ticketAnnounces {
-		a.shoutTicketCount(ta.name, ta.tickets)
+		if ta.isNew {
+			a.shoutEntrant(ta.name, ta.tickets)
+		} else if announceEnabled {
+			a.shoutTicketCount(ta.name, ta.tickets)
+		}
 	}
 
 	if len(upserts) > 0 {
@@ -864,12 +991,17 @@ func (a *App) processNewBets() {
 	a.emitUpdate()
 }
 
-func (a *App) shoutEntrant(name string) {
+func (a *App) shoutEntrant(name string, entries int) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
 		return
 	}
-	msg := fmt.Sprintf("Contradultions %s you have entered the raffle! see Disc for more info!", trimmed)
+	var msg string
+	if entries == 1 {
+		msg = fmt.Sprintf("Contradultions %s you have entered the raffle! You have 1 entry! See Disc for more info!", trimmed)
+	} else {
+		msg = fmt.Sprintf("Contradultions %s you have entered the raffle! You have %d entries! See Disc for more info!", trimmed, entries)
+	}
 	ext.Send(out.SHOUT, msg)
 	a.debugMu.Lock()
 	a.lastShout = msg
@@ -877,16 +1009,16 @@ func (a *App) shoutEntrant(name string) {
 	a.logDebug("shout sent: %s", msg)
 }
 
-func (a *App) shoutTicketCount(name string, tickets int) {
+func (a *App) shoutTicketCount(name string, entries int) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
 		return
 	}
 	var msg string
-	if tickets == 1 {
-		msg = fmt.Sprintf("%s now has 1 raffle ticket!", trimmed)
+	if entries == 1 {
+		msg = fmt.Sprintf("%s now has 1 raffle entry!", trimmed)
 	} else {
-		msg = fmt.Sprintf("%s now has %d raffle tickets!", trimmed, tickets)
+		msg = fmt.Sprintf("%s now has %d raffle entries!", trimmed, entries)
 	}
 	ext.Send(out.SHOUT, msg)
 	a.debugMu.Lock()

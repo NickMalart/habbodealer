@@ -8,9 +8,13 @@ export function ClearSessions():Promise<main.RaffleState>;
 
 export function GetDebugSnapshot():Promise<string>;
 
+export function GetSessionTally(arg1:number):Promise<main.SessionTally>;
+
 export function GetState():Promise<main.RaffleState>;
 
 export function GetTicketAnnounceEnabled():Promise<boolean>;
+
+export function ResumeSession(arg1:number):Promise<main.RaffleState>;
 
 export function SetBonusEvery(arg1:number):Promise<main.RaffleState>;
 

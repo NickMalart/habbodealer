@@ -158,7 +158,10 @@
     <div class="card tab-main">
       <div class="row" style="justify-content: space-between;">
         <h2 style="margin: 0;">Current Session</h2>
-        <span class="muted" id="sessionMeta">No active session</span>
+        <div class="row">
+          <span class="muted" id="sessionMeta">No active session</span>
+          <button class="alt" id="tallyCurrentBtn" style="display:none;" onclick="loadTallyCurrent()">Item Tally</button>
+        </div>
       </div>
       <table>
         <thead>
@@ -172,6 +175,34 @@
         <tbody id="participants">
           <tr><td colspan="4" class="muted">No participants yet.</td></tr>
         </tbody>
+      </table>
+    </div>
+
+    <div class="card tab-main" id="tallyCard" style="display:none;">
+      <div class="row" style="justify-content: space-between; margin-bottom:8px;">
+        <h2 style="margin: 0;">Item Tally <span id="tallyTitle" class="muted" style="font-size:13px;"></span></h2>
+        <button class="alt" onclick="document.getElementById('tallyCard').style.display='none'">Close</button>
+      </div>
+      <p class="muted" id="tallyMeta" style="margin:0 0 8px 0;"></p>
+      <table>
+        <thead><tr><th>Item</th><th>Won (in)</th><th>Lost (out)</th><th>Net</th></tr></thead>
+        <tbody id="tallyBody"><tr><td colspan="4" class="muted">Loading...</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="card tab-main" id="pastSessionsCard" style="display:none;">
+      <h2 style="margin: 0 0 10px 0;">Past Sessions</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Started</th>
+            <th>Ended</th>
+            <th>Players</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="pastSessions"></tbody>
       </table>
     </div>
 
@@ -234,16 +265,85 @@
       const list = state.currentSession ? state.currentSession.participants || [] : [];
       if (list.length === 0) {
         tbody.innerHTML = '<tr><td colspan="4" class="muted">No participants yet.</td></tr>';
-        return;
-      }
-      for (const p of list) {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${p.username}</td><td>${p.betCount}</td><td>${p.tickets}</td><td>${p.lastBet || ''}</td>`;
-        tbody.appendChild(tr);
+      } else {
+        for (const p of list) {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${p.username}</td><td>${p.betCount}</td><td>${p.tickets}</td><td>${p.lastBet || ''}</td>`;
+          tbody.appendChild(tr);
+        }
       }
 
       const enableBtn = document.getElementById('enableBtn');
       enableBtn.textContent = state.enabled ? 'Disable' : 'Enable';
+
+      // Show/hide tally button for current session
+      const tallyCurrentBtn = document.getElementById('tallyCurrentBtn');
+      tallyCurrentBtn.style.display = state.currentSession ? '' : 'none';
+      if (state.currentSession) tallyCurrentBtn.dataset.dbid = state.currentSession.id;
+
+      // Past sessions
+      const pastCard = document.getElementById('pastSessionsCard');
+      const pastTbody = document.getElementById('pastSessions');
+      const past = state.sessions || [];
+      if (past.length === 0) {
+        pastCard.style.display = 'none';
+      } else {
+        pastCard.style.display = '';
+        pastTbody.innerHTML = '';
+        const hasActive = !!state.currentSession;
+        for (const s of [...past].reverse()) {
+          const tr = document.createElement('tr');
+          const resumeBtn = hasActive ? '' : `<button class="alt" onclick="resumeSession(${s.id})">Resume</button>`;
+          tr.innerHTML = `<td>#${s.id}</td><td>${s.startedAt || ''}</td><td>${s.endedAt || 'open'}</td><td>${(s.participants || []).length}</td><td style="display:flex;gap:4px;">${resumeBtn}<button class="alt" onclick="loadTally(${s.id})">Tally</button></td>`;
+          pastTbody.appendChild(tr);
+        }
+      }
+    }
+
+    async function loadTally(dbID) {
+      document.getElementById('tallyCard').style.display = '';
+      document.getElementById('tallyTitle').textContent = `(Session #${dbID})`;
+      document.getElementById('tallyMeta').textContent = 'Loading...';
+      document.getElementById('tallyBody').innerHTML = '<tr><td colspan="4" class="muted">Loading...</td></tr>';
+      try {
+        const t = await call('GetSessionTally', dbID);
+        renderTally(t);
+      } catch (err) {
+        document.getElementById('tallyMeta').textContent = `Error: ${err}`;
+        document.getElementById('tallyBody').innerHTML = '';
+      }
+    }
+
+    async function loadTallyCurrent() {
+      const dbid = parseInt(document.getElementById('tallyCurrentBtn').dataset.dbid || '0', 10);
+      if (!dbid) return;
+      await loadTally(dbid);
+    }
+
+    function renderTally(t) {
+      document.getElementById('tallyTitle').textContent = `(Session #${t.sessionDbId})`;
+      document.getElementById('tallyMeta').textContent = `${t.games} completed game(s) between ${t.startedAt || '?'} and ${t.endedAt || 'now'}`;
+      const tbody = document.getElementById('tallyBody');
+      tbody.innerHTML = '';
+      if (!t.items || t.items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="muted">No item data found for this window.</td></tr>';
+        return;
+      }
+      for (const item of t.items) {
+        const netColor = item.netQty > 0 ? '#4caf50' : item.netQty < 0 ? '#f44336' : '';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${item.name}</td><td>${item.wonQty}</td><td>${item.lostQty}</td><td style="color:${netColor};font-weight:600;">${item.netQty > 0 ? '+' : ''}${item.netQty}</td>`;
+        tbody.appendChild(tr);
+      }
+    }
+
+    async function resumeSession(dbID) {
+      try {
+        await call('ResumeSession', dbID);
+        await refresh();
+      } catch (err) {
+        alert(`Could not resume session: ${err}`);
+      }
     }
 
     async function refresh() {

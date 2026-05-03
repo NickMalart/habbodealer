@@ -14,12 +14,20 @@ export function GetDebugSnapshot() {
   return window['go']['main']['App']['GetDebugSnapshot']();
 }
 
+export function GetSessionTally(arg1) {
+  return window['go']['main']['App']['GetSessionTally'](arg1);
+}
+
 export function GetState() {
   return window['go']['main']['App']['GetState']();
 }
 
 export function GetTicketAnnounceEnabled() {
   return window['go']['main']['App']['GetTicketAnnounceEnabled']();
+}
+
+export function ResumeSession(arg1) {
+  return window['go']['main']['App']['ResumeSession'](arg1);
 }
 
 export function SetBonusEvery(arg1) {
