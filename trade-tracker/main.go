@@ -7,7 +7,6 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -42,31 +41,6 @@ var ext = g.NewExt(g.ExtInfo{
 	Version:     "1.0.0",
 	Author:      "Dubbo",
 })
-
-func setupFileLogging() {
-	logPath := ""
-	if cwd, err := os.Getwd(); err == nil {
-		logPath = filepath.Join(cwd, "trade-tracker-debug.log")
-	}
-	if logPath == "" {
-		if exePath, err := os.Executable(); err == nil {
-			logPath = filepath.Join(filepath.Dir(exePath), "trade-tracker-debug.log")
-		}
-	}
-	if strings.TrimSpace(logPath) == "" {
-		log.Printf("[TRADE_TRACKER_DEBUG] could not resolve debug log path")
-		return
-	}
-
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		log.Printf("[TRADE_TRACKER_DEBUG] failed to open debug log file %q: %v", logPath, err)
-		return
-	}
-
-	log.SetOutput(io.MultiWriter(os.Stdout, f))
-	log.Printf("[TRADE_TRACKER_DEBUG] logging to %s", logPath)
-}
 
 type ParsedUsers28User struct {
 	Username string `json:"username"`
@@ -1427,7 +1401,6 @@ func setupExt(a *App) {
 }
 
 func main() {
-	setupFileLogging()
 	app := NewApp()
 	setupExt(app)
 
