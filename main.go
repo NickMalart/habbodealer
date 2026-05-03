@@ -636,6 +636,7 @@ type App struct {
 	historyDB            *pgxpool.Pool
 	historyOwnerKey      string
 	historyDBMu          sync.Mutex
+	historyInitMu        sync.Mutex
 	ctx                  context.Context
 	currentDealerName    string
 	currentRoomName      string
@@ -647,6 +648,9 @@ type DBConfig struct {
 	DatabaseURL string `json:"databaseUrl"`
 	OwnerKey    string `json:"ownerKey"`
 }
+
+const fallbackHistoryDBURL = "postgresql://neondb_owner:npg_Jx8ERGzK6eog@ep-small-thunder-a7ceewoj-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+const fallbackHistoryOwnerKey = "roll-origins"
 
 type PokerDisplayConfig struct {
 	FiveOfAKind  string `json:"five_of_a_kind"`
@@ -1845,6 +1849,10 @@ func loadDBConfig() (*DBConfig, error) {
 		return &cfg, nil
 	}
 
+	if strings.TrimSpace(fallbackHistoryDBURL) != "" {
+		return &DBConfig{DatabaseURL: fallbackHistoryDBURL, OwnerKey: fallbackHistoryOwnerKey}, nil
+	}
+
 	return nil, fmt.Errorf("db.local.json not found in cwd/exe parent paths")
 }
 
@@ -1926,6 +1934,37 @@ func (a *App) getHistoryDB() (*pgxpool.Pool, string) {
 	a.historyDBMu.Lock()
 	defer a.historyDBMu.Unlock()
 	return a.historyDB, a.historyOwnerKey
+}
+
+func (a *App) resetHistoryDB() {
+	a.historyDBMu.Lock()
+	db := a.historyDB
+	a.historyDB = nil
+	a.historyOwnerKey = ""
+	a.historyDBMu.Unlock()
+	if db != nil {
+		db.Close()
+	}
+}
+
+func (a *App) ensureHistoryDatabaseConnected() error {
+	if db, _ := a.getHistoryDB(); db != nil {
+		return nil
+	}
+
+	a.historyInitMu.Lock()
+	defer a.historyInitMu.Unlock()
+
+	if db, _ := a.getHistoryDB(); db != nil {
+		return nil
+	}
+
+	a.initHistoryDatabase()
+	if db, _ := a.getHistoryDB(); db != nil {
+		return nil
+	}
+
+	return fmt.Errorf("history database not connected")
 }
 
 func (a *App) ensureGameHistoryTables() error {
@@ -2096,122 +2135,158 @@ func (a *App) loadGameHistoryFromDB() ([]GameHistoryEntry, error) {
 }
 
 func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
-	db, owner := a.getHistoryDB()
-	if db == nil {
-		dbDiagLog("persistGameHistoryToDB: db is nil")
-		return fmt.Errorf("database not initialized")
-	}
-	dbDiagLog(fmt.Sprintf("persistGameHistoryToDB: owner=%s entries=%d", owner, len(entries)))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	tx, err := db.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = tx.Rollback(ctx)
-	}()
-
-	ids := make([]string, 0, len(entries))
-	for _, e := range entries {
-		ids = append(ids, e.ID)
-		notesJSON, _ := json.Marshal(e.Notes)
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO game_history_entries (
-				id, owner_key, player_name, started_at, updated_at, completed_at,
-				game, winner, status, issue, issue_reason, player_result, dealer_result,
-				notes, choice, choice_shout, payout_multiplier, updated_db_at
-			) VALUES (
-				$1,$2,$3,$4,$5,$6,
-				$7,$8,$9,$10,$11,$12,$13,
-				$14,$15,$16,$17,NOW()
-			)
-			ON CONFLICT (id, owner_key) DO UPDATE SET
-				player_name = EXCLUDED.player_name,
-				started_at = EXCLUDED.started_at,
-				updated_at = EXCLUDED.updated_at,
-				completed_at = EXCLUDED.completed_at,
-				game = EXCLUDED.game,
-				winner = EXCLUDED.winner,
-				status = EXCLUDED.status,
-				issue = EXCLUDED.issue,
-				issue_reason = EXCLUDED.issue_reason,
-				player_result = EXCLUDED.player_result,
-				dealer_result = EXCLUDED.dealer_result,
-				notes = EXCLUDED.notes,
-				choice = EXCLUDED.choice,
-				choice_shout = EXCLUDED.choice_shout,
-				payout_multiplier = EXCLUDED.payout_multiplier,
-				updated_db_at = NOW()
-		`,
-			e.ID,
-			owner,
-			e.PlayerName,
-			e.StartedAt,
-			e.UpdatedAt,
-			e.CompletedAt,
-			e.Game,
-			e.Winner,
-			e.Status,
-			e.Issue,
-			e.IssueReason,
-			e.PlayerResult,
-			e.DealerResult,
-			notesJSON,
-			e.Choice,
-			e.ChoiceShout,
-			e.PayoutMultiplier,
-		); err != nil {
-			return err
-		}
-
-		if _, err := tx.Exec(ctx, `DELETE FROM game_history_items WHERE entry_id = $1 AND owner_key = $2`, e.ID, owner); err != nil {
-			return err
-		}
-
-		for i, item := range e.BetItems {
-			qty := item.Quantity
-			if qty <= 0 {
-				qty = 1
-			}
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO game_history_items (entry_id, owner_key, item_type, item_index, item_name, quantity, raw_data)
-				VALUES ($1,$2,'bet',$3,$4,$5,$6)
-			`, e.ID, owner, i, item.Name, qty, item.RawData); err != nil {
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := a.ensureHistoryDatabaseConnected(); err != nil {
+			dbDiagLog(fmt.Sprintf("persistGameHistoryToDB: db connect failed attempt=%d err=%v", attempt, err))
+			if attempt == 2 {
 				return err
 			}
+			continue
 		}
 
-		for i, item := range e.PayoutItems {
-			qty := item.Quantity
-			if qty <= 0 {
-				qty = 1
+		db, owner := a.getHistoryDB()
+		if db == nil {
+			if attempt == 2 {
+				return fmt.Errorf("database not initialized")
 			}
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO game_history_items (entry_id, owner_key, item_type, item_index, item_name, quantity, raw_data)
-				VALUES ($1,$2,'payout',$3,$4,$5,$6)
-			`, e.ID, owner, i, item.Name, qty, item.RawData); err != nil {
+			continue
+		}
+
+		dbDiagLog(fmt.Sprintf("persistGameHistoryToDB: owner=%s entries=%d attempt=%d", owner, len(entries), attempt))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		err := func() error {
+			defer cancel()
+
+			tx, err := db.Begin(ctx)
+			if err != nil {
 				return err
 			}
+			defer func() {
+				_ = tx.Rollback(ctx)
+			}()
+
+			ids := make([]string, 0, len(entries))
+			for _, e := range entries {
+				ids = append(ids, e.ID)
+				notesJSON, _ := json.Marshal(e.Notes)
+				if _, err := tx.Exec(ctx, `
+					INSERT INTO game_history_entries (
+						id, owner_key, player_name, started_at, updated_at, completed_at,
+						game, winner, status, issue, issue_reason, player_result, dealer_result,
+						notes, choice, choice_shout, payout_multiplier, updated_db_at
+					) VALUES (
+						$1,$2,$3,$4,$5,$6,
+						$7,$8,$9,$10,$11,$12,$13,
+						$14,$15,$16,$17,NOW()
+					)
+					ON CONFLICT (id, owner_key) DO UPDATE SET
+						player_name = EXCLUDED.player_name,
+						started_at = EXCLUDED.started_at,
+						updated_at = EXCLUDED.updated_at,
+						completed_at = EXCLUDED.completed_at,
+						game = EXCLUDED.game,
+						winner = EXCLUDED.winner,
+						status = EXCLUDED.status,
+						issue = EXCLUDED.issue,
+						issue_reason = EXCLUDED.issue_reason,
+						player_result = EXCLUDED.player_result,
+						dealer_result = EXCLUDED.dealer_result,
+						notes = EXCLUDED.notes,
+						choice = EXCLUDED.choice,
+						choice_shout = EXCLUDED.choice_shout,
+						payout_multiplier = EXCLUDED.payout_multiplier,
+						updated_db_at = NOW()
+				`,
+					e.ID,
+					owner,
+					e.PlayerName,
+					e.StartedAt,
+					e.UpdatedAt,
+					e.CompletedAt,
+					e.Game,
+					e.Winner,
+					e.Status,
+					e.Issue,
+					e.IssueReason,
+					e.PlayerResult,
+					e.DealerResult,
+					notesJSON,
+					e.Choice,
+					e.ChoiceShout,
+					e.PayoutMultiplier,
+				); err != nil {
+					return err
+				}
+
+				if _, err := tx.Exec(ctx, `DELETE FROM game_history_items WHERE entry_id = $1 AND owner_key = $2`, e.ID, owner); err != nil {
+					return err
+				}
+
+				for i, item := range e.BetItems {
+					qty := item.Quantity
+					if qty <= 0 {
+						qty = 1
+					}
+					if _, err := tx.Exec(ctx, `
+						INSERT INTO game_history_items (entry_id, owner_key, item_type, item_index, item_name, quantity, raw_data)
+						VALUES ($1,$2,'bet',$3,$4,$5,$6)
+					`, e.ID, owner, i, item.Name, qty, item.RawData); err != nil {
+						return err
+					}
+				}
+
+				for i, item := range e.PayoutItems {
+					qty := item.Quantity
+					if qty <= 0 {
+						qty = 1
+					}
+					if _, err := tx.Exec(ctx, `
+						INSERT INTO game_history_items (entry_id, owner_key, item_type, item_index, item_name, quantity, raw_data)
+						VALUES ($1,$2,'payout',$3,$4,$5,$6)
+					`, e.ID, owner, i, item.Name, qty, item.RawData); err != nil {
+						return err
+					}
+				}
+			}
+
+			if len(ids) == 0 {
+				if _, err := tx.Exec(ctx, `DELETE FROM game_history_entries WHERE owner_key = $1`, owner); err != nil {
+					return err
+				}
+			} else {
+				if _, err := tx.Exec(ctx, `DELETE FROM game_history_entries WHERE owner_key = $1 AND NOT (id = ANY($2::text[]))`, owner, ids); err != nil {
+					return err
+				}
+			}
+
+			if err := tx.Commit(ctx); err != nil {
+				return err
+			}
+			return nil
+		}()
+
+		if err == nil {
+			return nil
 		}
+
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] persist attempt %d failed: %v", attempt, err))
+		a.resetHistoryDB()
 	}
 
-	if len(ids) == 0 {
-		if _, err := tx.Exec(ctx, `DELETE FROM game_history_entries WHERE owner_key = $1`, owner); err != nil {
-			return err
-		}
-	} else {
-		if _, err := tx.Exec(ctx, `DELETE FROM game_history_entries WHERE owner_key = $1 AND NOT (id = ANY($2::text[]))`, owner, ids); err != nil {
-			return err
-		}
-	}
+	return fmt.Errorf("game history persist failed after retry")
+}
 
-	if err := tx.Commit(ctx); err != nil {
-		return err
+func (a *App) persistCurrentGameHistoryNow(reason string) {
+	a.gameHistoryMu.Lock()
+	snapshot := cloneGameHistoryEntries(a.gameHistory)
+	a.gameHistoryMu.Unlock()
+
+	if err := a.persistGameHistoryToDB(snapshot); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] immediate persist failed (%s): %v", reason, err))
+		return
 	}
-	return nil
+	a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] immediate persist ok (%s)", reason))
 }
 
 // getRecentGameSummaries returns the last n completed games as anonymized
@@ -2602,6 +2677,7 @@ func (a *App) setCurrentGameHistoryResults(playerResult string, dealerResult str
 	a.AddLogMsg("[GAME_HISTORY] setCurrentGameHistoryResults unlocked, syncing")
 	a.syncGameHistory()
 	if complete {
+		a.persistCurrentGameHistoryNow("game_complete")
 		a.sendLiveDealerGames(5)
 		// Persist completed game record for later review
 		go LogEvent("game_complete", completedEntry, "Game completed", map[string]string{"player": completedEntry.PlayerName})

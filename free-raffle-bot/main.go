@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	g "xabbo.b7c.io/goearth"
 	in "xabbo.b7c.io/goearth/shockwave/in"
+	out "xabbo.b7c.io/goearth/shockwave/out"
 )
 
 //go:embed all:frontend/dist
@@ -70,7 +72,9 @@ type RaffleState struct {
 type App struct {
 	ctx context.Context
 
-	mu sync.Mutex
+	mu        sync.Mutex
+	processMu sync.Mutex
+	debugMu   sync.Mutex
 
 	connected      bool
 	inRoom         bool
@@ -82,6 +86,12 @@ type App struct {
 	db             *pgxpool.Pool
 	ownerKey       string
 	pollCancel     context.CancelFunc
+	listenCancel   context.CancelFunc
+	debugLines     []string
+	lastNotifyAt   string
+	lastNotifyRaw  string
+	lastQueryRows  int
+	lastShout      string
 }
 
 func NewApp() *App {
@@ -92,19 +102,25 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.initDatabase()
 	a.startPoller()
+	a.startRealtimeWatcher()
 	go a.runExt()
 }
 
 func (a *App) shutdown(context.Context) {
 	a.mu.Lock()
-	cancel := a.pollCancel
+	pollCancel := a.pollCancel
 	a.pollCancel = nil
+	listenCancel := a.listenCancel
+	a.listenCancel = nil
 	db := a.db
 	a.db = nil
 	a.mu.Unlock()
 
-	if cancel != nil {
-		cancel()
+	if pollCancel != nil {
+		pollCancel()
+	}
+	if listenCancel != nil {
+		listenCancel()
 	}
 	if db != nil {
 		db.Close()
@@ -117,6 +133,50 @@ func (a *App) runExt() {
 
 func (a *App) logDebug(format string, args ...interface{}) {
 	log.Printf("[FREE_RAFFLE_DEBUG] "+format, args...)
+	msg := fmt.Sprintf(format, args...)
+	a.debugMu.Lock()
+	line := fmt.Sprintf("%s %s", time.Now().UTC().Format(time.RFC3339), msg)
+	a.debugLines = append(a.debugLines, line)
+	if len(a.debugLines) > 300 {
+		a.debugLines = a.debugLines[len(a.debugLines)-300:]
+	}
+	a.debugMu.Unlock()
+	a.emitDebugUpdate()
+}
+
+func (a *App) emitDebugUpdate() {
+	if a.ctx == nil {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "raffleDebugUpdate", a.GetDebugSnapshot())
+}
+
+func (a *App) GetDebugSnapshot() string {
+	a.debugMu.Lock()
+	defer a.debugMu.Unlock()
+
+	lines := make([]string, 0, len(a.debugLines)+8)
+	lines = append(lines, "=== Free Raffle Debug Snapshot ===")
+	lines = append(lines, fmt.Sprintf("time_utc: %s", time.Now().UTC().Format(time.RFC3339)))
+	lines = append(lines, fmt.Sprintf("last_notify_at: %s", strings.TrimSpace(a.lastNotifyAt)))
+	lines = append(lines, fmt.Sprintf("last_notify_payload: %s", strings.TrimSpace(a.lastNotifyRaw)))
+	lines = append(lines, fmt.Sprintf("last_query_rows: %d", a.lastQueryRows))
+	lines = append(lines, fmt.Sprintf("last_shout: %s", strings.TrimSpace(a.lastShout)))
+	lines = append(lines, "")
+	lines = append(lines, "--- Recent Logs ---")
+	lines = append(lines, a.debugLines...)
+	return strings.Join(lines, "\n")
+}
+
+func (a *App) ClearDebugSnapshot() {
+	a.debugMu.Lock()
+	a.debugLines = nil
+	a.lastNotifyAt = ""
+	a.lastNotifyRaw = ""
+	a.lastQueryRows = 0
+	a.lastShout = ""
+	a.debugMu.Unlock()
+	a.emitDebugUpdate()
 }
 
 func normalizeUsername(raw string) string {
@@ -125,6 +185,26 @@ func normalizeUsername(raw string) string {
 
 func normalizeUsernameKey(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+func isAfterCursor(eventAt time.Time, entryID string, cursorAt time.Time, cursorEntry string) bool {
+	if eventAt.After(cursorAt) {
+		return true
+	}
+	if eventAt.Before(cursorAt) {
+		return false
+	}
+	if strings.TrimSpace(cursorEntry) == "" {
+		return true
+	}
+
+	entryNum, errEntry := strconv.ParseInt(strings.TrimSpace(entryID), 10, 64)
+	cursorNum, errCursor := strconv.ParseInt(strings.TrimSpace(cursorEntry), 10, 64)
+	if errEntry == nil && errCursor == nil {
+		return entryNum > cursorNum
+	}
+
+	return entryID > cursorEntry
 }
 
 func ticketsForBetCount(bets int, bonusEvery int) int {
@@ -308,6 +388,7 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 	}
 
 	a.emitUpdate()
+	go a.processNewBets()
 	return a.GetState(), nil
 }
 
@@ -385,7 +466,88 @@ func (a *App) startPoller() {
 	}()
 }
 
+func (a *App) startRealtimeWatcher() {
+	a.mu.Lock()
+	if a.listenCancel != nil {
+		a.mu.Unlock()
+		return
+	}
+	if a.db == nil {
+		a.mu.Unlock()
+		a.logDebug("realtime watcher not started: db is nil")
+		return
+	}
+	db := a.db
+	ctx, cancel := context.WithCancel(context.Background())
+	a.listenCancel = cancel
+	a.mu.Unlock()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			conn, err := db.Acquire(ctx)
+			if err != nil {
+				a.logDebug("realtime watcher acquire failed: %v", err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(2 * time.Second):
+				}
+				continue
+			}
+
+			if _, err := conn.Conn().Exec(ctx, `LISTEN raffle_game_finished`); err != nil {
+				a.logDebug("realtime watcher LISTEN failed: %v", err)
+				conn.Release()
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(2 * time.Second):
+				}
+				continue
+			}
+			a.logDebug("realtime watcher connected on channel raffle_game_finished")
+
+			for {
+				n, err := conn.Conn().WaitForNotification(ctx)
+				if err != nil {
+					if ctx.Err() == nil {
+						a.logDebug("realtime watcher notification error: %v", err)
+					}
+					break
+				}
+
+				payload := ""
+				if n != nil {
+					payload = strings.TrimSpace(n.Payload)
+				}
+				a.debugMu.Lock()
+				a.lastNotifyAt = time.Now().UTC().Format(time.RFC3339)
+				a.lastNotifyRaw = payload
+				a.debugMu.Unlock()
+				a.logDebug("realtime notify received: %s", payload)
+				a.processNewBets()
+			}
+
+			conn.Release()
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}()
+}
+
 func (a *App) processNewBets() {
+	a.processMu.Lock()
+	defer a.processMu.Unlock()
+
 	a.mu.Lock()
 	if !a.enabled || a.currentSession == nil || a.db == nil {
 		a.mu.Unlock()
@@ -425,50 +587,90 @@ func (a *App) processNewBets() {
 	defer cancel()
 
 	rows, err := db.Query(ctx, `
-		SELECT e.id, e.player_name, e.created_at
-		FROM game_history_entries e
-		WHERE e.owner_key = $1
-		  AND e.created_at >= $2
-		  AND (e.created_at > $3 OR (e.created_at = $3 AND e.id > $4))
-		  AND EXISTS (
-			SELECT 1
-			FROM game_history_items i
-			WHERE i.owner_key = e.owner_key
-			  AND i.entry_id = e.id
-			  AND i.item_type = 'bet'
-		  )
-		ORDER BY e.created_at ASC, e.id ASC
-		LIMIT 200
-	`, owner, sessionStartedAt, cursorAt, cursorEntry)
+		SELECT
+			t.id::text,
+			t.partner_name,
+			t.occurred_at
+		FROM trade_entries t
+		WHERE t.owner_key = $1
+		  AND t.occurred_at >= $2
+		ORDER BY t.occurred_at ASC, t.id ASC
+		LIMIT 500
+	`, owner, sessionStartedAt)
 	if err != nil {
 		a.logDebug("poll query failed: %v", err)
 		return
 	}
 	defer rows.Close()
 
-	type betRow struct {
-		EntryID   string
-		Player    string
-		CreatedAt time.Time
+	type dbBetRow struct {
+		EntryID    string
+		Player     string
+		OccurredAt time.Time
 	}
+	type betRow struct {
+		EntryID string
+		Player  string
+		EventAt time.Time
+	}
+	scannedCount := 0
+	latestSeenAt := time.Time{}
+	latestSeenEntry := ""
 	batch := make([]betRow, 0)
 	for rows.Next() {
-		var r betRow
-		if err := rows.Scan(&r.EntryID, &r.Player, &r.CreatedAt); err != nil {
+		var raw dbBetRow
+		if err := rows.Scan(&raw.EntryID, &raw.Player, &raw.OccurredAt); err != nil {
 			a.logDebug("poll scan failed: %v", err)
 			return
 		}
-		batch = append(batch, r)
+		scannedCount++
+
+		eventAt := raw.OccurredAt.UTC()
+		if latestSeenAt.IsZero() || eventAt.After(latestSeenAt) || (eventAt.Equal(latestSeenAt) && raw.EntryID > latestSeenEntry) {
+			latestSeenAt = eventAt
+			latestSeenEntry = raw.EntryID
+		}
+
+		if !isAfterCursor(eventAt, raw.EntryID, cursorAt, cursorEntry) {
+			continue
+		}
+
+		batch = append(batch, betRow{
+			EntryID: raw.EntryID,
+			Player:  raw.Player,
+			EventAt: eventAt,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		a.logDebug("poll rows error: %v", err)
 		return
 	}
+	latestSeenAtText := ""
+	if !latestSeenAt.IsZero() {
+		latestSeenAtText = latestSeenAt.Format(time.RFC3339)
+	}
+	a.logDebug(
+		"poll inspected=%d accepted=%d sessionStart=%s cursorAt=%s cursorEntry=%q latestSeenAt=%s latestSeenEntry=%q",
+		scannedCount,
+		len(batch),
+		sessionStartedAt.Format(time.RFC3339),
+		cursorAt.Format(time.RFC3339),
+		cursorEntry,
+		latestSeenAtText,
+		latestSeenEntry,
+	)
 	if len(batch) == 0 {
+		a.debugMu.Lock()
+		a.lastQueryRows = 0
+		a.debugMu.Unlock()
 		return
 	}
+	a.debugMu.Lock()
+	a.lastQueryRows = len(batch)
+	a.debugMu.Unlock()
 
 	upserts := make([]RaffleParticipant, 0, len(batch))
+	newEntrants := make([]string, 0, len(batch))
 	lastCursorAt := cursorAt
 	lastCursorEntry := cursorEntry
 
@@ -482,7 +684,7 @@ func (a *App) processNewBets() {
 		name := normalizeUsername(row.Player)
 		key := normalizeUsernameKey(name)
 		if key == "" {
-			lastCursorAt = row.CreatedAt.UTC()
+			lastCursorAt = row.EventAt.UTC()
 			lastCursorEntry = row.EntryID
 			continue
 		}
@@ -500,20 +702,23 @@ func (a *App) processNewBets() {
 				UsernameKey: key,
 				BetCount:    1,
 				Tickets:     ticketsForBetCount(1, a.currentSession.BonusEvery),
-				FirstBet:    row.CreatedAt.UTC().Format(time.RFC3339),
-				LastBet:     row.CreatedAt.UTC().Format(time.RFC3339),
+				FirstBet:    row.EventAt.UTC().Format(time.RFC3339),
+				LastBet:     row.EventAt.UTC().Format(time.RFC3339),
 			}
 			a.currentSession.Participants = append(a.currentSession.Participants, p)
 			upserts = append(upserts, p)
+			if a.connected && a.inRoom {
+				newEntrants = append(newEntrants, p.Username)
+			}
 		} else {
 			p := &a.currentSession.Participants[idx]
 			p.BetCount++
 			p.Tickets = ticketsForBetCount(p.BetCount, a.currentSession.BonusEvery)
-			p.LastBet = row.CreatedAt.UTC().Format(time.RFC3339)
+			p.LastBet = row.EventAt.UTC().Format(time.RFC3339)
 			upserts = append(upserts, *p)
 		}
 
-		lastCursorAt = row.CreatedAt.UTC()
+		lastCursorAt = row.EventAt.UTC()
 		lastCursorEntry = row.EntryID
 	}
 
@@ -529,6 +734,10 @@ func (a *App) processNewBets() {
 	bonusEvery := a.currentSession.BonusEvery
 	a.mu.Unlock()
 
+	for _, name := range newEntrants {
+		a.shoutEntrant(name)
+	}
+
 	if len(upserts) > 0 {
 		if err := a.persistParticipants(sessionDBID, upserts); err != nil {
 			a.logDebug("participant upsert failed: %v", err)
@@ -541,6 +750,19 @@ func (a *App) processNewBets() {
 	}
 
 	a.emitUpdate()
+}
+
+func (a *App) shoutEntrant(name string) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return
+	}
+	msg := fmt.Sprintf("%s entered the raffle!", trimmed)
+	ext.Send(out.SHOUT, msg)
+	a.debugMu.Lock()
+	a.lastShout = msg
+	a.debugMu.Unlock()
+	a.logDebug("shout sent: %s", msg)
 }
 
 func (a *App) persistSessionCursor(sessionDBID int64, at time.Time, entryID string) error {
@@ -759,6 +981,86 @@ func (a *App) ensureTables() error {
 		`CREATE INDEX IF NOT EXISTS idx_raffle_sessions_started ON raffle_sessions(started_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_raffle_participants_session ON raffle_participants(session_id, owner_key)`,
 		`CREATE INDEX IF NOT EXISTS idx_raffle_participants_tickets ON raffle_participants(session_id, ticket_count DESC)`,
+		`CREATE OR REPLACE FUNCTION notify_raffle_game_finished_from_entries()
+		RETURNS TRIGGER AS $$
+		BEGIN
+			IF lower(trim(COALESCE(NEW.status, ''))) IN ('completed','issue')
+			   AND trim(COALESCE(NEW.completed_at, '')) <> '' THEN
+				PERFORM pg_notify(
+					'raffle_game_finished',
+					json_build_object(
+						'owner_key', NEW.owner_key,
+						'entry_id', NEW.id,
+						'source', 'entries'
+					)::text
+				);
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql`,
+		`CREATE OR REPLACE FUNCTION notify_raffle_game_finished_from_items()
+		RETURNS TRIGGER AS $$
+		BEGIN
+			IF NEW.item_type <> 'bet' THEN
+				RETURN NEW;
+			END IF;
+
+			PERFORM pg_notify(
+				'raffle_game_finished',
+				json_build_object(
+					'owner_key', NEW.owner_key,
+					'entry_id', NEW.entry_id,
+					'source', 'items'
+				)::text
+			);
+
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql`,
+		`CREATE OR REPLACE FUNCTION notify_raffle_trade_entry_insert()
+		RETURNS TRIGGER AS $$
+		BEGIN
+			PERFORM pg_notify(
+				'raffle_game_finished',
+				json_build_object(
+					'owner_key', NEW.owner_key,
+					'entry_id', NEW.id,
+					'source', 'trade_entries'
+				)::text
+			);
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql`,
+		`DO $$
+		BEGIN
+			IF to_regclass('public.game_history_entries') IS NOT NULL THEN
+				DROP TRIGGER IF EXISTS trg_raffle_game_finished_entries ON game_history_entries;
+				CREATE TRIGGER trg_raffle_game_finished_entries
+				AFTER INSERT OR UPDATE ON game_history_entries
+				FOR EACH ROW
+				EXECUTE FUNCTION notify_raffle_game_finished_from_entries();
+			END IF;
+		END $$`,
+		`DO $$
+		BEGIN
+			IF to_regclass('public.game_history_items') IS NOT NULL THEN
+				DROP TRIGGER IF EXISTS trg_raffle_game_finished_items ON game_history_items;
+				CREATE TRIGGER trg_raffle_game_finished_items
+				AFTER INSERT OR UPDATE ON game_history_items
+				FOR EACH ROW
+				EXECUTE FUNCTION notify_raffle_game_finished_from_items();
+			END IF;
+		END $$`,
+		`DO $$
+		BEGIN
+			IF to_regclass('public.trade_entries') IS NOT NULL THEN
+				DROP TRIGGER IF EXISTS trg_raffle_trade_entries_insert ON trade_entries;
+				CREATE TRIGGER trg_raffle_trade_entries_insert
+				AFTER INSERT ON trade_entries
+				FOR EACH ROW
+				EXECUTE FUNCTION notify_raffle_trade_entry_insert();
+			END IF;
+		END $$`,
 	}
 
 	for _, q := range queries {

@@ -85,6 +85,31 @@
     }
     th { color: var(--muted); font-weight: 600; }
     .muted { color: var(--muted); }
+    .tabs { display: flex; gap: 8px; }
+    .tab-btn {
+      background: #355a68;
+      color: #eaf3f6;
+      border: 1px solid rgba(255,255,255,0.2);
+    }
+    .tab-btn.active {
+      background: var(--accent);
+      color: #1f1f1f;
+      border-color: transparent;
+    }
+    .hidden { display: none; }
+    textarea {
+      width: 100%;
+      min-height: 260px;
+      resize: vertical;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.2);
+      background: #0b1b22;
+      color: var(--text);
+      padding: 10px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+      line-height: 1.4;
+    }
   </style>
 </head>
 <body>
@@ -95,6 +120,13 @@
     </div>
 
     <div class="card">
+      <div class="tabs">
+        <button id="tabMainBtn" class="tab-btn active">Main</button>
+        <button id="tabDebugBtn" class="tab-btn">Debug</button>
+      </div>
+    </div>
+
+    <div class="card tab-main">
       <div class="row" style="justify-content: space-between;">
         <div class="row">
           <span class="status" id="connected">Disconnected</span>
@@ -120,7 +152,7 @@
       </div>
     </div>
 
-    <div class="card">
+    <div class="card tab-main">
       <div class="row" style="justify-content: space-between;">
         <h2 style="margin: 0;">Current Session</h2>
         <span class="muted" id="sessionMeta">No active session</span>
@@ -138,6 +170,19 @@
           <tr><td colspan="4" class="muted">No participants yet.</td></tr>
         </tbody>
       </table>
+    </div>
+
+    <div class="card tab-debug hidden" id="debugCard">
+      <div class="row" style="justify-content: space-between; margin-bottom: 10px;">
+        <h2 style="margin: 0;">Debug</h2>
+        <div class="row">
+          <button class="alt" id="refreshDebugBtn">Refresh Debug</button>
+          <button class="alt" id="copyDebugBtn">Copy Debug</button>
+          <button class="stop" id="clearDebugBtn">Clear Debug</button>
+        </div>
+      </div>
+      <textarea id="debugBox" placeholder="Debug output appears here..."></textarea>
+      <p class="sub" style="margin-top: 8px;">Use Copy Debug and paste it into chat when troubleshooting.</p>
     </div>
   </div>
 
@@ -188,11 +233,66 @@
         tr.innerHTML = `<td>${p.username}</td><td>${p.betCount}</td><td>${p.tickets}</td><td>${p.lastBet || ''}</td>`;
         tbody.appendChild(tr);
       }
+
+      const enableBtn = document.getElementById('enableBtn');
+      enableBtn.textContent = state.enabled ? 'Disable' : 'Enable';
     }
 
     async function refresh() {
       const state = await call('GetState');
       if (state) setStatus(state);
+    }
+
+    async function refreshDebug() {
+      const txt = await call('GetDebugSnapshot');
+      if (typeof txt === 'string') {
+        document.getElementById('debugBox').value = txt;
+      }
+    }
+
+    function showTab(name) {
+      const showDebug = name === 'debug';
+      document.querySelectorAll('.tab-main').forEach(el => el.classList.toggle('hidden', showDebug));
+      document.querySelectorAll('.tab-debug').forEach(el => el.classList.toggle('hidden', !showDebug));
+      document.getElementById('tabMainBtn').classList.toggle('active', !showDebug);
+      document.getElementById('tabDebugBtn').classList.toggle('active', showDebug);
+      if (showDebug) {
+        refreshDebug();
+      }
+    }
+
+    async function copyDebugToClipboard() {
+      const txt = document.getElementById('debugBox').value || '';
+      if (!txt.trim()) return;
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(txt);
+        } else {
+          const ta = document.getElementById('debugBox');
+          ta.focus();
+          ta.select();
+          document.execCommand('copy');
+        }
+      } catch (_) {
+      }
+    }
+
+    function bindRealtimeEvents() {
+      if (!window.runtime || !window.runtime.EventsOn) {
+        return;
+      }
+
+      window.runtime.EventsOn('raffleStateUpdate', (state) => {
+        if (state) {
+          setStatus(state);
+        }
+      });
+
+      window.runtime.EventsOn('raffleDebugUpdate', (snapshot) => {
+        if (typeof snapshot === 'string') {
+          document.getElementById('debugBox').value = snapshot;
+        }
+      });
     }
 
     function localInputToISO(id) {
@@ -246,10 +346,21 @@
     });
 
     document.getElementById('refreshBtn').addEventListener('click', refresh);
+    document.getElementById('refreshDebugBtn').addEventListener('click', refreshDebug);
+    document.getElementById('copyDebugBtn').addEventListener('click', copyDebugToClipboard);
+    document.getElementById('clearDebugBtn').addEventListener('click', async () => {
+      await call('ClearDebugSnapshot');
+      await refreshDebug();
+    });
+    document.getElementById('tabMainBtn').addEventListener('click', () => showTab('main'));
+    document.getElementById('tabDebugBtn').addEventListener('click', () => showTab('debug'));
 
     setDefaultDateTimes();
+    bindRealtimeEvents();
     refresh();
-    setInterval(refresh, 2000);
+    refreshDebug();
+    setInterval(refresh, 8000);
+    setInterval(refreshDebug, 10000);
   </script>
 </body>
 </html>
