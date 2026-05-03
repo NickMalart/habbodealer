@@ -758,8 +758,10 @@ func (a *App) getCurrentRoomName() string {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	a.initHistoryDatabase()
-	a.loadGameHistory()
+	go func() {
+		a.initHistoryDatabase()
+		a.loadGameHistory()
+	}()
 	rand.Seed(time.Now().UnixNano())
 	a.setupExt()
 	go func() {
