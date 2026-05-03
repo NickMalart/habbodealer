@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Free Raffle Bot</title>
+  <style>
+    :root {
+      --bg: #0d1c24;
+      --panel: #132b36;
+      --panel2: #10303f;
+      --text: #e8f2f4;
+      --muted: #b4c8ce;
+      --accent: #ffc857;
+      --ok: #62c370;
+      --warn: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--text);
+      font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+      background: radial-gradient(circle at 15% 20%, #1c4457 0%, var(--bg) 40%),
+                  radial-gradient(circle at 85% 75%, #2c1f34 0%, rgba(44,31,52,0) 36%);
+      min-height: 100vh;
+    }
+    .wrap {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 20px;
+      display: grid;
+      gap: 14px;
+    }
+    .card {
+      background: linear-gradient(130deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01)), var(--panel);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 14px;
+      padding: 14px;
+    }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .title { font-size: 24px; margin: 0 0 4px; }
+    .sub { margin: 0; color: var(--muted); }
+    .status {
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: var(--panel2);
+      border: 1px solid rgba(255,255,255,0.14);
+    }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-weight: 700;
+      cursor: pointer;
+      background: var(--accent);
+      color: #1f1f1f;
+    }
+    button.alt { background: #8ab6c9; }
+    button.stop { background: var(--warn); color: #fff; }
+    input[type="number"] {
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 8px;
+      padding: 8px;
+      width: 90px;
+      background: #0b1b22;
+      color: var(--text);
+    }
+    input[type="datetime-local"] {
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 8px;
+      padding: 8px;
+      background: #0b1b22;
+      color: var(--text);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      text-align: left;
+      padding: 8px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    th { color: var(--muted); font-weight: 600; }
+    .muted { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1 class="title">Free Raffle Bot</h1>
+      <p class="sub">Adds 1 ticket on first bet, then +1 ticket every Nth bet.</p>
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content: space-between;">
+        <div class="row">
+          <span class="status" id="connected">Disconnected</span>
+          <span class="status" id="room">Out of room</span>
+          <span class="status" id="enabled">Disabled</span>
+        </div>
+        <div class="row">
+          <label for="bonus">Bonus every</label>
+          <input id="bonus" type="number" min="1" value="5">
+          <button class="alt" id="saveBonus">Save Bonus Rule</button>
+        </div>
+      </div>
+      <div class="row" style="margin-top: 12px;">
+        <button id="enableBtn">Enable</button>
+        <button class="alt" id="sessionBtn">Start Raffle Session</button>
+        <button class="alt" id="refreshBtn">Refresh</button>
+      </div>
+      <div class="row" style="margin-top: 12px;">
+        <label for="startAt">Raffle start</label>
+        <input id="startAt" type="datetime-local">
+        <label for="endAt">Raffle end</label>
+        <input id="endAt" type="datetime-local">
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content: space-between;">
+        <h2 style="margin: 0;">Current Session</h2>
+        <span class="muted" id="sessionMeta">No active session</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Player</th>
+            <th>Bets</th>
+            <th>Tickets</th>
+            <th>Last Bet</th>
+          </tr>
+        </thead>
+        <tbody id="participants">
+          <tr><td colspan="4" class="muted">No participants yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    async function call(name, ...args) {
+      if (!window.go || !window.go.main || !window.go.main.App || !window.go.main.App[name]) {
+        return null;
+      }
+      return window.go.main.App[name](...args);
+    }
+
+    function setStatus(state) {
+      const connected = document.getElementById('connected');
+      const room = document.getElementById('room');
+      const enabled = document.getElementById('enabled');
+      connected.textContent = state.connected ? 'Connected' : 'Disconnected';
+      room.textContent = state.inRoom ? 'In room' : 'Out of room';
+      enabled.textContent = state.enabled ? 'Enabled' : 'Disabled';
+
+      const meta = document.getElementById('sessionMeta');
+      const sessionBtn = document.getElementById('sessionBtn');
+      if (state.currentSession) {
+        const endInfo = state.currentSession.scheduledEndAt ? `, ends ${state.currentSession.scheduledEndAt}` : ', no end set';
+        const closeInfo = state.currentSession.endedAt ? `, closed ${state.currentSession.endedAt}` : '';
+        meta.textContent = `Session #${state.currentSession.id} starts ${state.currentSession.startedAt}${endInfo}${closeInfo} (bonus every ${state.currentSession.bonusEvery})`;
+        sessionBtn.textContent = 'Stop Session';
+        sessionBtn.className = 'stop';
+      } else {
+        meta.textContent = 'No active session';
+        sessionBtn.textContent = 'Start Raffle Session';
+        sessionBtn.className = 'alt';
+      }
+
+      const bonusInput = document.getElementById('bonus');
+      if (state.bonusEvery > 0 && document.activeElement !== bonusInput) {
+        bonusInput.value = state.bonusEvery;
+      }
+
+      const tbody = document.getElementById('participants');
+      tbody.innerHTML = '';
+      const list = state.currentSession ? state.currentSession.participants || [] : [];
+      if (list.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="muted">No participants yet.</td></tr>';
+        return;
+      }
+      for (const p of list) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${p.username}</td><td>${p.betCount}</td><td>${p.tickets}</td><td>${p.lastBet || ''}</td>`;
+        tbody.appendChild(tr);
+      }
+    }
+
+    async function refresh() {
+      const state = await call('GetState');
+      if (state) setStatus(state);
+    }
+
+    function localInputToISO(id) {
+      const raw = (document.getElementById(id).value || '').trim();
+      if (!raw) return '';
+      const d = new Date(raw);
+      if (Number.isNaN(d.getTime())) return '';
+      return d.toISOString();
+    }
+
+    function setDefaultDateTimes() {
+      const start = new Date();
+      const end = new Date(start.getTime() + 60 * 60 * 1000);
+      const toLocalField = (d) => {
+        const p = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+      };
+      const startInput = document.getElementById('startAt');
+      const endInput = document.getElementById('endAt');
+      if (!startInput.value) startInput.value = toLocalField(start);
+      if (!endInput.value) endInput.value = toLocalField(end);
+    }
+
+    document.getElementById('enableBtn').addEventListener('click', async () => {
+      const state = await call('GetState');
+      await call('SetEnabled', !(state && state.enabled));
+      await refresh();
+    });
+
+    document.getElementById('saveBonus').addEventListener('click', async () => {
+      const value = parseInt(document.getElementById('bonus').value || '5', 10);
+      await call('SetBonusEvery', value > 0 ? value : 5);
+      await refresh();
+    });
+
+    document.getElementById('sessionBtn').addEventListener('click', async () => {
+      const state = await call('GetState');
+      if (state && state.currentSession) {
+        await call('StopRaffle');
+        await refresh();
+        return;
+      }
+      try {
+        const startISO = localInputToISO('startAt');
+        const endISO = localInputToISO('endAt');
+        await call('StartRaffleWithWindow', startISO, endISO);
+        await refresh();
+      } catch (err) {
+        alert(`Could not start raffle: ${err}`);
+      }
+    });
+
+    document.getElementById('refreshBtn').addEventListener('click', refresh);
+
+    setDefaultDateTimes();
+    refresh();
+    setInterval(refresh, 2000);
+  </script>
+</body>
+</html>

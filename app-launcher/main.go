@@ -73,6 +73,17 @@ func knownBuildTargets() []buildTarget {
 			},
 			OutExe: filepath.Join("trade-tracker", "build", "bin", "trade-tracker.exe"),
 		},
+		{
+			ID:        "free-raffle-bot",
+			Name:      "Free Raffle Bot",
+			SrcDir:    "free-raffle-bot",
+			BuildType: "wails",
+			CleanPaths: []string{
+				filepath.Join("free-raffle-bot", "build", "bin", "free-raffle-bot.exe"),
+				filepath.Join("free-raffle-bot", "free-raffle-bot.exe"),
+			},
+			OutExe: filepath.Join("free-raffle-bot", "build", "bin", "free-raffle-bot.exe"),
+		},
 	}
 }
 
