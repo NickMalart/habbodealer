@@ -2341,9 +2341,11 @@ func (a *App) ClearGameHistory() {
 	a.gameHistoryMu.Unlock()
 
 	_ = os.Remove(getGameHistoryFilePath())
-	if err := a.persistGameHistoryToDB(nil); err != nil {
-		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] clear failed: %v", err))
-	}
+	go func() {
+		if err := a.persistGameHistoryToDB(nil); err != nil {
+			a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] clear failed: %v", err))
+		}
+	}()
 	a.emitGameHistoryUpdate()
 	a.AddLogMsg("[GAME_HISTORY] cleared all saved game history")
 }
@@ -2372,19 +2374,23 @@ func (a *App) emitGameHistoryUpdate() {
 func (a *App) syncGameHistory() {
 	a.AddLogMsg("[GAME_HISTORY] syncGameHistory start")
 
-	// Save a copy of the history to disk without holding the mutex while
-	// performing heavier work (like emitting stats which may re-lock).
+	// Take a snapshot without holding the mutex during heavy work.
 	a.gameHistoryMu.Lock()
 	snapshot := cloneGameHistoryEntries(a.gameHistory)
 	jsonData, err := json.MarshalIndent(snapshot, "", "  ")
 	a.gameHistoryMu.Unlock()
+
+	// Write to disk synchronously — fast, local operation.
 	if err == nil {
 		_ = os.WriteFile(getGameHistoryFilePath(), jsonData, 0600)
 	}
 
-	if err := a.persistGameHistoryToDB(snapshot); err != nil {
-		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] sync save failed: %v", err))
-	}
+	// Persist to DB in the background so callers are never blocked.
+	go func(s []GameHistoryEntry) {
+		if err := a.persistGameHistoryToDB(s); err != nil {
+			a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] sync save failed: %v", err))
+		}
+	}(snapshot)
 
 	if a.ctx == nil {
 		a.AddLogMsg("[GAME_HISTORY] syncGameHistory no runtime context, done")
