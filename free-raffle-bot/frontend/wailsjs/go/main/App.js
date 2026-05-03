@@ -10,6 +10,10 @@ export function ClearSessions() {
   return window['go']['main']['App']['ClearSessions']();
 }
 
+export function DrawWinnerForCurrentSession() {
+  return window['go']['main']['App']['DrawWinnerForCurrentSession']();
+}
+
 export function GetDebugSnapshot() {
   return window['go']['main']['App']['GetDebugSnapshot']();
 }
@@ -26,6 +30,14 @@ export function GetTicketAnnounceEnabled() {
   return window['go']['main']['App']['GetTicketAnnounceEnabled']();
 }
 
+export function PostOrUpdateRaffleWebhook() {
+  return window['go']['main']['App']['PostOrUpdateRaffleWebhook']();
+}
+
+export function PostWinnerProofForCurrentSession(arg1, arg2) {
+  return window['go']['main']['App']['PostWinnerProofForCurrentSession'](arg1, arg2);
+}
+
 export function ResumeSession(arg1) {
   return window['go']['main']['App']['ResumeSession'](arg1);
 }
@@ -36,6 +48,10 @@ export function SetBonusEvery(arg1) {
 
 export function SetEnabled(arg1) {
   return window['go']['main']['App']['SetEnabled'](arg1);
+}
+
+export function SetRaffleDiscordConfig(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['SetRaffleDiscordConfig'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
 export function SetTicketAnnounceEnabled(arg1) {

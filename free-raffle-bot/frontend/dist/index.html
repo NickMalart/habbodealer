@@ -66,12 +66,24 @@
       background: #0b1b22;
       color: var(--text);
     }
+    input[type="text"],
+    input[type="url"] {
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 8px;
+      padding: 8px;
+      background: #0b1b22;
+      color: var(--text);
+      min-width: 260px;
+    }
     input[type="datetime-local"] {
       border: 1px solid rgba(255,255,255,0.25);
       border-radius: 8px;
       padding: 8px;
       background: #0b1b22;
       color: var(--text);
+    }
+    input[type="file"] {
+      color: var(--muted);
     }
     table {
       width: 100%;
@@ -109,6 +121,21 @@
       font-family: Consolas, "Courier New", monospace;
       font-size: 12px;
       line-height: 1.4;
+    }
+    .raffle-hero-preview {
+      width: 220px;
+      max-width: 100%;
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 10px;
+      display: block;
+    }
+    .winner-note {
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(98,195,112,0.12);
+      border: 1px solid rgba(98,195,112,0.4);
+      color: #c9f5ce;
+      font-size: 13px;
     }
   </style>
 </head>
@@ -152,6 +179,62 @@
         <input id="startAt" type="datetime-local">
         <label for="endAt">Raffle end</label>
         <input id="endAt" type="datetime-local">
+      </div>
+    </div>
+
+    <div class="card tab-main">
+      <h2 style="margin: 0 0 10px 0;">Discord Raffle Post</h2>
+      <p class="sub" style="margin-bottom: 12px;">Set raffle details, upload a hero image, and post/update the live ticket tracker.</p>
+
+      <div class="row" style="margin-bottom: 8px;">
+        <label for="raffleName" style="min-width: 140px;">Raffle Name</label>
+        <input id="raffleName" type="text" placeholder="Weekend Raffle" />
+      </div>
+
+      <div class="row" style="margin-bottom: 8px;">
+        <label for="rafflePrize" style="min-width: 140px;">Prize Name</label>
+        <input id="rafflePrize" type="text" placeholder="Purple Dragon Lamp" />
+        <label for="rafflePrizeQty" style="min-width: 80px;">Qty</label>
+        <input id="rafflePrizeQty" type="number" min="1" value="1" style="width:90px;" />
+      </div>
+
+      <div class="row" style="margin-bottom: 8px;align-items:flex-start;">
+        <label for="heroImage" style="min-width: 140px;">Hero Image</label>
+        <div>
+          <input id="heroImage" type="file" accept="image/*" />
+          <div id="heroImageMeta" class="muted" style="margin-top:6px;">No hero image selected.</div>
+          <img id="heroImagePreview" class="raffle-hero-preview" style="margin-top:8px;display:none;" alt="Raffle hero preview" />
+        </div>
+      </div>
+
+      <div class="row" style="margin-top: 10px;">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" id="raffleAutoUpdateChk" checked> Auto-update Discord tracker on ticket changes
+        </label>
+      </div>
+
+      <div class="row" style="margin-top: 12px;">
+        <button class="alt" id="saveDiscordCfgBtn">Save Discord Settings</button>
+        <button id="postRaffleWebhookBtn">Post / Update Raffle Message</button>
+        <button class="alt" id="drawWinnerBtn">Draw Winner</button>
+      </div>
+
+      <div class="row" style="margin-top: 10px;">
+        <div id="winnerSummary" class="winner-note" style="display:none;"></div>
+      </div>
+
+      <div id="winnerProofWrap" style="display:none;margin-top:12px;border-top:1px solid rgba(255,255,255,0.12);padding-top:12px;">
+        <div class="row" style="margin-bottom:8px;align-items:flex-start;">
+          <label for="winnerProofImage" style="min-width: 140px;">Winner Proof Photo</label>
+          <div>
+            <input id="winnerProofImage" type="file" accept="image/*" />
+            <div id="winnerProofMeta" class="muted" style="margin-top:6px;">Upload a photo showing the item delivered to the winner.</div>
+            <img id="winnerProofPreview" class="raffle-hero-preview" style="margin-top:8px;display:none;" alt="Winner proof preview" />
+          </div>
+        </div>
+        <div class="row">
+          <button class="alt" id="postWinnerProofBtn">Post Winner Proof</button>
+        </div>
       </div>
     </div>
 
@@ -221,6 +304,12 @@
   </div>
 
   <script>
+    let raffleHeroDataUrl = '';
+    let raffleHeroFileName = '';
+    let winnerProofDataUrl = '';
+    let winnerProofFileName = '';
+    let raffleFormDirty = false;
+
     async function call(name, ...args) {
       if (!window.go || !window.go.main || !window.go.main.App || !window.go.main.App[name]) {
         return null;
@@ -258,6 +347,45 @@
       const ticketChk = document.getElementById('ticketAnnounceChk');
       if (document.activeElement !== ticketChk) {
         ticketChk.checked = !!state.ticketAnnounceEnabled;
+      }
+
+      const raffleName = document.getElementById('raffleName');
+      if (!raffleFormDirty && document.activeElement !== raffleName) {
+        raffleName.value = state.raffleName || '';
+      }
+
+      const rafflePrize = document.getElementById('rafflePrize');
+      if (!raffleFormDirty && document.activeElement !== rafflePrize) {
+        rafflePrize.value = state.rafflePrizeName || '';
+      }
+
+      const rafflePrizeQty = document.getElementById('rafflePrizeQty');
+      if (!raffleFormDirty && document.activeElement !== rafflePrizeQty) {
+        const qty = Number(state.rafflePrizeQty || 1);
+        rafflePrizeQty.value = qty > 0 ? qty : 1;
+      }
+
+      const raffleAutoUpdateChk = document.getElementById('raffleAutoUpdateChk');
+      if (!raffleFormDirty && document.activeElement !== raffleAutoUpdateChk) {
+        raffleAutoUpdateChk.checked = !!state.raffleAutoUpdate;
+      }
+
+      const heroMeta = document.getElementById('heroImageMeta');
+      if (!raffleHeroDataUrl) {
+        const serverName = (state.raffleHeroImageName || '').trim();
+        heroMeta.textContent = serverName ? `Saved hero image: ${serverName}` : 'No hero image selected.';
+      }
+
+      const winnerSummary = document.getElementById('winnerSummary');
+      const winnerProofWrap = document.getElementById('winnerProofWrap');
+      if (state.currentSession && state.currentSession.winnerName) {
+        winnerSummary.style.display = '';
+        winnerSummary.textContent = `Winner: ${state.currentSession.winnerName} | Odds: ${state.currentSession.winnerOdds || 'n/a'} | Method: ${state.currentSession.winnerMethod || 'crypto/rand weighted draw'}`;
+        winnerProofWrap.style.display = '';
+      } else {
+        winnerSummary.style.display = 'none';
+        winnerSummary.textContent = '';
+        winnerProofWrap.style.display = 'none';
       }
 
       const tbody = document.getElementById('participants');
@@ -424,6 +552,15 @@
       if (!endInput.value) endInput.value = toLocalField(end);
     }
 
+    function readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+        reader.onerror = () => reject(new Error('Failed to read image file'));
+        reader.readAsDataURL(file);
+      });
+    }
+
     document.getElementById('enableBtn').addEventListener('click', async () => {
       const state = await call('GetState');
       await call('SetEnabled', !(state && state.enabled));
@@ -466,6 +603,125 @@
     });
     document.getElementById('tabMainBtn').addEventListener('click', () => showTab('main'));
     document.getElementById('tabDebugBtn').addEventListener('click', () => showTab('debug'));
+
+    document.getElementById('heroImage').addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      const heroMeta = document.getElementById('heroImageMeta');
+      const preview = document.getElementById('heroImagePreview');
+      if (!file) {
+        raffleHeroDataUrl = '';
+        raffleHeroFileName = '';
+        preview.style.display = 'none';
+        preview.src = '';
+        heroMeta.textContent = 'No hero image selected.';
+        return;
+      }
+      try {
+        const dataUrl = await readFileAsDataUrl(file);
+        raffleHeroDataUrl = dataUrl;
+        raffleHeroFileName = file.name || 'raffle-hero.png';
+        raffleFormDirty = true;
+        preview.src = dataUrl;
+        preview.style.display = '';
+        heroMeta.textContent = `Selected: ${raffleHeroFileName}`;
+      } catch (err) {
+        alert(`Could not read image: ${err}`);
+      }
+    });
+
+    document.getElementById('winnerProofImage').addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      const proofMeta = document.getElementById('winnerProofMeta');
+      const preview = document.getElementById('winnerProofPreview');
+      if (!file) {
+        winnerProofDataUrl = '';
+        winnerProofFileName = '';
+        preview.style.display = 'none';
+        preview.src = '';
+        proofMeta.textContent = 'Upload a photo showing the item delivered to the winner.';
+        return;
+      }
+      try {
+        const dataUrl = await readFileAsDataUrl(file);
+        winnerProofDataUrl = dataUrl;
+        winnerProofFileName = file.name || 'winner-proof.png';
+        preview.src = dataUrl;
+        preview.style.display = '';
+        proofMeta.textContent = `Selected proof photo: ${winnerProofFileName}`;
+      } catch (err) {
+        alert(`Could not read winner proof image: ${err}`);
+      }
+    });
+
+    document.getElementById('raffleName').addEventListener('input', () => { raffleFormDirty = true; });
+    document.getElementById('rafflePrize').addEventListener('input', () => { raffleFormDirty = true; });
+    document.getElementById('rafflePrizeQty').addEventListener('input', () => { raffleFormDirty = true; });
+    document.getElementById('raffleAutoUpdateChk').addEventListener('change', () => { raffleFormDirty = true; });
+
+    document.getElementById('saveDiscordCfgBtn').addEventListener('click', async () => {
+      const raffleName = (document.getElementById('raffleName').value || '').trim();
+      const rafflePrize = (document.getElementById('rafflePrize').value || '').trim();
+      const rafflePrizeQty = Math.max(1, parseInt(document.getElementById('rafflePrizeQty').value || '1', 10) || 1);
+      const autoUpdate = !!document.getElementById('raffleAutoUpdateChk').checked;
+      try {
+        await call('SetRaffleDiscordConfig', raffleName, rafflePrize, rafflePrizeQty, raffleHeroDataUrl, raffleHeroFileName, autoUpdate);
+        raffleFormDirty = false;
+        await refresh();
+      } catch (err) {
+        alert(`Could not save Discord config: ${err}`);
+      }
+    });
+
+    document.getElementById('postRaffleWebhookBtn').addEventListener('click', async () => {
+      try {
+        await call('SetRaffleDiscordConfig',
+          (document.getElementById('raffleName').value || '').trim(),
+          (document.getElementById('rafflePrize').value || '').trim(),
+          Math.max(1, parseInt(document.getElementById('rafflePrizeQty').value || '1', 10) || 1),
+          raffleHeroDataUrl,
+          raffleHeroFileName,
+          !!document.getElementById('raffleAutoUpdateChk').checked,
+        );
+        const result = await call('PostOrUpdateRaffleWebhook');
+        if (result !== 'ok') {
+          alert(`Discord webhook response: ${result}`);
+        }
+        raffleFormDirty = false;
+        await refresh();
+      } catch (err) {
+        alert(`Could not post raffle webhook: ${err}`);
+      }
+    });
+
+    document.getElementById('drawWinnerBtn').addEventListener('click', async () => {
+      try {
+        const result = await call('DrawWinnerForCurrentSession');
+        if (typeof result === 'string' && result.trim()) {
+          alert(result);
+        }
+        await refresh();
+      } catch (err) {
+        alert(`Could not draw winner: ${err}`);
+      }
+    });
+
+    document.getElementById('postWinnerProofBtn').addEventListener('click', async () => {
+      if (!winnerProofDataUrl) {
+        alert('Please upload a winner proof photo first.');
+        return;
+      }
+      try {
+        const result = await call('PostWinnerProofForCurrentSession', winnerProofDataUrl, winnerProofFileName);
+        if (result !== 'ok') {
+          alert(`Winner proof response: ${result}`);
+        } else {
+          alert('Winner proof posted to Discord.');
+        }
+        await refresh();
+      } catch (err) {
+        alert(`Could not post winner proof: ${err}`);
+      }
+    });
 
     setDefaultDateTimes();
     bindRealtimeEvents();

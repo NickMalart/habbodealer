@@ -1,11 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	crand "crypto/rand"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"math/big"
+	"mime/multipart"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -34,6 +42,8 @@ var ext = g.NewExt(g.ExtInfo{
 	Author:      "Dubbo",
 })
 
+const hardcodedRaffleWebhookURL = "https://discordapp.com/api/webhooks/1499651607800057926/SLvv8HU_yG2vyW04MaXkZ2eVd_10qpddkJjBWDQ6GmB7LzUhJu7yZAgQInsg0eLOogJ9"
+
 type DBConfig struct {
 	DatabaseURL string `json:"databaseUrl"`
 	OwnerKey    string `json:"ownerKey,omitempty"`
@@ -49,16 +59,25 @@ type RaffleParticipant struct {
 }
 
 type RaffleSession struct {
-	ID             int                 `json:"id"`
-	StartedAt      string              `json:"startedAt"`
-	ScheduledEndAt string              `json:"scheduledEndAt,omitempty"`
-	EndedAt        string              `json:"endedAt,omitempty"`
-	BonusEvery     int                 `json:"bonusEvery"`
-	Participants   []RaffleParticipant `json:"participants"`
-	DBID           int64               `json:"-"`
-	CursorAt       time.Time           `json:"-"`
-	CursorEntry    string              `json:"-"`
-	ResumedAt      time.Time           `json:"-"` // zero if never resumed; bets before this time skip shouts
+	ID               int                 `json:"id"`
+	StartedAt        string              `json:"startedAt"`
+	ScheduledEndAt   string              `json:"scheduledEndAt,omitempty"`
+	EndedAt          string              `json:"endedAt,omitempty"`
+	BonusEvery       int                 `json:"bonusEvery"`
+	WebhookMessageID string              `json:"webhookMessageId,omitempty"`
+	Participants     []RaffleParticipant `json:"participants"`
+	TicketEvents     []string            `json:"ticketEvents,omitempty"`
+	WinnerName       string              `json:"winnerName,omitempty"`
+	WinnerTickets    int                 `json:"winnerTickets,omitempty"`
+	WinnerOdds       string              `json:"winnerOdds,omitempty"`
+	WinnerDrawnAt    string              `json:"winnerDrawnAt,omitempty"`
+	WinnerMethod     string              `json:"winnerMethod,omitempty"`
+	WinnerSummary    string              `json:"winnerSummary,omitempty"`
+	WinnerProofURL   string              `json:"winnerProofUrl,omitempty"`
+	DBID             int64               `json:"-"`
+	CursorAt         time.Time           `json:"-"`
+	CursorEntry      string              `json:"-"`
+	ResumedAt        time.Time           `json:"-"` // zero if never resumed; bets before this time skip shouts
 }
 
 type RaffleState struct {
@@ -67,6 +86,12 @@ type RaffleState struct {
 	Enabled               bool            `json:"enabled"`
 	BonusEvery            int             `json:"bonusEvery"`
 	TicketAnnounceEnabled bool            `json:"ticketAnnounceEnabled"`
+	RaffleName            string          `json:"raffleName"`
+	RafflePrizeName       string          `json:"rafflePrizeName"`
+	RafflePrizeQty        int             `json:"rafflePrizeQty"`
+	RaffleHeroImageName   string          `json:"raffleHeroImageName"`
+	RaffleAutoUpdate      bool            `json:"raffleAutoUpdate"`
+	RaffleMessageID       string          `json:"raffleMessageId"`
 	CurrentSession        *RaffleSession  `json:"currentSession,omitempty"`
 	Sessions              []RaffleSession `json:"sessions"`
 }
@@ -95,10 +120,23 @@ type App struct {
 	lastNotifyRaw         string
 	lastQueryRows         int
 	lastShout             string
+
+	raffleName             string
+	rafflePrizeName        string
+	rafflePrizeQty         int
+	raffleHeroDataURL      string
+	raffleHeroFileName     string
+	raffleHeroImageURL     string
+	raffleHeroAttachmentID string
+	raffleAutoUpdate       bool
+	raffleMessageID        string
+
+	pendingProofBytes    []byte
+	pendingProofFileName string
 }
 
 func NewApp() *App {
-	return &App{bonusEvery: 5}
+	return &App{bonusEvery: 5, raffleAutoUpdate: true, rafflePrizeQty: 1}
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -228,17 +266,27 @@ func copySession(s *RaffleSession) *RaffleSession {
 		return nil
 	}
 	out := &RaffleSession{
-		ID:             s.ID,
-		StartedAt:      s.StartedAt,
-		ScheduledEndAt: s.ScheduledEndAt,
-		EndedAt:        s.EndedAt,
-		BonusEvery:     s.BonusEvery,
-		DBID:           s.DBID,
-		CursorAt:       s.CursorAt,
-		CursorEntry:    s.CursorEntry,
-		Participants:   make([]RaffleParticipant, len(s.Participants)),
+		ID:               s.ID,
+		StartedAt:        s.StartedAt,
+		ScheduledEndAt:   s.ScheduledEndAt,
+		EndedAt:          s.EndedAt,
+		BonusEvery:       s.BonusEvery,
+		WebhookMessageID: s.WebhookMessageID,
+		TicketEvents:     make([]string, len(s.TicketEvents)),
+		WinnerName:       s.WinnerName,
+		WinnerTickets:    s.WinnerTickets,
+		WinnerOdds:       s.WinnerOdds,
+		WinnerDrawnAt:    s.WinnerDrawnAt,
+		WinnerMethod:     s.WinnerMethod,
+		WinnerSummary:    s.WinnerSummary,
+		WinnerProofURL:   s.WinnerProofURL,
+		DBID:             s.DBID,
+		CursorAt:         s.CursorAt,
+		CursorEntry:      s.CursorEntry,
+		Participants:     make([]RaffleParticipant, len(s.Participants)),
 	}
 	copy(out.Participants, s.Participants)
+	copy(out.TicketEvents, s.TicketEvents)
 	return out
 }
 
@@ -252,6 +300,12 @@ func (a *App) GetState() RaffleState {
 		Enabled:               a.enabled,
 		BonusEvery:            a.bonusEvery,
 		TicketAnnounceEnabled: a.ticketAnnounceEnabled,
+		RaffleName:            a.raffleName,
+		RafflePrizeName:       a.rafflePrizeName,
+		RafflePrizeQty:        a.rafflePrizeQty,
+		RaffleHeroImageName:   a.raffleHeroFileName,
+		RaffleAutoUpdate:      a.raffleAutoUpdate,
+		RaffleMessageID:       a.raffleMessageID,
 		Sessions:              make([]RaffleSession, len(a.sessions)),
 	}
 	for i := range a.sessions {
@@ -334,6 +388,697 @@ func parseHistoryStartedAt(raw string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+func formatDateDDMMYYYYGMTPlus10(raw string) string {
+	v := strings.TrimSpace(raw)
+	if v == "" || strings.EqualFold(v, "tbd") {
+		return "TBD (GMT +10)"
+	}
+
+	var t time.Time
+	if parsed, err := time.Parse(time.RFC3339, v); err == nil {
+		t = parsed.UTC()
+	} else if parsed, ok := parseHistoryStartedAt(v); ok {
+		t = parsed.UTC()
+	} else {
+		return v + " (GMT +10)"
+	}
+
+	loc := time.FixedZone("GMT+10", 10*60*60)
+	return t.In(loc).Format("02/01/2006") + " GMT +10"
+}
+
+func decodeImageDataURL(dataURL string) ([]byte, string, error) {
+	s := strings.TrimSpace(dataURL)
+	if !strings.HasPrefix(s, "data:") {
+		return nil, "", fmt.Errorf("missing data URL prefix")
+	}
+
+	parts := strings.SplitN(s, ",", 2)
+	if len(parts) != 2 {
+		return nil, "", fmt.Errorf("invalid data URL")
+	}
+
+	meta := strings.TrimPrefix(parts[0], "data:")
+	b64 := parts[1]
+	mimeType := "image/png"
+	metaParts := strings.Split(meta, ";")
+	if len(metaParts) > 0 {
+		if mt := strings.TrimSpace(metaParts[0]); mt != "" {
+			mimeType = mt
+		}
+	}
+
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return raw, mimeType, nil
+}
+
+func clampEmbedText(v string, max int) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "-"
+	}
+	if max <= 0 {
+		max = 1024
+	}
+	if len(v) > max {
+		return v[:max-1] + "..."
+	}
+	return v
+}
+
+func buildTicketBoard(participants []RaffleParticipant) string {
+	if len(participants) == 0 {
+		return "🎟️ No ticket purchases yet. Be the first to jump in!"
+	}
+
+	maxRows := 18
+	if len(participants) < maxRows {
+		maxRows = len(participants)
+	}
+
+	lines := make([]string, 0, maxRows+1)
+	for i := 0; i < maxRows; i++ {
+		p := participants[i]
+		name := strings.TrimSpace(p.Username)
+		if name == "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("🎫 %d. %s — %d ticket(s)", i+1, name, p.Tickets))
+	}
+
+	if remaining := len(participants) - maxRows; remaining > 0 {
+		lines = append(lines, fmt.Sprintf("...and %d more player(s)", remaining))
+	}
+
+	board := "📢 Live ticket board\n" + strings.Join(lines, "\n")
+	if len(board) > 1000 {
+		board = board[:1000] + "..."
+	}
+	return board
+}
+
+func appendTicketEvent(s *RaffleSession, event string) {
+	if s == nil {
+		return
+	}
+	line := strings.TrimSpace(event)
+	if line == "" {
+		return
+	}
+	s.TicketEvents = append(s.TicketEvents, line)
+	if len(s.TicketEvents) > 60 {
+		s.TicketEvents = s.TicketEvents[len(s.TicketEvents)-60:]
+	}
+}
+
+func buildTicketEvents(events []string) string {
+	if len(events) == 0 {
+		return "No ticket gains recorded yet."
+	}
+	start := 0
+	if len(events) > 10 {
+		start = len(events) - 10
+	}
+	out := strings.Join(events[start:], "\n")
+	if len(out) > 1000 {
+		out = out[len(out)-1000:]
+	}
+	return out
+}
+
+func (a *App) SetRaffleDiscordConfig(
+	raffleName string,
+	rafflePrizeName string,
+	rafflePrizeQty int,
+	heroImageDataURL string,
+	heroImageFileName string,
+	autoUpdate bool,
+) RaffleState {
+	a.mu.Lock()
+	a.raffleName = strings.TrimSpace(raffleName)
+	a.rafflePrizeName = strings.TrimSpace(rafflePrizeName)
+	if rafflePrizeQty <= 0 {
+		rafflePrizeQty = 1
+	}
+	a.rafflePrizeQty = rafflePrizeQty
+	a.raffleHeroDataURL = strings.TrimSpace(heroImageDataURL)
+	a.raffleHeroFileName = strings.TrimSpace(heroImageFileName)
+	if a.raffleHeroDataURL == "" {
+		a.raffleHeroImageURL = ""
+	}
+	a.raffleAutoUpdate = autoUpdate
+	a.mu.Unlock()
+	a.emitUpdate()
+	return a.GetState()
+}
+
+func (a *App) PostOrUpdateRaffleWebhook() string {
+	if err := a.postOrUpdateRaffleWebhook(nil, true, "manual"); err != nil {
+		a.logDebug("raffle webhook manual sync failed: %v", err)
+		return err.Error()
+	}
+	return "ok"
+}
+
+func (a *App) DrawWinnerForCurrentSession() string {
+	a.mu.Lock()
+	if a.currentSession == nil {
+		a.mu.Unlock()
+		return "start or resume a raffle session first"
+	}
+	s := a.currentSession
+	if len(s.Participants) == 0 {
+		a.mu.Unlock()
+		return "no participants with tickets yet"
+	}
+
+	totalTickets := 0
+	for _, p := range s.Participants {
+		if p.Tickets > 0 {
+			totalTickets += p.Tickets
+		}
+	}
+	if totalTickets <= 0 {
+		a.mu.Unlock()
+		return "no valid tickets to draw from"
+	}
+
+	rnd, err := crand.Int(crand.Reader, big.NewInt(int64(totalTickets)))
+	if err != nil {
+		a.mu.Unlock()
+		a.logDebug("winner draw failed: %v", err)
+		return "failed to draw winner securely"
+	}
+
+	pick := int(rnd.Int64()) + 1
+	cumulative := 0
+	var winner RaffleParticipant
+	found := false
+	for _, p := range s.Participants {
+		if p.Tickets <= 0 {
+			continue
+		}
+		cumulative += p.Tickets
+		if pick <= cumulative {
+			winner = p
+			found = true
+			break
+		}
+	}
+	if !found {
+		a.mu.Unlock()
+		return "failed to resolve winner from ticket pool"
+	}
+
+	oddsPct := (float64(winner.Tickets) / float64(totalTickets)) * 100.0
+	oddsText := fmt.Sprintf("%d/%d (%.2f%%)", winner.Tickets, totalTickets, oddsPct)
+	drawnAt := time.Now().UTC().Format(time.RFC3339)
+	method := "crypto/rand weighted ticket draw"
+	summary := fmt.Sprintf("Winner %s selected with secure weighted draw: pick=%d over %d total tickets; %s", winner.Username, pick, totalTickets, oddsText)
+
+	s.WinnerName = winner.Username
+	s.WinnerTickets = winner.Tickets
+	s.WinnerOdds = oddsText
+	s.WinnerDrawnAt = drawnAt
+	s.WinnerMethod = method
+	s.WinnerSummary = summary
+
+	a.mu.Unlock()
+
+	a.logDebug("winner drawn: %s", summary)
+	a.emitUpdate()
+	go func() {
+		if err := a.postOrUpdateRaffleWebhook(nil, true, "winner-draw"); err != nil {
+			a.logDebug("auto-patch winner draw failed: %v", err)
+		}
+	}()
+	return fmt.Sprintf("Winner: %s | Odds: %s | Method: %s", winner.Username, oddsText, method)
+}
+
+func (a *App) PostWinnerProofForCurrentSession(imageDataURL string, imageFileName string) string {
+	dataURL := strings.TrimSpace(imageDataURL)
+	if dataURL == "" {
+		return "winner proof image is required"
+	}
+
+	a.mu.Lock()
+	if a.currentSession == nil {
+		a.mu.Unlock()
+		return "start or resume a raffle session first"
+	}
+	if a.currentSession.WinnerName == "" {
+		a.mu.Unlock()
+		return "draw a winner first"
+	}
+	messageID := strings.TrimSpace(a.currentSession.WebhookMessageID)
+	if messageID == "" {
+		messageID = strings.TrimSpace(a.raffleMessageID)
+	}
+	if messageID == "" {
+		a.mu.Unlock()
+		return "post the raffle to Discord first"
+	}
+	a.mu.Unlock()
+
+	raw, mimeType, err := decodeImageDataURL(dataURL)
+	if err != nil {
+		return "proof image decode error: " + err.Error()
+	}
+
+	fileName := strings.TrimSpace(imageFileName)
+	if fileName == "" {
+		switch mimeType {
+		case "image/jpeg":
+			fileName = "winner-proof.jpg"
+		case "image/gif":
+			fileName = "winner-proof.gif"
+		case "image/webp":
+			fileName = "winner-proof.webp"
+		default:
+			fileName = "winner-proof.png"
+		}
+	}
+
+	a.mu.Lock()
+	a.pendingProofBytes = raw
+	a.pendingProofFileName = fileName
+	a.mu.Unlock()
+
+	if err := a.postOrUpdateRaffleWebhook(nil, true, "winner-proof"); err != nil {
+		a.mu.Lock()
+		a.pendingProofBytes = nil
+		a.pendingProofFileName = ""
+		a.mu.Unlock()
+		a.logDebug("winner proof patch failed: %v", err)
+		return err.Error()
+	}
+	a.logDebug("winner proof patched into raffle message")
+	return "ok"
+}
+
+func withWebhookWait(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return raw
+	}
+	q := u.Query()
+	q.Set("wait", "true")
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func webhookMessageEndpoint(raw string, messageID string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", err
+	}
+	u.RawQuery = ""
+	u.Path = strings.TrimRight(u.Path, "/") + "/messages/" + strings.TrimSpace(messageID)
+	return u.String(), nil
+}
+
+func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowManual bool, reason string) error {
+	a.mu.Lock()
+	webhookURL := strings.TrimSpace(hardcodedRaffleWebhookURL)
+	autoUpdate := a.raffleAutoUpdate
+	raffleName := strings.TrimSpace(a.raffleName)
+	prizeName := strings.TrimSpace(a.rafflePrizeName)
+	prizeQty := a.rafflePrizeQty
+	heroDataURL := strings.TrimSpace(a.raffleHeroDataURL)
+	heroFileName := strings.TrimSpace(a.raffleHeroFileName)
+	heroImageURL := strings.TrimSpace(a.raffleHeroImageURL)
+	messageID := strings.TrimSpace(a.raffleMessageID)
+
+	var session *RaffleSession
+	if sessionOverride != nil {
+		session = copySession(sessionOverride)
+	} else if a.currentSession != nil {
+		session = copySession(a.currentSession)
+	}
+	if session != nil && strings.TrimSpace(session.WebhookMessageID) != "" {
+		messageID = strings.TrimSpace(session.WebhookMessageID)
+	}
+	a.mu.Unlock()
+
+	if webhookURL == "" {
+		return fmt.Errorf("discord webhook URL is empty")
+	}
+	if !autoUpdate && !allowManual {
+		return nil
+	}
+	if session == nil {
+		if allowManual {
+			return fmt.Errorf("start or resume a live raffle before posting to discord")
+		}
+		return fmt.Errorf("no raffle session available")
+	}
+
+	if raffleName == "" {
+		raffleName = "Weekend Raffle"
+	}
+	if prizeName == "" {
+		prizeName = "Mystery Prize"
+	}
+	if prizeQty <= 0 {
+		prizeQty = 1
+	}
+	prizeDisplay := fmt.Sprintf("%s x%d", prizeName, prizeQty)
+
+	now := time.Now().UTC()
+	participants := session.Participants
+	totalTickets := 0
+	for _, p := range participants {
+		if p.Tickets > 0 {
+			totalTickets += p.Tickets
+		}
+	}
+
+	statusText := "started"
+	if strings.TrimSpace(session.EndedAt) != "" {
+		statusText = "ended"
+	}
+
+	startLine := session.StartedAt
+	if startLine == "" {
+		startLine = now.Format(time.RFC3339)
+	}
+
+	endLine := session.ScheduledEndAt
+	if strings.TrimSpace(session.EndedAt) != "" {
+		endLine = session.EndedAt
+	}
+	if strings.TrimSpace(endLine) == "" {
+		endLine = "TBD"
+	}
+
+	ticketBoard := buildTicketBoard(participants)
+	ticketEvents := buildTicketEvents(session.TicketEvents)
+	headerLine := fmt.Sprintf("🎉 NEW RAFFLE! 🎉 %s | 🎁 %s | 🎟️ %d total tickets", raffleName, prizeDisplay, totalTickets)
+
+	promoEmbed := map[string]interface{}{
+		"title":       fmt.Sprintf("🎁 WHAT'S UP FOR GRABS 🎁"),
+		"description": fmt.Sprintf("🎁 **%s**\n🔥 **%s**", prizeDisplay, raffleName),
+		"color":       0xF1C40F,
+		"fields": []map[string]interface{}{
+			{"name": "🔥 How To Enter", "value": clampEmbedText("Find a live dealer at rollorigins.club and place a bet for your chance to win.", 1000), "inline": false},
+			{"name": "🎟️ Ticket Boost", "value": "Every 5th bet gives 1 extra ticket.", "inline": false},
+			{"name": "📣 Heads Up", "value": "Ticket board below updates automatically whenever someone earns tickets.", "inline": false},
+		},
+		"footer":    map[string]interface{}{"text": "✨ Roll Origins Free Raffle"},
+		"timestamp": now.Format(time.RFC3339),
+	}
+
+	trackerEmbed := map[string]interface{}{
+		"title":       "🎲 Roll Origins Raffle Tracker 🎲",
+		"description": fmt.Sprintf("🎉 **NEW RAFFLE!** 🎉 %s\n🎁 Prize: **%s**", raffleName, prizeDisplay),
+		"color":       0x2ECC71,
+		"fields": []map[string]interface{}{
+			{"name": "📌 Status", "value": "🟢 " + statusText, "inline": true},
+			{"name": "👥 Participants", "value": strconv.Itoa(len(participants)), "inline": true},
+			{"name": "🎟️ Total Tickets", "value": strconv.Itoa(totalTickets), "inline": true},
+			{"name": "🧾 Raffle ID", "value": strconv.FormatInt(session.DBID, 10), "inline": false},
+			{"name": "⏰ Planned End", "value": clampEmbedText(formatDateDDMMYYYYGMTPlus10(endLine), 1000), "inline": false},
+			{"name": "🏆 Winner", "value": func() string {
+				if strings.TrimSpace(session.WinnerName) == "" {
+					return "TBD"
+				}
+				return clampEmbedText(session.WinnerName, 200)
+			}(), "inline": true},
+			{"name": "🔐 Draw Method", "value": func() string {
+				if strings.TrimSpace(session.WinnerMethod) == "" {
+					return "Pending draw"
+				}
+				return clampEmbedText(session.WinnerMethod, 200)
+			}(), "inline": true},
+			{"name": "📊 Winner Odds", "value": func() string {
+				if strings.TrimSpace(session.WinnerOdds) == "" {
+					return "Pending draw"
+				}
+				return clampEmbedText(session.WinnerOdds, 200)
+			}(), "inline": true},
+			{"name": "🕒 Created", "value": clampEmbedText(startLine, 1000), "inline": true},
+			{"name": "🧠 Winner Explain", "value": func() string {
+				if strings.TrimSpace(session.WinnerSummary) == "" {
+					return "Draw not completed yet."
+				}
+				return clampEmbedText(session.WinnerSummary, 1000)
+			}(), "inline": false},
+			{"name": "📣 Ticket Board", "value": clampEmbedText(ticketBoard, 1000), "inline": false},
+			{"name": "🧾 Ticket Activity", "value": clampEmbedText(ticketEvents, 1000), "inline": false},
+		},
+		"footer":    map[string]interface{}{"text": "✨ Auto-updated on every ticket buy and winner draw ✨"},
+		"timestamp": now.Format(time.RFC3339),
+	}
+
+	if strings.TrimSpace(session.WinnerProofURL) != "" {
+		trackerEmbed["image"] = map[string]interface{}{"url": strings.TrimSpace(session.WinnerProofURL)}
+	}
+
+	if heroImageURL != "" {
+		promoEmbed["image"] = map[string]interface{}{"url": heroImageURL}
+	}
+
+	payload := map[string]interface{}{
+		"username": "Roll Origins Raffles",
+		"content":  headerLine,
+		"embeds":   []interface{}{promoEmbed, trackerEmbed},
+		"allowed_mentions": map[string]interface{}{
+			"parse": []string{},
+		},
+	}
+
+	a.mu.Lock()
+	proofBytes := a.pendingProofBytes
+	proofFileName := strings.TrimSpace(a.pendingProofFileName)
+	heroAttachmentID := strings.TrimSpace(a.raffleHeroAttachmentID)
+	a.mu.Unlock()
+
+	if proofBytes != nil && proofFileName != "" {
+		trackerEmbed["image"] = map[string]interface{}{"url": "attachment://" + proofFileName}
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	if messageID != "" {
+		endpoint, err := webhookMessageEndpoint(webhookURL, messageID)
+		if err != nil {
+			return err
+		}
+
+		var patchReq *http.Request
+		if proofBytes != nil && proofFileName != "" {
+			// Build attachments list: keep existing hero image + add new proof
+			attachmentsList := []map[string]interface{}{}
+			nextFileIdx := 0
+			if heroAttachmentID != "" {
+				// Keep the existing hero image attachment by its snowflake ID
+				attachmentsList = append(attachmentsList, map[string]interface{}{"id": heroAttachmentID})
+			}
+			// New proof file — Discord identifies new files by their multipart index
+			attachmentsList = append(attachmentsList, map[string]interface{}{"id": strconv.Itoa(nextFileIdx), "filename": proofFileName})
+
+			payload["attachments"] = attachmentsList
+
+			jb, err := json.Marshal(payload)
+			if err != nil {
+				return err
+			}
+			var mpBody bytes.Buffer
+			mpWriter := multipart.NewWriter(&mpBody)
+			if err := mpWriter.WriteField("payload_json", string(jb)); err != nil {
+				return err
+			}
+			part, err := mpWriter.CreateFormFile(fmt.Sprintf("files[%d]", nextFileIdx), proofFileName)
+			if err != nil {
+				return err
+			}
+			if _, err := part.Write(proofBytes); err != nil {
+				return err
+			}
+			if err := mpWriter.Close(); err != nil {
+				return err
+			}
+			patchReq, err = http.NewRequest("PATCH", endpoint, &mpBody)
+			if err != nil {
+				return err
+			}
+			patchReq.Header.Set("Content-Type", mpWriter.FormDataContentType())
+		} else {
+			jb, err := json.Marshal(payload)
+			if err != nil {
+				return err
+			}
+			patchReq, err = http.NewRequest("PATCH", endpoint, bytes.NewReader(jb))
+			if err != nil {
+				return err
+			}
+			patchReq.Header.Set("Content-Type", "application/json")
+		}
+
+		resp, err := client.Do(patchReq)
+		if err == nil {
+			defer resp.Body.Close()
+			patchBody, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				if proofBytes != nil {
+					var patchResp struct {
+						Attachments []struct {
+							Filename string `json:"filename"`
+							URL      string `json:"url"`
+						} `json:"attachments"`
+					}
+					_ = json.Unmarshal(patchBody, &patchResp)
+					cdnURL := ""
+					for _, att := range patchResp.Attachments {
+						if strings.EqualFold(att.Filename, proofFileName) {
+							cdnURL = strings.TrimSpace(att.URL)
+							break
+						}
+					}
+					if cdnURL == "" && len(patchResp.Attachments) > 0 {
+						cdnURL = strings.TrimSpace(patchResp.Attachments[len(patchResp.Attachments)-1].URL)
+					}
+					a.mu.Lock()
+					if cdnURL != "" && a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
+						a.currentSession.WinnerProofURL = cdnURL
+					}
+					a.pendingProofBytes = nil
+					a.pendingProofFileName = ""
+					a.mu.Unlock()
+				}
+				if session != nil && session.DBID > 0 && strings.TrimSpace(messageID) != "" {
+					if err := a.persistSessionWebhookMessageID(session.DBID, strings.TrimSpace(messageID)); err != nil {
+						a.logDebug("failed to persist webhook message id after patch session=%d id=%s err=%v", session.DBID, strings.TrimSpace(messageID), err)
+					}
+				}
+				a.logDebug("raffle webhook updated message id=%s reason=%s", messageID, reason)
+				return nil
+			}
+			a.logDebug("raffle webhook update failed status=%d body=%s; falling back to create", resp.StatusCode, strings.TrimSpace(string(patchBody)))
+		} else {
+			a.logDebug("raffle webhook update request failed: %v; falling back to create", err)
+		}
+	}
+
+	type uploadFile struct {
+		Field string
+		Name  string
+		Bytes []byte
+	}
+	uploads := make([]uploadFile, 0, 1)
+	if heroDataURL != "" {
+		raw, mimeType, err := decodeImageDataURL(heroDataURL)
+		if err != nil {
+			return fmt.Errorf("hero image decode error: %w", err)
+		}
+		fileName := strings.TrimSpace(heroFileName)
+		if fileName == "" {
+			switch mimeType {
+			case "image/jpeg":
+				fileName = "raffle-hero.jpg"
+			case "image/gif":
+				fileName = "raffle-hero.gif"
+			case "image/webp":
+				fileName = "raffle-hero.webp"
+			default:
+				fileName = "raffle-hero.png"
+			}
+		}
+		promoEmbed["image"] = map[string]interface{}{"url": "attachment://" + fileName}
+		uploads = append(uploads, uploadFile{Field: "files[0]", Name: fileName, Bytes: raw})
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	postURL := withWebhookWait(webhookURL)
+	var req *http.Request
+
+	if len(uploads) == 0 {
+		req, err = http.NewRequest("POST", postURL, bytes.NewReader(payloadJSON))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+	} else {
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+		if err := writer.WriteField("payload_json", string(payloadJSON)); err != nil {
+			return err
+		}
+		for _, f := range uploads {
+			part, err := writer.CreateFormFile(f.Field, f.Name)
+			if err != nil {
+				return err
+			}
+			if _, err := part.Write(f.Bytes); err != nil {
+				return err
+			}
+		}
+		if err := writer.Close(); err != nil {
+			return err
+		}
+
+		req, err = http.NewRequest("POST", postURL, &body)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("discord status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var respPayload struct {
+		ID          string `json:"id"`
+		Attachments []struct {
+			ID  string `json:"id"`
+			URL string `json:"url"`
+		} `json:"attachments"`
+	}
+	_ = json.Unmarshal(body, &respPayload)
+
+	a.mu.Lock()
+	if strings.TrimSpace(respPayload.ID) != "" {
+		a.raffleMessageID = strings.TrimSpace(respPayload.ID)
+		if a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
+			a.currentSession.WebhookMessageID = strings.TrimSpace(respPayload.ID)
+		}
+	}
+	if len(respPayload.Attachments) > 0 {
+		if strings.TrimSpace(respPayload.Attachments[0].URL) != "" {
+			a.raffleHeroImageURL = strings.TrimSpace(respPayload.Attachments[0].URL)
+		}
+		if strings.TrimSpace(respPayload.Attachments[0].ID) != "" {
+			a.raffleHeroAttachmentID = strings.TrimSpace(respPayload.Attachments[0].ID)
+		}
+	}
+	a.mu.Unlock()
+
+	if session != nil && session.DBID > 0 && strings.TrimSpace(respPayload.ID) != "" {
+		if err := a.persistSessionWebhookMessageID(session.DBID, strings.TrimSpace(respPayload.ID)); err != nil {
+			a.logDebug("failed to persist webhook message id session=%d id=%s err=%v", session.DBID, strings.TrimSpace(respPayload.ID), err)
+		}
+	}
+
+	a.logDebug("raffle webhook posted message id=%s reason=%s", strings.TrimSpace(respPayload.ID), reason)
+	a.emitUpdate()
+	return nil
+}
+
 func (a *App) StartRaffle() RaffleState {
 	state, err := a.StartRaffleWithWindow("", "")
 	if err != nil {
@@ -402,8 +1147,8 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 
 		var dbSessionID int64
 		err := db.QueryRow(ctx,
-			`INSERT INTO raffle_sessions (started_at, scheduled_end_at, owner_key, bonus_every, last_seen_created_at, last_seen_entry_id)
-			 VALUES ($1,$2,$3,$4,$5,$6)
+			`INSERT INTO raffle_sessions (started_at, scheduled_end_at, owner_key, bonus_every, last_seen_created_at, last_seen_entry_id, webhook_message_id)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7)
 			 RETURNING id`,
 			startAt,
 			func() interface{} {
@@ -415,6 +1160,7 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 			owner,
 			bonusEvery,
 			startAt,
+			"",
 			"",
 		).Scan(&dbSessionID)
 		if err != nil {
@@ -513,6 +1259,12 @@ func (a *App) ResumeSession(dbID int64) (RaffleState, error) {
 			a.logDebug("resume session db update failed: %v", err)
 		}
 	}
+
+	a.mu.Lock()
+	if a.currentSession != nil && a.currentSession.DBID == dbID {
+		a.raffleMessageID = strings.TrimSpace(a.currentSession.WebhookMessageID)
+	}
+	a.mu.Unlock()
 
 	a.logDebug("resumed session dbID=%d participants=%d", dbID, len(s.Participants))
 	a.emitUpdate()
@@ -936,6 +1688,7 @@ func (a *App) processNewBets() {
 				LastBet:     row.EventAt.UTC().Format(time.RFC3339),
 			}
 			a.currentSession.Participants = append(a.currentSession.Participants, p)
+			appendTicketEvent(a.currentSession, fmt.Sprintf("%s - now %d ticket(s)", p.Username, p.Tickets))
 			upserts = append(upserts, p)
 			// New entrant: use combined shout, but suppress if this bet predates a resume
 			if resumedAt.IsZero() || row.EventAt.UTC().After(resumedAt) {
@@ -948,6 +1701,9 @@ func (a *App) processNewBets() {
 			p.Tickets = ticketsForBetCount(p.BetCount, a.currentSession.BonusEvery)
 			p.LastBet = row.EventAt.UTC().Format(time.RFC3339)
 			upserts = append(upserts, *p)
+			if p.Tickets > oldTickets {
+				appendTicketEvent(a.currentSession, fmt.Sprintf("%s +%d ticket(s) => %d total", p.Username, p.Tickets-oldTickets, p.Tickets))
+			}
 			if announceEnabled && p.Tickets > oldTickets && (resumedAt.IsZero() || row.EventAt.UTC().After(resumedAt)) {
 				ticketAnnounces = append(ticketAnnounces, ticketAnnounce{name: p.Username, tickets: p.Tickets})
 			}
@@ -989,6 +1745,14 @@ func (a *App) processNewBets() {
 	}
 
 	a.emitUpdate()
+
+	if len(upserts) > 0 {
+		go func() {
+			if err := a.postOrUpdateRaffleWebhook(nil, true, "ticket-gain"); err != nil {
+				a.logDebug("auto-patch ticket gain failed: %v", err)
+			}
+		}()
+	}
 }
 
 func (a *App) shoutEntrant(name string, entries int) {
@@ -1043,6 +1807,27 @@ func (a *App) persistSessionCursor(sessionDBID int64, at time.Time, entryID stri
 		 WHERE id = $3 AND owner_key = $4`,
 		at,
 		entryID,
+		sessionDBID,
+		owner,
+	)
+	return err
+}
+
+func (a *App) persistSessionWebhookMessageID(sessionDBID int64, messageID string) error {
+	a.mu.Lock()
+	db := a.db
+	owner := a.ownerKey
+	a.mu.Unlock()
+	if db == nil || sessionDBID <= 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := db.Exec(ctx,
+		`UPDATE raffle_sessions
+		 SET webhook_message_id = $1
+		 WHERE id = $2 AND owner_key = $3`,
+		strings.TrimSpace(messageID),
 		sessionDBID,
 		owner,
 	)
@@ -1223,6 +2008,7 @@ func (a *App) ensureTables() error {
 			bonus_every INTEGER NOT NULL DEFAULT 5,
 			last_seen_created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			last_seen_entry_id TEXT NOT NULL DEFAULT '',
+			webhook_message_id TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
 		`CREATE TABLE IF NOT EXISTS raffle_participants (
@@ -1307,6 +2093,7 @@ func (a *App) ensureTables() error {
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS bonus_every INTEGER NOT NULL DEFAULT 5`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS last_seen_created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS last_seen_entry_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS webhook_message_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE raffle_participants ADD COLUMN IF NOT EXISTS username_key TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE raffle_participants ADD COLUMN IF NOT EXISTS bet_count INTEGER NOT NULL DEFAULT 1`,
 		`ALTER TABLE raffle_participants ADD COLUMN IF NOT EXISTS ticket_count INTEGER NOT NULL DEFAULT 1`,
@@ -1334,7 +2121,7 @@ func (a *App) loadSessionsFromDB() error {
 	defer cancel()
 
 	sRows, err := db.Query(ctx, `
-		SELECT id, started_at, scheduled_end_at, ended_at, bonus_every, last_seen_created_at, last_seen_entry_id
+		SELECT id, started_at, scheduled_end_at, ended_at, bonus_every, last_seen_created_at, last_seen_entry_id, webhook_message_id
 		FROM raffle_sessions
 		WHERE owner_key = $1
 		ORDER BY id ASC
@@ -1345,13 +2132,14 @@ func (a *App) loadSessionsFromDB() error {
 	defer sRows.Close()
 
 	type dbSession struct {
-		id             int64
-		startedAt      time.Time
-		scheduledEndAt *time.Time
-		endedAt        *time.Time
-		bonusEvery     int
-		cursorAt       time.Time
-		cursorID       string
+		id               int64
+		startedAt        time.Time
+		scheduledEndAt   *time.Time
+		endedAt          *time.Time
+		bonusEvery       int
+		cursorAt         time.Time
+		cursorID         string
+		webhookMessageID string
 	}
 	sessionsByID := map[int64]*RaffleSession{}
 	orderedIDs := make([]int64, 0)
@@ -1360,17 +2148,18 @@ func (a *App) loadSessionsFromDB() error {
 
 	for sRows.Next() {
 		var s dbSession
-		if err := sRows.Scan(&s.id, &s.startedAt, &s.scheduledEndAt, &s.endedAt, &s.bonusEvery, &s.cursorAt, &s.cursorID); err != nil {
+		if err := sRows.Scan(&s.id, &s.startedAt, &s.scheduledEndAt, &s.endedAt, &s.bonusEvery, &s.cursorAt, &s.cursorID, &s.webhookMessageID); err != nil {
 			return err
 		}
 		rs := &RaffleSession{
-			ID:           int(s.id),
-			StartedAt:    s.startedAt.UTC().Format(time.RFC3339),
-			BonusEvery:   s.bonusEvery,
-			Participants: []RaffleParticipant{},
-			DBID:         s.id,
-			CursorAt:     s.cursorAt.UTC(),
-			CursorEntry:  s.cursorID,
+			ID:               int(s.id),
+			StartedAt:        s.startedAt.UTC().Format(time.RFC3339),
+			BonusEvery:       s.bonusEvery,
+			WebhookMessageID: strings.TrimSpace(s.webhookMessageID),
+			Participants:     []RaffleParticipant{},
+			DBID:             s.id,
+			CursorAt:         s.cursorAt.UTC(),
+			CursorEntry:      s.cursorID,
 		}
 		if s.scheduledEndAt != nil {
 			rs.ScheduledEndAt = s.scheduledEndAt.UTC().Format(time.RFC3339)
@@ -1436,6 +2225,11 @@ func (a *App) loadSessionsFromDB() error {
 	a.mu.Lock()
 	a.sessions = closed
 	a.currentSession = current
+	if a.currentSession != nil {
+		a.raffleMessageID = strings.TrimSpace(a.currentSession.WebhookMessageID)
+	} else {
+		a.raffleMessageID = ""
+	}
 	if a.nextSessionID < maxID {
 		a.nextSessionID = maxID
 	}

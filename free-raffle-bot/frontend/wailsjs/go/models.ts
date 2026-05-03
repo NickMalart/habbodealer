@@ -26,7 +26,16 @@ export namespace main {
 	    scheduledEndAt?: string;
 	    endedAt?: string;
 	    bonusEvery: number;
+	    webhookMessageId?: string;
 	    participants: RaffleParticipant[];
+	    ticketEvents?: string[];
+	    winnerName?: string;
+	    winnerTickets?: number;
+	    winnerOdds?: string;
+	    winnerDrawnAt?: string;
+	    winnerMethod?: string;
+	    winnerSummary?: string;
+	    winnerProofUrl?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new RaffleSession(source);
@@ -39,7 +48,16 @@ export namespace main {
 	        this.scheduledEndAt = source["scheduledEndAt"];
 	        this.endedAt = source["endedAt"];
 	        this.bonusEvery = source["bonusEvery"];
+	        this.webhookMessageId = source["webhookMessageId"];
 	        this.participants = this.convertValues(source["participants"], RaffleParticipant);
+	        this.ticketEvents = source["ticketEvents"];
+	        this.winnerName = source["winnerName"];
+	        this.winnerTickets = source["winnerTickets"];
+	        this.winnerOdds = source["winnerOdds"];
+	        this.winnerDrawnAt = source["winnerDrawnAt"];
+	        this.winnerMethod = source["winnerMethod"];
+	        this.winnerSummary = source["winnerSummary"];
+	        this.winnerProofUrl = source["winnerProofUrl"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -66,6 +84,12 @@ export namespace main {
 	    enabled: boolean;
 	    bonusEvery: number;
 	    ticketAnnounceEnabled: boolean;
+	    raffleName: string;
+	    rafflePrizeName: string;
+	    rafflePrizeQty: number;
+	    raffleHeroImageName: string;
+	    raffleAutoUpdate: boolean;
+	    raffleMessageId: string;
 	    currentSession?: RaffleSession;
 	    sessions: RaffleSession[];
 	
@@ -80,6 +104,12 @@ export namespace main {
 	        this.enabled = source["enabled"];
 	        this.bonusEvery = source["bonusEvery"];
 	        this.ticketAnnounceEnabled = source["ticketAnnounceEnabled"];
+	        this.raffleName = source["raffleName"];
+	        this.rafflePrizeName = source["rafflePrizeName"];
+	        this.rafflePrizeQty = source["rafflePrizeQty"];
+	        this.raffleHeroImageName = source["raffleHeroImageName"];
+	        this.raffleAutoUpdate = source["raffleAutoUpdate"];
+	        this.raffleMessageId = source["raffleMessageId"];
 	        this.currentSession = this.convertValues(source["currentSession"], RaffleSession);
 	        this.sessions = this.convertValues(source["sessions"], RaffleSession);
 	    }

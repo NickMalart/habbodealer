@@ -6,6 +6,8 @@ export function ClearDebugSnapshot():Promise<void>;
 
 export function ClearSessions():Promise<main.RaffleState>;
 
+export function DrawWinnerForCurrentSession():Promise<string>;
+
 export function GetDebugSnapshot():Promise<string>;
 
 export function GetSessionTally(arg1:number):Promise<main.SessionTally>;
@@ -14,11 +16,17 @@ export function GetState():Promise<main.RaffleState>;
 
 export function GetTicketAnnounceEnabled():Promise<boolean>;
 
+export function PostOrUpdateRaffleWebhook():Promise<string>;
+
+export function PostWinnerProofForCurrentSession(arg1:string,arg2:string):Promise<string>;
+
 export function ResumeSession(arg1:number):Promise<main.RaffleState>;
 
 export function SetBonusEvery(arg1:number):Promise<main.RaffleState>;
 
 export function SetEnabled(arg1:boolean):Promise<main.RaffleState>;
+
+export function SetRaffleDiscordConfig(arg1:string,arg2:string,arg3:number,arg4:string,arg5:string,arg6:boolean):Promise<main.RaffleState>;
 
 export function SetTicketAnnounceEnabled(arg1:boolean):Promise<main.RaffleState>;
 
