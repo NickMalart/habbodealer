@@ -129,19 +129,12 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 		return
 	}
 
-	// Persist the exact payload to payload.json (overwrite each game)
-	payloadFile := "payload.json"
-	if err := os.WriteFile(payloadFile, jb, 0600); err != nil {
-		a.AddLogMsg(fmt.Sprintf("[DISCORD] failed to write payload file: %v", err))
-	} else {
-		a.AddLogMsg("[DISCORD] payload written to " + payloadFile)
-	}
-
-	// Read back the payload file to ensure we post the exact bytes written.
-	fileBytes, fileErr := os.ReadFile(payloadFile)
-	if fileErr == nil {
-		jb = fileBytes
-	}
+	// Best-effort async payload dump for debugging without delaying webhook POST.
+	go func(b []byte) {
+		if err := os.WriteFile("payload.json", b, 0600); err != nil {
+			a.AddLogMsg(fmt.Sprintf("[DISCORD] payload debug write failed: %v", err))
+		}
+	}(append([]byte(nil), jb...))
 
 	req, err := http.NewRequest("POST", webhookURL, bytes.NewReader(jb))
 	if err != nil {

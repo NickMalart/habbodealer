@@ -623,26 +623,31 @@ type tradeShortage struct {
 }
 
 type App struct {
-	ext                  *g.Ext
-	assets               embed.FS
-	log                  []string
-	debugLog             []string
-	logMu                sync.Mutex
-	chatLog              []string
-	chatLogMu            sync.Mutex
-	gameHistory          []GameHistoryEntry
-	gameHistoryMu        sync.Mutex
-	currentGameHistoryID string
-	historyDB            *pgxpool.Pool
-	historyOwnerKey      string
-	historyDBMu          sync.Mutex
-	historyInitMu        sync.Mutex
-	historyPersistMu     sync.Mutex
-	ctx                  context.Context
-	currentDealerName    string
-	currentRoomName      string
-	users28PythonExec    string
-	users28ParserScript  string
+	ext                   *g.Ext
+	assets                embed.FS
+	log                   []string
+	debugLog              []string
+	logMu                 sync.Mutex
+	chatLog               []string
+	chatLogMu             sync.Mutex
+	gameHistory           []GameHistoryEntry
+	gameHistoryMu         sync.Mutex
+	currentGameHistoryID  string
+	historyDB             *pgxpool.Pool
+	historyOwnerKey       string
+	historyDBMu           sync.Mutex
+	historyInitMu         sync.Mutex
+	historyPersistMu      sync.Mutex
+	historyPersistStateMu sync.Mutex
+	historyPersistSignal  chan struct{}
+	historyPersistStop    chan struct{}
+	historyPersistPending []GameHistoryEntry
+	historyPersistRunning bool
+	ctx                   context.Context
+	currentDealerName     string
+	currentRoomName       string
+	users28PythonExec     string
+	users28ParserScript   string
 }
 
 type DBConfig struct {
@@ -652,6 +657,7 @@ type DBConfig struct {
 
 const fallbackHistoryDBURL = "postgresql://neondb_owner:npg_Jx8ERGzK6eog@ep-small-thunder-a7ceewoj-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 const fallbackHistoryOwnerKey = "roll-origins"
+const historyPersistDebounce = 1200 * time.Millisecond
 
 type PokerDisplayConfig struct {
 	FiveOfAKind  string `json:"five_of_a_kind"`
@@ -766,6 +772,7 @@ func (a *App) getCurrentRoomName() string {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.startHistoryPersistWorker()
 	go func() {
 		a.initHistoryDatabase()
 		a.loadGameHistory()
@@ -865,6 +872,7 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(context.Context) {
+	a.stopHistoryPersistWorker()
 	a.historyDBMu.Lock()
 	db := a.historyDB
 	a.historyDB = nil
@@ -1753,6 +1761,192 @@ func getGameHistoryFilePath() string {
 	return filepath.Join(configPath, "game_history.json")
 }
 
+func getGameHistoryDBSpoolPath() string {
+	return filepath.Join(filepath.Dir(getGameHistoryFilePath()), "game_history_db_spool.json")
+}
+
+func writeGameHistoryDBSpool(entries []GameHistoryEntry) error {
+	if err := os.MkdirAll(filepath.Dir(getGameHistoryDBSpoolPath()), 0700); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(getGameHistoryDBSpoolPath(), b, 0600)
+}
+
+func readGameHistoryDBSpool() ([]GameHistoryEntry, error) {
+	b, err := os.ReadFile(getGameHistoryDBSpoolPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if len(bytes.TrimSpace(b)) == 0 {
+		return nil, nil
+	}
+	var entries []GameHistoryEntry
+	if err := json.Unmarshal(b, &entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+func clearGameHistoryDBSpool() error {
+	err := os.Remove(getGameHistoryDBSpoolPath())
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func (a *App) startHistoryPersistWorker() {
+	if a == nil {
+		return
+	}
+
+	a.historyPersistStateMu.Lock()
+	if a.historyPersistRunning {
+		a.historyPersistStateMu.Unlock()
+		return
+	}
+	if a.historyPersistSignal == nil {
+		a.historyPersistSignal = make(chan struct{}, 1)
+	}
+	if a.historyPersistStop == nil {
+		a.historyPersistStop = make(chan struct{})
+	}
+	signal := a.historyPersistSignal
+	stop := a.historyPersistStop
+	a.historyPersistRunning = true
+	a.historyPersistStateMu.Unlock()
+
+	go func() {
+		// Recover any previous failed persist from local spool on startup.
+		a.flushQueuedGameHistoryPersist("startup_recovery")
+
+		var timer *time.Timer
+		var timerC <-chan time.Time
+
+		for {
+			select {
+			case <-signal:
+				if timer == nil {
+					timer = time.NewTimer(historyPersistDebounce)
+				} else {
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					timer.Reset(historyPersistDebounce)
+				}
+				timerC = timer.C
+			case <-timerC:
+				a.flushQueuedGameHistoryPersist("debounce")
+				timerC = nil
+			case <-stop:
+				if timer != nil {
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+				}
+				a.flushQueuedGameHistoryPersist("shutdown")
+				return
+			}
+		}
+	}()
+}
+
+func (a *App) stopHistoryPersistWorker() {
+	if a == nil {
+		return
+	}
+
+	a.historyPersistStateMu.Lock()
+	stop := a.historyPersistStop
+	a.historyPersistRunning = false
+	a.historyPersistSignal = nil
+	a.historyPersistStop = nil
+	a.historyPersistStateMu.Unlock()
+
+	if stop != nil {
+		close(stop)
+	}
+}
+
+func (a *App) queueGameHistoryPersist(entries []GameHistoryEntry, reason string) {
+	if a == nil {
+		return
+	}
+	a.startHistoryPersistWorker()
+
+	a.historyPersistStateMu.Lock()
+	a.historyPersistPending = cloneGameHistoryEntries(entries)
+	signal := a.historyPersistSignal
+	a.historyPersistStateMu.Unlock()
+
+	if signal != nil {
+		select {
+		case signal <- struct{}{}:
+		default:
+		}
+	}
+
+	if strings.TrimSpace(reason) != "" {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] queued persist (%s) entries=%d", reason, len(entries)))
+	}
+}
+
+func (a *App) flushQueuedGameHistoryPersist(reason string) {
+	if a == nil {
+		return
+	}
+
+	a.historyPersistStateMu.Lock()
+	pending := cloneGameHistoryEntries(a.historyPersistPending)
+	if len(pending) > 0 {
+		a.historyPersistPending = nil
+	}
+	a.historyPersistStateMu.Unlock()
+
+	if len(pending) == 0 {
+		spoolEntries, err := readGameHistoryDBSpool()
+		if err != nil {
+			a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] failed reading spool: %v", err))
+			return
+		}
+		pending = spoolEntries
+	}
+
+	if len(pending) == 0 {
+		return
+	}
+
+	if err := writeGameHistoryDBSpool(pending); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] failed writing spool: %v", err))
+		return
+	}
+
+	if err := a.persistGameHistoryToDB(pending); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] flush failed (%s): %v", reason, err))
+		return
+	}
+
+	if err := clearGameHistoryDBSpool(); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] flush succeeded but spool cleanup failed: %v", err))
+		return
+	}
+
+	a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] flush ok (%s) entries=%d", reason, len(pending)))
+}
+
 func cloneTradeItems(items []TradeItem) []TradeItem {
 	copyItems := make([]TradeItem, len(items))
 	copy(copyItems, items)
@@ -2288,11 +2482,8 @@ func (a *App) persistCurrentGameHistoryNow(reason string) {
 	snapshot := cloneGameHistoryEntries(a.gameHistory)
 	a.gameHistoryMu.Unlock()
 
-	if err := a.persistGameHistoryToDB(snapshot); err != nil {
-		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] immediate persist failed (%s): %v", reason, err))
-		return
-	}
-	a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] immediate persist ok (%s)", reason))
+	a.queueGameHistoryPersist(snapshot, reason)
+	go a.flushQueuedGameHistoryPersist("immediate_" + reason)
 }
 
 // getRecentGameSummaries returns the last n completed games as anonymized
@@ -2469,12 +2660,9 @@ func (a *App) syncGameHistory() {
 		_ = os.WriteFile(getGameHistoryFilePath(), jsonData, 0600)
 	}
 
-	// Persist to DB in the background so callers are never blocked.
-	go func(s []GameHistoryEntry) {
-		if err := a.persistGameHistoryToDB(s); err != nil {
-			a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] sync save failed: %v", err))
-		}
-	}(snapshot)
+	// Queue DB persistence through a single debounced worker to avoid
+	// spawning many heavy full-history upserts during a busy round.
+	a.queueGameHistoryPersist(snapshot, "sync")
 
 	if a.ctx == nil {
 		a.AddLogMsg("[GAME_HISTORY] syncGameHistory no runtime context, done")
@@ -2683,12 +2871,14 @@ func (a *App) setCurrentGameHistoryResults(playerResult string, dealerResult str
 	a.AddLogMsg("[GAME_HISTORY] setCurrentGameHistoryResults unlocked, syncing")
 	a.syncGameHistory()
 	if complete {
+		// Notify Discord webhook (if configured)
+		go a.sendDiscordWebhookForGame(completedEntry)
+		// Fan out non-critical tasks after Discord enqueue so DB latency never
+		// delays posting completed rounds to Discord.
 		a.persistCurrentGameHistoryNow("game_complete")
 		a.sendLiveDealerGames(5)
 		// Persist completed game record for later review
 		go LogEvent("game_complete", completedEntry, "Game completed", map[string]string{"player": completedEntry.PlayerName})
-		// Notify Discord webhook (if configured)
-		go a.sendDiscordWebhookForGame(completedEntry)
 	}
 }
 

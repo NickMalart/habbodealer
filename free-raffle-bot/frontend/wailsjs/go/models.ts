@@ -28,7 +28,6 @@ export namespace main {
 	    bonusEvery: number;
 	    webhookMessageId?: string;
 	    participants: RaffleParticipant[];
-	    ticketEvents?: string[];
 	    winnerName?: string;
 	    winnerTickets?: number;
 	    winnerOdds?: string;
@@ -50,7 +49,6 @@ export namespace main {
 	        this.bonusEvery = source["bonusEvery"];
 	        this.webhookMessageId = source["webhookMessageId"];
 	        this.participants = this.convertValues(source["participants"], RaffleParticipant);
-	        this.ticketEvents = source["ticketEvents"];
 	        this.winnerName = source["winnerName"];
 	        this.winnerTickets = source["winnerTickets"];
 	        this.winnerOdds = source["winnerOdds"];
