@@ -5143,11 +5143,12 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		}
 		return
 	}
-	mutex.Unlock()
 	if dealerRisk <= 0 {
+		mutex.Unlock()
 		go a.finalizeRiskKeep()
 		return
 	}
+	mutex.Unlock()
 
 	go func(max int) {
 		waitForUnmute(90 * time.Second)
