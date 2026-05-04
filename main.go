@@ -2480,13 +2480,159 @@ func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
 	return fmt.Errorf("game history persist failed after retry")
 }
 
+func (a *App) persistSingleGameEntryToDB(entry GameHistoryEntry) error {
+	a.historyPersistMu.Lock()
+	defer a.historyPersistMu.Unlock()
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := a.ensureHistoryDatabaseConnected(); err != nil {
+			dbDiagLog(fmt.Sprintf("persistSingleGameEntryToDB: db connect failed attempt=%d err=%v", attempt, err))
+			if attempt == 2 {
+				return err
+			}
+			continue
+		}
+
+		db, owner := a.getHistoryDB()
+		if db == nil {
+			if attempt == 2 {
+				return fmt.Errorf("database not initialized")
+			}
+			continue
+		}
+
+		dbDiagLog(fmt.Sprintf("persistSingleGameEntryToDB: owner=%s entry_id=%s attempt=%d", owner, entry.ID, attempt))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		err := func() error {
+			defer cancel()
+
+			tx, err := db.Begin(ctx)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				_ = tx.Rollback(ctx)
+			}()
+
+			// Insert/update single entry only, no cleanup DELETE
+			notesJSON, _ := json.Marshal(entry.Notes)
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO game_history_entries (
+					id, owner_key, player_name, started_at, updated_at, completed_at,
+					game, winner, status, issue, issue_reason, player_result, dealer_result,
+					notes, choice, choice_shout, payout_multiplier, updated_db_at
+				) VALUES (
+					$1,$2,$3,$4,$5,$6,
+					$7,$8,$9,$10,$11,$12,$13,
+					$14,$15,$16,$17,NOW()
+				)
+				ON CONFLICT (id, owner_key) DO UPDATE SET
+					player_name = EXCLUDED.player_name,
+					started_at = EXCLUDED.started_at,
+					updated_at = EXCLUDED.updated_at,
+					completed_at = EXCLUDED.completed_at,
+					game = EXCLUDED.game,
+					winner = EXCLUDED.winner,
+					status = EXCLUDED.status,
+					issue = EXCLUDED.issue,
+					issue_reason = EXCLUDED.issue_reason,
+					player_result = EXCLUDED.player_result,
+					dealer_result = EXCLUDED.dealer_result,
+					notes = EXCLUDED.notes,
+					choice = EXCLUDED.choice,
+					choice_shout = EXCLUDED.choice_shout,
+					payout_multiplier = EXCLUDED.payout_multiplier,
+					updated_db_at = NOW()
+			`,
+				entry.ID,
+				owner,
+				entry.PlayerName,
+				entry.StartedAt,
+				entry.UpdatedAt,
+				entry.CompletedAt,
+				entry.Game,
+				entry.Winner,
+				entry.Status,
+				entry.Issue,
+				entry.IssueReason,
+				entry.PlayerResult,
+				entry.DealerResult,
+				notesJSON,
+				entry.Choice,
+				entry.ChoiceShout,
+				entry.PayoutMultiplier,
+			); err != nil {
+				return err
+			}
+
+			// Update items for this entry (delete old, insert new)
+			if _, err := tx.Exec(ctx, `DELETE FROM game_history_items WHERE entry_id = $1 AND owner_key = $2`, entry.ID, owner); err != nil {
+				return err
+			}
+
+			for i, item := range entry.BetItems {
+				qty := item.Quantity
+				if qty <= 0 {
+					qty = 1
+				}
+				if _, err := tx.Exec(ctx, `
+					INSERT INTO game_history_items (entry_id, owner_key, item_type, item_index, item_name, quantity, raw_data)
+					VALUES ($1,$2,'bet',$3,$4,$5,$6)
+				`, entry.ID, owner, i, item.Name, qty, item.RawData); err != nil {
+					return err
+				}
+			}
+
+			for i, item := range entry.PayoutItems {
+				qty := item.Quantity
+				if qty <= 0 {
+					qty = 1
+				}
+				if _, err := tx.Exec(ctx, `
+					INSERT INTO game_history_items (entry_id, owner_key, item_type, item_index, item_name, quantity, raw_data)
+					VALUES ($1,$2,'payout',$3,$4,$5,$6)
+				`, entry.ID, owner, i, item.Name, qty, item.RawData); err != nil {
+					return err
+				}
+			}
+
+			if err := tx.Commit(ctx); err != nil {
+				return err
+			}
+			return nil
+		}()
+
+		if err == nil {
+			return nil
+		}
+
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] persist single entry attempt %d failed: %v", attempt, err))
+		if strings.Contains(strings.ToLower(err.Error()), "closed pool") {
+			a.resetHistoryDB()
+		}
+	}
+
+	return fmt.Errorf("single entry persist failed after retry")
+}
+
 func (a *App) persistCurrentGameHistoryNow(reason string) {
 	a.gameHistoryMu.Lock()
-	snapshot := cloneGameHistoryEntries(a.gameHistory)
+	if len(a.gameHistory) == 0 {
+		a.gameHistoryMu.Unlock()
+		return
+	}
+	current := a.gameHistory[len(a.gameHistory)-1]
 	a.gameHistoryMu.Unlock()
 
-	a.queueGameHistoryPersist(snapshot, reason)
-	go a.flushQueuedGameHistoryPersist("immediate_" + reason)
+	// Persist just the current entry directly (like Discord webhook gets just the one entry)
+	go func() {
+		if err := a.persistSingleGameEntryToDB(current); err != nil {
+			a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] persist now (%s) failed: %v", reason, err))
+		} else {
+			a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] persist now (%s) ok", reason))
+		}
+	}()
 }
 
 // getRecentGameSummaries returns the last n completed games as anonymized
@@ -2704,7 +2850,14 @@ func (a *App) syncCurrentGameEntry() {
 	current := a.gameHistory[len(a.gameHistory)-1]
 	a.gameHistoryMu.Unlock()
 
-	a.queueGameHistoryPersist([]GameHistoryEntry{current}, "sync_current")
+	// Persist directly without the cleanup DELETE that would wipe other entries
+	go func() {
+		if err := a.persistSingleGameEntryToDB(current); err != nil {
+			a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] sync single entry failed: %v", err))
+		} else {
+			a.AddLogMsg("[GAME_HISTORY][DB] sync single entry ok")
+		}
+	}()
 }
 
 func (a *App) findCurrentGameHistoryIndexLocked() int {
@@ -5256,6 +5409,7 @@ func (a *App) finalizeRiskKeep() {
 	mutex.Unlock()
 
 	a.AddLogMsg(fmt.Sprintf("[RISK] finalizing Keep -> payout %d to %s(%d) (mult=%d)", total, targetName, targetID, sessionMult))
+	a.noteCurrentGameHistory(fmt.Sprintf("Risk keep selected by %s; converting bank of %d to payout", targetName, total))
 
 	// Build required map proportionally from recorded bet types if available
 	baseMult := sessionMult
@@ -5543,9 +5697,11 @@ func (a *App) verifyAndRetryPayoutAdds(plannedIDs []int) {
 		a.noteCurrentGameHistory(fmt.Sprintf("Trade echo verification timed out but trade was already accepted — items sent=%d/%d; awaiting TRADE_COMPLETED confirmation", payoutActualAddCount, payoutExpectedAddCount))
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] echo timed out but trade accepted; leaving game open for TRADE_COMPLETED (sent=%d/%d)", payoutActualAddCount, payoutExpectedAddCount))
 	} else {
-		// Trade was never accepted — items were not given. Mark as a real issue.
+		// Trade was never accepted yet — items echo didn't confirm. Mark as a note/warning
+		// but don't close the game. If the trade later completes successfully, it will
+		// be updated to "Completed" status. Only mark as Issue if trade fails permanently.
 		a.noteCurrentGameHistory(fmt.Sprintf("Payout items did not fully reflect in trade offer (sent=%d/%d); manual review needed", payoutActualAddCount, payoutExpectedAddCount))
-		a.markCurrentGameHistoryIssue(fmt.Sprintf("Payout items did not fully reflect in trade offer after automated attempts (sent=%d/%d)", payoutActualAddCount, payoutExpectedAddCount), true)
+		a.markCurrentGameHistoryIssue(fmt.Sprintf("Payout items did not fully reflect in trade offer after automated attempts (sent=%d/%d)", payoutActualAddCount, payoutExpectedAddCount), false)
 	}
 }
 
@@ -10481,17 +10637,8 @@ func (a *App) evaluateUnderOverRound() {
 		// Never route Under/Over-7 rounds into Risk (UO7 is auto-payout only).
 		if isRiskEnabled && uoVariantForRound != "uo7" {
 			if riskSessionActive {
-				// This evaluation is part of an active risk re-roll
-				// Send an immediate webhook for the pending player win so Discord
-				// and external listeners see the result even while the session
-				// continues under Risk. Do this without marking the history
-				// entry complete so payout bookkeeping remains intact.
-				a.gameHistoryMu.Lock()
-				if idx := a.findCurrentGameHistoryIndexLocked(); idx >= 0 {
-					entry := a.gameHistory[idx]
-					go a.sendDiscordWebhookForGame(entry)
-				}
-				a.gameHistoryMu.Unlock()
+				// Post the round outcome immediately so Discord shows who won this roll.
+				a.sendDiscordRoundResult(playerName, strconv.Itoa(total), "", winnerMsg)
 				go a.applyRiskOutcome(true)
 				return
 			}
@@ -10501,13 +10648,8 @@ func (a *App) evaluateUnderOverRound() {
 				riskGame = "UO7"
 			}
 			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, riskGame, params)
-			// Send immediate webhook for pending player win so external listeners see it.
-			a.gameHistoryMu.Lock()
-			if idx := a.findCurrentGameHistoryIndexLocked(); idx >= 0 {
-				entry := a.gameHistory[idx]
-				go a.sendDiscordWebhookForGame(entry)
-			}
-			a.gameHistoryMu.Unlock()
+			// Post round outcome so Discord shows the win even while risk prompt is pending.
+			a.sendDiscordRoundResult(playerName, strconv.Itoa(total), "", winnerMsg)
 			return
 		}
 		startPayout(a, payoutTargetID, payoutTargetName)
@@ -10580,17 +10722,14 @@ func (a *App) finalize13Round(playerWins bool, reason string) {
 		resetPayoutRetryState()
 		if isRiskEnabled {
 			if riskSessionActive {
+				// Post the round outcome immediately so Discord shows who won this roll.
+				a.sendDiscordRoundResult(playerName, playerHand, dealerHand, winnerMsg)
 				go a.applyRiskOutcome(true)
 				return
 			}
 			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "13", nil)
-			// Send immediate webhook for pending player win so external listeners see it.
-			a.gameHistoryMu.Lock()
-			if idx := a.findCurrentGameHistoryIndexLocked(); idx >= 0 {
-				entry := a.gameHistory[idx]
-				go a.sendDiscordWebhookForGame(entry)
-			}
-			a.gameHistoryMu.Unlock()
+			// Post round outcome so Discord shows the win even while risk prompt is pending.
+			a.sendDiscordRoundResult(playerName, playerHand, dealerHand, winnerMsg)
 			return
 		}
 		startPayout(a, payoutTargetID, payoutTargetName)
@@ -10678,18 +10817,15 @@ func (a *App) finalizeTriRound() {
 		resetPayoutRetryState()
 		if isRiskEnabled {
 			if riskSessionActive {
+				// Post the round outcome immediately so Discord shows who won this roll.
+				a.sendDiscordRoundResult(playerName, playerHand, dealerHand, winnerMsg)
 				go a.applyRiskOutcome(true)
 				return
 			}
 			params := map[string]interface{}{"mode": triMode}
 			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "Tri", params)
-			// Send immediate webhook for pending player win so external listeners see it.
-			a.gameHistoryMu.Lock()
-			if idx := a.findCurrentGameHistoryIndexLocked(); idx >= 0 {
-				entry := a.gameHistory[idx]
-				go a.sendDiscordWebhookForGame(entry)
-			}
-			a.gameHistoryMu.Unlock()
+			// Post round outcome so Discord shows the win even while risk prompt is pending.
+			a.sendDiscordRoundResult(playerName, playerHand, dealerHand, winnerMsg)
 			return
 		}
 		startPayout(a, payoutTargetID, payoutTargetName)

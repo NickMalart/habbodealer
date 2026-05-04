@@ -164,3 +164,47 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 		a.AddLogMsg(fmt.Sprintf("[DISCORD] webhook responded: %d body=%q", resp.StatusCode, respBody))
 	}
 }
+
+// sendDiscordRoundResult posts the game outcome to Discord immediately when the
+// round winner is known, without waiting for payout to complete. It builds a
+// synthetic "Completed" snapshot so the history entry can remain open for
+// payout bookkeeping. Call this only for player-win branches where payout is
+// still pending.
+func (a *App) sendDiscordRoundResult(winner string, playerResult string, dealerResult string, winnerMsg string) {
+	a.gameHistoryMu.Lock()
+	idx := a.findCurrentGameHistoryIndexLocked()
+	if idx < 0 {
+		a.gameHistoryMu.Unlock()
+		return
+	}
+	// Clone and promote to Completed for the Discord-only snapshot.
+	snap := a.gameHistory[idx]
+	a.gameHistoryMu.Unlock()
+
+	snap.Winner = winner
+	if strings.TrimSpace(playerResult) != "" {
+		snap.PlayerResult = playerResult
+	}
+	if strings.TrimSpace(dealerResult) != "" {
+		snap.DealerResult = dealerResult
+	}
+	snap.Status = "Completed"
+	snap.CompletedAt = time.Now().Format(time.RFC3339)
+	if strings.TrimSpace(winnerMsg) != "" {
+		snap.Notes = append(append([]string{}, snap.Notes...), winnerMsg)
+	}
+
+	go a.sendDiscordWebhookForGame(snap)
+
+	// Also persist the completed snapshot to the DB immediately for statistics.
+	// Issues are tracked in Discord; the DB just needs to know the game was
+	// played, who won, and the result.
+	snapForDB := snap
+	go func() {
+		if err := a.persistSingleGameEntryToDB(snapForDB); err != nil {
+			a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] round-result stats persist failed: %v", err))
+		} else {
+			a.AddLogMsg("[GAME_HISTORY][DB] round-result stats persisted ok")
+		}
+	}()
+}
