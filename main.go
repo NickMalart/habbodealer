@@ -2885,6 +2885,7 @@ func (a *App) setCurrentGameHistoryResults(playerResult string, dealerResult str
 func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
 	a.AddLogMsg("[GAME_HISTORY] markCurrentGameHistoryIssue start")
 	a.gameHistoryMu.Lock()
+	var completedEntry *GameHistoryEntry
 	if !a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
 		entry.Issue = true
 		entry.IssueReason = reason
@@ -2892,6 +2893,8 @@ func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
 		entry.Notes = append(entry.Notes, reason)
 		if complete {
 			entry.CompletedAt = gameHistoryTimestamp()
+			e := *entry
+			completedEntry = &e
 		}
 	}) {
 		a.gameHistoryMu.Unlock()
@@ -2904,6 +2907,9 @@ func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
 	a.gameHistoryMu.Unlock()
 	a.AddLogMsg("[GAME_HISTORY] markCurrentGameHistoryIssue unlocked, syncing")
 	a.syncGameHistory()
+	if complete && completedEntry != nil {
+		go a.sendDiscordWebhookForGame(*completedEntry)
+	}
 }
 
 func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note string, complete bool) {
@@ -5498,8 +5504,15 @@ func (a *App) verifyAndRetryPayoutAdds(plannedIDs []int) {
 	}
 
 	a.AddLogMsg("[PAYOUT_DEBUG] payout items still not fully reflected in own trade offer; waiting for manual intervention")
-	a.noteCurrentGameHistory("Payout items did not fully reflect in trade offer; manual review may be needed")
-	a.markCurrentGameHistoryIssue("Payout items did not fully reflect in trade offer after automated attempts", true)
+	if tradeAutoAccepted {
+		// Items were added and the trade was already accepted — the player received their payout.
+		// The "issue" is only that the trade echo didn't confirm in time; items were given.
+		a.noteCurrentGameHistory(fmt.Sprintf("Trade echo verification timed out but trade was already accepted — items sent=%d/%d; player likely received payout", payoutActualAddCount, payoutExpectedAddCount))
+		a.markCurrentGameHistoryIssue(fmt.Sprintf("Echo verification timed out after trade accepted (sent=%d/%d); items given to player", payoutActualAddCount, payoutExpectedAddCount), true)
+	} else {
+		a.noteCurrentGameHistory(fmt.Sprintf("Payout items did not fully reflect in trade offer (sent=%d/%d); manual review needed", payoutActualAddCount, payoutExpectedAddCount))
+		a.markCurrentGameHistoryIssue(fmt.Sprintf("Payout items did not fully reflect in trade offer after automated attempts (sent=%d/%d)", payoutActualAddCount, payoutExpectedAddCount), true)
+	}
 }
 
 func stopUnderfundedTradeMonitor() {
