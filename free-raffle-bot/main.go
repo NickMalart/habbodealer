@@ -66,7 +66,6 @@ type RaffleSession struct {
 	BonusEvery       int                 `json:"bonusEvery"`
 	WebhookMessageID string              `json:"webhookMessageId,omitempty"`
 	Participants     []RaffleParticipant `json:"participants"`
-	TicketEvents     []string            `json:"ticketEvents,omitempty"`
 	WinnerName       string              `json:"winnerName,omitempty"`
 	WinnerTickets    int                 `json:"winnerTickets,omitempty"`
 	WinnerOdds       string              `json:"winnerOdds,omitempty"`
@@ -274,7 +273,6 @@ func copySession(s *RaffleSession) *RaffleSession {
 		EndedAt:          s.EndedAt,
 		BonusEvery:       s.BonusEvery,
 		WebhookMessageID: s.WebhookMessageID,
-		TicketEvents:     make([]string, len(s.TicketEvents)),
 		WinnerName:       s.WinnerName,
 		WinnerTickets:    s.WinnerTickets,
 		WinnerOdds:       s.WinnerOdds,
@@ -290,7 +288,6 @@ func copySession(s *RaffleSession) *RaffleSession {
 		Participants:     make([]RaffleParticipant, len(s.Participants)),
 	}
 	copy(out.Participants, s.Participants)
-	copy(out.TicketEvents, s.TicketEvents)
 	return out
 }
 
@@ -485,33 +482,17 @@ func buildTicketBoard(participants []RaffleParticipant) string {
 	return board
 }
 
-func appendTicketEvent(s *RaffleSession, event string) {
-	if s == nil {
-		return
+func sanitizeTrackerEmbedFields(fields []map[string]interface{}) []map[string]interface{} {
+	// Keep this noisy field out even if someone accidentally adds it in future edits.
+	filtered := make([]map[string]interface{}, 0, len(fields))
+	for _, field := range fields {
+		name, _ := field["name"].(string)
+		if strings.Contains(strings.ToLower(strings.TrimSpace(name)), "ticket activity") {
+			continue
+		}
+		filtered = append(filtered, field)
 	}
-	line := strings.TrimSpace(event)
-	if line == "" {
-		return
-	}
-	s.TicketEvents = append(s.TicketEvents, line)
-	if len(s.TicketEvents) > 60 {
-		s.TicketEvents = s.TicketEvents[len(s.TicketEvents)-60:]
-	}
-}
-
-func buildTicketEvents(events []string) string {
-	if len(events) == 0 {
-		return "No ticket gains recorded yet."
-	}
-	start := 0
-	if len(events) > 10 {
-		start = len(events) - 10
-	}
-	out := strings.Join(events[start:], "\n")
-	if len(out) > 1000 {
-		out = out[len(out)-1000:]
-	}
-	return out
+	return filtered
 }
 
 func (a *App) SetRaffleDiscordConfig(
@@ -780,7 +761,6 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	}
 
 	ticketBoard := buildTicketBoard(participants)
-	ticketEvents := buildTicketEvents(session.TicketEvents)
 	headerLine := fmt.Sprintf("🎉 NEW RAFFLE! 🎉 %s | 🎁 %s | 🎟️ %d total tickets", raffleName, prizeDisplay, totalTickets)
 
 	promoEmbed := map[string]interface{}{
@@ -796,46 +776,47 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		"timestamp": now.Format(time.RFC3339),
 	}
 
+	trackerFields := []map[string]interface{}{
+		{"name": "📌 Status", "value": "🟢 " + statusText, "inline": true},
+		{"name": "👥 Participants", "value": strconv.Itoa(len(participants)), "inline": true},
+		{"name": "🎟️ Total Tickets", "value": strconv.Itoa(totalTickets), "inline": true},
+		{"name": "🧾 Raffle ID", "value": strconv.FormatInt(session.DBID, 10), "inline": false},
+		{"name": "⏰ Planned End", "value": clampEmbedText(formatDateDDMMYYYYGMTPlus10(endLine), 1000), "inline": false},
+		{"name": "🏆 Winner", "value": func() string {
+			if strings.TrimSpace(session.WinnerName) == "" {
+				return "TBD"
+			}
+			return clampEmbedText(session.WinnerName, 200)
+		}(), "inline": true},
+		{"name": "🔐 Draw Method", "value": func() string {
+			if strings.TrimSpace(session.WinnerMethod) == "" {
+				return "Pending draw"
+			}
+			return clampEmbedText(session.WinnerMethod, 200)
+		}(), "inline": true},
+		{"name": "📊 Winner Odds", "value": func() string {
+			if strings.TrimSpace(session.WinnerOdds) == "" {
+				return "Pending draw"
+			}
+			return clampEmbedText(session.WinnerOdds, 200)
+		}(), "inline": true},
+		{"name": "🕒 Created", "value": clampEmbedText(startLine, 1000), "inline": true},
+		{"name": "🧠 Winner Explain", "value": func() string {
+			if strings.TrimSpace(session.WinnerSummary) == "" {
+				return "Draw not completed yet."
+			}
+			return clampEmbedText(session.WinnerSummary, 1000)
+		}(), "inline": false},
+		{"name": "📣 Ticket Board", "value": clampEmbedText(ticketBoard, 1000), "inline": false},
+	}
+
 	trackerEmbed := map[string]interface{}{
 		"title":       "🎲 Roll Origins Raffle Tracker 🎲",
 		"description": fmt.Sprintf("🎉 **NEW RAFFLE!** 🎉 %s\n🎁 Prize: **%s**", raffleName, prizeDisplay),
 		"color":       0x2ECC71,
-		"fields": []map[string]interface{}{
-			{"name": "📌 Status", "value": "🟢 " + statusText, "inline": true},
-			{"name": "👥 Participants", "value": strconv.Itoa(len(participants)), "inline": true},
-			{"name": "🎟️ Total Tickets", "value": strconv.Itoa(totalTickets), "inline": true},
-			{"name": "🧾 Raffle ID", "value": strconv.FormatInt(session.DBID, 10), "inline": false},
-			{"name": "⏰ Planned End", "value": clampEmbedText(formatDateDDMMYYYYGMTPlus10(endLine), 1000), "inline": false},
-			{"name": "🏆 Winner", "value": func() string {
-				if strings.TrimSpace(session.WinnerName) == "" {
-					return "TBD"
-				}
-				return clampEmbedText(session.WinnerName, 200)
-			}(), "inline": true},
-			{"name": "🔐 Draw Method", "value": func() string {
-				if strings.TrimSpace(session.WinnerMethod) == "" {
-					return "Pending draw"
-				}
-				return clampEmbedText(session.WinnerMethod, 200)
-			}(), "inline": true},
-			{"name": "📊 Winner Odds", "value": func() string {
-				if strings.TrimSpace(session.WinnerOdds) == "" {
-					return "Pending draw"
-				}
-				return clampEmbedText(session.WinnerOdds, 200)
-			}(), "inline": true},
-			{"name": "🕒 Created", "value": clampEmbedText(startLine, 1000), "inline": true},
-			{"name": "🧠 Winner Explain", "value": func() string {
-				if strings.TrimSpace(session.WinnerSummary) == "" {
-					return "Draw not completed yet."
-				}
-				return clampEmbedText(session.WinnerSummary, 1000)
-			}(), "inline": false},
-			{"name": "📣 Ticket Board", "value": clampEmbedText(ticketBoard, 1000), "inline": false},
-			{"name": "🧾 Ticket Activity", "value": clampEmbedText(ticketEvents, 1000), "inline": false},
-		},
-		"footer":    map[string]interface{}{"text": "✨ Auto-updated on every ticket buy and winner draw ✨"},
-		"timestamp": now.Format(time.RFC3339),
+		"fields":      sanitizeTrackerEmbedFields(trackerFields),
+		"footer":      map[string]interface{}{"text": "✨ Auto-updated on every ticket buy and winner draw ✨"},
+		"timestamp":   now.Format(time.RFC3339),
 	}
 
 	if strings.TrimSpace(session.WinnerProofURL) != "" {
@@ -1719,7 +1700,6 @@ func (a *App) processNewBets() {
 				LastBet:     row.EventAt.UTC().Format(time.RFC3339),
 			}
 			a.currentSession.Participants = append(a.currentSession.Participants, p)
-			appendTicketEvent(a.currentSession, fmt.Sprintf("%s - now %d ticket(s)", p.Username, p.Tickets))
 			upserts = append(upserts, p)
 			// New entrant: use combined shout, but suppress if this bet predates a resume
 			if resumedAt.IsZero() || row.EventAt.UTC().After(resumedAt) {
@@ -1732,9 +1712,6 @@ func (a *App) processNewBets() {
 			p.Tickets = ticketsForBetCount(p.BetCount, a.currentSession.BonusEvery)
 			p.LastBet = row.EventAt.UTC().Format(time.RFC3339)
 			upserts = append(upserts, *p)
-			if p.Tickets > oldTickets {
-				appendTicketEvent(a.currentSession, fmt.Sprintf("%s +%d ticket(s) => %d total", p.Username, p.Tickets-oldTickets, p.Tickets))
-			}
 			if announceEnabled && p.Tickets > oldTickets && (resumedAt.IsZero() || row.EventAt.UTC().After(resumedAt)) {
 				ticketAnnounces = append(ticketAnnounces, ticketAnnounce{name: p.Username, tickets: p.Tickets})
 			}

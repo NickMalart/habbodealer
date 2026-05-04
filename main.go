@@ -4459,16 +4459,15 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 
 	mutex.Lock()
 	if !riskInitialized {
-		// Prefer the pre-captured risk snapshot if available; otherwise
-		// fall back to dealerSnapshotQty which may have been set by capture.
-		initialQty := dealerSnapshotQty
+		// Limit dealer risk to stock relevant to this bet so unrelated hand
+		// items cannot inflate the player's allowed risk amount.
+		initialQty := 0
 		if riskHandSnapshotReady && len(riskHandSnapshot) > 0 {
-			initialQty = 0
-			for _, it := range riskHandSnapshot {
-				initialQty += it.Quantity
-			}
+			initialQty = riskRelevantHandQuantity(riskHandSnapshot, betItems)
 			dealerSnapshotQty = initialQty
 			riskSnapshotTaken = true
+		} else {
+			initialQty = dealerSnapshotQty
 		}
 		dealerRisk = initialQty + betQty
 		playerRisk = 0
@@ -5104,6 +5103,43 @@ func payoutRequirementsFromBetItemsMult(betItems []TradeItem, mult int) map[stri
 	return required
 }
 
+func riskRelevantHandQuantity(snapshot []TradeItem, betItems []TradeItem) int {
+	if len(snapshot) == 0 || len(betItems) == 0 {
+		return 0
+	}
+
+	relevant := make(map[string]struct{}, len(betItems))
+	for _, item := range betItems {
+		key := strings.ToLower(strings.TrimSpace(item.Name))
+		if normalized, ok := normalizeClassKeyWithVariant(item.Name); ok {
+			key = normalized
+		}
+		if key == "" {
+			continue
+		}
+		relevant[key] = struct{}{}
+	}
+	if len(relevant) == 0 {
+		return 0
+	}
+
+	total := 0
+	for _, item := range snapshot {
+		key := strings.ToLower(strings.TrimSpace(item.Name))
+		if normalized, ok := normalizeClassKeyWithVariant(item.Name); ok {
+			key = normalized
+		}
+		if _, ok := relevant[key]; !ok {
+			continue
+		}
+		if item.Quantity > 0 {
+			total += item.Quantity
+		}
+	}
+
+	return total
+}
+
 // Backwards-compatible wrapper: default multiplier 2
 func payoutRequirementsFromBetItems(betItems []TradeItem) map[string]int {
 	return payoutRequirementsFromBetItemsMult(betItems, 2)
@@ -5205,19 +5241,7 @@ func (a *App) verifyAndRetryPayoutAdds(plannedIDs []int) {
 	}
 
 	if payoutTradeActive && !tradeAutoAccepted && len(plannedIDs) >= requiredTotal && payoutActualAddCount >= requiredTotal {
-		// Attribution can be unreliable in this direction; once full payout has been queued,
-		// accept without waiting for the player to accept first.
-		ext.Send(out.TRADE_ACCEPT)
-		tradeAutoAccepted = true
-		tradeAutoAcceptPending = false
-		a.AddLogMsg(fmt.Sprintf("[PAYOUT] auto-accept fallback after queued full payout (%d/%d sent=%d)", len(plannedIDs), requiredTotal, payoutActualAddCount))
-
-		// Start response timeout monitor after dealer accept (fallback path).
-		if payoutTradeActive && !payoutResponseTimeoutActive {
-			a.AddLogMsg("[PAYOUT] starting payout response timeout monitor after dealer auto-accept (fallback)")
-			a.startPayoutResponseTimeoutMonitor(payoutTargetName, payoutTargetID, payoutTargetName)
-		}
-		return
+		a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] queued payout matched counts but trade echo is still short; refusing fallback accept (%d/%d sent=%d)", len(plannedIDs), requiredTotal, payoutActualAddCount))
 	}
 
 	a.AddLogMsg("[PAYOUT_DEBUG] payout items still not fully reflected in own trade offer; waiting for manual intervention")
@@ -7260,9 +7284,19 @@ func (a *App) openDealerAfterRound() {
 	// not accept stale `rN` commands from a previous round.
 	mutex.Lock()
 	riskSessionActive = false
+	riskInitialized = false
+	riskSnapshotTaken = false
+	riskHandSnapshot = nil
+	riskHandSnapshotReady = false
+	dealerSnapshotQty = 0
+	dealerRisk = 0
+	playerRisk = 0
 	riskPendingBet = 0
 	riskSessionGame = ""
 	riskSessionParams = nil
+	riskPayoutRequired = nil
+	riskPayoutActive = false
+	riskSessionPayoutMultiplier = 2
 	mutex.Unlock()
 
 	// Optional: clear visible trade items (but keep frozen snapshot).
