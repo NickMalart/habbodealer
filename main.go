@@ -5521,11 +5521,13 @@ func (a *App) verifyAndRetryPayoutAdds(plannedIDs []int) {
 
 	a.AddLogMsg("[PAYOUT_DEBUG] payout items still not fully reflected in own trade offer; waiting for manual intervention")
 	if tradeAutoAccepted {
-		// Items were added and the trade was already accepted — the player received their payout.
-		// The "issue" is only that the trade echo didn't confirm in time; items were given.
-		a.noteCurrentGameHistory(fmt.Sprintf("Trade echo verification timed out but trade was already accepted — items sent=%d/%d; player likely received payout", payoutActualAddCount, payoutExpectedAddCount))
-		a.markCurrentGameHistoryIssue(fmt.Sprintf("Echo verification timed out after trade accepted (sent=%d/%d); items given to player", payoutActualAddCount, payoutExpectedAddCount), true)
+		// Trade was already accepted — items were given to the player. The echo just didn't
+		// confirm in time. Leave the game open so TRADE_COMPLETED (header 112) can finalize
+		// it normally. Only add a note for audit purposes; do NOT mark as issue.
+		a.noteCurrentGameHistory(fmt.Sprintf("Trade echo verification timed out but trade was already accepted — items sent=%d/%d; awaiting TRADE_COMPLETED confirmation", payoutActualAddCount, payoutExpectedAddCount))
+		a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] echo timed out but trade accepted; leaving game open for TRADE_COMPLETED (sent=%d/%d)", payoutActualAddCount, payoutExpectedAddCount))
 	} else {
+		// Trade was never accepted — items were not given. Mark as a real issue.
 		a.noteCurrentGameHistory(fmt.Sprintf("Payout items did not fully reflect in trade offer (sent=%d/%d); manual review needed", payoutActualAddCount, payoutExpectedAddCount))
 		a.markCurrentGameHistoryIssue(fmt.Sprintf("Payout items did not fully reflect in trade offer after automated attempts (sent=%d/%d)", payoutActualAddCount, payoutExpectedAddCount), true)
 	}
