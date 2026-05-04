@@ -70,6 +70,12 @@ type TrackerState struct {
 	Sessions       []TradeSession `json:"sessions"`
 }
 
+type LocalTrackerState struct {
+	NextSessionID  int            `json:"nextSessionId"`
+	CurrentSession *TradeSession  `json:"currentSession,omitempty"`
+	Sessions       []TradeSession `json:"sessions"`
+}
+
 type App struct {
 	ctx context.Context
 
@@ -202,6 +208,7 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.loadLocalState()
 	a.initDatabase()
 	go a.runExt()
 }
@@ -374,7 +381,12 @@ func (a *App) StartTracking() TrackerState {
 			}
 			a.mu.Unlock()
 			a.logDebug("session insert ok: sessionID=%d dbSessionID=%d ownerKey=%q", sessionID, dbSessionID, a.ownerKey)
+			a.saveLocalState()
 		}
+	}
+
+	if sessionID > 0 {
+		a.saveLocalState()
 	}
 
 	a.emitUpdate()
@@ -419,6 +431,8 @@ func (a *App) StopTracking() TrackerState {
 		a.logDebug("stop requested without DB close update: dbNil=%t dbSessionID=%d", db == nil, dbSessionID)
 	}
 
+	a.saveLocalState()
+
 	a.emitUpdate()
 	return a.GetState()
 }
@@ -430,8 +444,175 @@ func (a *App) ClearSessions() TrackerState {
 		a.currentSession.Entries = nil
 	}
 	a.mu.Unlock()
+	a.saveLocalState()
 	a.emitUpdate()
 	return a.GetState()
+}
+
+func loadLocalStatePath() string {
+	searchDirs := []string{}
+	if cwd, err := os.Getwd(); err == nil {
+		searchDirs = append(searchDirs, cwd)
+	}
+	if exePath, err := os.Executable(); err == nil {
+		searchDirs = append(searchDirs, filepath.Dir(exePath))
+	}
+
+	seenDirs := map[string]struct{}{}
+	for _, dir := range searchDirs {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			continue
+		}
+		for {
+			if _, ok := seenDirs[abs]; !ok {
+				seenDirs[abs] = struct{}{}
+				return filepath.Join(abs, "trade-tracker.sessions.json")
+			}
+			parent := filepath.Dir(abs)
+			if parent == abs {
+				break
+			}
+			abs = parent
+		}
+	}
+
+	return "trade-tracker.sessions.json"
+}
+
+func (a *App) saveLocalState() {
+	a.mu.Lock()
+	state := LocalTrackerState{
+		NextSessionID:  a.nextSessionID,
+		CurrentSession: copySession(a.currentSession),
+		Sessions:       make([]TradeSession, len(a.sessions)),
+	}
+	for i := range a.sessions {
+		state.Sessions[i] = *copySession(&a.sessions[i])
+	}
+	a.mu.Unlock()
+
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		a.logDebug("local state marshal failed: %v", err)
+		return
+	}
+
+	path := loadLocalStatePath()
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		a.logDebug("local state write failed: path=%q err=%v", path, err)
+		return
+	}
+}
+
+func (a *App) loadLocalState() {
+	path := loadLocalStatePath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			a.logDebug("local state read failed: path=%q err=%v", path, err)
+		}
+		return
+	}
+
+	var state LocalTrackerState
+	if err := json.Unmarshal(data, &state); err != nil {
+		a.logDebug("local state parse failed: path=%q err=%v", path, err)
+		return
+	}
+
+	a.mu.Lock()
+	a.nextSessionID = state.NextSessionID
+	a.currentSession = copySession(state.CurrentSession)
+	a.sessions = make([]TradeSession, len(state.Sessions))
+	for i := range state.Sessions {
+		a.sessions[i] = *copySession(&state.Sessions[i])
+	}
+	a.mu.Unlock()
+}
+
+func mergeTradeEntries(base []TradeEntry, extra []TradeEntry) []TradeEntry {
+	if len(extra) == 0 {
+		return base
+	}
+	seen := make(map[string]struct{}, len(base))
+	for _, entry := range base {
+		key := entry.Timestamp + "|" + entry.PayloadHex + "|" + entry.PartnerName
+		seen[key] = struct{}{}
+	}
+	merged := append([]TradeEntry(nil), base...)
+	for _, entry := range extra {
+		key := entry.Timestamp + "|" + entry.PayloadHex + "|" + entry.PartnerName
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		merged = append(merged, entry)
+		seen[key] = struct{}{}
+	}
+	return merged
+}
+
+func (a *App) mergeLocalStateIntoLoadedSessions(loaded []TradeSession, maxSessionID int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	loadedByDBID := make(map[int64]int, len(loaded))
+	for i := range loaded {
+		if loaded[i].DBID > 0 {
+			loadedByDBID[loaded[i].DBID] = i
+		}
+	}
+
+	for _, localSession := range a.sessions {
+		if localSession.DBID > 0 {
+			if idx, ok := loadedByDBID[localSession.DBID]; ok {
+				loaded[idx].Entries = mergeTradeEntries(loaded[idx].Entries, localSession.Entries)
+				continue
+			}
+		}
+		loaded = append(loaded, localSession)
+	}
+
+	a.sessions = loaded
+	if a.nextSessionID < maxSessionID {
+		a.nextSessionID = maxSessionID
+	}
+	for _, session := range a.sessions {
+		if a.nextSessionID < session.ID {
+			a.nextSessionID = session.ID
+		}
+	}
+	if a.currentSession != nil && a.nextSessionID < a.currentSession.ID {
+		a.nextSessionID = a.currentSession.ID
+	}
+}
+
+func (a *App) appendTradeEntryLocal(dbSessionID int64, partnerName string, partnerTradeID int, items []TradeItem, payload string, occurredAt time.Time) {
+	te := TradeEntry{
+		Timestamp:      occurredAt.Format(time.RFC3339),
+		PartnerName:    partnerName,
+		PartnerTradeID: partnerTradeID,
+		PayloadHex:     payload,
+		FurniItems:     append([]TradeItem(nil), items...),
+	}
+
+	a.mu.Lock()
+	if a.currentSession != nil && (dbSessionID == 0 || a.currentSession.DBID == dbSessionID) {
+		a.currentSession.Entries = append(a.currentSession.Entries, te)
+	} else {
+		for i := range a.sessions {
+			if a.sessions[i].DBID == dbSessionID && dbSessionID > 0 {
+				a.sessions[i].Entries = append(a.sessions[i].Entries, te)
+				break
+			}
+		}
+	}
+	a.mu.Unlock()
+
+	a.saveLocalState()
 }
 
 func decodeLeadingVL64(data []byte) (int, bool) {
@@ -737,17 +918,41 @@ func (a *App) handleIncomingTradeOpen(e *g.Intercept) {
 		}
 		partnerName := a.currentTradePartnerName
 		partnerTradeID := a.currentTradePartnerID
+		items := append([]TradeItem(nil), a.partnerAcceptedSnapshot...)
 		a.mu.Unlock()
-		for _, it := range a.partnerAcceptedSnapshot {
+		for _, it := range items {
 			a.logDebug("partner snapshot item: name=%q qty=%d", it.Name, it.Quantity)
 		}
-		a.logDebug("incoming partner accept: ourAccepted=%t recorded=%t dbReady=%t dbSessionID=%d partner=%q tradeID=%d items=%d", ourAccepted, recorded, db != nil, dbSessionID, partnerName, partnerTradeID, len(a.partnerAcceptedSnapshot))
+		a.logDebug("incoming partner accept: ourAccepted=%t recorded=%t dbReady=%t dbSessionID=%d partner=%q tradeID=%d items=%d", ourAccepted, recorded, db != nil, dbSessionID, partnerName, partnerTradeID, len(items))
 
-		if db != nil && dbSessionID > 0 && ourAccepted && !recorded {
-			if err := a.persistTradeEntry(dbSessionID, partnerName, partnerTradeID, a.partnerAcceptedSnapshot, fmt.Sprintf("% X", e.Packet.Data)); err != nil {
-				log.Printf("[DB] failed to persist final trade entry: %v", err)
-				a.logDebug("persist attempt from partner accept failed: dbSessionID=%d err=%v", dbSessionID, err)
-			} else {
+		if ourAccepted && !recorded {
+			payload := fmt.Sprintf("% X", e.Packet.Data)
+			occurredAt := time.Now().UTC()
+			a.appendTradeEntryLocal(dbSessionID, partnerName, partnerTradeID, items, payload, occurredAt)
+			a.mu.Lock()
+			a.tradeRecorded = true
+			a.partnerAccepted = false
+			a.ourAccepted = false
+			a.partnerAcceptedSnapshot = nil
+			a.lastAllTradeItems = nil
+			a.mu.Unlock()
+			a.logDebug("trade recorded locally from partner accept: dbSessionID=%d", dbSessionID)
+			if db != nil && dbSessionID > 0 {
+				go func(items []TradeItem) {
+					if err := a.persistTradeEntry(dbSessionID, partnerName, partnerTradeID, items, payload, occurredAt); err != nil {
+						log.Printf("[DB] failed to mirror final trade entry: %v", err)
+						a.logDebug("async persist from partner accept failed: dbSessionID=%d err=%v", dbSessionID, err)
+					}
+				}(append([]TradeItem(nil), items...))
+			}
+			a.emitUpdate()
+		} else {
+			a.logDebug("persist skipped on partner accept: dbReady=%t dbSessionID=%d ourAccepted=%t recorded=%t", db != nil, dbSessionID, ourAccepted, recorded)
+			// Fallback: persist on partner accept only, for cases where outgoing accept packet is not intercepted.
+			if db != nil && dbSessionID > 0 && !recorded {
+				payload := "PARTNER_ACCEPT_ONLY " + fmt.Sprintf("% X", e.Packet.Data)
+				occurredAt := time.Now().UTC()
+				a.appendTradeEntryLocal(dbSessionID, partnerName, partnerTradeID, items, payload, occurredAt)
 				a.mu.Lock()
 				a.tradeRecorded = true
 				a.partnerAccepted = false
@@ -755,26 +960,13 @@ func (a *App) handleIncomingTradeOpen(e *g.Intercept) {
 				a.partnerAcceptedSnapshot = nil
 				a.lastAllTradeItems = nil
 				a.mu.Unlock()
-				a.logDebug("persist attempt from partner accept succeeded: dbSessionID=%d", dbSessionID)
+				go func(items []TradeItem) {
+					if err := a.persistTradeEntry(dbSessionID, partnerName, partnerTradeID, items, payload, occurredAt); err != nil {
+						a.logDebug("fallback async persist (partner accept only) failed: dbSessionID=%d err=%v", dbSessionID, err)
+					}
+				}(append([]TradeItem(nil), items...))
+				a.logDebug("fallback trade recorded locally from partner accept: dbSessionID=%d", dbSessionID)
 				a.emitUpdate()
-			}
-		} else {
-			a.logDebug("persist skipped on partner accept: dbReady=%t dbSessionID=%d ourAccepted=%t recorded=%t", db != nil, dbSessionID, ourAccepted, recorded)
-			// Fallback: persist on partner accept only, for cases where outgoing accept packet is not intercepted.
-			if db != nil && dbSessionID > 0 && !recorded {
-				if err := a.persistTradeEntry(dbSessionID, partnerName, partnerTradeID, a.partnerAcceptedSnapshot, "PARTNER_ACCEPT_ONLY "+fmt.Sprintf("% X", e.Packet.Data)); err != nil {
-					a.logDebug("fallback persist (partner accept only) failed: dbSessionID=%d err=%v", dbSessionID, err)
-				} else {
-					a.mu.Lock()
-					a.tradeRecorded = true
-					a.partnerAccepted = false
-					a.ourAccepted = false
-					a.partnerAcceptedSnapshot = nil
-					a.lastAllTradeItems = nil
-					a.mu.Unlock()
-					a.logDebug("fallback persist (partner accept only) succeeded: dbSessionID=%d", dbSessionID)
-					a.emitUpdate()
-				}
 			}
 		}
 		return
@@ -803,11 +995,36 @@ func (a *App) handleIncomingTradeOpen(e *g.Intercept) {
 		a.mu.Unlock()
 		a.logDebug("outgoing our accept: partnerAccepted=%t recorded=%t dbReady=%t dbSessionID=%d partner=%q tradeID=%d items=%d", partnerAccepted, recorded, db != nil, dbSessionID, partnerName, partnerTradeID, len(partnerSnap))
 
-		if db != nil && dbSessionID > 0 && partnerAccepted && !recorded {
-			if err := a.persistTradeEntry(dbSessionID, partnerName, partnerTradeID, partnerSnap, fmt.Sprintf("% X", e.Packet.Data)); err != nil {
-				log.Printf("[DB] failed to persist final trade entry: %v", err)
-				a.logDebug("persist attempt from outgoing accept failed: dbSessionID=%d err=%v", dbSessionID, err)
-			} else {
+		if partnerAccepted && !recorded {
+			payload := fmt.Sprintf("% X", e.Packet.Data)
+			occurredAt := time.Now().UTC()
+			items := append([]TradeItem(nil), partnerSnap...)
+			a.appendTradeEntryLocal(dbSessionID, partnerName, partnerTradeID, items, payload, occurredAt)
+			a.mu.Lock()
+			a.tradeRecorded = true
+			a.partnerAccepted = false
+			a.ourAccepted = false
+			a.partnerAcceptedSnapshot = nil
+			a.lastAllTradeItems = nil
+			a.mu.Unlock()
+			a.logDebug("trade recorded locally from outgoing accept: dbSessionID=%d", dbSessionID)
+			if db != nil && dbSessionID > 0 {
+				go func(items []TradeItem) {
+					if err := a.persistTradeEntry(dbSessionID, partnerName, partnerTradeID, items, payload, occurredAt); err != nil {
+						log.Printf("[DB] failed to mirror final trade entry: %v", err)
+						a.logDebug("async persist from outgoing accept failed: dbSessionID=%d err=%v", dbSessionID, err)
+					}
+				}(items)
+			}
+			a.emitUpdate()
+		} else {
+			a.logDebug("persist skipped on outgoing accept: dbReady=%t dbSessionID=%d partnerAccepted=%t recorded=%t", db != nil, dbSessionID, partnerAccepted, recorded)
+			// Fallback: persist on our accept only, for cases where incoming partner accept packet is missed.
+			if db != nil && dbSessionID > 0 && !recorded {
+				payload := "OUTGOING_ACCEPT_ONLY " + fmt.Sprintf("% X", e.Packet.Data)
+				occurredAt := time.Now().UTC()
+				items := append([]TradeItem(nil), partnerSnap...)
+				a.appendTradeEntryLocal(dbSessionID, partnerName, partnerTradeID, items, payload, occurredAt)
 				a.mu.Lock()
 				a.tradeRecorded = true
 				a.partnerAccepted = false
@@ -815,26 +1032,13 @@ func (a *App) handleIncomingTradeOpen(e *g.Intercept) {
 				a.partnerAcceptedSnapshot = nil
 				a.lastAllTradeItems = nil
 				a.mu.Unlock()
-				a.logDebug("persist attempt from outgoing accept succeeded: dbSessionID=%d", dbSessionID)
+				go func(items []TradeItem) {
+					if err := a.persistTradeEntry(dbSessionID, partnerName, partnerTradeID, items, payload, occurredAt); err != nil {
+						a.logDebug("fallback async persist (outgoing accept only) failed: dbSessionID=%d err=%v", dbSessionID, err)
+					}
+				}(items)
+				a.logDebug("fallback trade recorded locally from outgoing accept: dbSessionID=%d", dbSessionID)
 				a.emitUpdate()
-			}
-		} else {
-			a.logDebug("persist skipped on outgoing accept: dbReady=%t dbSessionID=%d partnerAccepted=%t recorded=%t", db != nil, dbSessionID, partnerAccepted, recorded)
-			// Fallback: persist on our accept only, for cases where incoming partner accept packet is missed.
-			if db != nil && dbSessionID > 0 && !recorded {
-				if err := a.persistTradeEntry(dbSessionID, partnerName, partnerTradeID, partnerSnap, "OUTGOING_ACCEPT_ONLY "+fmt.Sprintf("% X", e.Packet.Data)); err != nil {
-					a.logDebug("fallback persist (outgoing accept only) failed: dbSessionID=%d err=%v", dbSessionID, err)
-				} else {
-					a.mu.Lock()
-					a.tradeRecorded = true
-					a.partnerAccepted = false
-					a.ourAccepted = false
-					a.partnerAcceptedSnapshot = nil
-					a.lastAllTradeItems = nil
-					a.mu.Unlock()
-					a.logDebug("fallback persist (outgoing accept only) succeeded: dbSessionID=%d", dbSessionID)
-					a.emitUpdate()
-				}
 			}
 		}
 		return
@@ -956,13 +1160,12 @@ func (a *App) initDatabase() {
 	}
 }
 
-func (a *App) persistTradeEntry(dbSessionID int64, partnerName string, partnerTradeID int, items []TradeItem, payload string) error {
+func (a *App) persistTradeEntry(dbSessionID int64, partnerName string, partnerTradeID int, items []TradeItem, payload string, occurredAt time.Time) error {
 	if a.db == nil {
 		a.logDebug("persist aborted: db not initialized")
 		return fmt.Errorf("db not initialized")
 	}
 
-	occurredAt := time.Now().UTC()
 	itemsJSON, _ := json.Marshal(items)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -1017,27 +1220,6 @@ func (a *App) persistTradeEntry(dbSessionID int64, partnerName string, partnerTr
 		return err
 	}
 	a.logDebug("persist insert ok: dbSessionID=%d", dbSessionID)
-
-	// Append to in-memory session entries when possible
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	te := TradeEntry{
-		Timestamp:      occurredAt.Format(time.RFC3339),
-		PartnerName:    partnerName,
-		PartnerTradeID: partnerTradeID,
-		PayloadHex:     payload,
-		FurniItems:     items,
-	}
-	if a.currentSession != nil && a.currentSession.DBID == dbSessionID {
-		a.currentSession.Entries = append(a.currentSession.Entries, te)
-		return nil
-	}
-	for i := range a.sessions {
-		if a.sessions[i].DBID == dbSessionID {
-			a.sessions[i].Entries = append(a.sessions[i].Entries, te)
-			return nil
-		}
-	}
 
 	return nil
 }
@@ -1247,12 +1429,8 @@ func (a *App) loadSessionsFromDB() error {
 		loaded = append(loaded, *sessionsByID[id])
 	}
 
-	a.mu.Lock()
-	a.sessions = loaded
-	if a.nextSessionID < maxSessionID {
-		a.nextSessionID = maxSessionID
-	}
-	a.mu.Unlock()
+	a.mergeLocalStateIntoLoadedSessions(loaded, maxSessionID)
+	a.saveLocalState()
 
 	a.emitUpdate()
 	return nil
