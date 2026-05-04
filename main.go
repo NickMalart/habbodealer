@@ -4510,6 +4510,7 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 	if displayMax <= 0 {
 		finalPlayerRisk := playerRisk
 		// clear session flags (keep partner info if we need it for finalize)
+		stopRiskDecisionTimeoutMonitor()
 		riskSessionActive = false
 		riskSessionGame = ""
 		riskSessionParams = nil
@@ -4539,7 +4540,19 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 	// Send initial prompt (mute-aware) and start the risk-decision reminder monitor
 	go func(m string, player string) {
 		waitForUnmute(90 * time.Second)
+		mutex.Lock()
+		canPrompt := riskSessionActive && playerRisk > 0 && dealerRisk > 0
+		mutex.Unlock()
+		if !canPrompt {
+			return
+		}
 		time.Sleep(800 * time.Millisecond)
+		mutex.Lock()
+		canPrompt = riskSessionActive && playerRisk > 0 && dealerRisk > 0
+		mutex.Unlock()
+		if !canPrompt {
+			return
+		}
 		sendMessageWithDelay(m)
 		a.startRiskDecisionTimeoutMonitor(m, player)
 	}(msg, playerName)
@@ -4814,6 +4827,7 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 
 		// If nothing left to risk, end session and reopen/finalize as appropriate.
 		if playerRisk <= 0 || displayMax <= 0 {
+			stopRiskDecisionTimeoutMonitor()
 			riskSessionActive = false
 			riskSessionGame = ""
 			riskSessionParams = nil
@@ -4830,25 +4844,35 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			return
 		}
 
-		// Player still has bank left: keep session and re-prompt.
+		// Player still has bank left: keep session and re-prompt, unless dealer
+		// can no longer cover additional risk.
+		shouldFinalize := dealerRisk <= 0
 		mutex.Unlock()
+		if shouldFinalize {
+			go a.finalizeRiskKeep()
+			return
+		}
 
 		a.AddLogMsg(fmt.Sprintf("[RISK] %s lost risk round; bank remains playerRisk=%d dealerRisk=%d", partner, playerRisk, dealerRisk))
 		sendShout(fmt.Sprintf("%s lost the risk round. Bank: %d", partner, playerRisk))
 
 		go func(max int) {
 			waitForUnmute(90 * time.Second)
+			mutex.Lock()
+			canPrompt := riskSessionActive && playerRisk > 0 && dealerRisk > 0
+			mutex.Unlock()
+			if !canPrompt {
+				return
+			}
 			time.Sleep(800 * time.Millisecond)
+			mutex.Lock()
+			canPrompt = riskSessionActive && playerRisk > 0 && dealerRisk > 0
+			mutex.Unlock()
+			if !canPrompt {
+				return
+			}
 			sendMessageWithDelay(fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, max))
 		}(displayMax)
-
-		// If dealer has no funds left, finalize into physical payout
-		mutex.Lock()
-		shouldFinalize := dealerRisk <= 0
-		mutex.Unlock()
-		if shouldFinalize {
-			go a.finalizeRiskKeep()
-		}
 		return
 	}
 
@@ -4877,6 +4901,7 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 	if displayMax <= 0 {
 		finalPlayerRisk := playerRisk
 		// clear session flags (keep partner info for finalize)
+		stopRiskDecisionTimeoutMonitor()
 		riskSessionActive = false
 		riskPendingBet = 0
 		riskSessionGame = ""
@@ -4892,20 +4917,28 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		return
 	}
 	mutex.Unlock()
+	if dealerRisk <= 0 {
+		go a.finalizeRiskKeep()
+		return
+	}
 
 	go func(max int) {
 		waitForUnmute(90 * time.Second)
+		mutex.Lock()
+		canPrompt := riskSessionActive && playerRisk > 0 && dealerRisk > 0
+		mutex.Unlock()
+		if !canPrompt {
+			return
+		}
 		time.Sleep(800 * time.Millisecond)
+		mutex.Lock()
+		canPrompt = riskSessionActive && playerRisk > 0 && dealerRisk > 0
+		mutex.Unlock()
+		if !canPrompt {
+			return
+		}
 		sendMessageWithDelay(fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, max))
 	}(displayMax)
-
-	// If dealer has no funds left, finalize into physical payout
-	mutex.Lock()
-	shouldFinalize := dealerRisk <= 0
-	mutex.Unlock()
-	if shouldFinalize {
-		go a.finalizeRiskKeep()
-	}
 }
 
 // finalizeRiskKeep converts the current `playerRisk` internal bank into a
