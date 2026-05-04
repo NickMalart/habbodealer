@@ -1696,6 +1696,9 @@ func dealerGameActive() bool {
 		awaitingBlackjackDecision ||
 		awaiting13Decision ||
 		awaitingTriChoice ||
+		payoutActive ||
+		payoutTradeActive ||
+		payoutTradeSent ||
 		blackjackRoundActive ||
 		thirteenRoundActive ||
 		triRoundActive ||
@@ -2713,6 +2716,7 @@ func (a *App) updateCurrentGameHistoryLocked(update func(entry *GameHistoryEntry
 func (a *App) beginGameHistory(playerName string, betItems []TradeItem) {
 	a.AddLogMsg("[GAME_HISTORY] beginGameHistory start")
 	a.gameHistoryMu.Lock()
+	var replacedEntry *GameHistoryEntry
 
 	if a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
 		if entry.CompletedAt == "" {
@@ -2721,6 +2725,8 @@ func (a *App) beginGameHistory(playerName string, betItems []TradeItem) {
 			entry.IssueReason = "Round was replaced before it fully finished"
 			entry.CompletedAt = gameHistoryTimestamp()
 			entry.Notes = append(entry.Notes, "New round started before previous round was fully resolved")
+			e := *entry
+			replacedEntry = &e
 		}
 	}) {
 		a.currentGameHistoryID = ""
@@ -2747,6 +2753,12 @@ func (a *App) beginGameHistory(playerName string, betItems []TradeItem) {
 	a.AddLogMsg("[GAME_HISTORY] beginGameHistory mutation complete")
 	a.gameHistoryMu.Unlock()
 	a.AddLogMsg("[GAME_HISTORY] beginGameHistory unlocked, syncing")
+	if replacedEntry != nil {
+		go a.sendDiscordWebhookForGame(*replacedEntry)
+		a.persistCurrentGameHistoryNow("game_issue_replaced")
+		a.sendLiveDealerGames(5)
+		go LogEvent("game_issue", *replacedEntry, "Game marked issue: round replaced before full resolution", map[string]string{"player": replacedEntry.PlayerName})
+	}
 	// Persist game-begin record
 	go LogEvent("game_begin", entry, "Game started", map[string]string{"player": entry.PlayerName})
 	a.syncGameHistory()
@@ -2909,6 +2921,9 @@ func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
 	a.syncGameHistory()
 	if complete && completedEntry != nil {
 		go a.sendDiscordWebhookForGame(*completedEntry)
+		a.persistCurrentGameHistoryNow("game_issue")
+		a.sendLiveDealerGames(5)
+		go LogEvent("game_issue", *completedEntry, "Game completed with issue", map[string]string{"player": completedEntry.PlayerName})
 	}
 }
 
@@ -3631,7 +3646,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 	if e.Packet.Header.Value == 104 {
 		// Manual block-all-trades toggle — skip if we just sent our own payout trade open
-		if blockAllTrades && !payoutTradeSent && !matchesRecentOutgoingFunc(e.Packet.Data) {
+		if !payoutTradeSent && !matchesRecentOutgoingFunc(e.Packet.Data) {
 			activeRound := awaitingGameChoice || dealerGameActive() || payoutActive || payoutTradeActive
 			allowed := false
 

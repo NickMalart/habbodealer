@@ -55,6 +55,7 @@ type RaffleParticipant struct {
 	Tickets     int    `json:"tickets"`
 	FirstBet    string `json:"firstBet"`
 	LastBet     string `json:"lastBet"`
+	ManualDelta int    `json:"-"`
 	UsernameKey string `json:"-"`
 }
 
@@ -138,7 +139,7 @@ type App struct {
 }
 
 func NewApp() *App {
-	return &App{bonusEvery: 5, raffleAutoUpdate: true, rafflePrizeQty: 1}
+	return &App{bonusEvery: 5, raffleAutoUpdate: true, raffleName: "Flame Raffle", rafflePrizeName: "Purple Dragon Lamp", rafflePrizeQty: 30}
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -261,6 +262,23 @@ func ticketsForBetCount(bets int, bonusEvery int) int {
 		bonusEvery = 5
 	}
 	return 1 + (bets / bonusEvery)
+}
+
+func effectiveTicketsForParticipant(betCount int, bonusEvery int, manualDelta int) int {
+	tickets := ticketsForBetCount(betCount, bonusEvery) + manualDelta
+	if tickets < 0 {
+		return 0
+	}
+	return tickets
+}
+
+func sortParticipants(participants []RaffleParticipant) {
+	sort.Slice(participants, func(i, j int) bool {
+		if participants[i].Tickets != participants[j].Tickets {
+			return participants[i].Tickets > participants[j].Tickets
+		}
+		return strings.ToLower(participants[i].Username) < strings.ToLower(participants[j].Username)
+	})
 }
 
 func copySession(s *RaffleSession) *RaffleSession {
@@ -519,8 +537,17 @@ func (a *App) SetRaffleDiscordConfig(
 		a.raffleHeroAttachmentFile = ""
 	}
 	a.raffleAutoUpdate = autoUpdate
+	var sessionDBID int64
+	if a.currentSession != nil {
+		sessionDBID = a.currentSession.DBID
+	}
 	a.mu.Unlock()
 	a.emitUpdate()
+	if sessionDBID > 0 {
+		if err := a.saveSessionMeta(sessionDBID); err != nil {
+			a.logDebug("saveSessionMeta failed: %v", err)
+		}
+	}
 	return a.GetState()
 }
 
@@ -530,6 +557,139 @@ func (a *App) PostOrUpdateRaffleWebhook() string {
 		return err.Error()
 	}
 	return "ok"
+}
+
+func (a *App) UpsertManualParticipant(username string, betCount int, tickets int) (RaffleState, error) {
+	name := normalizeUsername(username)
+	key := normalizeUsernameKey(name)
+	if key == "" {
+		return a.GetState(), fmt.Errorf("username is required")
+	}
+	if betCount < 0 {
+		betCount = 0
+	}
+	if tickets < 0 {
+		tickets = 0
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	a.mu.Lock()
+	if a.currentSession == nil {
+		a.mu.Unlock()
+		return a.GetState(), fmt.Errorf("start or resume a raffle session first")
+	}
+
+	sessionDBID := a.currentSession.DBID
+	bonusEvery := a.currentSession.BonusEvery
+	if bonusEvery <= 0 {
+		bonusEvery = 5
+	}
+
+	idx := -1
+	for i := range a.currentSession.Participants {
+		if a.currentSession.Participants[i].UsernameKey == key {
+			idx = i
+			break
+		}
+	}
+
+	manualDelta := tickets - ticketsForBetCount(betCount, bonusEvery)
+	var persisted RaffleParticipant
+	if idx == -1 {
+		persisted = RaffleParticipant{
+			Username:    name,
+			UsernameKey: key,
+			BetCount:    betCount,
+			Tickets:     effectiveTicketsForParticipant(betCount, bonusEvery, manualDelta),
+			ManualDelta: manualDelta,
+			FirstBet:    now,
+			LastBet:     now,
+		}
+		a.currentSession.Participants = append(a.currentSession.Participants, persisted)
+	} else {
+		p := &a.currentSession.Participants[idx]
+		if p.FirstBet == "" {
+			p.FirstBet = now
+		}
+		p.Username = name
+		p.UsernameKey = key
+		p.BetCount = betCount
+		p.ManualDelta = manualDelta
+		p.Tickets = effectiveTicketsForParticipant(betCount, bonusEvery, manualDelta)
+		p.LastBet = now
+		persisted = *p
+	}
+
+	sortParticipants(a.currentSession.Participants)
+	a.mu.Unlock()
+
+	if sessionDBID <= 0 {
+		return a.GetState(), fmt.Errorf("current raffle session is not persisted yet")
+	}
+	if err := a.persistParticipants(sessionDBID, []RaffleParticipant{persisted}); err != nil {
+		a.logDebug("manual participant persist failed for %s: %v", name, err)
+		return a.GetState(), err
+	}
+
+	a.logDebug("manual participant saved: %s bets=%d tickets=%d delta=%d", name, persisted.BetCount, persisted.Tickets, persisted.ManualDelta)
+	a.emitUpdate()
+	go func() {
+		if err := a.postOrUpdateRaffleWebhook(nil, true, "manual-participant"); err != nil {
+			a.logDebug("auto-patch manual participant failed: %v", err)
+		}
+	}()
+
+	return a.GetState(), nil
+}
+
+func (a *App) RemoveParticipantFromCurrentSession(username string) (RaffleState, error) {
+	name := normalizeUsername(username)
+	key := normalizeUsernameKey(name)
+	if key == "" {
+		return a.GetState(), fmt.Errorf("username is required")
+	}
+
+	a.mu.Lock()
+	if a.currentSession == nil {
+		a.mu.Unlock()
+		return a.GetState(), fmt.Errorf("start or resume a raffle session first")
+	}
+
+	sessionDBID := a.currentSession.DBID
+	idx := -1
+	for i := range a.currentSession.Participants {
+		if a.currentSession.Participants[i].UsernameKey == key {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		a.mu.Unlock()
+		return a.GetState(), fmt.Errorf("participant %s not found in active session", name)
+	}
+
+	removedName := a.currentSession.Participants[idx].Username
+	a.currentSession.Participants = append(a.currentSession.Participants[:idx], a.currentSession.Participants[idx+1:]...)
+	a.mu.Unlock()
+
+	if sessionDBID <= 0 {
+		return a.GetState(), fmt.Errorf("current raffle session is not persisted yet")
+	}
+	if err := a.deleteParticipant(sessionDBID, key); err != nil {
+		a.logDebug("participant delete failed for %s: %v", removedName, err)
+		return a.GetState(), err
+	}
+
+	a.logDebug("participant removed from session: %s", removedName)
+	a.emitUpdate()
+	go func() {
+		if err := a.postOrUpdateRaffleWebhook(nil, true, "remove-participant"); err != nil {
+			a.logDebug("auto-patch remove participant failed: %v", err)
+		}
+	}()
+
+	return a.GetState(), nil
 }
 
 func (a *App) DrawWinnerForCurrentSession() string {
@@ -728,13 +888,13 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	}
 
 	if raffleName == "" {
-		raffleName = "Weekend Raffle"
+		raffleName = "Flame Raffle"
 	}
 	if prizeName == "" {
-		prizeName = "Mystery Prize"
+		prizeName = "Purple Dragon Lamp"
 	}
 	if prizeQty <= 0 {
-		prizeQty = 1
+		prizeQty = 30
 	}
 	prizeDisplay := fmt.Sprintf("%s x%d", prizeName, prizeQty)
 
@@ -1000,6 +1160,7 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		Bytes []byte
 	}
 	uploads := make([]uploadFile, 0, 1)
+	createWithHeroUpload := false
 	if heroDataURL != "" {
 		raw, mimeType, err := decodeImageDataURL(heroDataURL)
 		if err != nil {
@@ -1015,7 +1176,24 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			case "image/webp":
 				fileName = "raffle-hero.webp"
 			default:
+				createWithHeroUpload = true
 				fileName = "raffle-hero.png"
+
+				// Fallback creates must not reference attachment:// images unless those files are uploaded in this request.
+				if !createWithHeroUpload {
+					if heroImageURL != "" {
+						promoEmbed["image"] = map[string]interface{}{"url": heroImageURL}
+					} else {
+						delete(promoEmbed, "image")
+					}
+				}
+				if proofBytes == nil || proofFileName == "" {
+					if strings.TrimSpace(session.WinnerProofURL) != "" {
+						trackerEmbed["image"] = map[string]interface{}{"url": strings.TrimSpace(session.WinnerProofURL)}
+					} else if strings.TrimSpace(session.WinnerProofID) != "" && strings.TrimSpace(session.WinnerProofFile) != "" {
+						delete(trackerEmbed, "image")
+					}
+				}
 			}
 		}
 		promoEmbed["image"] = map[string]interface{}{"url": "attachment://" + fileName}
@@ -1089,22 +1267,35 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			a.currentSession.WebhookMessageID = strings.TrimSpace(respPayload.ID)
 		}
 	}
+	heroAttachmentUpdated := false
 	if len(respPayload.Attachments) > 0 {
 		if strings.TrimSpace(respPayload.Attachments[0].URL) != "" {
 			a.raffleHeroImageURL = strings.TrimSpace(respPayload.Attachments[0].URL)
+			heroAttachmentUpdated = true
 		}
 		if strings.TrimSpace(respPayload.Attachments[0].ID) != "" {
 			a.raffleHeroAttachmentID = strings.TrimSpace(respPayload.Attachments[0].ID)
+			heroAttachmentUpdated = true
 		}
 		if strings.TrimSpace(respPayload.Attachments[0].Filename) != "" {
 			a.raffleHeroAttachmentFile = strings.TrimSpace(respPayload.Attachments[0].Filename)
+			heroAttachmentUpdated = true
 		}
+	}
+	var metaSessionDBID int64
+	if session != nil && heroAttachmentUpdated {
+		metaSessionDBID = session.DBID
 	}
 	a.mu.Unlock()
 
 	if session != nil && session.DBID > 0 && strings.TrimSpace(respPayload.ID) != "" {
 		if err := a.persistSessionWebhookMessageID(session.DBID, strings.TrimSpace(respPayload.ID)); err != nil {
 			a.logDebug("failed to persist webhook message id session=%d id=%s err=%v", session.DBID, strings.TrimSpace(respPayload.ID), err)
+		}
+	}
+	if metaSessionDBID > 0 {
+		if err := a.saveSessionMeta(metaSessionDBID); err != nil {
+			a.logDebug("saveSessionMeta after hero attachment failed: %v", err)
 		}
 	}
 
@@ -1145,6 +1336,12 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 	var startedAt string
 	var scheduledEndAt string
 	var bonusEvery int
+	var raffleName string
+	var rafflePrizeName string
+	var rafflePrizeQty int
+	var heroImageURL string
+	var heroAttachmentID string
+	var heroAttachmentFile string
 
 	a.mu.Lock()
 	if a.currentSession == nil {
@@ -1170,6 +1367,21 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 		a.mu.Unlock()
 		return a.GetState(), fmt.Errorf("a raffle session is already active")
 	}
+	raffleName = strings.TrimSpace(a.raffleName)
+	if raffleName == "" {
+		raffleName = "Flame Raffle"
+	}
+	rafflePrizeName = strings.TrimSpace(a.rafflePrizeName)
+	if rafflePrizeName == "" {
+		rafflePrizeName = "Purple Dragon Lamp"
+	}
+	rafflePrizeQty = a.rafflePrizeQty
+	if rafflePrizeQty <= 0 {
+		rafflePrizeQty = 30
+	}
+	heroImageURL = strings.TrimSpace(a.raffleHeroImageURL)
+	heroAttachmentID = strings.TrimSpace(a.raffleHeroAttachmentID)
+	heroAttachmentFile = strings.TrimSpace(a.raffleHeroAttachmentFile)
 	db = a.db
 	owner = a.ownerKey
 	a.enabled = true
@@ -1181,8 +1393,9 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 
 		var dbSessionID int64
 		err := db.QueryRow(ctx,
-			`INSERT INTO raffle_sessions (started_at, scheduled_end_at, owner_key, bonus_every, last_seen_created_at, last_seen_entry_id, webhook_message_id)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7)
+			`INSERT INTO raffle_sessions (started_at, scheduled_end_at, owner_key, bonus_every, last_seen_created_at, last_seen_entry_id, webhook_message_id,
+			                              raffle_name, prize_name, prize_qty, hero_image_url, hero_attachment_id, hero_attachment_file)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 			 RETURNING id`,
 			startAt,
 			func() interface{} {
@@ -1196,6 +1409,12 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 			startAt,
 			"",
 			"",
+			raffleName,
+			rafflePrizeName,
+			rafflePrizeQty,
+			heroImageURL,
+			heroAttachmentID,
+			heroAttachmentFile,
 		).Scan(&dbSessionID)
 		if err != nil {
 			a.logDebug("start session insert failed: %v", err)
@@ -1717,7 +1936,7 @@ func (a *App) processNewBets() {
 				Username:    name,
 				UsernameKey: key,
 				BetCount:    1,
-				Tickets:     ticketsForBetCount(1, a.currentSession.BonusEvery),
+				Tickets:     effectiveTicketsForParticipant(1, a.currentSession.BonusEvery, 0),
 				FirstBet:    row.EventAt.UTC().Format(time.RFC3339),
 				LastBet:     row.EventAt.UTC().Format(time.RFC3339),
 			}
@@ -1731,7 +1950,7 @@ func (a *App) processNewBets() {
 			p := &a.currentSession.Participants[idx]
 			oldTickets := p.Tickets
 			p.BetCount++
-			p.Tickets = ticketsForBetCount(p.BetCount, a.currentSession.BonusEvery)
+			p.Tickets = effectiveTicketsForParticipant(p.BetCount, a.currentSession.BonusEvery, p.ManualDelta)
 			p.LastBet = row.EventAt.UTC().Format(time.RFC3339)
 			upserts = append(upserts, *p)
 			if announceEnabled && p.Tickets > oldTickets && (resumedAt.IsZero() || row.EventAt.UTC().After(resumedAt)) {
@@ -1743,12 +1962,7 @@ func (a *App) processNewBets() {
 		lastCursorEntry = row.EntryID
 	}
 
-	sort.Slice(a.currentSession.Participants, func(i, j int) bool {
-		if a.currentSession.Participants[i].Tickets != a.currentSession.Participants[j].Tickets {
-			return a.currentSession.Participants[i].Tickets > a.currentSession.Participants[j].Tickets
-		}
-		return strings.ToLower(a.currentSession.Participants[i].Username) < strings.ToLower(a.currentSession.Participants[j].Username)
-	})
+	sortParticipants(a.currentSession.Participants)
 
 	a.currentSession.CursorAt = lastCursorAt
 	a.currentSession.CursorEntry = lastCursorEntry
@@ -1864,6 +2078,61 @@ func (a *App) persistSessionWebhookMessageID(sessionDBID int64, messageID string
 	return err
 }
 
+func (a *App) saveSessionMeta(sessionDBID int64) error {
+	a.mu.Lock()
+	db := a.db
+	owner := a.ownerKey
+	raffleName := strings.TrimSpace(a.raffleName)
+	prizeName := strings.TrimSpace(a.rafflePrizeName)
+	prizeQty := a.rafflePrizeQty
+	heroImageURL := strings.TrimSpace(a.raffleHeroImageURL)
+	heroAttachmentID := strings.TrimSpace(a.raffleHeroAttachmentID)
+	heroAttachmentFile := strings.TrimSpace(a.raffleHeroAttachmentFile)
+	a.mu.Unlock()
+	if db == nil || sessionDBID <= 0 {
+		return nil
+	}
+	if raffleName == "" {
+		raffleName = "Flame Raffle"
+	}
+	if prizeName == "" {
+		prizeName = "Purple Dragon Lamp"
+	}
+	if prizeQty <= 0 {
+		prizeQty = 30
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := db.Exec(ctx,
+		`UPDATE raffle_sessions
+		 SET raffle_name = $1, prize_name = $2, prize_qty = $3,
+		     hero_image_url = $4, hero_attachment_id = $5, hero_attachment_file = $6
+		 WHERE id = $7 AND owner_key = $8`,
+		raffleName, prizeName, prizeQty,
+		heroImageURL, heroAttachmentID, heroAttachmentFile,
+		sessionDBID, owner,
+	)
+	return err
+}
+
+func (a *App) deleteParticipant(sessionDBID int64, usernameKey string) error {
+	a.mu.Lock()
+	db := a.db
+	owner := a.ownerKey
+	a.mu.Unlock()
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := db.Exec(ctx, `
+		DELETE FROM raffle_participants
+		WHERE session_id = $1 AND owner_key = $2 AND username_key = $3
+	`, sessionDBID, owner, strings.TrimSpace(usernameKey))
+	return err
+}
+
 func (a *App) persistParticipants(sessionDBID int64, participants []RaffleParticipant) error {
 	a.mu.Lock()
 	db := a.db
@@ -1889,19 +2158,20 @@ func (a *App) persistParticipants(sessionDBID int64, participants []RafflePartic
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO raffle_participants (
 				session_id, owner_key, username, username_key,
-				bet_count, ticket_count, first_bet_at, last_bet_at, updated_at
+				bet_count, ticket_count, manual_ticket_delta, first_bet_at, last_bet_at, updated_at
 			) VALUES (
 				$1,$2,$3,$4,
-				$5,$6,$7,$8,NOW()
+				$5,$6,$7,$8,$9,NOW()
 			)
 			ON CONFLICT (session_id, owner_key, username_key) DO UPDATE SET
 				username = EXCLUDED.username,
 				bet_count = EXCLUDED.bet_count,
 				ticket_count = EXCLUDED.ticket_count,
+				manual_ticket_delta = EXCLUDED.manual_ticket_delta,
 				first_bet_at = LEAST(raffle_participants.first_bet_at, EXCLUDED.first_bet_at),
 				last_bet_at = GREATEST(raffle_participants.last_bet_at, EXCLUDED.last_bet_at),
 				updated_at = NOW()
-		`, sessionDBID, owner, p.Username, p.UsernameKey, p.BetCount, p.Tickets, firstAt, lastAt); err != nil {
+		`, sessionDBID, owner, p.Username, p.UsernameKey, p.BetCount, p.Tickets, p.ManualDelta, firstAt, lastAt); err != nil {
 			return err
 		}
 	}
@@ -2039,6 +2309,12 @@ func (a *App) ensureTables() error {
 			last_seen_created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			last_seen_entry_id TEXT NOT NULL DEFAULT '',
 			webhook_message_id TEXT NOT NULL DEFAULT '',
+			raffle_name TEXT NOT NULL DEFAULT 'Flame Raffle',
+			prize_name TEXT NOT NULL DEFAULT 'Purple Dragon Lamp',
+			prize_qty INTEGER NOT NULL DEFAULT 30,
+			hero_image_url TEXT NOT NULL DEFAULT '',
+			hero_attachment_id TEXT NOT NULL DEFAULT '',
+			hero_attachment_file TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
 		`CREATE TABLE IF NOT EXISTS raffle_participants (
@@ -2049,6 +2325,7 @@ func (a *App) ensureTables() error {
 			username_key TEXT NOT NULL,
 			bet_count INTEGER NOT NULL DEFAULT 1,
 			ticket_count INTEGER NOT NULL DEFAULT 1,
+			manual_ticket_delta INTEGER NOT NULL DEFAULT 0,
 			first_bet_at TIMESTAMPTZ NOT NULL,
 			last_bet_at TIMESTAMPTZ NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -2124,9 +2401,20 @@ func (a *App) ensureTables() error {
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS last_seen_created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS last_seen_entry_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS webhook_message_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS raffle_name TEXT NOT NULL DEFAULT 'Flame Raffle'`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS prize_name TEXT NOT NULL DEFAULT 'Purple Dragon Lamp'`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS prize_qty INTEGER NOT NULL DEFAULT 30`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS hero_image_url TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS hero_attachment_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS hero_attachment_file TEXT NOT NULL DEFAULT ''`,
+		// Fix existing rows that still have the old hardcoded defaults
+		`UPDATE raffle_sessions SET raffle_name = 'Flame Raffle' WHERE raffle_name = 'Weekend Raffle'`,
+		`UPDATE raffle_sessions SET prize_name = 'Purple Dragon Lamp' WHERE prize_name = 'Mystery Prize'`,
+		`UPDATE raffle_sessions SET prize_qty = 30 WHERE prize_qty <= 1`,
 		`ALTER TABLE raffle_participants ADD COLUMN IF NOT EXISTS username_key TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE raffle_participants ADD COLUMN IF NOT EXISTS bet_count INTEGER NOT NULL DEFAULT 1`,
 		`ALTER TABLE raffle_participants ADD COLUMN IF NOT EXISTS ticket_count INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE raffle_participants ADD COLUMN IF NOT EXISTS manual_ticket_delta INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE raffle_participants ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
 	}
 	for _, q := range alterQueries {
@@ -2151,7 +2439,8 @@ func (a *App) loadSessionsFromDB() error {
 	defer cancel()
 
 	sRows, err := db.Query(ctx, `
-		SELECT id, started_at, scheduled_end_at, ended_at, bonus_every, last_seen_created_at, last_seen_entry_id, webhook_message_id
+		SELECT id, started_at, scheduled_end_at, ended_at, bonus_every, last_seen_created_at, last_seen_entry_id, webhook_message_id,
+		       raffle_name, prize_name, prize_qty, hero_image_url, hero_attachment_id, hero_attachment_file
 		FROM raffle_sessions
 		WHERE owner_key = $1
 		ORDER BY id ASC
@@ -2162,23 +2451,40 @@ func (a *App) loadSessionsFromDB() error {
 	defer sRows.Close()
 
 	type dbSession struct {
-		id               int64
-		startedAt        time.Time
-		scheduledEndAt   *time.Time
-		endedAt          *time.Time
-		bonusEvery       int
-		cursorAt         time.Time
-		cursorID         string
-		webhookMessageID string
+		id                 int64
+		startedAt          time.Time
+		scheduledEndAt     *time.Time
+		endedAt            *time.Time
+		bonusEvery         int
+		cursorAt           time.Time
+		cursorID           string
+		webhookMessageID   string
+		raffleName         string
+		prizeName          string
+		prizeQty           int
+		heroImageURL       string
+		heroAttachmentID   string
+		heroAttachmentFile string
 	}
 	sessionsByID := map[int64]*RaffleSession{}
 	orderedIDs := make([]int64, 0)
 	maxID := 0
 	var current *RaffleSession
 
+	type sessionMeta struct {
+		raffleName         string
+		prizeName          string
+		prizeQty           int
+		heroImageURL       string
+		heroAttachmentID   string
+		heroAttachmentFile string
+	}
+	metaByID := map[int64]sessionMeta{}
+
 	for sRows.Next() {
 		var s dbSession
-		if err := sRows.Scan(&s.id, &s.startedAt, &s.scheduledEndAt, &s.endedAt, &s.bonusEvery, &s.cursorAt, &s.cursorID, &s.webhookMessageID); err != nil {
+		if err := sRows.Scan(&s.id, &s.startedAt, &s.scheduledEndAt, &s.endedAt, &s.bonusEvery, &s.cursorAt, &s.cursorID, &s.webhookMessageID,
+			&s.raffleName, &s.prizeName, &s.prizeQty, &s.heroImageURL, &s.heroAttachmentID, &s.heroAttachmentFile); err != nil {
 			return err
 		}
 		rs := &RaffleSession{
@@ -2190,6 +2496,14 @@ func (a *App) loadSessionsFromDB() error {
 			DBID:             s.id,
 			CursorAt:         s.cursorAt.UTC(),
 			CursorEntry:      s.cursorID,
+		}
+		metaByID[s.id] = sessionMeta{
+			raffleName:         strings.TrimSpace(s.raffleName),
+			prizeName:          strings.TrimSpace(s.prizeName),
+			prizeQty:           s.prizeQty,
+			heroImageURL:       strings.TrimSpace(s.heroImageURL),
+			heroAttachmentID:   strings.TrimSpace(s.heroAttachmentID),
+			heroAttachmentFile: strings.TrimSpace(s.heroAttachmentFile),
 		}
 		if s.scheduledEndAt != nil {
 			rs.ScheduledEndAt = s.scheduledEndAt.UTC().Format(time.RFC3339)
@@ -2211,7 +2525,7 @@ func (a *App) loadSessionsFromDB() error {
 	}
 
 	pRows, err := db.Query(ctx, `
-		SELECT session_id, username, username_key, bet_count, ticket_count, first_bet_at, last_bet_at
+		SELECT session_id, username, username_key, bet_count, ticket_count, manual_ticket_delta, first_bet_at, last_bet_at
 		FROM raffle_participants
 		WHERE owner_key = $1
 		ORDER BY session_id ASC, ticket_count DESC, username ASC
@@ -2226,8 +2540,11 @@ func (a *App) loadSessionsFromDB() error {
 		var p RaffleParticipant
 		var firstAt time.Time
 		var lastAt time.Time
-		if err := pRows.Scan(&sessionID, &p.Username, &p.UsernameKey, &p.BetCount, &p.Tickets, &firstAt, &lastAt); err != nil {
+		if err := pRows.Scan(&sessionID, &p.Username, &p.UsernameKey, &p.BetCount, &p.Tickets, &p.ManualDelta, &firstAt, &lastAt); err != nil {
 			return err
+		}
+		if p.Tickets != effectiveTicketsForParticipant(p.BetCount, sessionsByID[sessionID].BonusEvery, p.ManualDelta) {
+			p.Tickets = effectiveTicketsForParticipant(p.BetCount, sessionsByID[sessionID].BonusEvery, p.ManualDelta)
 		}
 		p.FirstBet = firstAt.UTC().Format(time.RFC3339)
 		p.LastBet = lastAt.UTC().Format(time.RFC3339)
@@ -2245,6 +2562,7 @@ func (a *App) loadSessionsFromDB() error {
 		if s == nil {
 			continue
 		}
+		sortParticipants(s.Participants)
 		if s.EndedAt == "" && current == nil {
 			current = s
 			continue
@@ -2259,6 +2577,22 @@ func (a *App) loadSessionsFromDB() error {
 		a.raffleMessageID = strings.TrimSpace(a.currentSession.WebhookMessageID)
 	} else {
 		a.raffleMessageID = ""
+	}
+	if current != nil {
+		if m, ok := metaByID[current.DBID]; ok {
+			if m.raffleName != "" {
+				a.raffleName = m.raffleName
+			}
+			if m.prizeName != "" {
+				a.rafflePrizeName = m.prizeName
+			}
+			if m.prizeQty > 0 {
+				a.rafflePrizeQty = m.prizeQty
+			}
+			a.raffleHeroImageURL = m.heroImageURL
+			a.raffleHeroAttachmentID = m.heroAttachmentID
+			a.raffleHeroAttachmentFile = m.heroAttachmentFile
+		}
 	}
 	if a.nextSessionID < maxID {
 		a.nextSessionID = maxID

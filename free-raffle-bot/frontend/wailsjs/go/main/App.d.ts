@@ -20,6 +20,8 @@ export function PostOrUpdateRaffleWebhook():Promise<string>;
 
 export function PostWinnerProofForCurrentSession(arg1:string,arg2:string):Promise<string>;
 
+export function RemoveParticipantFromCurrentSession(arg1:string):Promise<main.RaffleState>;
+
 export function ResumeSession(arg1:number):Promise<main.RaffleState>;
 
 export function SetBonusEvery(arg1:number):Promise<main.RaffleState>;
@@ -35,3 +37,5 @@ export function StartRaffle():Promise<main.RaffleState>;
 export function StartRaffleWithWindow(arg1:string,arg2:string):Promise<main.RaffleState>;
 
 export function StopRaffle():Promise<main.RaffleState>;
+
+export function UpsertManualParticipant(arg1:string,arg2:number,arg3:number):Promise<main.RaffleState>;

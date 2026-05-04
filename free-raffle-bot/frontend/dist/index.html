@@ -246,17 +246,36 @@
           <button class="alt" id="tallyCurrentBtn" style="display:none;" onclick="loadTallyCurrent()">Item Tally</button>
         </div>
       </div>
+      <div class="card" style="margin-top:12px;padding:12px;background:rgba(255,255,255,0.03);">
+        <div class="row" style="justify-content:space-between;align-items:flex-start;">
+          <div>
+            <div style="font-weight:700;margin-bottom:4px;">Manual Participant</div>
+            <div class="muted" id="manualParticipantMeta">Add someone to the active raffle or edit an existing player.</div>
+          </div>
+          <button class="alt" id="clearManualParticipantBtn" type="button">Clear</button>
+        </div>
+        <div class="row" style="margin-top:10px;">
+          <label for="manualParticipantName" style="min-width:80px;">Player</label>
+          <input id="manualParticipantName" type="text" placeholder="Username" />
+          <label for="manualParticipantBets">Rounds Played</label>
+          <input id="manualParticipantBets" type="number" min="0" value="0" />
+          <label for="manualParticipantTickets">Tickets</label>
+          <input id="manualParticipantTickets" type="number" min="0" value="0" />
+          <button id="saveManualParticipantBtn" type="button">Add / Update Player</button>
+        </div>
+      </div>
       <table>
         <thead>
           <tr>
             <th>Player</th>
-            <th>Bets</th>
+            <th>Rounds Played</th>
             <th>Tickets</th>
             <th>Last Bet</th>
+            <th></th>
           </tr>
         </thead>
         <tbody id="participants">
-          <tr><td colspan="4" class="muted">No participants yet.</td></tr>
+          <tr><td colspan="5" class="muted">No participants yet.</td></tr>
         </tbody>
       </table>
     </div>
@@ -309,12 +328,50 @@
     let winnerProofDataUrl = '';
     let winnerProofFileName = '';
     let raffleFormDirty = false;
+    let manualParticipantDirty = false;
+    let manualParticipantEditingKey = '';
 
     async function call(name, ...args) {
       if (!window.go || !window.go.main || !window.go.main.App || !window.go.main.App[name]) {
-        return null;
+        throw new Error(`Backend method ${name} is not available in the running app. Rebuild and relaunch Free Raffle Bot.`);
       }
       return window.go.main.App[name](...args);
+    }
+
+    function resetManualParticipantForm() {
+      manualParticipantDirty = false;
+      manualParticipantEditingKey = '';
+      document.getElementById('manualParticipantName').value = '';
+      document.getElementById('manualParticipantBets').value = '0';
+      document.getElementById('manualParticipantTickets').value = '0';
+      document.getElementById('manualParticipantMeta').textContent = 'Add someone to the active raffle or edit an existing player.';
+    }
+
+    function fillManualParticipantForm(participant) {
+      if (!participant) return;
+      manualParticipantDirty = false;
+      manualParticipantEditingKey = (participant.username || '').trim().toLowerCase();
+      document.getElementById('manualParticipantName').value = participant.username || '';
+      document.getElementById('manualParticipantBets').value = String(Number(participant.betCount || 0));
+      document.getElementById('manualParticipantTickets').value = String(Number(participant.tickets || 0));
+      document.getElementById('manualParticipantMeta').textContent = `Editing ${participant.username || 'player'} in the active raffle.`;
+    }
+
+    function syncManualParticipantForm(state) {
+      const wrapMeta = document.getElementById('manualParticipantMeta');
+      if (!state.currentSession) {
+        resetManualParticipantForm();
+        wrapMeta.textContent = 'Start or resume a raffle session to add people manually.';
+        return;
+      }
+      if (manualParticipantDirty || !manualParticipantEditingKey) {
+        return;
+      }
+      const list = state.currentSession.participants || [];
+      const match = list.find((p) => ((p.username || '').trim().toLowerCase()) === manualParticipantEditingKey);
+      if (match) {
+        fillManualParticipantForm(match);
+      }
     }
 
     function setStatus(state) {
@@ -391,15 +448,20 @@
       const tbody = document.getElementById('participants');
       tbody.innerHTML = '';
       const list = state.currentSession ? state.currentSession.participants || [] : [];
+      syncManualParticipantForm(state);
       if (list.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" class="muted">No participants yet.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="muted">No participants yet.</td></tr>';
       } else {
         for (const p of list) {
           const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${p.username}</td><td>${p.betCount}</td><td>${p.tickets}</td><td>${p.lastBet || ''}</td>`;
+          const safeName = JSON.stringify(p.username || '');
+          tr.innerHTML = `<td>${p.username}</td><td>${p.betCount}</td><td>${p.tickets}</td><td>${p.lastBet || ''}</td><td style="display:flex;gap:6px;"><button class="alt" type="button" onclick='editManualParticipant(${safeName})'>Edit</button><button class="stop" type="button" onclick='removeParticipant(${safeName})'>Remove</button></td>`;
           tbody.appendChild(tr);
         }
       }
+
+      document.getElementById('saveManualParticipantBtn').disabled = !state.currentSession;
+      document.getElementById('clearManualParticipantBtn').disabled = !state.currentSession && !manualParticipantEditingKey;
 
       const enableBtn = document.getElementById('enableBtn');
       enableBtn.textContent = state.enabled ? 'Disable' : 'Enable';
@@ -471,6 +533,39 @@
         await refresh();
       } catch (err) {
         alert(`Could not resume session: ${err}`);
+      }
+    }
+
+    async function editManualParticipant(username) {
+      const state = await call('GetState');
+      if (!state || !state.currentSession) {
+        return;
+      }
+      const list = state.currentSession.participants || [];
+      const targetKey = (username || '').trim().toLowerCase();
+      const participant = list.find((p) => ((p.username || '').trim().toLowerCase()) === targetKey);
+      if (participant) {
+        fillManualParticipantForm(participant);
+      }
+    }
+
+    async function removeParticipant(username) {
+      const trimmed = (username || '').trim();
+      if (!trimmed) {
+        return;
+      }
+      if (!confirm(`Remove ${trimmed} from this raffle session? This will patch the Discord tracker too.`)) {
+        return;
+      }
+      try {
+        await call('RemoveParticipantFromCurrentSession', trimmed);
+        if ((manualParticipantEditingKey || '') === trimmed.toLowerCase()) {
+          resetManualParticipantForm();
+        }
+        document.getElementById('manualParticipantMeta').textContent = `${trimmed} was removed. Discord tracker will update automatically.`;
+        await refresh();
+      } catch (err) {
+        alert(`Could not remove participant: ${err}`);
       }
     }
 
@@ -657,6 +752,32 @@
     document.getElementById('rafflePrize').addEventListener('input', () => { raffleFormDirty = true; });
     document.getElementById('rafflePrizeQty').addEventListener('input', () => { raffleFormDirty = true; });
     document.getElementById('raffleAutoUpdateChk').addEventListener('change', () => { raffleFormDirty = true; });
+    document.getElementById('manualParticipantName').addEventListener('input', () => { manualParticipantDirty = true; });
+    document.getElementById('manualParticipantBets').addEventListener('input', () => { manualParticipantDirty = true; });
+    document.getElementById('manualParticipantTickets').addEventListener('input', () => { manualParticipantDirty = true; });
+
+    document.getElementById('clearManualParticipantBtn').addEventListener('click', () => {
+      resetManualParticipantForm();
+    });
+
+    document.getElementById('saveManualParticipantBtn').addEventListener('click', async () => {
+      const username = (document.getElementById('manualParticipantName').value || '').trim();
+      const betCount = Math.max(0, parseInt(document.getElementById('manualParticipantBets').value || '0', 10) || 0);
+      const tickets = Math.max(0, parseInt(document.getElementById('manualParticipantTickets').value || '0', 10) || 0);
+      if (!username) {
+        alert('Enter a username first.');
+        return;
+      }
+      try {
+        await call('UpsertManualParticipant', username, betCount, tickets);
+        document.getElementById('manualParticipantMeta').textContent = `Saved ${username}. Discord tracker will update automatically.`;
+        manualParticipantDirty = false;
+        manualParticipantEditingKey = username.toLowerCase();
+        await refresh();
+      } catch (err) {
+        alert(`Could not save manual participant: ${err}`);
+      }
+    });
 
     document.getElementById('saveDiscordCfgBtn').addEventListener('click', async () => {
       const raffleName = (document.getElementById('raffleName').value || '').trim();
