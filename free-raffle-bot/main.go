@@ -122,15 +122,16 @@ type App struct {
 	lastQueryRows         int
 	lastShout             string
 
-	raffleName             string
-	rafflePrizeName        string
-	rafflePrizeQty         int
-	raffleHeroDataURL      string
-	raffleHeroFileName     string
-	raffleHeroImageURL     string
-	raffleHeroAttachmentID string
-	raffleAutoUpdate       bool
-	raffleMessageID        string
+	raffleName               string
+	rafflePrizeName          string
+	rafflePrizeQty           int
+	raffleHeroDataURL        string
+	raffleHeroFileName       string
+	raffleHeroImageURL       string
+	raffleHeroAttachmentID   string
+	raffleHeroAttachmentFile string
+	raffleAutoUpdate         bool
+	raffleMessageID          string
 
 	pendingProofBytes    []byte
 	pendingProofFileName string
@@ -514,6 +515,8 @@ func (a *App) SetRaffleDiscordConfig(
 	a.raffleHeroFileName = strings.TrimSpace(heroImageFileName)
 	if a.raffleHeroDataURL == "" {
 		a.raffleHeroImageURL = ""
+		a.raffleHeroAttachmentID = ""
+		a.raffleHeroAttachmentFile = ""
 	}
 	a.raffleAutoUpdate = autoUpdate
 	a.mu.Unlock()
@@ -696,6 +699,8 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	heroDataURL := strings.TrimSpace(a.raffleHeroDataURL)
 	heroFileName := strings.TrimSpace(a.raffleHeroFileName)
 	heroImageURL := strings.TrimSpace(a.raffleHeroImageURL)
+	heroAttachmentID := strings.TrimSpace(a.raffleHeroAttachmentID)
+	heroAttachmentFile := strings.TrimSpace(a.raffleHeroAttachmentFile)
 	messageID := strings.TrimSpace(a.raffleMessageID)
 
 	var session *RaffleSession
@@ -826,7 +831,9 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		trackerEmbed["image"] = map[string]interface{}{"url": "attachment://" + strings.TrimSpace(session.WinnerProofFile)}
 	}
 
-	if heroImageURL != "" {
+	if heroAttachmentID != "" && heroAttachmentFile != "" {
+		promoEmbed["image"] = map[string]interface{}{"url": "attachment://" + heroAttachmentFile}
+	} else if heroImageURL != "" {
 		promoEmbed["image"] = map[string]interface{}{"url": heroImageURL}
 	}
 
@@ -842,7 +849,6 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	a.mu.Lock()
 	proofBytes := a.pendingProofBytes
 	proofFileName := strings.TrimSpace(a.pendingProofFileName)
-	heroAttachmentID := strings.TrimSpace(a.raffleHeroAttachmentID)
 	existingProofAttachmentID := ""
 	existingProofFileName := ""
 	if session != nil {
@@ -869,7 +875,11 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			attachmentsList := []map[string]interface{}{}
 			nextFileIdx := 0
 			if heroAttachmentID != "" {
-				attachmentsList = append(attachmentsList, map[string]interface{}{"id": heroAttachmentID})
+				heroAttachment := map[string]interface{}{"id": heroAttachmentID}
+				if heroAttachmentFile != "" {
+					heroAttachment["filename"] = heroAttachmentFile
+				}
+				attachmentsList = append(attachmentsList, heroAttachment)
 			}
 			attachmentsList = append(attachmentsList, map[string]interface{}{"id": strconv.Itoa(nextFileIdx), "filename": proofFileName})
 
@@ -905,10 +915,18 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 					{"id": existingProofAttachmentID, "filename": existingProofFileName},
 				}
 				if heroAttachmentID != "" {
-					payload["attachments"] = append(payload["attachments"].([]map[string]interface{}), map[string]interface{}{"id": heroAttachmentID})
+					heroAttachment := map[string]interface{}{"id": heroAttachmentID}
+					if heroAttachmentFile != "" {
+						heroAttachment["filename"] = heroAttachmentFile
+					}
+					payload["attachments"] = append(payload["attachments"].([]map[string]interface{}), heroAttachment)
 				}
 			} else if heroAttachmentID != "" {
-				payload["attachments"] = []map[string]interface{}{{"id": heroAttachmentID}}
+				heroAttachment := map[string]interface{}{"id": heroAttachmentID}
+				if heroAttachmentFile != "" {
+					heroAttachment["filename"] = heroAttachmentFile
+				}
+				payload["attachments"] = []map[string]interface{}{heroAttachment}
 			}
 			jb, err := json.Marshal(payload)
 			if err != nil {
@@ -1057,8 +1075,9 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	var respPayload struct {
 		ID          string `json:"id"`
 		Attachments []struct {
-			ID  string `json:"id"`
-			URL string `json:"url"`
+			ID       string `json:"id"`
+			Filename string `json:"filename"`
+			URL      string `json:"url"`
 		} `json:"attachments"`
 	}
 	_ = json.Unmarshal(body, &respPayload)
@@ -1076,6 +1095,9 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		}
 		if strings.TrimSpace(respPayload.Attachments[0].ID) != "" {
 			a.raffleHeroAttachmentID = strings.TrimSpace(respPayload.Attachments[0].ID)
+		}
+		if strings.TrimSpace(respPayload.Attachments[0].Filename) != "" {
+			a.raffleHeroAttachmentFile = strings.TrimSpace(respPayload.Attachments[0].Filename)
 		}
 	}
 	a.mu.Unlock()
