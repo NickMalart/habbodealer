@@ -34,6 +34,10 @@ export function PostOrUpdateRaffleWebhook() {
   return window['go']['main']['App']['PostOrUpdateRaffleWebhook']();
 }
 
+export function RepostRaffleWebhook() {
+  return window['go']['main']['App']['RepostRaffleWebhook']();
+}
+
 export function PostWinnerProofForCurrentSession(arg1, arg2) {
   return window['go']['main']['App']['PostWinnerProofForCurrentSession'](arg1, arg2);
 }

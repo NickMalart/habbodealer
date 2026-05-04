@@ -559,6 +559,21 @@ func (a *App) PostOrUpdateRaffleWebhook() string {
 	return "ok"
 }
 
+func (a *App) RepostRaffleWebhook() string {
+	a.mu.Lock()
+	a.raffleMessageID = ""
+	if a.currentSession != nil {
+		a.currentSession.WebhookMessageID = ""
+	}
+	a.mu.Unlock()
+
+	if err := a.postOrUpdateRaffleWebhook(nil, true, "repost"); err != nil {
+		a.logDebug("raffle webhook repost failed: %v", err)
+		return err.Error()
+	}
+	return "ok"
+}
+
 func (a *App) UpsertManualParticipant(username string, betCount int, tickets int) (RaffleState, error) {
 	name := normalizeUsername(username)
 	key := normalizeUsernameKey(name)

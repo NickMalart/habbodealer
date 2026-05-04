@@ -216,6 +216,7 @@
       <div class="row" style="margin-top: 12px;">
         <button class="alt" id="saveDiscordCfgBtn">Save Discord Settings</button>
         <button id="postRaffleWebhookBtn">Post / Update Raffle Message</button>
+        <button class="alt" id="repostRaffleWebhookBtn">Repost to Discord</button>
         <button class="alt" id="drawWinnerBtn">Draw Winner</button>
       </div>
 
@@ -811,6 +812,28 @@
         await refresh();
       } catch (err) {
         alert(`Could not post raffle webhook: ${err}`);
+      }
+    });
+
+    document.getElementById('repostRaffleWebhookBtn').addEventListener('click', async () => {
+      if (!confirm('This will send a brand-new Discord message (the old one stays). Continue?')) return;
+      try {
+        await call('SetRaffleDiscordConfig',
+          (document.getElementById('raffleName').value || '').trim(),
+          (document.getElementById('rafflePrize').value || '').trim(),
+          Math.max(1, parseInt(document.getElementById('rafflePrizeQty').value || '1', 10) || 1),
+          raffleHeroDataUrl,
+          raffleHeroFileName,
+          !!document.getElementById('raffleAutoUpdateChk').checked,
+        );
+        const result = await call('RepostRaffleWebhook');
+        if (result !== 'ok') {
+          alert(`Repost response: ${result}`);
+        }
+        raffleFormDirty = false;
+        await refresh();
+      } catch (err) {
+        alert(`Could not repost: ${err}`);
       }
     });
 

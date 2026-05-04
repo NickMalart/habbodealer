@@ -18,6 +18,8 @@ export function GetTicketAnnounceEnabled():Promise<boolean>;
 
 export function PostOrUpdateRaffleWebhook():Promise<string>;
 
+export function RepostRaffleWebhook():Promise<string>;
+
 export function PostWinnerProofForCurrentSession(arg1:string,arg2:string):Promise<string>;
 
 export function RemoveParticipantFromCurrentSession(arg1:string):Promise<main.RaffleState>;
