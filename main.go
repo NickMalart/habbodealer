@@ -2691,6 +2691,22 @@ func (a *App) syncGameHistory() {
 	}
 }
 
+func (a *App) syncCurrentGameEntry() {
+	a.AddLogMsg("[GAME_HISTORY] syncCurrentGameEntry start")
+
+	// Only persist the current entry being modified, not the entire history.
+	// This prevents expensive full-history upserts during busy gameplay.
+	a.gameHistoryMu.Lock()
+	if len(a.gameHistory) == 0 {
+		a.gameHistoryMu.Unlock()
+		return
+	}
+	current := a.gameHistory[len(a.gameHistory)-1]
+	a.gameHistoryMu.Unlock()
+
+	a.queueGameHistoryPersist([]GameHistoryEntry{current}, "sync_current")
+}
+
 func (a *App) findCurrentGameHistoryIndexLocked() int {
 	if strings.TrimSpace(a.currentGameHistoryID) == "" {
 		return -1
@@ -2761,7 +2777,7 @@ func (a *App) beginGameHistory(playerName string, betItems []TradeItem) {
 	}
 	// Persist game-begin record
 	go LogEvent("game_begin", entry, "Game started", map[string]string{"player": entry.PlayerName})
-	a.syncGameHistory()
+	a.syncCurrentGameEntry()
 }
 
 func (a *App) noteCurrentGameHistory(note string) {
@@ -2776,7 +2792,7 @@ func (a *App) noteCurrentGameHistory(note string) {
 	a.AddLogMsg("[GAME_HISTORY] noteCurrentGameHistory mutation complete")
 	a.gameHistoryMu.Unlock()
 	a.AddLogMsg("[GAME_HISTORY] noteCurrentGameHistory unlocked, syncing")
-	a.syncGameHistory()
+	a.syncCurrentGameEntry()
 }
 
 func (a *App) setCurrentGameHistoryGame(game string) {
@@ -2796,7 +2812,7 @@ func (a *App) setCurrentGameHistoryGame(game string) {
 	a.AddLogMsg("[GAME_HISTORY] setCurrentGameHistoryGame mutation complete")
 	a.gameHistoryMu.Unlock()
 	a.AddLogMsg("[GAME_HISTORY] setCurrentGameHistoryGame unlocked, syncing")
-	a.syncGameHistory()
+	a.syncCurrentGameEntry()
 }
 
 // setCurrentGameHistoryChoice records the normalized choice and the raw shout
@@ -2817,7 +2833,7 @@ func (a *App) setCurrentGameHistoryChoice(choice string, shout string) {
 	}
 	a.gameHistoryMu.Unlock()
 	a.AddLogMsg("[GAME_HISTORY] setCurrentGameHistoryChoice unlocked, syncing")
-	a.syncGameHistory()
+	a.syncCurrentGameEntry()
 }
 
 // setCurrentGameHistoryPayoutMultiplier stores the payout multiplier for the current entry
@@ -2835,7 +2851,7 @@ func (a *App) setCurrentGameHistoryPayoutMultiplier(mult int) {
 	}
 	a.gameHistoryMu.Unlock()
 	a.AddLogMsg("[GAME_HISTORY] setCurrentGameHistoryPayoutMultiplier unlocked, syncing")
-	a.syncGameHistory()
+	a.syncCurrentGameEntry()
 }
 
 func (a *App) setCurrentGameHistoryResults(playerResult string, dealerResult string, winner string, status string, complete bool) {
@@ -2881,7 +2897,7 @@ func (a *App) setCurrentGameHistoryResults(playerResult string, dealerResult str
 	a.AddLogMsg("[GAME_HISTORY] setCurrentGameHistoryResults mutation complete")
 	a.gameHistoryMu.Unlock()
 	a.AddLogMsg("[GAME_HISTORY] setCurrentGameHistoryResults unlocked, syncing")
-	a.syncGameHistory()
+	a.syncCurrentGameEntry()
 	if complete {
 		// Notify Discord webhook (if configured)
 		go a.sendDiscordWebhookForGame(completedEntry)
@@ -2918,7 +2934,7 @@ func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
 	a.AddLogMsg("[GAME_HISTORY] markCurrentGameHistoryIssue mutation complete")
 	a.gameHistoryMu.Unlock()
 	a.AddLogMsg("[GAME_HISTORY] markCurrentGameHistoryIssue unlocked, syncing")
-	a.syncGameHistory()
+	a.syncCurrentGameEntry()
 	if complete && completedEntry != nil {
 		go a.sendDiscordWebhookForGame(*completedEntry)
 		a.persistCurrentGameHistoryNow("game_issue")
@@ -2973,7 +2989,7 @@ func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note strin
 	a.AddLogMsg("[GAME_HISTORY] captureCurrentGameHistoryPayoutItems mutation complete")
 	a.gameHistoryMu.Unlock()
 	a.AddLogMsg("[GAME_HISTORY] captureCurrentGameHistoryPayoutItems unlocked, syncing")
-	a.syncGameHistory()
+	a.syncCurrentGameEntry()
 	// If this call marked the entry complete, send that single entry to Discord.
 	if complete && completedEntry != nil {
 		go a.sendDiscordWebhookForGame(*completedEntry)
