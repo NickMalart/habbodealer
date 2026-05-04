@@ -4644,8 +4644,9 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 		return
 	}
 
-	// Ensure dealer snapshot captured (prefer dedicated risk snapshot)
-	a.captureRiskSnapshot(false)
+	// Ensure dealer snapshot is fresh for this trade — always force so a stale
+	// snapshot from a previous session never inflates dealerRisk.
+	a.captureRiskSnapshot(true)
 
 	mutex.Lock()
 	if !riskInitialized {
@@ -5060,7 +5061,38 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			if !canPrompt {
 				return
 			}
-			sendMessageWithDelay(fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, max))
+			// Belt-and-suspenders: validate live snapshot covers dealerRisk before
+			// prompting. If the snapshot is short (e.g. stale from a prior trade),
+			// cap dealerRisk so we never over-promise.
+			mutex.Lock()
+			handItemsMu.Lock()
+			snap := make([]TradeItem, len(riskHandSnapshot))
+			copy(snap, riskHandSnapshot)
+			handItemsMu.Unlock()
+			liveCover := riskRelevantHandQuantity(snap, gameBetItems)
+			totalCommitted := playerRisk + dealerRisk
+			if liveCover < totalCommitted {
+				diff := totalCommitted - liveCover
+				if diff > dealerRisk {
+					diff = dealerRisk
+				}
+				a.AddLogMsg(fmt.Sprintf("[RISK] live cover %d < committed %d; capping dealerRisk by %d", liveCover, totalCommitted, diff))
+				dealerRisk -= diff
+			}
+			if dealerRisk <= 0 {
+				mutex.Unlock()
+				go a.finalizeRiskKeep()
+				return
+			}
+			curMax := maxTradeQuantityPerItem
+			if playerRisk < curMax {
+				curMax = playerRisk
+			}
+			if dealerRisk < curMax {
+				curMax = dealerRisk
+			}
+			mutex.Unlock()
+			sendMessageWithDelay(fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, curMax))
 		}(displayMax)
 		return
 	}
@@ -5126,7 +5158,38 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		if !canPrompt {
 			return
 		}
-		sendMessageWithDelay(fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, max))
+		// Belt-and-suspenders: validate live snapshot covers dealerRisk before
+		// prompting. If the snapshot is short (e.g. stale from a prior trade),
+		// cap dealerRisk so we never over-promise.
+		mutex.Lock()
+		handItemsMu.Lock()
+		snap := make([]TradeItem, len(riskHandSnapshot))
+		copy(snap, riskHandSnapshot)
+		handItemsMu.Unlock()
+		liveCover := riskRelevantHandQuantity(snap, gameBetItems)
+		totalCommitted := playerRisk + dealerRisk
+		if liveCover < totalCommitted {
+			diff := totalCommitted - liveCover
+			if diff > dealerRisk {
+				diff = dealerRisk
+			}
+			a.AddLogMsg(fmt.Sprintf("[RISK] live cover %d < committed %d; capping dealerRisk by %d", liveCover, totalCommitted, diff))
+			dealerRisk -= diff
+		}
+		if dealerRisk <= 0 {
+			mutex.Unlock()
+			go a.finalizeRiskKeep()
+			return
+		}
+		curMax := maxTradeQuantityPerItem
+		if playerRisk < curMax {
+			curMax = playerRisk
+		}
+		if dealerRisk < curMax {
+			curMax = dealerRisk
+		}
+		mutex.Unlock()
+		sendMessageWithDelay(fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, curMax))
 	}(displayMax)
 }
 
