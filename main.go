@@ -6098,47 +6098,44 @@ func startDealerOpenHeartbeat(a *App) {
 	dealerOpenMu.Lock()
 	announceSecs := dealerAnnounceSeconds
 	dealerOpenMu.Unlock()
+	emitNext := func(secsAway int, nextAt string) {
+		if a != nil && a.ctx != nil {
+			b, _ := json.Marshal(map[string]interface{}{"secsAway": secsAway, "nextAt": nextAt})
+			runtime.EventsEmit(a.ctx, "dealerOpenNextUpdate", string(b))
+		}
+	}
 
 	go func(id int, openMsg string, secs int) {
-		// Initial delay equal to announce interval (the immediate announce
-		// is performed elsewhere when reopening dealer). The heartbeat waits
-		// this interval before the first replay.
-		timer := time.NewTimer(time.Duration(secs) * time.Second)
-		defer timer.Stop()
+		defer emitNext(0, "")
 
-		select {
-		case <-timer.C:
-			if id != dealerOpenHeartbeatID {
-				dealerOpenHeartbeatActive = false
-				return
-			}
-			if !awaitingTradeOpen || !dealerTradeWindowOpen {
-				dealerOpenHeartbeatActive = false
-				return
-			}
-			if !dealerDiceReady() {
-				addLog(fmt.Sprintf("[TRADE_REOPEN] dice not ready; stopping reopen heartbeat (initial, %ds)", secs))
-				log.Printf("[TRADE_REOPEN] dice not ready; stopping reopen heartbeat (initial, %ds)", secs)
-				dealerTradeWindowOpen = false
-				dealerOpenHeartbeatActive = false
-				return
-			}
-			// First scheduled shout: only if not muted.
-			if isMuted {
-				addLog(fmt.Sprintf("[TRADE_REOPEN] initial %ds announcer skipped due to mute", secs))
-				log.Printf("[TRADE_REOPEN] initial %ds announcer skipped due to mute", secs)
-			} else {
-				addLog(fmt.Sprintf("[TRADE_REOPEN] initial %ds re-announcing dealer open", secs))
-				log.Printf("[TRADE_REOPEN] initial %ds re-announcing dealer open", secs)
-				sendMessageWithDelay(openMsg)
-			}
+		base := time.Duration(secs) * time.Second
+		if base < time.Second {
+			base = time.Second
 		}
 
-		// Periodic announcer using configured interval.
-		ticker := time.NewTicker(time.Duration(secs) * time.Second)
-		defer ticker.Stop()
+		for {
+			if id != dealerOpenHeartbeatID {
+				dealerOpenHeartbeatActive = false
+				return
+			}
+			if !awaitingTradeOpen || !dealerTradeWindowOpen {
+				dealerOpenHeartbeatActive = false
+				return
+			}
 
-		for range ticker.C {
+			// Add jitter to dealer-open shout cadence (not trade window timeout).
+			jitterWindow := base / 5
+			jitter := time.Duration(rand.Int63n(int64(jitterWindow)*2+1)) - jitterWindow
+			wait := base + jitter
+			if wait < time.Second {
+				wait = time.Second
+			}
+			nextAt := time.Now().Add(wait).Format("15:04:05")
+			emitNext(int(wait.Seconds()), nextAt)
+
+			timer := time.NewTimer(wait)
+			<-timer.C
+
 			if id != dealerOpenHeartbeatID {
 				dealerOpenHeartbeatActive = false
 				return
@@ -6148,16 +6145,21 @@ func startDealerOpenHeartbeat(a *App) {
 				return
 			}
 			if !dealerDiceReady() {
-				addLog(fmt.Sprintf("[TRADE_REOPEN] dice not ready; stopping %ds announcer", secs))
-				log.Printf("[TRADE_REOPEN] dice not ready; stopping %ds announcer", secs)
+				addLog(fmt.Sprintf("[TRADE_REOPEN] dice not ready; stopping jittered announcer (~%ds)", secs))
+				log.Printf("[TRADE_REOPEN] dice not ready; stopping jittered announcer (~%ds)", secs)
 				dealerTradeWindowOpen = false
 				dealerOpenHeartbeatActive = false
 				return
 			}
 
-			addLog(fmt.Sprintf("[TRADE_REOPEN] %ds periodic dealer-open announcer firing", secs))
-			log.Printf("[TRADE_REOPEN] %ds periodic dealer-open announcer firing", secs)
-			sendMessageWithDelay(openMsg)
+			if isMuted {
+				addLog(fmt.Sprintf("[TRADE_REOPEN] jittered dealer-open announcer skipped due to mute (wait=%ds)", int(wait.Seconds())))
+				log.Printf("[TRADE_REOPEN] jittered dealer-open announcer skipped due to mute (wait=%ds)", int(wait.Seconds()))
+			} else {
+				addLog(fmt.Sprintf("[TRADE_REOPEN] jittered dealer-open announcer firing (base=%ds wait=%ds)", secs, int(wait.Seconds())))
+				log.Printf("[TRADE_REOPEN] jittered dealer-open announcer firing (base=%ds wait=%ds)", secs, int(wait.Seconds()))
+				sendMessageWithDelay(openMsg)
+			}
 		}
 	}(id, dealerOpenMsg, announceSecs)
 }

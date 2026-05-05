@@ -342,6 +342,7 @@
           <div style="display:flex;gap:8px;justify-content:center;align-items:center;">
             <button class="save-button" @click="saveDealerOpen">Save</button>
           </div>
+          <div v-if="dealerOpenEnabled && dealerOpenNext > 0" style="text-align:center;margin-top:6px;font-size:12px;opacity:0.6;">Next dealer shout in {{ dealerOpenNext }}s</div>
         </div>
         <div class="form-group" style="margin-top:12px;">
           <fieldset style="border:1px solid rgba(255,255,255,0.08);padding:10px;border-radius:6px;">
@@ -964,6 +965,8 @@ export default {
       dealerOpenEnabled: true,
       dealerTradeSeconds: 45,
       dealerAnnounceSeconds: 45,
+      dealerOpenNext: 0,
+      dealerOpenCountdownTimer: null,
       // Dealer mode: when true, only Under/Over-7 is presented to players
       onlyUnderOverMode: false,
       // UI toggle: enable Under/Over-7 mode (allow '7' payout multiplier)
@@ -2735,10 +2738,31 @@ export default {
         this.dealerOpenEnabled = !!parsed.enabled;
         this.dealerTradeSeconds = parsed.tradeSeconds || parsed.seconds || 45;
         this.dealerAnnounceSeconds = parsed.announceSeconds || parsed.seconds || 45;
+        if (!parsed.enabled) {
+          this.dealerOpenNext = 0;
+          clearInterval(this.dealerOpenCountdownTimer);
+        }
+      } catch (e) {}
+    });
+    window.runtime.EventsOn("dealerOpenNextUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        clearInterval(this.dealerOpenCountdownTimer);
+        this.dealerOpenNext = parsed.secsAway || 0;
+        if (this.dealerOpenNext > 0) {
+          this.dealerOpenCountdownTimer = setInterval(() => {
+            if (this.dealerOpenNext > 0) this.dealerOpenNext--;
+            else clearInterval(this.dealerOpenCountdownTimer);
+          }, 1000);
+        }
       } catch (e) {}
     });
   },
-  beforeUnmount() {}
+  beforeUnmount() {
+    clearInterval(this.autoShoutCountdownTimer);
+    clearInterval(this.autoShoutCountdownTimer2);
+    clearInterval(this.dealerOpenCountdownTimer);
+  }
 };
 </script>
 
