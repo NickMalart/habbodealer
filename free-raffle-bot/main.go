@@ -531,11 +531,15 @@ func (a *App) SetRaffleDiscordConfig(
 	a.rafflePrizeQty = rafflePrizeQty
 	a.raffleHeroDataURL = strings.TrimSpace(heroImageDataURL)
 	a.raffleHeroFileName = strings.TrimSpace(heroImageFileName)
-	if a.raffleHeroDataURL == "" {
+	if a.raffleHeroDataURL != "" {
+		// New image file selected — clear stale Discord attachment IDs.
+		// They will be replaced with fresh IDs when the next POST uploads the file.
 		a.raffleHeroImageURL = ""
 		a.raffleHeroAttachmentID = ""
 		a.raffleHeroAttachmentFile = ""
 	}
+	// If no new image is provided, preserve existing attachment state so
+	// every subsequent PATCH still carries the hero image reference.
 	a.raffleAutoUpdate = autoUpdate
 	var sessionDBID int64
 	if a.currentSession != nil {
