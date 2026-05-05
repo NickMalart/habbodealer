@@ -1119,18 +1119,52 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			defer resp.Body.Close()
 			patchBody, _ := io.ReadAll(resp.Body)
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				if proofBytes != nil || existingProofAttachmentID != "" {
-					var patchResp struct {
-						Attachments []struct {
-							ID       string `json:"id"`
-							Filename string `json:"filename"`
-							URL      string `json:"url"`
-						} `json:"attachments"`
+				// Always parse all attachments from the PATCH response so we can
+				// refresh both the hero CDN URL/ID and the proof URL/ID. This
+				// ensures the hero image never disappears from the embed if Discord
+				// renews attachment IDs between patches.
+				var patchResp struct {
+					Attachments []struct {
+						ID       string `json:"id"`
+						Filename string `json:"filename"`
+						URL      string `json:"url"`
+					} `json:"attachments"`
+				}
+				_ = json.Unmarshal(patchBody, &patchResp)
+
+				// Extract updated hero attachment state from response.
+				newHeroID := ""
+				newHeroFile := ""
+				newHeroURL := ""
+				if heroAttachmentFile != "" {
+					for _, att := range patchResp.Attachments {
+						if strings.EqualFold(att.Filename, heroAttachmentFile) {
+							newHeroID = strings.TrimSpace(att.ID)
+							newHeroFile = strings.TrimSpace(att.Filename)
+							newHeroURL = strings.TrimSpace(att.URL)
+							break
+						}
 					}
-					_ = json.Unmarshal(patchBody, &patchResp)
-					cdnURL := ""
-					proofAttachmentID := ""
-					proofAttachmentFile := ""
+				}
+				// If the hero was present in the response by name but not found
+				// above (e.g. filename differs), fall back to any non-proof attachment.
+				if newHeroURL == "" && heroAttachmentID != "" {
+					for _, att := range patchResp.Attachments {
+						if strings.EqualFold(att.Filename, proofFileName) || strings.EqualFold(att.Filename, existingProofFileName) {
+							continue
+						}
+						newHeroID = strings.TrimSpace(att.ID)
+						newHeroFile = strings.TrimSpace(att.Filename)
+						newHeroURL = strings.TrimSpace(att.URL)
+						break
+					}
+				}
+
+				// Extract proof attachment state from response.
+				cdnURL := ""
+				proofAttachmentID := ""
+				proofAttachmentFile := ""
+				if proofBytes != nil || existingProofAttachmentID != "" {
 					for _, att := range patchResp.Attachments {
 						if strings.EqualFold(att.Filename, proofFileName) || (proofFileName == "" && strings.EqualFold(att.Filename, existingProofFileName)) {
 							cdnURL = strings.TrimSpace(att.URL)
@@ -1145,22 +1179,48 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 						proofAttachmentID = strings.TrimSpace(last.ID)
 						proofAttachmentFile = strings.TrimSpace(last.Filename)
 					}
-					a.mu.Lock()
-					if cdnURL != "" && a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
-						a.currentSession.WinnerProofURL = cdnURL
-						a.currentSession.WinnerProofID = proofAttachmentID
-						a.currentSession.WinnerProofFile = proofAttachmentFile
-					}
-					a.pendingProofBytes = nil
-					a.pendingProofFileName = ""
-					a.mu.Unlock()
 				}
+
+				heroMetaChanged := false
+				a.mu.Lock()
+				// Update hero attachment state so future PATCHes use the fresh ID/URL.
+				if newHeroURL != "" && newHeroURL != a.raffleHeroImageURL {
+					a.raffleHeroImageURL = newHeroURL
+					heroMetaChanged = true
+				}
+				if newHeroID != "" && newHeroID != a.raffleHeroAttachmentID {
+					a.raffleHeroAttachmentID = newHeroID
+					heroMetaChanged = true
+				}
+				if newHeroFile != "" && newHeroFile != a.raffleHeroAttachmentFile {
+					a.raffleHeroAttachmentFile = newHeroFile
+					heroMetaChanged = true
+				}
+				// Update proof attachment state.
+				if cdnURL != "" && a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
+					a.currentSession.WinnerProofURL = cdnURL
+					a.currentSession.WinnerProofID = proofAttachmentID
+					a.currentSession.WinnerProofFile = proofAttachmentFile
+				}
+				a.pendingProofBytes = nil
+				a.pendingProofFileName = ""
+				var metaSessionDBID int64
+				if heroMetaChanged && session != nil {
+					metaSessionDBID = session.DBID
+				}
+				a.mu.Unlock()
+
 				if session != nil && session.DBID > 0 && strings.TrimSpace(messageID) != "" {
 					if err := a.persistSessionWebhookMessageID(session.DBID, strings.TrimSpace(messageID)); err != nil {
 						a.logDebug("failed to persist webhook message id after patch session=%d id=%s err=%v", session.DBID, strings.TrimSpace(messageID), err)
 					}
 				}
-				a.logDebug("raffle webhook updated message id=%s reason=%s", messageID, reason)
+				if metaSessionDBID > 0 {
+					if err := a.saveSessionMeta(metaSessionDBID); err != nil {
+						a.logDebug("saveSessionMeta after patch hero refresh failed: %v", err)
+					}
+				}
+				a.logDebug("raffle webhook updated message id=%s reason=%s heroRefreshed=%v", messageID, reason, heroMetaChanged)
 				return nil
 			}
 			a.logDebug("raffle webhook update failed status=%d body=%s; falling back to create", resp.StatusCode, strings.TrimSpace(string(patchBody)))

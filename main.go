@@ -1522,41 +1522,54 @@ func (a *App) GetRiskEnabled() bool {
 	return v
 }
 
-// runAutoShoutLoop runs the ticker that shouts the configured phrase.
+// runAutoShoutLoop shouts the configured phrase on a jittered interval.
+// Each cycle waits the configured duration ±20% to avoid a perfectly
+// mechanical cadence that looks bot-like.
 func (a *App) runAutoShoutLoop(stopChan chan struct{}, phrase string, seconds int) {
-	ticker := time.NewTicker(time.Duration(seconds) * time.Second)
-	defer ticker.Stop()
-
-	a.AddLogMsg(fmt.Sprintf("[AUTO_SHOUT] started: every %ds -> %q", seconds, phrase))
+	base := time.Duration(seconds) * time.Second
+	a.AddLogMsg(fmt.Sprintf("[AUTO_SHOUT] started: ~every %ds -> %q", seconds, phrase))
 
 	for {
+		// ±20% jitter around the base interval
+		jitter := time.Duration(rand.Int63n(int64(base/5)*2) - int64(base/5))
+		wait := base + jitter
+		nextAt := time.Now().Add(wait).Format("15:04:05")
+		a.AddLogMsg(fmt.Sprintf("[AUTO_SHOUT] next shout in %ds (at %s)", int(wait.Seconds()), nextAt))
+		if a.ctx != nil {
+			b, _ := json.Marshal(map[string]interface{}{"slot": 1, "secsAway": int(wait.Seconds()), "nextAt": nextAt})
+			runtime.EventsEmit(a.ctx, "autoShoutNextUpdate", string(b))
+		}
 		select {
 		case <-stopChan:
 			a.AddLogMsg("[AUTO_SHOUT] stopped")
+			if a.ctx != nil {
+				b, _ := json.Marshal(map[string]interface{}{"slot": 1, "secsAway": 0, "nextAt": ""})
+				runtime.EventsEmit(a.ctx, "autoShoutNextUpdate", string(b))
+			}
 			return
-
-		case <-ticker.C:
-			autoShoutMu.Lock()
-			enabled := autoShoutEnabled
-			currentPhrase := strings.TrimSpace(autoShoutPhrase)
-			autoShoutMu.Unlock()
-
-			if !enabled || currentPhrase == "" {
-				continue
-			}
-
-			if ChatIsDisabled {
-				a.AddLogMsg("[AUTO_SHOUT] skipped because chat is disabled")
-				continue
-			}
-
-			if isMuted {
-				a.AddLogMsg("[AUTO_SHOUT] skipped because muted")
-				continue
-			}
-
-			sendMessageWithDelay(currentPhrase)
+		case <-time.After(wait):
 		}
+
+		autoShoutMu.Lock()
+		enabled := autoShoutEnabled
+		currentPhrase := strings.TrimSpace(autoShoutPhrase)
+		autoShoutMu.Unlock()
+
+		if !enabled || currentPhrase == "" {
+			continue
+		}
+
+		if ChatIsDisabled {
+			a.AddLogMsg("[AUTO_SHOUT] skipped because chat is disabled")
+			continue
+		}
+
+		if isMuted {
+			a.AddLogMsg("[AUTO_SHOUT] skipped because muted")
+			continue
+		}
+
+		sendMessageWithDelay(currentPhrase)
 	}
 }
 
@@ -1644,41 +1657,54 @@ func (a *App) ToggleAutoShout2(enabled bool) AutoShoutConfig {
 	return cfg
 }
 
-// runAutoShoutLoop2 runs the ticker that shouts the configured phrase for slot 2.
+// runAutoShoutLoop2 shouts the configured phrase (slot 2) on a jittered interval.
+// Each cycle waits the configured duration ±20% to avoid a perfectly
+// mechanical cadence that looks bot-like.
 func (a *App) runAutoShoutLoop2(stopChan chan struct{}, phrase string, seconds int) {
-	ticker := time.NewTicker(time.Duration(seconds) * time.Second)
-	defer ticker.Stop()
-
-	a.AddLogMsg(fmt.Sprintf("[AUTO_SHOUT 2] started: every %ds -> %q", seconds, phrase))
+	base := time.Duration(seconds) * time.Second
+	a.AddLogMsg(fmt.Sprintf("[AUTO_SHOUT 2] started: ~every %ds -> %q", seconds, phrase))
 
 	for {
+		// ±20% jitter around the base interval
+		jitter := time.Duration(rand.Int63n(int64(base/5)*2) - int64(base/5))
+		wait := base + jitter
+		nextAt := time.Now().Add(wait).Format("15:04:05")
+		a.AddLogMsg(fmt.Sprintf("[AUTO_SHOUT 2] next shout in %ds (at %s)", int(wait.Seconds()), nextAt))
+		if a.ctx != nil {
+			b, _ := json.Marshal(map[string]interface{}{"slot": 2, "secsAway": int(wait.Seconds()), "nextAt": nextAt})
+			runtime.EventsEmit(a.ctx, "autoShoutNextUpdate", string(b))
+		}
 		select {
 		case <-stopChan:
 			a.AddLogMsg("[AUTO_SHOUT 2] stopped")
+			if a.ctx != nil {
+				b, _ := json.Marshal(map[string]interface{}{"slot": 2, "secsAway": 0, "nextAt": ""})
+				runtime.EventsEmit(a.ctx, "autoShoutNextUpdate", string(b))
+			}
 			return
-
-		case <-ticker.C:
-			autoShout2Mu.Lock()
-			enabled := autoShout2Enabled
-			currentPhrase := strings.TrimSpace(autoShout2Phrase)
-			autoShout2Mu.Unlock()
-
-			if !enabled || currentPhrase == "" {
-				continue
-			}
-
-			if ChatIsDisabled {
-				a.AddLogMsg("[AUTO_SHOUT 2] skipped because chat is disabled")
-				continue
-			}
-
-			if isMuted {
-				a.AddLogMsg("[AUTO_SHOUT 2] skipped because muted")
-				continue
-			}
-
-			sendMessageWithDelay(currentPhrase)
+		case <-time.After(wait):
 		}
+
+		autoShout2Mu.Lock()
+		enabled := autoShout2Enabled
+		currentPhrase := strings.TrimSpace(autoShout2Phrase)
+		autoShout2Mu.Unlock()
+
+		if !enabled || currentPhrase == "" {
+			continue
+		}
+
+		if ChatIsDisabled {
+			a.AddLogMsg("[AUTO_SHOUT 2] skipped because chat is disabled")
+			continue
+		}
+
+		if isMuted {
+			a.AddLogMsg("[AUTO_SHOUT 2] skipped because muted")
+			continue
+		}
+
+		sendMessageWithDelay(currentPhrase)
 	}
 }
 
@@ -2367,9 +2393,7 @@ func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
 				_ = tx.Rollback(ctx)
 			}()
 
-			ids := make([]string, 0, len(entries))
 			for _, e := range entries {
-				ids = append(ids, e.ID)
 				notesJSON, _ := json.Marshal(e.Notes)
 				if _, err := tx.Exec(ctx, `
 					INSERT INTO game_history_entries (
@@ -2448,16 +2472,6 @@ func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
 					`, e.ID, owner, i, item.Name, qty, item.RawData); err != nil {
 						return err
 					}
-				}
-			}
-
-			if len(ids) == 0 {
-				if _, err := tx.Exec(ctx, `DELETE FROM game_history_entries WHERE owner_key = $1`, owner); err != nil {
-					return err
-				}
-			} else {
-				if _, err := tx.Exec(ctx, `DELETE FROM game_history_entries WHERE owner_key = $1 AND NOT (id = ANY($2::text[]))`, owner, ids); err != nil {
-					return err
 				}
 			}
 
@@ -2618,11 +2632,11 @@ func (a *App) persistSingleGameEntryToDB(entry GameHistoryEntry) error {
 
 func (a *App) persistCurrentGameHistoryNow(reason string) {
 	a.gameHistoryMu.Lock()
-	if len(a.gameHistory) == 0 {
+	current, ok := a.currentGameHistoryEntryForPersistLocked()
+	if !ok {
 		a.gameHistoryMu.Unlock()
 		return
 	}
-	current := a.gameHistory[len(a.gameHistory)-1]
 	a.gameHistoryMu.Unlock()
 
 	// Persist just the current entry directly (like Discord webhook gets just the one entry)
@@ -2843,11 +2857,11 @@ func (a *App) syncCurrentGameEntry() {
 	// Only persist the current entry being modified, not the entire history.
 	// This prevents expensive full-history upserts during busy gameplay.
 	a.gameHistoryMu.Lock()
-	if len(a.gameHistory) == 0 {
+	current, ok := a.currentGameHistoryEntryForPersistLocked()
+	if !ok {
 		a.gameHistoryMu.Unlock()
 		return
 	}
-	current := a.gameHistory[len(a.gameHistory)-1]
 	a.gameHistoryMu.Unlock()
 
 	// Persist directly without the cleanup DELETE that would wipe other entries
@@ -2858,6 +2872,21 @@ func (a *App) syncCurrentGameEntry() {
 			a.AddLogMsg("[GAME_HISTORY][DB] sync single entry ok")
 		}
 	}()
+}
+
+// currentGameHistoryEntryForPersistLocked returns the active game-history entry
+// for persistence. Caller must hold a.gameHistoryMu.
+func (a *App) currentGameHistoryEntryForPersistLocked() (GameHistoryEntry, bool) {
+	if len(a.gameHistory) == 0 {
+		return GameHistoryEntry{}, false
+	}
+
+	if idx := a.findCurrentGameHistoryIndexLocked(); idx >= 0 && idx < len(a.gameHistory) {
+		return a.gameHistory[idx], true
+	}
+
+	// Fallback: newest entry is stored at the front.
+	return a.gameHistory[0], true
 }
 
 func (a *App) findCurrentGameHistoryIndexLocked() int {
@@ -4915,10 +4944,9 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 	mutex.Unlock()
 
 	a.AddLogMsg(fmt.Sprintf("[RISK] win recorded bet=%d payout=%d dealerRisk=%d playerRisk=%d", betQty, payout, dealerRisk, playerRisk))
-	msg := fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, displayMax)
 
 	// Send initial prompt (mute-aware) and start the risk-decision reminder monitor
-	go func(m string, player string) {
+	go func(player string) {
 		waitForUnmute(90 * time.Second)
 		mutex.Lock()
 		canPrompt := riskSessionActive && playerRisk > 0 && dealerRisk > 0
@@ -4929,13 +4957,14 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 		time.Sleep(800 * time.Millisecond)
 		mutex.Lock()
 		canPrompt = riskSessionActive && playerRisk > 0 && dealerRisk > 0
+		msg, ok := buildRiskPromptLocked()
 		mutex.Unlock()
-		if !canPrompt {
+		if !canPrompt || !ok {
 			return
 		}
-		sendMessageWithDelay(m)
-		a.startRiskDecisionTimeoutMonitor(m, player)
-	}(msg, playerName)
+		sendMessageWithDelay(msg)
+		a.startRiskDecisionTimeoutMonitor(player)
+	}(playerName)
 }
 
 // handleRiskBet validates and applies a player's risk bet (internal state move)
@@ -5281,8 +5310,9 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			if dealerRisk < curMax {
 				curMax = dealerRisk
 			}
+			msg := fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, curMax)
 			mutex.Unlock()
-			sendMessageWithDelay(fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, curMax))
+			sendMessageWithDelay(msg)
 		}(displayMax)
 		return
 	}
@@ -5379,9 +5409,29 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		if dealerRisk < curMax {
 			curMax = dealerRisk
 		}
+		msg := fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, curMax)
 		mutex.Unlock()
-		sendMessageWithDelay(fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, curMax))
+		sendMessageWithDelay(msg)
 	}(displayMax)
+}
+
+func buildRiskPromptLocked() (string, bool) {
+	if !riskSessionActive || playerRisk <= 0 || dealerRisk <= 0 {
+		return "", false
+	}
+
+	curMax := maxTradeQuantityPerItem
+	if playerRisk < curMax {
+		curMax = playerRisk
+	}
+	if dealerRisk < curMax {
+		curMax = dealerRisk
+	}
+	if curMax <= 0 {
+		return "", false
+	}
+
+	return fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, curMax), true
 }
 
 // finalizeRiskKeep converts the current `playerRisk` internal bank into a
@@ -5802,19 +5852,26 @@ func stopRiskDecisionTimeoutMonitor() {
 
 // startRiskDecisionTimeoutMonitor will repeat the initial Keep-or-Risk prompt
 // up to 4 more times (5 total) before auto-finalizing the Keep path.
-func (a *App) startRiskDecisionTimeoutMonitor(msg string, player string) {
+func (a *App) startRiskDecisionTimeoutMonitor(player string) {
 	stopRiskDecisionTimeoutMonitor()
 
 	riskDecisionTimeoutMonitorID++
 	monitorID := riskDecisionTimeoutMonitorID
 	riskDecisionTimeoutActive = true
 
-	go func(id int, reminder string, p string) {
+	go func(id int, p string) {
 		// Repeat 4 reminders (so initial + 4 = 5 total)
 		for attempt := 1; attempt <= 4; attempt++ {
 			time.Sleep(30 * time.Second)
 
+			mutex.Lock()
 			if id != riskDecisionTimeoutMonitorID || !riskDecisionTimeoutActive || !riskSessionActive {
+				mutex.Unlock()
+				return
+			}
+			reminder, ok := buildRiskPromptLocked()
+			mutex.Unlock()
+			if !ok {
 				return
 			}
 
@@ -5822,7 +5879,10 @@ func (a *App) startRiskDecisionTimeoutMonitor(msg string, player string) {
 			sendShout(reminder)
 		}
 
-		if id != riskDecisionTimeoutMonitorID || !riskDecisionTimeoutActive || !riskSessionActive {
+		mutex.Lock()
+		shouldFinalize := id == riskDecisionTimeoutMonitorID && riskDecisionTimeoutActive && riskSessionActive
+		mutex.Unlock()
+		if !shouldFinalize {
 			return
 		}
 
@@ -5832,7 +5892,7 @@ func (a *App) startRiskDecisionTimeoutMonitor(msg string, player string) {
 
 		// Convert bank -> payout and start normal payout flow.
 		go a.finalizeRiskKeep()
-	}(monitorID, msg, player)
+	}(monitorID, player)
 }
 
 func (a *App) startGameChoiceTimeoutMonitor() {

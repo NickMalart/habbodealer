@@ -115,10 +115,14 @@ func (a *App) evaluatePokerHand() {
 			resetPayoutRetryState()
 			if isRiskEnabled {
 				if riskSessionActive {
+					// Post the round outcome immediately so Discord shows who won this roll.
+					a.sendDiscordRoundResult(playerName, playerHand, hand, winnerMsg)
 					go a.applyRiskOutcome(true)
 					return
 				}
 				go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "Pkr", nil)
+				// Post round outcome so Discord shows the win even while risk prompt is pending.
+				a.sendDiscordRoundResult(playerName, playerHand, hand, winnerMsg)
 				return
 			}
 			startPayout(a, payoutTargetID, payoutTargetName)
@@ -375,10 +379,14 @@ func (a *App) finalizeBlackjackRound(playerWins bool, reason string) {
 		resetPayoutRetryState()
 		if isRiskEnabled {
 			if riskSessionActive {
+				// Post the round outcome immediately so Discord shows who won this roll.
+				a.sendDiscordRoundResult(playerName, playerHand, dealerHand, winnerMsg)
 				go a.applyRiskOutcome(true)
 				return
 			}
 			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "21", nil)
+			// Post round outcome so Discord shows the win even while risk prompt is pending.
+			a.sendDiscordRoundResult(playerName, playerHand, dealerHand, winnerMsg)
 			return
 		}
 		startPayout(a, payoutTargetID, payoutTargetName)

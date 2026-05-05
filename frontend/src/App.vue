@@ -288,6 +288,7 @@
           <button class="save-button" @click="saveAutoShout">Save</button>
           <button class="save-button" @click="toggleAutoShout">{{ autoShoutEnabled ? 'Stop Auto Shout' : 'Start Auto Shout' }}</button>
         </div>
+        <div v-if="autoShoutEnabled && autoShoutNext > 0" style="text-align:center;margin-top:6px;font-size:12px;opacity:0.6;">Next shout in {{ autoShoutNext }}s</div>
 
         <!-- Auto Shout slot #2 (duplicate) -->
         <div class="auto-shout-panel" style="margin-top:12px;padding:10px;border-top:1px dashed rgba(255,255,255,0.04);">
@@ -321,6 +322,7 @@
             <button class="save-button" @click="saveAutoShout2">Save</button>
             <button class="save-button" @click="toggleAutoShout2">{{ autoShoutEnabled2 ? 'Stop Auto Shout' : 'Start Auto Shout' }}</button>
           </div>
+          <div v-if="autoShoutEnabled2 && autoShoutNext2 > 0" style="text-align:center;margin-top:6px;font-size:12px;opacity:0.6;">Next shout in {{ autoShoutNext2 }}s</div>
         </div>
 
         <div style="margin-top:18px;border-top:1px solid rgba(255,255,255,0.04);padding-top:12px;">
@@ -949,11 +951,15 @@ export default {
       autoShoutSeconds: 30,
       autoShoutEnabled: false,
       autoShoutPresets: [],
+      autoShoutNext: 0,
+      autoShoutCountdownTimer: null,
       // Auto shout #2 UI state
       autoShoutPhrase2: '',
       autoShoutSeconds2: 30,
       autoShoutEnabled2: false,
       autoShoutPresets2: [],
+      autoShoutNext2: 0,
+      autoShoutCountdownTimer2: null,
       // Dealer open UI state
       dealerOpenEnabled: true,
       dealerTradeSeconds: 45,
@@ -2686,6 +2692,7 @@ export default {
         this.autoShoutEnabled = !!parsed.enabled;
         this.autoShoutPhrase = parsed.phrase || '';
         this.autoShoutSeconds = parsed.seconds || 30;
+        if (!parsed.enabled) { this.autoShoutNext = 0; clearInterval(this.autoShoutCountdownTimer); }
       } catch (e) {}
     });
     window.runtime.EventsOn("autoShoutUpdate2", (jsonStr) => {
@@ -2694,6 +2701,32 @@ export default {
         this.autoShoutEnabled2 = !!parsed.enabled;
         this.autoShoutPhrase2 = parsed.phrase || '';
         this.autoShoutSeconds2 = parsed.seconds || 30;
+        if (!parsed.enabled) { this.autoShoutNext2 = 0; clearInterval(this.autoShoutCountdownTimer2); }
+      } catch (e) {}
+    });
+    window.runtime.EventsOn("autoShoutNextUpdate", (jsonStr) => {
+      try {
+        const parsed = JSON.parse(jsonStr || '{}') || {};
+        if (parsed.slot === 1) {
+          clearInterval(this.autoShoutCountdownTimer);
+          this.autoShoutNext = parsed.secsAway || 0;
+          if (this.autoShoutNext > 0) {
+            this.autoShoutCountdownTimer = setInterval(() => {
+              if (this.autoShoutNext > 0) this.autoShoutNext--;
+              else clearInterval(this.autoShoutCountdownTimer);
+            }, 1000);
+          }
+        }
+        if (parsed.slot === 2) {
+          clearInterval(this.autoShoutCountdownTimer2);
+          this.autoShoutNext2 = parsed.secsAway || 0;
+          if (this.autoShoutNext2 > 0) {
+            this.autoShoutCountdownTimer2 = setInterval(() => {
+              if (this.autoShoutNext2 > 0) this.autoShoutNext2--;
+              else clearInterval(this.autoShoutCountdownTimer2);
+            }, 1000);
+          }
+        }
       } catch (e) {}
     });
     window.runtime.EventsOn("dealerOpenUpdate", (jsonStr) => {
