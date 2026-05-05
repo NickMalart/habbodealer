@@ -12689,6 +12689,18 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		return
 	}
 
+	// Strict UO7 mode: while waiting for initial game choice, only allow
+	// U/O/7-related choices. Ignore other game selections (e.g. 13, 21, pkr, tri).
+	if underOver7GameModeEnabled {
+		switch choice {
+		case "uo", "uo7", "uo_over", "uo_under":
+			// allowed as-is
+		default:
+			a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] ignoring non-UO7 choice %q because UnderOver7 mode is enabled", choice))
+			return
+		}
+	}
+
 	// senderName already resolved above.
 
 	// Accept only if sender matches the locked trade starter.
