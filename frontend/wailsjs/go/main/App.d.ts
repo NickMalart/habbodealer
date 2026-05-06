@@ -116,7 +116,7 @@ export function ShowWindow():Promise<void>;
 
 export function SkipDiceSetupForTesting():Promise<void>;
 
-export function StartCasinoSetup(arg1:string,arg2:string,arg3:number,arg4:number,arg5:boolean):Promise<void>;
+export function StartCasinoSetup(arg1:string,arg2:string,arg3:number,arg4:number,arg5:boolean,arg6:Array<string>):Promise<void>;
 
 export function StopCasinoSetup():Promise<void>;
 

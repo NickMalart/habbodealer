@@ -230,8 +230,8 @@ export function SkipDiceSetupForTesting() {
   return window['go']['main']['App']['SkipDiceSetupForTesting']();
 }
 
-export function StartCasinoSetup(arg1, arg2, arg3, arg4, arg5) {
-  return window['go']['main']['App']['StartCasinoSetup'](arg1, arg2, arg3, arg4, arg5);
+export function StartCasinoSetup(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['StartCasinoSetup'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
 export function StopCasinoSetup() {

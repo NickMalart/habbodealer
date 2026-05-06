@@ -121,6 +121,11 @@ var (
 	// Pending variant selection when prompting for Over/Under (set by beginUO7ChoiceSequence)
 	pendingUoVariant          string
 	onlyUnderOver7Mode        bool // when true, dealer prompts only Under/Over-7
+	enabledGamePkr            bool = true
+	enabledGame21             bool = true
+	enabledGame13             bool = true
+	enabledGameTri            bool = true
+	enabledGameUO7            bool = false
 	pokerSequencePlayerName   string
 	pokerSequencePlayerResult PokerHandResult
 	pokerSequencePlayerHand   string
@@ -5042,17 +5047,9 @@ func (a *App) handleRiskBet(n int, sender string) {
 		}
 	}
 
-	var msg string
-	if underOver7GameModeEnabled {
-		mutex.Lock()
-		m := underOver7PayoutMultiplier
-		mutex.Unlock()
-		msg = fmt.Sprintf("Shout U (2-6), O (8-12) or 7 to WIN x%d!", m)
-	} else if onlyUnderOver7Mode {
-		msg = "Shout U (2-6) or O (8-12) to DOUBLE!"
-	} else {
-		msg = "Shout pkr, 21, 13, trih, tril"
-	}
+	mutex.Lock()
+	msg := buildGameChoicePromptLocked()
+	mutex.Unlock()
 
 	a.AddLogMsg(fmt.Sprintf("[RISK] prompting for game choice: %q (partner=%q id=%d)", msg, awaitingGameChoicePartnerName, awaitingGameChoicePartnerID))
 	sendShout(msg)
@@ -5178,28 +5175,37 @@ func (a *App) executeRiskRound() {
 			mutex.Lock()
 			uoPlayerChoice = v
 			uoRoundActive = true
+			isUORolling = true
 			mutex.Unlock()
 		} else {
 			mutex.Lock()
 			uoRoundActive = true
+			isUORolling = true
 			mutex.Unlock()
 		}
 		a.rollUnderOverDice()
 	case "13":
 		mutex.Lock()
 		thirteenPlayerTurn = true
+		is13Rolling = true
 		mutex.Unlock()
 		a.roll13Dice()
 	case "Tri":
 		if v, ok := params["mode"].(string); ok {
 			mutex.Lock()
 			triMode = v
+			isTriRolling = true
+			mutex.Unlock()
+		} else {
+			mutex.Lock()
+			isTriRolling = true
 			mutex.Unlock()
 		}
 		a.rollTriDice()
 	case "21":
 		mutex.Lock()
 		blackjackPlayerTurn = true
+		isBJRolling = true
 		mutex.Unlock()
 		a.rollBjDice()
 	default:
@@ -5922,22 +5928,9 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 				return
 			}
 
-			var reminder string
-			if underOver7GameModeEnabled {
-				mutex.Lock()
-				m := underOver7PayoutMultiplier
-				pv := pendingUoVariant
-				mutex.Unlock()
-				if pv == "uo" {
-					reminder = "Shout U (2-6), O (8-12) to DOUBLE!"
-				} else {
-					reminder = fmt.Sprintf("Shout U (2-6), O (8-12) or 7 to WIN x%d!", m)
-				}
-			} else if onlyUnderOver7Mode {
-				reminder = "Shout U (2-6) or O (8-12) to DOUBLE!"
-			} else {
-				reminder = "Shout pkr, 21, 13, trih, tril"
-			}
+			mutex.Lock()
+			reminder := buildGameChoicePromptLocked()
+			mutex.Unlock()
 
 			a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] repeating prompt %d/%d for %s", attempt, reminderCount, player))
 			sendShout(reminder)
@@ -9305,22 +9298,9 @@ func (a *App) sendTradeCompletionMessage() {
 	a.beginGameHistory(partnerName, gameBetItems)
 	a.AddLogMsg("[TRADE_FLOW] beginGameHistory returned")
 
-	var msg string
-	if underOver7GameModeEnabled {
-		mutex.Lock()
-		m := underOver7PayoutMultiplier
-		pv := pendingUoVariant
-		mutex.Unlock()
-		if pv == "uo" {
-			msg = "Shout U (2-6), O (8-12) to DOUBLE!"
-		} else {
-			msg = fmt.Sprintf("Shout U (2-6), O (8-12) to DOUBLE! or 7 to WIN x%d!", m)
-		}
-	} else if onlyUnderOver7Mode {
-		msg = "Shout U (2-6) or O (8-12) to DOUBLE!"
-	} else {
-		msg = "Shout pkr, 21, 13, trih, tril"
-	}
+	mutex.Lock()
+	msg := buildGameChoicePromptLocked()
+	mutex.Unlock()
 	awaitingGameChoice = true
 	gameChoiceUnreadableWarned = false
 	awaitingGameChoicePartnerName = normalizeUsername(strings.TrimSpace(tradeStarterName))
@@ -9353,6 +9333,103 @@ func (a *App) sendTradeCompletionMessage() {
 
 	a.AddLogMsg(fmt.Sprintf("[TRADE_MESSAGE] shouting: %q", msg))
 	sendShout(msg)
+}
+
+func setEnabledGamesFromSelection(codes []string) {
+	// Defaults preserve historical behavior when no selection is provided.
+	enabledGamePkr = true
+	enabledGame21 = true
+	enabledGame13 = true
+	enabledGameTri = true
+	enabledGameUO7 = false
+
+	if len(codes) == 0 {
+		return
+	}
+
+	enabledGamePkr = false
+	enabledGame21 = false
+	enabledGame13 = false
+	enabledGameTri = false
+	enabledGameUO7 = false
+
+	for _, raw := range codes {
+		s := strings.ToLower(strings.TrimSpace(raw))
+		s = gameChoiceCleanupRe.ReplaceAllString(s, "")
+		switch s {
+		case "pkr", "poker":
+			enabledGamePkr = true
+		case "21":
+			enabledGame21 = true
+		case "13":
+			enabledGame13 = true
+		case "tri", "trih", "tril", "trihigh", "trilow":
+			enabledGameTri = true
+		case "uo", "uo7", "underover", "underover7":
+			enabledGameUO7 = true
+		}
+	}
+
+	if !enabledGamePkr && !enabledGame21 && !enabledGame13 && !enabledGameTri && !enabledGameUO7 {
+		enabledGamePkr = true
+		enabledGame21 = true
+		enabledGame13 = true
+		enabledGameTri = true
+	}
+}
+
+func enabledGameChoicePartsLocked() []string {
+	parts := make([]string, 0, 5)
+	if enabledGamePkr {
+		parts = append(parts, "pkr")
+	}
+	if enabledGame21 {
+		parts = append(parts, "21")
+	}
+	if enabledGame13 {
+		parts = append(parts, "13")
+	}
+	if enabledGameTri {
+		parts = append(parts, "tri")
+	}
+	if enabledGameUO7 {
+		parts = append(parts, "uo7")
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "pkr", "21", "13", "tri")
+	}
+	return parts
+}
+
+func buildGameChoicePromptLocked() string {
+	if underOver7GameModeEnabled {
+		m := underOver7PayoutMultiplier
+		if pendingUoVariant == "uo" {
+			return "Shout U (2-6), O (8-12) to DOUBLE!"
+		}
+		return fmt.Sprintf("Shout U (2-6), O (8-12) to DOUBLE! or 7 to WIN x%d!", m)
+	}
+	if onlyUnderOver7Mode {
+		return "Shout U (2-6) or O (8-12) to DOUBLE!"
+	}
+	return "Shout " + strings.Join(enabledGameChoicePartsLocked(), ", ")
+}
+
+func isGameChoiceEnabledLocked(choice string) bool {
+	switch choice {
+	case "pkr":
+		return enabledGamePkr
+	case "21":
+		return enabledGame21
+	case "13":
+		return enabledGame13
+	case "tri", "trihigh", "trilow":
+		return enabledGameTri
+	case "uo", "uo7", "uo_over", "uo_under":
+		return enabledGameUO7
+	default:
+		return false
+	}
 }
 
 func formatTradeItemName(name string) string {
@@ -10353,7 +10430,7 @@ func (a *App) beginUOChoiceSequence() {
 		awaitingUOChoicePartnerID = lastTradePartnerID
 	}
 
-	msg := "Over or Under?"
+	msg := "Shout U (1-6) or O (8-12)? - Just shout U or O!"
 	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
 	sendShout(msg)
 }
@@ -10393,7 +10470,7 @@ func (a *App) beginUO7ChoiceSequence() {
 		awaitingUOChoicePartnerID = lastTradePartnerID
 	}
 
-	msg := "Over, Under or 7?"
+	msg := "O (over), U (under) or 7? - Just shout O, U or 7!"
 	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
 	sendShout(msg)
 }
@@ -10961,9 +11038,15 @@ func getExpectedDiceCount() int {
 // when the user clicks the "Start Casino" button. It resets any existing dice and
 // enables recording of incoming dice IDs. It also receives trade-limit configuration
 // values which are stored in global state and emitted in live-dealer payloads.
-func (a *App) StartCasinoSetup(dealerName string, roomName string, maxUniqueItems int, maxQuantityPerItem int, riskEnabled bool) {
+func (a *App) StartCasinoSetup(dealerName string, roomName string, maxUniqueItems int, maxQuantityPerItem int, riskEnabled bool, enabledGames []string) {
 	// Reset state first (this will lock/unlock internally)
 	resetDiceState()
+
+	mutex.Lock()
+	setEnabledGamesFromSelection(enabledGames)
+	selectedPrompt := strings.Join(enabledGameChoicePartsLocked(), ", ")
+	mutex.Unlock()
+	a.AddLogMsg(fmt.Sprintf("[CONFIG] enabled games = %s", selectedPrompt))
 
 	// Apply risk mode flag from frontend
 	mutex.Lock()
@@ -11330,50 +11413,73 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 	if len(diceData) < 2 {
 		return
 	}
+	if len(diceData)%2 != 0 {
+		a.AddLogMsg(fmt.Sprintf("[DICE_PARSE] odd DICE_VALUE field count=%d payload=%q", len(diceData), rawData))
+	}
 
-	diceIDStr := diceData[0]
-	diceID, err := strconv.Atoi(diceIDStr)
-	if err != nil {
-		logrus.WithFields(logrus.Fields{"dice_id_str": diceIDStr, "error": err}).Warn("Failed to parse dice ID")
+	type diceResultPair struct {
+		diceID   int
+		rawValue int
+		adjValue int
+	}
+
+	pairs := make([]diceResultPair, 0, len(diceData)/2)
+	for i := 0; i+1 < len(diceData); i += 2 {
+		diceIDStr := diceData[i]
+		diceID, err := strconv.Atoi(diceIDStr)
+		if err != nil {
+			logrus.WithFields(logrus.Fields{"dice_id_str": diceIDStr, "error": err}).Warn("Failed to parse dice ID")
+			continue
+		}
+		rememberDiceID(diceID)
+
+		diceValueStr := diceData[i+1]
+		diceValue, err := strconv.Atoi(diceValueStr)
+		if err != nil {
+			logrus.WithFields(logrus.Fields{"dice_value_str": diceValueStr, "error": err}).Warn("Failed to parse dice value")
+			continue
+		}
+
+		pairs = append(pairs, diceResultPair{
+			diceID:   diceID,
+			rawValue: diceValue,
+			adjValue: diceValue - (diceID * 38),
+		})
+	}
+
+	if len(pairs) == 0 {
 		return
 	}
-	rememberDiceID(diceID)
-
-	diceValueStr := diceData[1]
-	diceValue, err := strconv.Atoi(diceValueStr)
-	if err != nil {
-		logrus.WithFields(logrus.Fields{"dice_value_str": diceValueStr, "error": err}).Warn("Failed to parse dice value")
-		return
-	}
-	adjustedDiceValue := diceValue - (diceID * 38)
 
 	needEmit := false
 	mutex.Lock()
-	for i, dice := range diceList {
-		if dice.ID == diceID {
-			if dice.IsRolling && (isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling) {
-				dice.IsRolling = false
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							a.AddLogMsg(fmt.Sprintf("[DICE_SYNC_GUARD] recovered from resultsWaitGroup.Done panic for dice %d: %v", diceID, r))
-						}
+	for _, pair := range pairs {
+		for i, dice := range diceList {
+			if dice.ID == pair.diceID {
+				if dice.IsRolling && (isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling) {
+					dice.IsRolling = false
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								a.AddLogMsg(fmt.Sprintf("[DICE_SYNC_GUARD] recovered from resultsWaitGroup.Done panic for dice %d: %v", pair.diceID, r))
+							}
+						}()
+						resultsWaitGroup.Done()
 					}()
-					resultsWaitGroup.Done()
-				}()
-			}
-			diceList[i].Value = adjustedDiceValue
-			diceList[i].IsClosed = diceList[i].Value == 0
+				}
+				diceList[i].Value = pair.adjValue
+				diceList[i].IsClosed = diceList[i].Value == 0
 
-			if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling {
-				log.Printf("Dice %d rolled: %d\n", diceID, adjustedDiceValue)
-				logRollResult := fmt.Sprintf("Dice %d rolled: %d\n", diceID, adjustedDiceValue)
-				a.AddLogMsg(logRollResult)
-				// Persist dice result for later inspection
-				go LogEvent("dice_result", map[string]interface{}{"dice_id": diceID, "value": adjustedDiceValue}, logRollResult, map[string]string{"source": "handleDiceResult"})
+				if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling {
+					log.Printf("Dice %d rolled: %d\n", pair.diceID, pair.adjValue)
+					logRollResult := fmt.Sprintf("Dice %d rolled: %d\n", pair.diceID, pair.adjValue)
+					a.AddLogMsg(logRollResult)
+					// Persist dice result for later inspection
+					go LogEvent("dice_result", map[string]interface{}{"dice_id": pair.diceID, "value": pair.adjValue}, logRollResult, map[string]string{"source": "handleDiceResult"})
+				}
+				needEmit = true
+				break
 			}
-			needEmit = true
-			break
 		}
 	}
 	mutex.Unlock()
@@ -12691,14 +12797,14 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		return
 	}
 
-	// Strict UO7 mode: while waiting for initial game choice, only allow
+	// Standalone UO modes: while waiting for initial game choice, only allow
 	// U/O/7-related choices. Ignore other game selections (e.g. 13, 21, pkr, tri).
-	if underOver7GameModeEnabled {
+	if underOver7GameModeEnabled || onlyUnderOver7Mode {
 		switch choice {
 		case "uo", "uo7", "uo_over", "uo_under":
 			// allowed as-is
 		default:
-			a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] ignoring non-UO7 choice %q because UnderOver7 mode is enabled", choice))
+			a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] ignoring non-UO choice %q because standalone UO mode is enabled", choice))
 			return
 		}
 	}
@@ -12735,6 +12841,18 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] backfilled trade partner name from chat sender: %q", lastTradePartnerName))
 	}
 
+	if !underOver7GameModeEnabled && !onlyUnderOver7Mode {
+		mutex.Lock()
+		enabled := isGameChoiceEnabledLocked(choice)
+		prompt := buildGameChoicePromptLocked()
+		mutex.Unlock()
+		if !enabled {
+			a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] ignoring disabled choice %q; allowed prompt: %q", choice, prompt))
+			sendShout("That game is disabled. " + prompt)
+			return
+		}
+	}
+
 	e.Block()
 	if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isHitting || is13Hitting || isClosing {
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %s selected but dice are busy", choice))
@@ -12748,8 +12866,9 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	awaitingGameChoicePartnerID = 0
 	awaitingGameChoicePartnerName = ""
 
-	// For Tri and Under/Over (two-step selection) we must first ask High/Low or Over/Under
-	if choice != "tri" && choice != "uo" {
+	// For Tri and Under/Over variants (two-step selection) we must first ask
+	// High/Low or Over/Under before starting the round.
+	if choice != "tri" && choice != "uo" && choice != "uo7" {
 		// Combine the standard "Starting" ack with the player-roll prompt
 		ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay(choice))
 		if riskSessionActive {
@@ -12786,8 +12905,18 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Tri; prompting for High/Low", index))
 		a.beginTriChoiceSequence()
 	case "uo7":
-		// Two-step Under/Over-7 selection: check whether UO7 coverage is possible
-		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Under/Over7; checking UO7 coverage", index))
+		// Two-step Under/Over-7 selection:
+		// - standalone UO7 mode allows Over/Under/7
+		// - mixed mode forces standard Over/Under only (no "7")
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Under/Over7; checking mode and coverage", index))
+
+		if !underOver7GameModeEnabled {
+			pendingUoVariant = "uo"
+			a.noteCurrentGameHistory("Mixed-mode UO7 selected - forcing Over/Under (no 7)")
+			a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Under/Over7 in mixed mode; prompting Over/Under only", index))
+			a.beginUOChoiceSequence()
+			break
+		}
 
 		handItemsMu.Lock()
 		ready := tradeHandSnapshotReady
@@ -13113,6 +13242,8 @@ func gameChoiceDisplay(choice string) string {
 		return "13"
 	case "tri":
 		return "Tri"
+	case "uo7":
+		return "UO7"
 	case "uo", "uo_over", "uo_under":
 		return "UO7"
 	case "trih":

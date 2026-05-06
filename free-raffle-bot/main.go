@@ -60,26 +60,32 @@ type RaffleParticipant struct {
 }
 
 type RaffleSession struct {
-	ID               int                 `json:"id"`
-	StartedAt        string              `json:"startedAt"`
-	ScheduledEndAt   string              `json:"scheduledEndAt,omitempty"`
-	EndedAt          string              `json:"endedAt,omitempty"`
-	BonusEvery       int                 `json:"bonusEvery"`
-	WebhookMessageID string              `json:"webhookMessageId,omitempty"`
-	Participants     []RaffleParticipant `json:"participants"`
-	WinnerName       string              `json:"winnerName,omitempty"`
-	WinnerTickets    int                 `json:"winnerTickets,omitempty"`
-	WinnerOdds       string              `json:"winnerOdds,omitempty"`
-	WinnerDrawnAt    string              `json:"winnerDrawnAt,omitempty"`
-	WinnerMethod     string              `json:"winnerMethod,omitempty"`
-	WinnerSummary    string              `json:"winnerSummary,omitempty"`
-	WinnerProofURL   string              `json:"winnerProofUrl,omitempty"`
-	WinnerProofID    string              `json:"-"`
-	WinnerProofFile  string              `json:"-"`
-	DBID             int64               `json:"-"`
-	CursorAt         time.Time           `json:"-"`
-	CursorEntry      string              `json:"-"`
-	ResumedAt        time.Time           `json:"-"` // zero if never resumed; bets before this time skip shouts
+	ID                 int                 `json:"id"`
+	StartedAt          string              `json:"startedAt"`
+	ScheduledEndAt     string              `json:"scheduledEndAt,omitempty"`
+	EndedAt            string              `json:"endedAt,omitempty"`
+	RaffleName         string              `json:"raffleName,omitempty"`
+	PrizeName          string              `json:"prizeName,omitempty"`
+	PrizeQty           int                 `json:"prizeQty,omitempty"`
+	BonusEvery         int                 `json:"bonusEvery"`
+	WebhookMessageID   string              `json:"webhookMessageId,omitempty"`
+	Participants       []RaffleParticipant `json:"participants"`
+	WinnerName         string              `json:"winnerName,omitempty"`
+	WinnerTickets      int                 `json:"winnerTickets,omitempty"`
+	WinnerOdds         string              `json:"winnerOdds,omitempty"`
+	WinnerDrawnAt      string              `json:"winnerDrawnAt,omitempty"`
+	WinnerMethod       string              `json:"winnerMethod,omitempty"`
+	WinnerSummary      string              `json:"winnerSummary,omitempty"`
+	WinnerProofURL     string              `json:"winnerProofUrl,omitempty"`
+	WinnerProofID      string              `json:"-"`
+	WinnerProofFile    string              `json:"-"`
+	HeroImageURL       string              `json:"-"`
+	HeroAttachmentID   string              `json:"-"`
+	HeroAttachmentFile string              `json:"-"`
+	DBID               int64               `json:"-"`
+	CursorAt           time.Time           `json:"-"`
+	CursorEntry        string              `json:"-"`
+	ResumedAt          time.Time           `json:"-"` // zero if never resumed; bets before this time skip shouts
 }
 
 type RaffleState struct {
@@ -139,7 +145,7 @@ type App struct {
 }
 
 func NewApp() *App {
-	return &App{bonusEvery: 5, raffleAutoUpdate: true, raffleName: "Flame Raffle", rafflePrizeName: "Purple Dragon Lamp", rafflePrizeQty: 30}
+	return &App{bonusEvery: 5, raffleAutoUpdate: true, raffleName: "Flame Raffle", rafflePrizeName: "Purple Dragon Lamp", rafflePrizeQty: 1}
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -286,25 +292,31 @@ func copySession(s *RaffleSession) *RaffleSession {
 		return nil
 	}
 	out := &RaffleSession{
-		ID:               s.ID,
-		StartedAt:        s.StartedAt,
-		ScheduledEndAt:   s.ScheduledEndAt,
-		EndedAt:          s.EndedAt,
-		BonusEvery:       s.BonusEvery,
-		WebhookMessageID: s.WebhookMessageID,
-		WinnerName:       s.WinnerName,
-		WinnerTickets:    s.WinnerTickets,
-		WinnerOdds:       s.WinnerOdds,
-		WinnerDrawnAt:    s.WinnerDrawnAt,
-		WinnerMethod:     s.WinnerMethod,
-		WinnerSummary:    s.WinnerSummary,
-		WinnerProofURL:   s.WinnerProofURL,
-		WinnerProofID:    s.WinnerProofID,
-		WinnerProofFile:  s.WinnerProofFile,
-		DBID:             s.DBID,
-		CursorAt:         s.CursorAt,
-		CursorEntry:      s.CursorEntry,
-		Participants:     make([]RaffleParticipant, len(s.Participants)),
+		ID:                 s.ID,
+		StartedAt:          s.StartedAt,
+		ScheduledEndAt:     s.ScheduledEndAt,
+		EndedAt:            s.EndedAt,
+		RaffleName:         s.RaffleName,
+		PrizeName:          s.PrizeName,
+		PrizeQty:           s.PrizeQty,
+		BonusEvery:         s.BonusEvery,
+		WebhookMessageID:   s.WebhookMessageID,
+		WinnerName:         s.WinnerName,
+		WinnerTickets:      s.WinnerTickets,
+		WinnerOdds:         s.WinnerOdds,
+		WinnerDrawnAt:      s.WinnerDrawnAt,
+		WinnerMethod:       s.WinnerMethod,
+		WinnerSummary:      s.WinnerSummary,
+		WinnerProofURL:     s.WinnerProofURL,
+		WinnerProofID:      s.WinnerProofID,
+		WinnerProofFile:    s.WinnerProofFile,
+		HeroImageURL:       s.HeroImageURL,
+		HeroAttachmentID:   s.HeroAttachmentID,
+		HeroAttachmentFile: s.HeroAttachmentFile,
+		DBID:               s.DBID,
+		CursorAt:           s.CursorAt,
+		CursorEntry:        s.CursorEntry,
+		Participants:       make([]RaffleParticipant, len(s.Participants)),
 	}
 	copy(out.Participants, s.Participants)
 	return out
@@ -543,6 +555,16 @@ func (a *App) SetRaffleDiscordConfig(
 	a.raffleAutoUpdate = autoUpdate
 	var sessionDBID int64
 	if a.currentSession != nil {
+		// Freeze display metadata once a message exists for this session.
+		// Later auto-updates should only update mutable tracker content.
+		if strings.TrimSpace(a.currentSession.WebhookMessageID) == "" {
+			a.currentSession.RaffleName = a.raffleName
+			a.currentSession.PrizeName = a.rafflePrizeName
+			a.currentSession.PrizeQty = a.rafflePrizeQty
+			a.currentSession.HeroImageURL = a.raffleHeroImageURL
+			a.currentSession.HeroAttachmentID = a.raffleHeroAttachmentID
+			a.currentSession.HeroAttachmentFile = a.raffleHeroAttachmentFile
+		}
 		sessionDBID = a.currentSession.DBID
 	}
 	a.mu.Unlock()
@@ -567,6 +589,16 @@ func (a *App) RepostRaffleWebhook() string {
 	a.mu.Lock()
 	a.raffleMessageID = ""
 	if a.currentSession != nil {
+		// Repost defines a new baseline for static session metadata.
+		a.currentSession.RaffleName = strings.TrimSpace(a.raffleName)
+		a.currentSession.PrizeName = strings.TrimSpace(a.rafflePrizeName)
+		a.currentSession.PrizeQty = a.rafflePrizeQty
+		if a.currentSession.PrizeQty <= 0 {
+			a.currentSession.PrizeQty = 1
+		}
+		a.currentSession.HeroImageURL = strings.TrimSpace(a.raffleHeroImageURL)
+		a.currentSession.HeroAttachmentID = strings.TrimSpace(a.raffleHeroAttachmentID)
+		a.currentSession.HeroAttachmentFile = strings.TrimSpace(a.raffleHeroAttachmentFile)
 		a.currentSession.WebhookMessageID = ""
 	}
 	a.mu.Unlock()
@@ -891,6 +923,26 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	if session != nil && strings.TrimSpace(session.WebhookMessageID) != "" {
 		messageID = strings.TrimSpace(session.WebhookMessageID)
 	}
+	if session != nil {
+		if n := strings.TrimSpace(session.RaffleName); n != "" {
+			raffleName = n
+		}
+		if n := strings.TrimSpace(session.PrizeName); n != "" {
+			prizeName = n
+		}
+		if session.PrizeQty > 0 {
+			prizeQty = session.PrizeQty
+		}
+		if n := strings.TrimSpace(session.HeroImageURL); n != "" {
+			heroImageURL = n
+		}
+		if n := strings.TrimSpace(session.HeroAttachmentID); n != "" {
+			heroAttachmentID = n
+		}
+		if n := strings.TrimSpace(session.HeroAttachmentFile); n != "" {
+			heroAttachmentFile = n
+		}
+	}
 	a.mu.Unlock()
 
 	if webhookURL == "" {
@@ -913,7 +965,7 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		prizeName = "Purple Dragon Lamp"
 	}
 	if prizeQty <= 0 {
-		prizeQty = 30
+		prizeQty = 1
 	}
 	prizeDisplay := fmt.Sprintf("%s x%d", prizeName, prizeQty)
 
@@ -1190,14 +1242,23 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 				// Update hero attachment state so future PATCHes use the fresh ID/URL.
 				if newHeroURL != "" && newHeroURL != a.raffleHeroImageURL {
 					a.raffleHeroImageURL = newHeroURL
+					if a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
+						a.currentSession.HeroImageURL = newHeroURL
+					}
 					heroMetaChanged = true
 				}
 				if newHeroID != "" && newHeroID != a.raffleHeroAttachmentID {
 					a.raffleHeroAttachmentID = newHeroID
+					if a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
+						a.currentSession.HeroAttachmentID = newHeroID
+					}
 					heroMetaChanged = true
 				}
 				if newHeroFile != "" && newHeroFile != a.raffleHeroAttachmentFile {
 					a.raffleHeroAttachmentFile = newHeroFile
+					if a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
+						a.currentSession.HeroAttachmentFile = newHeroFile
+					}
 					heroMetaChanged = true
 				}
 				// Update proof attachment state.
@@ -1350,14 +1411,23 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	if len(respPayload.Attachments) > 0 {
 		if strings.TrimSpace(respPayload.Attachments[0].URL) != "" {
 			a.raffleHeroImageURL = strings.TrimSpace(respPayload.Attachments[0].URL)
+			if a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
+				a.currentSession.HeroImageURL = strings.TrimSpace(respPayload.Attachments[0].URL)
+			}
 			heroAttachmentUpdated = true
 		}
 		if strings.TrimSpace(respPayload.Attachments[0].ID) != "" {
 			a.raffleHeroAttachmentID = strings.TrimSpace(respPayload.Attachments[0].ID)
+			if a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
+				a.currentSession.HeroAttachmentID = strings.TrimSpace(respPayload.Attachments[0].ID)
+			}
 			heroAttachmentUpdated = true
 		}
 		if strings.TrimSpace(respPayload.Attachments[0].Filename) != "" {
 			a.raffleHeroAttachmentFile = strings.TrimSpace(respPayload.Attachments[0].Filename)
+			if a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
+				a.currentSession.HeroAttachmentFile = strings.TrimSpace(respPayload.Attachments[0].Filename)
+			}
 			heroAttachmentUpdated = true
 		}
 	}
@@ -1434,33 +1504,39 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 		if bonusEvery <= 0 {
 			bonusEvery = 5
 		}
+		raffleName = strings.TrimSpace(a.raffleName)
+		if raffleName == "" {
+			raffleName = "Flame Raffle"
+		}
+		rafflePrizeName = strings.TrimSpace(a.rafflePrizeName)
+		if rafflePrizeName == "" {
+			rafflePrizeName = "Purple Dragon Lamp"
+		}
+		rafflePrizeQty = a.rafflePrizeQty
+		if rafflePrizeQty <= 0 {
+			rafflePrizeQty = 1
+		}
+		heroImageURL = strings.TrimSpace(a.raffleHeroImageURL)
+		heroAttachmentID = strings.TrimSpace(a.raffleHeroAttachmentID)
+		heroAttachmentFile = strings.TrimSpace(a.raffleHeroAttachmentFile)
 		a.currentSession = &RaffleSession{
-			ID:             sessionID,
-			StartedAt:      startedAt,
-			ScheduledEndAt: scheduledEndAt,
-			BonusEvery:     bonusEvery,
-			Participants:   []RaffleParticipant{},
-			CursorAt:       startAt,
+			ID:                 sessionID,
+			StartedAt:          startedAt,
+			ScheduledEndAt:     scheduledEndAt,
+			RaffleName:         raffleName,
+			PrizeName:          rafflePrizeName,
+			PrizeQty:           rafflePrizeQty,
+			BonusEvery:         bonusEvery,
+			Participants:       []RaffleParticipant{},
+			CursorAt:           startAt,
+			HeroImageURL:       heroImageURL,
+			HeroAttachmentID:   heroAttachmentID,
+			HeroAttachmentFile: heroAttachmentFile,
 		}
 	} else {
 		a.mu.Unlock()
 		return a.GetState(), fmt.Errorf("a raffle session is already active")
 	}
-	raffleName = strings.TrimSpace(a.raffleName)
-	if raffleName == "" {
-		raffleName = "Flame Raffle"
-	}
-	rafflePrizeName = strings.TrimSpace(a.rafflePrizeName)
-	if rafflePrizeName == "" {
-		rafflePrizeName = "Purple Dragon Lamp"
-	}
-	rafflePrizeQty = a.rafflePrizeQty
-	if rafflePrizeQty <= 0 {
-		rafflePrizeQty = 30
-	}
-	heroImageURL = strings.TrimSpace(a.raffleHeroImageURL)
-	heroAttachmentID = strings.TrimSpace(a.raffleHeroAttachmentID)
-	heroAttachmentFile = strings.TrimSpace(a.raffleHeroAttachmentFile)
 	db = a.db
 	owner = a.ownerKey
 	a.enabled = true
@@ -2178,7 +2254,7 @@ func (a *App) saveSessionMeta(sessionDBID int64) error {
 		prizeName = "Purple Dragon Lamp"
 	}
 	if prizeQty <= 0 {
-		prizeQty = 30
+		prizeQty = 1
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -2390,7 +2466,7 @@ func (a *App) ensureTables() error {
 			webhook_message_id TEXT NOT NULL DEFAULT '',
 			raffle_name TEXT NOT NULL DEFAULT 'Flame Raffle',
 			prize_name TEXT NOT NULL DEFAULT 'Purple Dragon Lamp',
-			prize_qty INTEGER NOT NULL DEFAULT 30,
+			prize_qty INTEGER NOT NULL DEFAULT 1,
 			hero_image_url TEXT NOT NULL DEFAULT '',
 			hero_attachment_id TEXT NOT NULL DEFAULT '',
 			hero_attachment_file TEXT NOT NULL DEFAULT '',
@@ -2482,14 +2558,14 @@ func (a *App) ensureTables() error {
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS webhook_message_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS raffle_name TEXT NOT NULL DEFAULT 'Flame Raffle'`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS prize_name TEXT NOT NULL DEFAULT 'Purple Dragon Lamp'`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS prize_qty INTEGER NOT NULL DEFAULT 30`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS prize_qty INTEGER NOT NULL DEFAULT 1`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS hero_image_url TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS hero_attachment_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS hero_attachment_file TEXT NOT NULL DEFAULT ''`,
 		// Fix existing rows that still have the old hardcoded defaults
 		`UPDATE raffle_sessions SET raffle_name = 'Flame Raffle' WHERE raffle_name = 'Weekend Raffle'`,
 		`UPDATE raffle_sessions SET prize_name = 'Purple Dragon Lamp' WHERE prize_name = 'Mystery Prize'`,
-		`UPDATE raffle_sessions SET prize_qty = 30 WHERE prize_qty <= 1`,
+		`UPDATE raffle_sessions SET prize_qty = 1 WHERE prize_qty <= 0`,
 		`ALTER TABLE raffle_participants ADD COLUMN IF NOT EXISTS username_key TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE raffle_participants ADD COLUMN IF NOT EXISTS bet_count INTEGER NOT NULL DEFAULT 1`,
 		`ALTER TABLE raffle_participants ADD COLUMN IF NOT EXISTS ticket_count INTEGER NOT NULL DEFAULT 1`,
@@ -2567,14 +2643,20 @@ func (a *App) loadSessionsFromDB() error {
 			return err
 		}
 		rs := &RaffleSession{
-			ID:               int(s.id),
-			StartedAt:        s.startedAt.UTC().Format(time.RFC3339),
-			BonusEvery:       s.bonusEvery,
-			WebhookMessageID: strings.TrimSpace(s.webhookMessageID),
-			Participants:     []RaffleParticipant{},
-			DBID:             s.id,
-			CursorAt:         s.cursorAt.UTC(),
-			CursorEntry:      s.cursorID,
+			ID:                 int(s.id),
+			StartedAt:          s.startedAt.UTC().Format(time.RFC3339),
+			RaffleName:         strings.TrimSpace(s.raffleName),
+			PrizeName:          strings.TrimSpace(s.prizeName),
+			PrizeQty:           s.prizeQty,
+			BonusEvery:         s.bonusEvery,
+			WebhookMessageID:   strings.TrimSpace(s.webhookMessageID),
+			Participants:       []RaffleParticipant{},
+			DBID:               s.id,
+			CursorAt:           s.cursorAt.UTC(),
+			CursorEntry:        s.cursorID,
+			HeroImageURL:       strings.TrimSpace(s.heroImageURL),
+			HeroAttachmentID:   strings.TrimSpace(s.heroAttachmentID),
+			HeroAttachmentFile: strings.TrimSpace(s.heroAttachmentFile),
 		}
 		metaByID[s.id] = sessionMeta{
 			raffleName:         strings.TrimSpace(s.raffleName),
@@ -2661,16 +2743,22 @@ func (a *App) loadSessionsFromDB() error {
 		if m, ok := metaByID[current.DBID]; ok {
 			if m.raffleName != "" {
 				a.raffleName = m.raffleName
+				current.RaffleName = m.raffleName
 			}
 			if m.prizeName != "" {
 				a.rafflePrizeName = m.prizeName
+				current.PrizeName = m.prizeName
 			}
 			if m.prizeQty > 0 {
 				a.rafflePrizeQty = m.prizeQty
+				current.PrizeQty = m.prizeQty
 			}
 			a.raffleHeroImageURL = m.heroImageURL
 			a.raffleHeroAttachmentID = m.heroAttachmentID
 			a.raffleHeroAttachmentFile = m.heroAttachmentFile
+			current.HeroImageURL = m.heroImageURL
+			current.HeroAttachmentID = m.heroAttachmentID
+			current.HeroAttachmentFile = m.heroAttachmentFile
 		}
 	}
 	if a.nextSessionID < maxID {

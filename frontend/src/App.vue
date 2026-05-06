@@ -148,7 +148,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"></rect><circle cx="9" cy="9" r="1"></circle><circle cx="15" cy="9" r="1"></circle><circle cx="9" cy="15" r="1"></circle><circle cx="15" cy="15" r="1"></circle></svg>
             </span>
             <span class="dealer-post-btn-copy">
-              <strong>Post to dice-gamesd</strong>
+              <strong>Post to dice-games</strong>
               <small>Dice-focused room updates</small>
             </span>
           </button>
@@ -160,16 +160,16 @@
       <div class="dice-setup-modal-backdrop" v-if="showDiceSetupModal" @click="showDiceSetupModal = false">
         <div class="dice-setup-modal" @click.stop>
           <div class="game-guide-header">
-            <h3 class="section-title game-guide-title">Roll all {{ (onlyUnderOverMode || underOver7Mode) ? 2 : 5 }} dice</h3>
+            <h3 class="section-title game-guide-title">Roll all {{ underOver7Mode ? 2 : 5 }} dice</h3>
             <button type="button" class="copy-btn" @click="showDiceSetupModal = false">Close</button>
           </div>
-          <p class="game-guide-text">Please roll all {{ (onlyUnderOverMode || underOver7Mode) ? 2 : 5 }} dice in the game. Circles will turn green as each dice is recorded.</p>
+          <p class="game-guide-text">Please roll all {{ underOver7Mode ? 2 : 5 }} dice in the game. Circles will turn green as each dice is recorded.</p>
           <div class="dice-circles">
             <div v-for="(slot, idx) in diceSetup" :key="idx" :class="['dice-circle', { rolled: diceSetup[idx] && diceSetup[idx].rolled }]">{{ idx + 1 }}</div>
           </div>
           <div class="game-guide-block">
             <div class="game-guide-label">Status</div>
-            <div class="game-guide-text">{{ (diceSetup.filter(d => d.rolled).length) || 0 }} / {{ diceSetup.length || ((onlyUnderOverMode || underOver7Mode) ? 2 : 5) }} rolled</div>
+            <div class="game-guide-text">{{ (diceSetup.filter(d => d.rolled).length) || 0 }} / {{ diceSetup.length || (underOver7Mode ? 2 : 5) }} rolled</div>
           </div>
         </div>
       </div>
@@ -207,11 +207,7 @@
               Max Unique Items = how many different item types the player may offer. Max Quantity Per Item = max allowed amount for any one item type.
             </div>
             <div class="game-guide-block" style="margin-top:8px;">
-              <div class="game-guide-label">Dealer Mode</div>
-              <label style="font-size:13px;display:flex;align-items:center;gap:8px;">
-                <input type="checkbox" v-model="onlyUnderOverMode" />
-                Only Under/Over 7 (only show Over/Under to players)
-              </label>
+              <div class="game-guide-label">Standalone Mode (2-dice, no Risk)</div>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;">
                 <input type="checkbox" v-model="underOver7Mode" />
                 Enable Under/Over-7 mode (allow '7' x{{ uo7Multiplier }} payout)
@@ -219,7 +215,30 @@
                   <option v-for="n in [2,3,4,5]" :key="n" :value="n">x{{ n }}</option>
                 </select>
               </label>
-              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;">
+            </div>
+            <div class="game-guide-block" style="margin-top:8px;">
+              <div class="game-guide-label">Enabled Games</div>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;">
+                <input type="checkbox" v-model="enableGamePkr" :disabled="underOver7Mode" />
+                Poker (pkr)
+              </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
+                <input type="checkbox" v-model="enableGame21" :disabled="underOver7Mode" />
+                21
+              </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
+                <input type="checkbox" v-model="enableGame13" :disabled="underOver7Mode" />
+                13
+              </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
+                <input type="checkbox" v-model="enableGameTri" :disabled="underOver7Mode" />
+                Tri
+              </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
+                <input type="checkbox" v-model="enableGameUO7" :disabled="underOver7Mode" />
+                Under/Over-7 (uo7)
+              </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;border-top:1px solid #333;padding-top:6px;">
                 <input type="checkbox" v-model="riskModeEnabledInput" :disabled="underOver7Mode" />
                 Enable Risk Mode
               </label>
@@ -968,11 +987,17 @@ export default {
       dealerOpenNext: 0,
       dealerOpenCountdownTimer: null,
       // Dealer mode: when true, only Under/Over-7 is presented to players
-      onlyUnderOverMode: false,
+
       // UI toggle: enable Under/Over-7 mode (allow '7' payout multiplier)
       underOver7Mode: false,
       // Dealer-selected UO7 payout multiplier (2..5)
       uo7Multiplier: 3,
+      // Enabled games for normal mixed mode (when standalone UO modes are off)
+      enableGamePkr: false,
+      enableGame21: false,
+      enableGame13: false,
+      enableGameTri: false,
+      enableGameUO7: false,
       // Risk mode: when true, enable Risk banking mechanic
       riskModeEnabledInput: false,
       // Block recommended-rooms packet
@@ -1251,15 +1276,26 @@ export default {
             return;
           }
 
-          // send dealer mode to backend before starting setup
-          await window.go.main.App.SetOnlyUnderOver(this.onlyUnderOverMode);
+          const selectedGames = [];
+          if (this.enableGamePkr) selectedGames.push('pkr');
+          if (this.enableGame21) selectedGames.push('21');
+          if (this.enableGame13) selectedGames.push('13');
+          if (this.enableGameTri) selectedGames.push('tri');
+          if (this.enableGameUO7) selectedGames.push('uo7');
+
+          const standaloneMode = this.underOver7Mode;
+          if (!standaloneMode && selectedGames.length === 0) {
+            this.addLogMsg('[UI] Start cancelled: select at least one enabled game (pkr, 21, 13, tri, uo7)');
+            return;
+          }
+
           // set the UO7 payout multiplier before enabling mode / starting
           await window.go.main.App.SetUnderOver7PayoutMultiplier(this.uo7Multiplier);
           await window.go.main.App.SetUnderOver7Mode(this.underOver7Mode);
-          await window.go.main.App.StartCasinoSetup(name, roomName, maxUnique, maxPer, this.riskModeEnabledInput);
+          await window.go.main.App.StartCasinoSetup(name, roomName, maxUnique, maxPer, this.riskModeEnabledInput, selectedGames);
 
           this.showDealerNameModal = false;
-          const expected = (this.onlyUnderOverMode || this.underOver7Mode) ? 2 : 5;
+          const expected = this.underOver7Mode ? 2 : 5;
           this.diceSetup = Array.from({ length: expected }).map(() => ({ rolled: false, id: 0, value: 0 }));
           this.showDiceSetupModal = true;
           this.casinoStatus = 'Awaiting dice rolls';
@@ -2218,7 +2254,7 @@ export default {
         const payload = JSON.parse(jsonStr || '{}') || {};
         const dice = (payload.dice || []).map(d => ({ id: d.ID, value: d.Value, rolled: d.Value && d.Value > 0 }));
         // ensure correct number of slots based on selected dealer mode
-        const expected = (this.onlyUnderOverMode || this.underOver7Mode) ? 2 : 5;
+        const expected = this.underOver7Mode ? 2 : 5;
         this.diceSetup = Array.from({ length: expected }).map((_, i) => dice[i] || { id: 0, value: 0, rolled: false });
 
         const active = !!payload.active;
@@ -2231,7 +2267,7 @@ export default {
           this.casinoStatus = 'Stopped';
           this.casinoStatusKey = 'stopped';
           this.showDiceSetupModal = false;
-          const expected = this.onlyUnderOverMode ? 2 : 5;
+          const expected = this.underOver7Mode ? 2 : 5;
           this.diceSetup = Array.from({ length: expected }).map(() => ({ id: 0, value: 0, rolled: false }));
           return;
         }
