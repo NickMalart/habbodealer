@@ -103,11 +103,12 @@ type GEarthStatus struct {
 }
 
 type App struct {
-	ctx       context.Context
-	mu        sync.Mutex
-	apps      []LaunchAppItem
-	processes map[string]*os.Process
-	building  bool
+	ctx                         context.Context
+	mu                          sync.Mutex
+	apps                        []LaunchAppItem
+	processes                   map[string]*os.Process
+	building                    bool
+	skipExternalKillsOnShutdown bool
 }
 
 func NewApp() *App {
@@ -387,6 +388,39 @@ func (a *App) LaunchGEarth() string {
 	return "ok"
 }
 
+// CloseAll stops any tracked child processes and prevents shutdown from
+// spawning additional external taskkill/powershell commands.
+func (a *App) CloseAll() string {
+	a.mu.Lock()
+	keys := make([]string, 0, len(a.processes))
+	procs := make([]*os.Process, 0, len(a.processes))
+	for k, p := range a.processes {
+		keys = append(keys, k)
+		procs = append(procs, p)
+	}
+	a.mu.Unlock()
+
+	killed := 0
+	for i, p := range procs {
+		if p == nil {
+			continue
+		}
+		if err := p.Kill(); err == nil {
+			killed++
+			a.emitLog(fmt.Sprintf("stopped tracked process %s", keys[i]), "info")
+		} else {
+			a.emitLog(fmt.Sprintf("warn: could not stop %s: %v", keys[i], err), "error")
+		}
+	}
+
+	a.mu.Lock()
+	a.processes = map[string]*os.Process{}
+	a.skipExternalKillsOnShutdown = true
+	a.mu.Unlock()
+
+	return fmt.Sprintf("stopped %d processes", killed)
+}
+
 // 笏笏 Build helpers 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
 
 func (a *App) emitLog(line, kind string) {
@@ -483,7 +517,7 @@ func (a *App) stopProcessByExePath(exePath string) {
 	escaped := strings.ReplaceAll(exePath, "'", "''")
 	ps := fmt.Sprintf("Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '%s' } | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }", escaped)
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", ps)
-	_ = cmd.Run()
+	_ = runHiddenCmd(cmd)
 }
 
 func (a *App) stopProcessByExeName(exePath string) {
@@ -496,7 +530,7 @@ func (a *App) stopProcessByExeName(exePath string) {
 		return
 	}
 	cmd := exec.Command("taskkill", "/F", "/IM", name)
-	_ = cmd.Run()
+	_ = runHiddenCmd(cmd)
 }
 
 func (a *App) closeBuildTargetProcesses(t buildTarget, root string) {
@@ -718,19 +752,26 @@ func (a *App) shutdown(ctx context.Context) {
 	a.processes = map[string]*os.Process{}
 	a.mu.Unlock()
 
-	// Final fallback on Windows: taskkill known names
+	// Final fallback on Windows: taskkill known names (unless CloseAll used)
+	a.mu.Lock()
+	skip := a.skipExternalKillsOnShutdown
+	a.mu.Unlock()
 	if runtime.GOOS == "windows" {
-		_ = exec.Command("taskkill", "/F", "/IM", "G-Earth.exe").Run()
-		for _, t := range targets {
-			for _, rel := range append([]string{t.OutExe}, t.CleanPaths...) {
-				if strings.TrimSpace(rel) == "" {
-					continue
+		if skip {
+			a.emitLog("Skipping external taskkill/powershell on shutdown (CloseAll pressed)", "info")
+		} else {
+			_ = runHiddenCmd(exec.Command("taskkill", "/F", "/IM", "G-Earth.exe"))
+			for _, t := range targets {
+				for _, rel := range append([]string{t.OutExe}, t.CleanPaths...) {
+					if strings.TrimSpace(rel) == "" {
+						continue
+					}
+					name := filepath.Base(rel)
+					if name == "" {
+						continue
+					}
+					_ = runHiddenCmd(exec.Command("taskkill", "/F", "/IM", name))
 				}
-				name := filepath.Base(rel)
-				if name == "" {
-					continue
-				}
-				_ = exec.Command("taskkill", "/F", "/IM", name).Run()
 			}
 		}
 	}
