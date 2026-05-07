@@ -230,13 +230,19 @@ var (
 	// Variant marker for the active Under/Over round: "uo" or "uo7".
 	uoVariantForRound string
 	// Pending variant selection when prompting for Over/Under (set by beginUO7ChoiceSequence)
-	pendingUoVariant          string
-	onlyUnderOver7Mode        bool // when true, dealer prompts only Under/Over-7
-	enabledGamePkr            bool = true
-	enabledGame21             bool = true
-	enabledGame13             bool = true
-	enabledGameTri            bool = true
-	enabledGameUO7            bool = false
+	pendingUoVariant   string
+	onlyUnderOver7Mode bool // when true, dealer prompts only Under/Over-7
+	enabledGamePkr     bool = true
+	enabledGame21      bool = true
+	enabledGame13      bool = true
+	enabledGameTri     bool = true
+	enabledGameUO7     bool = false
+	enabledGamePu3     bool = true
+	// Pair Up 3 (PU3) state
+	isPu3Rolling              bool
+	pu3RoundActive            bool
+	pu3PlayerTurn             bool
+	pu3PlayerName             string
 	pokerSequencePlayerName   string
 	pokerSequencePlayerResult PokerHandResult
 	pokerSequencePlayerHand   string
@@ -4770,6 +4776,13 @@ func resetTriSequence() {
 	triPlayerName = ""
 }
 
+func resetPu3Sequence() {
+	pu3RoundActive = false
+	pu3PlayerTurn = false
+	pu3PlayerName = ""
+	isPu3Rolling = false
+}
+
 func stopPayout() {
 	payoutActive = false
 	payoutTradeActive = false
@@ -5498,6 +5511,13 @@ func (a *App) executeRiskRound() {
 			mutex.Unlock()
 		}
 		a.rollTriDice()
+	case "PU3":
+		mutex.Lock()
+		pu3RoundActive = true
+		pu3PlayerTurn = true
+		isPu3Rolling = true
+		mutex.Unlock()
+		a.rollPu3Dice()
 	case "21":
 		mutex.Lock()
 		blackjackPlayerTurn = true
@@ -8082,6 +8102,7 @@ func (a *App) openDealerAfterRound() {
 	resetBlackjackSequence()
 	reset13Sequence()
 	resetTriSequence()
+	resetPu3Sequence()
 
 	// Clear any incoming game-choice state.
 	awaitingGameChoice = false
@@ -9640,6 +9661,7 @@ func setEnabledGamesFromSelection(codes []string) {
 	enabledGame13 = true
 	enabledGameTri = true
 	enabledGameUO7 = false
+	enabledGamePu3 = true
 
 	if len(codes) == 0 {
 		return
@@ -9650,6 +9672,7 @@ func setEnabledGamesFromSelection(codes []string) {
 	enabledGame13 = false
 	enabledGameTri = false
 	enabledGameUO7 = false
+	enabledGamePu3 = false
 
 	for _, raw := range codes {
 		s := strings.ToLower(strings.TrimSpace(raw))
@@ -9663,6 +9686,8 @@ func setEnabledGamesFromSelection(codes []string) {
 			enabledGame13 = true
 		case "tri", "trih", "tril", "trihigh", "trilow":
 			enabledGameTri = true
+		case "pu3", "pairup3", "pairup":
+			enabledGamePu3 = true
 		case "uo", "uo7", "underover", "underover7":
 			enabledGameUO7 = true
 		}
@@ -9692,6 +9717,9 @@ func enabledGameChoicePartsLocked() []string {
 	}
 	if enabledGameUO7 {
 		parts = append(parts, "uo7")
+	}
+	if enabledGamePu3 {
+		parts = append(parts, "pu3")
 	}
 	if len(parts) == 0 {
 		parts = append(parts, "pkr", "21", "13", "tri")
@@ -9725,6 +9753,8 @@ func isGameChoiceEnabledLocked(choice string) bool {
 		return enabledGameTri
 	case "uo", "uo7", "uo_over", "uo_under":
 		return enabledGameUO7
+	case "pu3", "pairup", "pairup3":
+		return enabledGamePu3
 	default:
 		return false
 	}
@@ -10703,6 +10733,33 @@ func (a *App) beginTriRound(mode string) {
 	}()
 }
 
+// beginPu3Sequence starts a Pair Up 3 round: player rolls 3 dice; any pair or triple wins.
+func (a *App) beginPu3Sequence() {
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	resetPokerSequence()
+	resetBlackjackSequence()
+	reset13Sequence()
+	resetTriSequence()
+	resetPu3Sequence()
+
+	pu3RoundActive = true
+	pu3PlayerTurn = true
+	pu3PlayerName = playerName
+
+	a.setCurrentGameHistoryGame("PU3")
+
+	go func() {
+		// Combined ack already announced; delay then start player's PU3 roll
+		time.Sleep(1400 * time.Millisecond)
+		isPu3Rolling = true
+		go a.rollPu3Dice()
+	}()
+}
+
 // beginUOChoiceSequence prompts the player to choose Over or Under for the Under/Over-7 game.
 func (a *App) beginUOChoiceSequence() {
 	playerName := strings.TrimSpace(lastTradePartnerName)
@@ -11270,6 +11327,72 @@ func (a *App) finalizeTriRound() {
 	}
 
 	a.setCurrentGameHistoryResults(playerHand, dealerHand, "Dealer", "Completed", true)
+	a.noteCurrentGameHistory(winnerMsg)
+	if isRiskEnabled && riskSessionActive {
+		go a.applyRiskOutcome(false)
+		return
+	}
+	go a.openDealerAfterRound()
+}
+
+// finalizePu3Round handles the outcome for Pair Up 3 (PU3) rounds.
+func (a *App) finalizePu3Round(playerWins bool, reason string) {
+	playerName := strings.TrimSpace(pu3PlayerName)
+	if playerName == "" {
+		playerName = strings.TrimSpace(lastTradePartnerName)
+	}
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	// Build a simple representation of the three dice used for PU3
+	playerHand := ""
+	if len(diceList) >= 3 {
+		playerHand = fmt.Sprintf("%d,%d,%d", diceList[0].Value, diceList[1].Value, diceList[2].Value)
+	}
+
+	winnerName := "Dealer"
+	if playerWins {
+		winnerName = playerName
+	}
+
+	winnerMsg := fmt.Sprintf("%s Wins - %s: %s", winnerName, playerName, playerHand)
+
+	a.AddLogMsg(fmt.Sprintf("[PU3_RULES] playerWins=%t playerHand=%s winner=%s reason=%s", playerWins, playerHand, winnerName, reason))
+	log.Printf("[PU3_RULES] playerWins=%t playerHand=%s winner=%s", playerWins, playerHand, winnerName)
+
+	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", winnerMsg))
+
+	if !ChatIsDisabled {
+		waitForUnmute(90 * time.Second)
+		time.Sleep(800 * time.Millisecond)
+		sendMessageWithDelay(winnerMsg)
+	}
+
+	payoutTargetID := lastTradePartnerID
+	payoutTargetName := playerName
+	resetPu3Sequence()
+
+	if playerWins && payoutTargetID > 0 {
+		a.setCurrentGameHistoryResults(playerHand, "", playerName, "Payout Pending", false)
+		a.noteCurrentGameHistory(winnerMsg)
+		a.AddLogMsg(fmt.Sprintf("[PAYOUT] pu3 player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
+		resetPayoutRetryState()
+		if isRiskEnabled {
+			if riskSessionActive {
+				a.sendDiscordRoundResult(playerName, playerHand, "", winnerMsg)
+				go a.applyRiskOutcome(true)
+				return
+			}
+			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "PU3", nil)
+			a.sendDiscordRoundResult(playerName, playerHand, "", winnerMsg)
+			return
+		}
+		startPayout(a, payoutTargetID, payoutTargetName)
+		return
+	}
+
+	a.setCurrentGameHistoryResults(playerHand, "", a.getCurrentDealerName(), "Completed", true)
 	a.noteCurrentGameHistory(winnerMsg)
 	if isRiskEnabled && riskSessionActive {
 		go a.applyRiskOutcome(false)
@@ -11939,6 +12062,54 @@ func (a *App) rollTriDice() {
 
 	a.evaluateTriRound()
 	isTriRolling = false
+}
+
+// Roll dice for Pair Up 3 (PU3) game - player rolls three dice and outcome is immediate.
+func (a *App) rollPu3Dice() {
+	if fakeDiceTestingMode {
+		mutex.Lock()
+		if len(diceList) < 5 {
+			mutex.Unlock()
+			log.Println("Not enough dice to roll")
+			isPu3Rolling = false
+			return
+		}
+		currentSum = 0
+		for _, index := range []int{0, 1, 2} {
+			diceList[index].Value = rand.Intn(6) + 1
+			diceList[index].IsClosed = false
+			currentSum += diceList[index].Value
+			logRollResult := fmt.Sprintf("Dice %d rolled: %d\n", diceList[index].ID, diceList[index].Value)
+			a.AddLogMsg(logRollResult)
+		}
+		mutex.Unlock()
+		a.evaluatePu3Round()
+		isPu3Rolling = false
+		return
+	}
+
+	mutex.Lock()
+
+	if len(diceList) < 5 {
+		mutex.Unlock()
+		log.Println("Not enough dice to roll")
+		isPu3Rolling = false
+		return
+	}
+
+	resultsWaitGroup.Add(3)
+	mutex.Unlock()
+
+	for _, index := range []int{0, 1, 2} {
+		diceList[index].Roll()
+		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
+	}
+
+	time.Sleep(1000 * time.Millisecond)
+	resultsWaitGroup.Wait()
+
+	a.evaluatePu3Round()
+	isPu3Rolling = false
 }
 
 // Roll dice for blackjack-style game
@@ -13174,6 +13345,10 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	if choice != "tri" && choice != "uo" && choice != "uo7" {
 		// Combine the standard "Starting" ack with the player-roll prompt
 		ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay(choice))
+		// PU3 has a custom player-facing instruction message
+		if strings.EqualFold(choice, "pu3") {
+			ack = "PU3! Any pair or triple wins — Player Roll."
+		}
 		if riskSessionActive {
 			a.beginRiskRoundHistory(choice, msg, gameChoiceDisplay(choice))
 		} else {
@@ -13203,6 +13378,10 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		// Start the 13-game sequence (similar flow to 21)
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected 13; starting 13 sequence", index))
 		a.begin13Sequence()
+	case "pu3":
+		// Pair Up 3: single 3-dice roll where any pair or triple wins
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected PU3; starting PU3 sequence", index))
+		a.beginPu3Sequence()
 	case "tri":
 		// Two-step Tri selection: prompt player for High or Low
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Tri; prompting for High/Low", index))
@@ -13549,6 +13728,8 @@ func gameChoiceDisplay(choice string) string {
 		return "TriL"
 	case "trilow":
 		return "TriL"
+	case "pu3":
+		return "PU3"
 	default:
 		return choice
 	}

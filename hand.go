@@ -657,6 +657,72 @@ func (a *App) evaluateTriRound() {
 	isTriRolling = false
 }
 
+// Wait for PU3 dice results and evaluate a Pair Up 3 round
+func (a *App) evaluatePu3Round() {
+	defer func() {
+		if r := recover(); r != nil {
+			a.AddLogMsg(fmt.Sprintf("[PU3_CRASH_GUARD] recovered panic in evaluatePu3Round: %v", r))
+			log.Printf("[PU3_CRASH_GUARD] recovered panic in evaluatePu3Round: %v", r)
+			resetPu3Sequence()
+			isPu3Rolling = false
+		}
+	}()
+
+	mutex.Lock()
+	mutex.Unlock()
+	if !pu3RoundActive {
+		isPu3Rolling = false
+		return
+	}
+
+	// Read the three dice values (use slots 0,1,2)
+	v1 := 0
+	v2 := 0
+	v3 := 0
+	if len(diceList) >= 3 {
+		v1 = diceList[0].Value
+		v2 = diceList[1].Value
+		v3 = diceList[2].Value
+	}
+
+	playerWins := (v1 == v2) || (v1 == v3) || (v2 == v3)
+
+	a.AddLogMsg(fmt.Sprintf("[PU3] evaluating roll=%d,%d,%d playerTurn=%t", v1, v2, v3, pu3PlayerTurn))
+	log.Printf("[PU3] evaluating roll=%d,%d,%d playerTurn=%t", v1, v2, v3, pu3PlayerTurn)
+
+	playerHand := fmt.Sprintf("%d,%d,%d", v1, v2, v3)
+
+	if !ChatIsDisabled {
+		if !isMuted {
+			if pu3PlayerTurn {
+				// Send the raw player roll; outcome will be announced immediately
+				sendMessageWithDelay(playerHand)
+			}
+		} else {
+			if pu3PlayerTurn {
+				log.Printf("User is muted. Queuing message: %s", playerHand)
+				messageQueue = append(messageQueue, playerHand)
+			}
+		}
+	}
+
+	if pu3PlayerTurn {
+		// Record player roll and finalize immediately
+		a.setCurrentGameHistoryResults(playerHand, "", "", "In Progress", false)
+		a.noteCurrentGameHistory("PU3 player roll recorded")
+		pu3PlayerTurn = false
+		go func() {
+			time.Sleep(700 * time.Millisecond)
+			a.finalizePu3Round(playerWins, "player-roll")
+		}()
+		return
+	}
+
+	// Fallback: finalize using current evaluation
+	a.finalizePu3Round(playerWins, "")
+	isPu3Rolling = false
+}
+
 // Sum the values of the dice and return a string representation
 func sumHand(values []int) string {
 	sum := 0

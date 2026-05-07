@@ -299,6 +299,10 @@
                 Tri
               </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
+                <input type="checkbox" v-model="enableGamePu3" :disabled="underOver7Mode" />
+                Pair Up 3 (pu3)
+              </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
                 <input type="checkbox" v-model="enableGameUO7" :disabled="underOver7Mode" />
                 Under/Over-7 (uo7)
               </label>
@@ -908,6 +912,15 @@ export default {
           playerFlow: 'Use the Tri command when needed and let the app roll the three dice.',
           dealerFlow: 'The dealer/app handles the roll output and result logging automatically, but the house rules for who wins depend on how you are using the tri command.',
         },
+        {
+          key: 'pu3',
+          title: 'Pair Up 3 (PU3)',
+          summary: 'Player rolls 3 dice; any pair or triple wins.',
+          description: 'Player rolls three dice. If any two dice match or all three match the player wins; otherwise the dealer wins.',
+          howItWorks: 'After trade completion the player chooses PU3, the app rolls three dice for the player, evaluates for a pair or triple, and resolves the round immediately.',
+          playerFlow: 'Trade the bet, say pu3 when prompted, then wait for the roll and outcome.',
+          dealerFlow: 'The dealer starts the PU3 roll, announces the result, and manages payouts if the player wins.',
+        },
         
       ],
       // trade UI/state removed
@@ -978,6 +991,7 @@ export default {
       enableGame21: false,
       enableGame13: false,
       enableGameTri: false,
+      enableGamePu3: false,
       enableGameUO7: false,
       // Risk mode: when true, enable Risk banking mechanic
       riskModeEnabledInput: false,
@@ -1198,6 +1212,7 @@ export default {
           if (this.enableGame21) selectedGames.push('21');
           if (this.enableGame13) selectedGames.push('13');
           if (this.enableGameTri) selectedGames.push('tri');
+          if (this.enableGamePu3) selectedGames.push('pu3');
           if (this.enableGameUO7) selectedGames.push('uo7');
 
           const standaloneMode = this.underOver7Mode;
