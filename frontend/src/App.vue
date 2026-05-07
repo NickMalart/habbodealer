@@ -163,6 +163,7 @@
 
       <div class="history-actions">
         <button type="button" class="copy-btn" @click="refreshAbortedOffers">Refresh</button>
+        <button type="button" class="copy-btn" @click="refreshAbortedItemStats">Refresh Stats</button>
       </div>
 
       <div v-if="(abortedOffers || []).length === 0" class="trade-empty">
@@ -184,6 +185,25 @@
             Items: {{ summarizeTradeItems(offer.items) || 'No items recorded' }}
           </div>
         </button>
+      </div>
+
+      <div class="aborted-stats" style="margin-top:14px;">
+        <h3 class="section-subtitle">Aborted Offer Item Stats</h3>
+        <div class="history-actions">
+          <button type="button" class="copy-btn" @click="refreshAbortedItemStats">Refresh Stats</button>
+        </div>
+        <div v-if="(abortedItemStats || []).length === 0" class="trade-empty">No stats available.</div>
+        <table v-else class="catalog-table">
+          <thead><tr><th>Item</th><th>Occurrences</th><th>Total Qty</th><th>Last Seen</th></tr></thead>
+          <tbody>
+            <tr v-for="stat in abortedItemStats" :key="stat.name">
+              <td><span class="catalog-label">{{ formatItemName(stat.name) }}</span></td>
+              <td><span class="catalog-label">{{ stat.occurrences }}</span></td>
+              <td><span class="catalog-label">{{ stat.totalQuantity }}</span></td>
+              <td><span class="catalog-label">{{ formatDateTime(stat.lastSeen) }}</span></td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
 
@@ -965,6 +985,7 @@ export default {
       handItems: [],
       gameHistory: [],
       abortedOffers: [],
+      abortedItemStats: [],
       historySearch: '',
       selectedHistory: null,
       showClearHistoryConfirm: false,
@@ -1488,6 +1509,15 @@ export default {
         this.abortedOffers = JSON.parse(jsonStr || '[]') || [];
       } catch (error) {
         this.addLogMsg('Error loading aborted offers');
+        console.error(error);
+      }
+    },
+    async refreshAbortedItemStats() {
+      try {
+        const jsonStr = await window.go.main.App.GetAbortedItemStatsJSON(100);
+        this.abortedItemStats = JSON.parse(jsonStr || '[]') || [];
+      } catch (error) {
+        this.addLogMsg('Error loading aborted item stats');
         console.error(error);
       }
     },
