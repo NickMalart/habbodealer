@@ -4,7 +4,7 @@
     <!-- Tab bar -->
       <div class="tab-bar">
       <button
-        v-for="tab in ['Home', 'Trade', 'Game History', 'Aborted Offers', 'Stats', 'Logs', 'Utility']"
+        v-for="tab in ['Home', 'Trade', 'Game History', 'Aborted DB', 'Stats', 'Logs', 'Utility']"
         :key="tab"
         :class="['tab-btn', { active: activeTab === tab }]"
         @click="activeTab = tab"
@@ -157,50 +157,64 @@
 
     </div>
 
-    <div v-if="activeTab === 'Aborted Offers'">
-      <h2 class="section-title">Aborted Offers</h2>
-      <p class="config-intro">Offers that closed without accept; useful to review items players tried to give you.</p>
+    <div v-if="activeTab === 'Aborted DB'">
+      <h2 class="section-title">Aborted DB</h2>
+      <p class="config-intro">Raw rows from the <code>aborted_trade_offers</code> table.</p>
 
       <div class="history-actions">
         <button type="button" class="copy-btn" @click="refreshAbortedOffers">Refresh</button>
-        <button type="button" class="copy-btn" @click="refreshAbortedItemStats">Refresh Stats</button>
+      </div>
+
+      <div class="history-actions" style="margin-top:8px">
+        <button type="button" class="copy-btn" @click="showOfferItemsTable = !showOfferItemsTable">Toggle Offer Items</button>
       </div>
 
       <div v-if="(abortedOffers || []).length === 0" class="trade-empty">
-        No aborted offers recorded.
+        No aborted offers recorded in DB.
+      </div>
+      <div v-if="showOfferItemsTable" style="margin-top:12px">
+        <h3 class="section-title">Aborted Offer Items</h3>
+        <div v-if="(abortedOfferItems() || []).length === 0" class="trade-empty">No items found in aborted offers.</div>
+        <div v-else class="history-list">
+          <table class="catalog-table" style="width:100%">
+            <thead>
+              <tr>
+                <th>Item Name</th>
+                <th>Occurred At</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(it, idx) in abortedOfferItems()" :key="idx">
+                <td><span class="catalog-label">{{ it.name || 'Unknown' }}</span></td>
+                <td><span class="catalog-label">{{ formatDateTime(it.occurredAt) }}</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div v-else class="history-list">
-        <button
-          v-for="offer in abortedOffers"
-          :key="offer.id"
-          type="button"
-          class="history-card"
-        >
-          <div class="history-card-top">
-            <span class="history-player">{{ offer.partnerName || 'Unknown' }}</span>
-            <span class="history-status">{{ formatDateTime(offer.occurredAt) }}</span>
-          </div>
-          <div class="history-summary">
-            Items: {{ summarizeTradeItems(offer.items) || 'No items recorded' }}
-          </div>
-        </button>
-      </div>
-
-      <div class="aborted-stats" style="margin-top:14px;">
-        <h3 class="section-subtitle">Aborted Offer Item Stats</h3>
-        <div class="history-actions">
-          <button type="button" class="copy-btn" @click="refreshAbortedItemStats">Refresh Stats</button>
-        </div>
-        <div v-if="(abortedItemStats || []).length === 0" class="trade-empty">No stats available.</div>
-        <table v-else class="catalog-table">
-          <thead><tr><th>Item</th><th>Occurrences</th><th>Total Qty</th><th>Last Seen</th></tr></thead>
+        <table class="catalog-table" style="width:100%">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Occurred At</th>
+              <th>Partner</th>
+              <th>Partner Trade ID</th>
+              <th>Payload</th>
+              <th>Items (raw JSON)</th>
+              <th>Closed Reason</th>
+            </tr>
+          </thead>
           <tbody>
-            <tr v-for="stat in abortedItemStats" :key="stat.name">
-              <td><span class="catalog-label">{{ formatItemName(stat.name) }}</span></td>
-              <td><span class="catalog-label">{{ stat.occurrences }}</span></td>
-              <td><span class="catalog-label">{{ stat.totalQuantity }}</span></td>
-              <td><span class="catalog-label">{{ formatDateTime(stat.lastSeen) }}</span></td>
+            <tr v-for="offer in abortedOffers" :key="offer.id">
+              <td><span class="catalog-label">{{ offer.id }}</span></td>
+              <td><span class="catalog-label">{{ formatDateTime(offer.occurredAt) }}</span></td>
+              <td><span class="catalog-label">{{ offer.partnerName || 'Unknown' }}</span></td>
+              <td><span class="catalog-label">{{ offer.partnerTradeId || offer.partnerTradeID || 0 }}</span></td>
+              <td><span class="catalog-label">{{ offer.payload || offer.payload || '' }}</span></td>
+              <td><pre style="white-space:pre-wrap;margin:0;font-size:12px">{{ JSON.stringify(offer.items || offer.Items || [], null, 2) }}</pre></td>
+              <td><span class="catalog-label">{{ offer.closedReason || offer.closed_reason || '' }}</span></td>
             </tr>
           </tbody>
         </table>
@@ -986,6 +1000,7 @@ export default {
       gameHistory: [],
       abortedOffers: [],
       abortedItemStats: [],
+      showOfferItemsTable: false,
       historySearch: '',
       selectedHistory: null,
       showClearHistoryConfirm: false,
@@ -1520,6 +1535,22 @@ export default {
         this.addLogMsg('Error loading aborted item stats');
         console.error(error);
       }
+    },
+    abortedOfferItems() {
+      const out = [];
+      (this.abortedOffers || []).forEach((offer) => {
+        const occurred = offer.occurredAt || offer.occurred_at || '';
+        const items = offer.items || offer.Items || [];
+        (items || []).forEach((it) => {
+          const name = it.Name || it.name || it.itemName || it.ItemName || '';
+          out.push({ name, occurredAt: occurred });
+        });
+      });
+      return out.sort((a, b) => {
+        const da = new Date(a.occurredAt).getTime() || 0;
+        const db = new Date(b.occurredAt).getTime() || 0;
+        return db - da;
+      });
     },
     
     addLogMsg(msg) {
@@ -3706,6 +3737,7 @@ input[type="text"]::placeholder {
 .history-list {
   display: grid;
   gap: 12px;
+  overflow-x: hidden;
 }
 
 .history-card {
@@ -3912,15 +3944,20 @@ input[type="text"]::placeholder {
   border-collapse: collapse;
   margin-bottom: 10px;
   font-size: 13px;
+  table-layout: fixed;
 }
 .catalog-table th {
   text-align: left;
   padding: 6px 8px;
   color: #c0c0c0;
   border-bottom: 1px solid #444;
+  vertical-align: top;
 }
 .catalog-table td {
   padding: 4px 4px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .catalog-input {
   width: 100%;
@@ -3934,6 +3971,14 @@ input[type="text"]::placeholder {
 }
 .catalog-value {
   width: 80px;
+}
+
+.catalog-table td pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  margin: 0;
+  max-width: 100%;
 }
 .catalog-label {
   display: block;

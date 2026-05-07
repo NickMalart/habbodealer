@@ -2384,8 +2384,7 @@ func (a *App) ensureGameHistoryTables() error {
 			quantity INTEGER NOT NULL DEFAULT 1,
 			raw_data TEXT NOT NULL DEFAULT '',
 			owner_key TEXT NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			PRIMARY KEY (id)
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_aborted_offers_owner ON aborted_trade_offers(owner_key)`,
 		`CREATE INDEX IF NOT EXISTS idx_aborted_offers_occurred ON aborted_trade_offers(occurred_at)`,
@@ -2924,52 +2923,75 @@ func (a *App) GetGameHistoryJSON() string {
 }
 
 func (a *App) loadAbortedOffersFromDB() ([]AbortedOffer, error) {
-	db, owner := a.getHistoryDB()
+	db, _ := a.getHistoryDB()
 	if db == nil {
+		a.AddLogMsg("[GAME_HISTORY][DB] loadAbortedOffersFromDB: database not initialized")
+		dbDiagLog("loadAbortedOffersFromDB: database not initialized")
 		return nil, fmt.Errorf("database not initialized")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 
+	a.AddLogMsg("[GAME_HISTORY][DB] loadAbortedOffersFromDB: querying aborted_trade_offers (all owners)")
+	dbDiagLog("loadAbortedOffersFromDB: querying aborted_trade_offers (all owners)")
+
 	rows, err := db.Query(ctx, `
 		SELECT id, occurred_at, partner_name, partner_trade_id, payload_hex, furni_items, closed_reason
 		FROM aborted_trade_offers
-		WHERE owner_key = $1
 		ORDER BY occurred_at DESC, id DESC
-	`, owner)
+	`)
 	if err != nil {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] loadAbortedOffersFromDB: query failed: %v", err))
+		dbDiagLog(fmt.Sprintf("loadAbortedOffersFromDB: query failed: %v", err))
 		return nil, err
 	}
 	defer rows.Close()
 
 	offers := make([]AbortedOffer, 0)
+	count := 0
 	for rows.Next() {
 		var o AbortedOffer
 		var rawItems []byte
-		if err := rows.Scan(&o.ID, &o.OccurredAt, &o.PartnerName, &o.PartnerTradeID, &o.Payload, &rawItems, &o.ClosedReason); err != nil {
+		var occurred time.Time
+		if err := rows.Scan(&o.ID, &occurred, &o.PartnerName, &o.PartnerTradeID, &o.Payload, &rawItems, &o.ClosedReason); err != nil {
+			a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] loadAbortedOffersFromDB: scan failed: %v", err))
+			dbDiagLog(fmt.Sprintf("loadAbortedOffersFromDB: scan failed: %v", err))
 			return nil, err
 		}
+		o.OccurredAt = occurred.UTC().Format(time.RFC3339)
 		if len(rawItems) > 0 {
 			_ = json.Unmarshal(rawItems, &o.Items)
 		}
 		offers = append(offers, o)
+		count++
 	}
 	if err := rows.Err(); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] loadAbortedOffersFromDB: rows error: %v", err))
+		dbDiagLog(fmt.Sprintf("loadAbortedOffersFromDB: rows error: %v", err))
 		return nil, err
 	}
+
+	a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] loadAbortedOffersFromDB: loaded %d offers", count))
+	dbDiagLog(fmt.Sprintf("loadAbortedOffersFromDB: loaded %d offers", count))
 	return offers, nil
 }
 
 func (a *App) GetAbortedOffersJSON() string {
 	offers, err := a.loadAbortedOffersFromDB()
 	if err != nil {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] GetAbortedOffersJSON: load failed: %v", err))
+		dbDiagLog(fmt.Sprintf("GetAbortedOffersJSON: load failed: %v", err))
 		return "[]"
 	}
 	b, err := json.Marshal(offers)
 	if err != nil {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] GetAbortedOffersJSON: marshal failed: %v", err))
+		dbDiagLog(fmt.Sprintf("GetAbortedOffersJSON: marshal failed: %v", err))
 		return "[]"
 	}
+	a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] GetAbortedOffersJSON: returning %d offers", len(offers)))
+	dbDiagLog(fmt.Sprintf("GetAbortedOffersJSON: returning %d offers", len(offers)))
 	return string(b)
 }
 
@@ -2981,34 +3003,43 @@ type AbortedItemStat struct {
 }
 
 func (a *App) loadAbortedItemStatsFromDB(limit int) ([]AbortedItemStat, error) {
-	db, owner := a.getHistoryDB()
+	db, _ := a.getHistoryDB()
 	if db == nil {
+		a.AddLogMsg("[GAME_HISTORY][DB] loadAbortedItemStatsFromDB: database not initialized")
+		dbDiagLog("loadAbortedItemStatsFromDB: database not initialized")
 		return nil, fmt.Errorf("database not initialized")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 
+	a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] loadAbortedItemStatsFromDB: querying item stats (limit=%d)", limit))
+	dbDiagLog(fmt.Sprintf("loadAbortedItemStatsFromDB: querying item stats (limit=%d)", limit))
+
 	rows, err := db.Query(ctx, `
 		SELECT i.item_name, COUNT(DISTINCT i.aborted_offer_id) AS occurrences, COALESCE(SUM(i.quantity),0) AS total_quantity, MAX(o.occurred_at) AS last_seen
 		FROM aborted_trade_offer_items i
 		JOIN aborted_trade_offers o ON o.id = i.aborted_offer_id
-		WHERE i.owner_key = $1
 		GROUP BY i.item_name
 		ORDER BY occurrences DESC, last_seen DESC
-		LIMIT $2
-	`, owner, limit)
+		LIMIT $1
+	`, limit)
 	if err != nil {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] loadAbortedItemStatsFromDB: query failed: %v", err))
+		dbDiagLog(fmt.Sprintf("loadAbortedItemStatsFromDB: query failed: %v", err))
 		return nil, err
 	}
 	defer rows.Close()
 
 	out := make([]AbortedItemStat, 0)
+	count := 0
 	for rows.Next() {
 		var name string
 		var occ int
 		var totalQty int
 		var last time.Time
 		if err := rows.Scan(&name, &occ, &totalQty, &last); err != nil {
+			a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] loadAbortedItemStatsFromDB: scan failed: %v", err))
+			dbDiagLog(fmt.Sprintf("loadAbortedItemStatsFromDB: scan failed: %v", err))
 			return nil, err
 		}
 		out = append(out, AbortedItemStat{
@@ -3017,10 +3048,16 @@ func (a *App) loadAbortedItemStatsFromDB(limit int) ([]AbortedItemStat, error) {
 			TotalQuantity: totalQty,
 			LastSeen:      last.UTC().Format(time.RFC3339),
 		})
+		count++
 	}
 	if err := rows.Err(); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] loadAbortedItemStatsFromDB: rows error: %v", err))
+		dbDiagLog(fmt.Sprintf("loadAbortedItemStatsFromDB: rows error: %v", err))
 		return nil, err
 	}
+
+	a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] loadAbortedItemStatsFromDB: loaded %d stats", count))
+	dbDiagLog(fmt.Sprintf("loadAbortedItemStatsFromDB: loaded %d stats", count))
 	return out, nil
 }
 
