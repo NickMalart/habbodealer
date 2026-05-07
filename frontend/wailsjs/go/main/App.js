@@ -34,6 +34,14 @@ export function ExportEventsForDate(arg1) {
   return window['go']['main']['App']['ExportEventsForDate'](arg1);
 }
 
+export function GetAbortedItemStatsJSON(arg1) {
+  return window['go']['main']['App']['GetAbortedItemStatsJSON'](arg1);
+}
+
+export function GetAbortedOffersJSON() {
+  return window['go']['main']['App']['GetAbortedOffersJSON']();
+}
+
 export function GetAutoShoutConfig() {
   return window['go']['main']['App']['GetAutoShoutConfig']();
 }

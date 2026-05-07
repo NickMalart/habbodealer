@@ -18,6 +18,10 @@ export function ClearTradeItems():Promise<void>;
 
 export function ExportEventsForDate(arg1:string):Promise<string>;
 
+export function GetAbortedItemStatsJSON(arg1:number):Promise<string>;
+
+export function GetAbortedOffersJSON():Promise<string>;
+
 export function GetAutoShoutConfig():Promise<main.AutoShoutConfig>;
 
 export function GetAutoShoutConfig2():Promise<main.AutoShoutConfig>;

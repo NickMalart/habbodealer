@@ -34,6 +34,117 @@ import (
 	room "xabbo.b7c.io/goearth/shockwave/room"
 )
 
+// Handler for unowned/unknown incoming item: shout, close, persist aborted offer
+func (a *App) handleUnownedIncomingItem(candidate, rawField string) {
+	now := time.Now()
+	lastUnownedCloseMu.Lock()
+	if !lastUnownedCloseAt.IsZero() && now.Sub(lastUnownedCloseAt) < 3*time.Second {
+		lastUnownedCloseMu.Unlock()
+		return
+	}
+	lastUnownedCloseAt = now
+	lastUnownedCloseMu.Unlock()
+
+	partnerName := strings.TrimSpace(lastTradePartnerName)
+	if partnerName == "" {
+		partnerName = "Player"
+	}
+	partnerID := lastTradePartnerID
+
+	msg := fmt.Sprintf("No %s available", formatTradeItemName(candidate))
+	a.AddLogMsg(fmt.Sprintf("[TRADE_UNOWNED] detected candidate=%q raw=%q partner=%q id=%d", candidate, rawField, partnerName, partnerID))
+
+	tradeItemsMu.Lock()
+	itemsCopy := make([]TradeItem, len(currentTradeItems))
+	copy(itemsCopy, currentTradeItems)
+	tradeItemsMu.Unlock()
+
+	occurredAt := time.Now().UTC()
+	payload := "UNOWNED_FIELD " + candidate + " RAW=" + rawField
+
+	go func() {
+		time.Sleep(350 * time.Millisecond)
+		sendShout(msg)
+
+		time.Sleep(1200 * time.Millisecond)
+		ext.Send(out.TRADE_CLOSE)
+
+		// Persist into history DB (session_id NULL/0)
+		if err := a.persistAbortedOfferToHistoryDB(0, partnerName, partnerID, itemsCopy, payload, occurredAt, "UNOWNED_ITEM"); err != nil {
+			a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY] persist aborted (unowned) failed: %v", err))
+		}
+
+		time.Sleep(1500 * time.Millisecond)
+		a.reopenDealerIdle("unowned incoming item")
+	}()
+}
+
+// Persist an aborted offer into the history DB (aborted_trade_offers/aborted_trade_offer_items)
+func (a *App) persistAbortedOfferToHistoryDB(dbSessionID int64, partnerName string, partnerTradeID int, items []TradeItem, payload string, occurredAt time.Time, closedReason string) error {
+	db, owner := a.getHistoryDB()
+	if db == nil {
+		a.AddLogMsg("[GAME_HISTORY] persist aborted: no history DB")
+		return fmt.Errorf("history db not connected")
+	}
+
+	itemsJSON, _ := json.Marshal(items)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var abortedID int64
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO aborted_trade_offers (session_id, occurred_at, partner_name, partner_trade_id, payload_hex, furni_items, owner_key, closed_reason)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+		dbSessionID, occurredAt, partnerName, partnerTradeID, payload, itemsJSON, owner, closedReason,
+	).Scan(&abortedID); err != nil {
+		return err
+	}
+
+	for _, item := range items {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			continue
+		}
+		qty := item.Quantity
+		if qty <= 0 {
+			qty = 1
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO aborted_trade_offer_items (aborted_offer_id, item_name, quantity, raw_data, owner_key)
+			VALUES ($1,$2,$3,$4,$5)
+			ON CONFLICT (aborted_offer_id, item_name)
+			DO UPDATE SET quantity = EXCLUDED.quantity, raw_data = EXCLUDED.raw_data
+		`, abortedID, name, qty, item.RawData, owner); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+
+	a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY] persisted aborted_offer id=%d partner=%q items=%d", abortedID, partnerName, len(items)))
+
+	// Notify frontend UI listeners (if present) that aborted offers/stats changed.
+	if a.ctx != nil {
+		go func() {
+			runtime.EventsEmit(a.ctx, "abortedOffersUpdate", a.GetAbortedOffersJSON())
+			runtime.EventsEmit(a.ctx, "abortedItemStatsUpdate", a.GetAbortedItemStatsJSON(100))
+		}()
+	}
+	return nil
+}
+
+var lastUnownedCloseMu sync.Mutex
+var lastUnownedCloseAt time.Time
+
 // Global variables for dice management, rolling state, mutex, and wait group
 var (
 	diceList                             []*Dice
@@ -7384,6 +7495,8 @@ func (a *App) extractTradeItemAndQuantity(field string) (string, int, bool) {
 			}
 			// Verification failed: do not accept unverified normalized classes.
 			a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS_PARSE_FALLBACK] strict fallback found %q inside %q but verification failed; skipping", normalized, field))
+			// NEW: treat this as an 'unowned item' case and record it
+			go a.handleUnownedIncomingItem(normalized, field)
 		}
 		a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] fallback strict match %q rejected by normalisation/raw-check", match))
 	}

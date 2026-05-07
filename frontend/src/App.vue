@@ -2188,6 +2188,9 @@ export default {
       // Fetch minimal stats for ranges
       await this.loadStats('all_time');
       await this.loadStats('today');
+      // Load aborted offers/stats on startup
+      await this.refreshAbortedOffers();
+      await this.refreshAbortedItemStats();
       await this.loadEventDates();
     window.runtime.EventsOn("logUpdate", (message) => {
       this.log = message.split('\n');
@@ -2293,6 +2296,23 @@ export default {
         this.gameHistory = JSON.parse(jsonStr) || [];
       } catch (_) {
         this.gameHistory = [];
+      }
+    });
+
+    // Aborted offers updates from backend
+    window.runtime.EventsOn("abortedOffersUpdate", (jsonStr) => {
+      try {
+        this.abortedOffers = JSON.parse(jsonStr || '[]') || [];
+      } catch (_) {
+        this.abortedOffers = [];
+      }
+    });
+
+    window.runtime.EventsOn("abortedItemStatsUpdate", (jsonStr) => {
+      try {
+        this.abortedItemStats = JSON.parse(jsonStr || '[]') || [];
+      } catch (_) {
+        this.abortedItemStats = [];
       }
     });
 
