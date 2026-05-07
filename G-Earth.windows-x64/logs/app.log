@@ -633,3 +633,24 @@ java.net.SocketException: Connection reset
 	at java.base/java.lang.Thread.run(Unknown Source)
 2026-05-07 21:03:55.256 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@577423c5
 2026-05-07 21:19:22.569 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@53eb2ac6
+2026-05-07 21:32:46.747 ERROR g.a.s.e.e.i.n.NetworkExtensionServer - Channel exception caught (channel=[id: 0x8a1b42bb, L:/127.0.0.1:9092 - R:/127.0.0.1:62006]), closing channel
+java.net.SocketException: Connection reset
+	at java.base/sun.nio.ch.SocketChannelImpl.throwConnectionReset(Unknown Source)
+	at java.base/sun.nio.ch.SocketChannelImpl.read(Unknown Source)
+	at io.netty.buffer.AdaptivePoolingAllocator$AdaptiveByteBuf.setBytes(AdaptivePoolingAllocator.java:1301)
+	at io.netty.buffer.AbstractByteBuf.writeBytes(AbstractByteBuf.java:1132)
+	at io.netty.channel.socket.nio.NioSocketChannel.doReadBytes(NioSocketChannel.java:350)
+	at io.netty.channel.nio.AbstractNioByteChannel$NioByteUnsafe.read(AbstractNioByteChannel.java:152)
+	at io.netty.channel.nio.AbstractNioChannel$AbstractNioUnsafe.handle(AbstractNioChannel.java:445)
+	at io.netty.channel.nio.NioIoHandler$DefaultNioRegistration.handle(NioIoHandler.java:383)
+	at io.netty.channel.nio.NioIoHandler.processSelectedKey(NioIoHandler.java:577)
+	at io.netty.channel.nio.NioIoHandler.processSelectedKeysOptimized(NioIoHandler.java:552)
+	at io.netty.channel.nio.NioIoHandler.processSelectedKeys(NioIoHandler.java:493)
+	at io.netty.channel.nio.NioIoHandler.run(NioIoHandler.java:470)
+	at io.netty.channel.SingleThreadIoEventLoop.runIo(SingleThreadIoEventLoop.java:204)
+	at io.netty.channel.SingleThreadIoEventLoop.run(SingleThreadIoEventLoop.java:175)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$5.run(SingleThreadEventExecutor.java:1073)
+	at io.netty.util.internal.ThreadExecutorMap$2.run(ThreadExecutorMap.java:74)
+	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
+	at java.base/java.lang.Thread.run(Unknown Source)
+2026-05-07 21:33:02.468 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@cc404ae
