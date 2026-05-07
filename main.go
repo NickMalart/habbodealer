@@ -10470,7 +10470,7 @@ func (a *App) beginUO7ChoiceSequence() {
 		awaitingUOChoicePartnerID = lastTradePartnerID
 	}
 
-	msg := "O (over), U (under) or 7? - Just shout O, U or 7!"
+	msg := "UO7 selected. Shout U (1-6), O (8-12), or 7."
 	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
 	sendShout(msg)
 }
@@ -12799,6 +12799,11 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 
 	// Standalone UO modes: while waiting for initial game choice, only allow
 	// U/O/7-related choices. Ignore other game selections (e.g. 13, 21, pkr, tri).
+	if choice == "uo_over" || choice == "uo_under" {
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] coerced shorthand %q into UO7 game selection; prompting for final U/O/7 choice", choice))
+		choice = "uo7"
+	}
+
 	if underOver7GameModeEnabled || onlyUnderOver7Mode {
 		switch choice {
 		case "uo", "uo7", "uo_over", "uo_under":
@@ -13109,7 +13114,7 @@ func normalizeIncomingGameChoice(msg string) (string, bool) {
 		return "tri", true
 	case "uo", "underover":
 		return "uo", true
-	case "uo7", "underover7":
+	case "uo7", "underover7", "u7", "o7":
 		return "uo7", true
 	case "trih":
 		return "trihigh", true
@@ -13150,7 +13155,7 @@ func normalizeLooseGameChoice(msg string) (string, bool) {
 		return "tri", true
 	case "uo", "underover":
 		return "uo", true
-	case "uo7", "underover7":
+	case "uo7", "underover7", "u7", "o7":
 		return "uo7", true
 	case "trih":
 		return "trihigh", true
