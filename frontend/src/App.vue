@@ -4,7 +4,7 @@
     <!-- Tab bar -->
       <div class="tab-bar">
       <button
-        v-for="tab in ['Home', 'Trade', 'Game History', 'Aborted DB', 'Stats', 'Logs', 'Utility']"
+        v-for="tab in ['Home', 'Game History', 'Aborted DB', 'Stats', 'Logs', 'Utility']"
         :key="tab"
         :class="['tab-btn', { active: activeTab === tab }]"
         @click="activeTab = tab"
@@ -212,7 +212,7 @@
               <td><span class="catalog-label">{{ formatDateTime(offer.occurredAt) }}</span></td>
               <td><span class="catalog-label">{{ offer.partnerName || 'Unknown' }}</span></td>
               <td><span class="catalog-label">{{ offer.partnerTradeId || offer.partnerTradeID || 0 }}</span></td>
-              <td><span class="catalog-label">{{ offer.payload || offer.payload || '' }}</span></td>
+              <td><span class="catalog-label">{{ summarizeTradeItems(offer.items || offer.Items || []) || (offer.payload || '') }}</span></td>
               <td><pre style="white-space:pre-wrap;margin:0;font-size:12px">{{ JSON.stringify(offer.items || offer.Items || [], null, 2) }}</pre></td>
               <td><span class="catalog-label">{{ offer.closedReason || offer.closed_reason || '' }}</span></td>
             </tr>
@@ -608,90 +608,7 @@
       </div>
     </div>
 
-    <!-- Trade tab -->
-    <div v-if="activeTab === 'Trade'">
-
-      <h2 class="section-title">Double Payout Check</h2>
-      <p class="trade-hint" v-if="activeBetSourceLabel">
-        Showing {{ activeBetSourceLabel }} data until the round is fully complete.
-      </p>
-      <div class="trade-empty" v-if="activeBetItems.length === 0">
-        No live or saved round bet data yet.
-      </div>
-      <table v-else class="catalog-table">
-        <thead><tr><th>Item</th><th>Bet</th><th>Need Stock</th><th>Payout</th><th>Have</th><th>Status</th></tr></thead>
-        <tbody>
-          <tr v-for="(row, index) in payoutRows" :key="`payout-${index}`">
-            <td><span class="catalog-label">{{ row.displayName }}</span></td>
-            <td><span class="catalog-label">{{ row.betQty }}</span></td>
-            <td><span class="catalog-label">{{ row.required }}</span></td>
-            <td><span class="catalog-label">{{ row.payoutTotal }}</span></td>
-            <td><span class="catalog-label">{{ row.have }}</span></td>
-            <td><span class="catalog-label" :class="{ 'unlisted-value': row.short > 0 }">{{ row.short > 0 ? `Short ${row.short}` : 'OK' }}</span></td>
-          </tr>
-        </tbody>
-      </table>
-      <p class="trade-hint" v-if="activeBetItems.length > 0 && !canCoverPayout">
-        You do not have enough stock to return double payout (bet + match).
-      </p>
-      <p class="trade-hint" v-if="activeBetItems.length > 0 && canCoverPayout">
-        Your hand can return double payout (bet + match).
-      </p>
-
-      <hr class="trade-divider" />
-
-      <!-- Your Hand -->
-      <h2 class="section-title">Your Hand</h2>
-      <div v-if="handItems.length === 0" class="trade-empty">
-        No hand data yet.
-        <span style="font-size:12px;color:#666;">Refreshes every 30s and when a trade opens.</span>
-      </div>
-      <table v-else class="catalog-table">
-        <thead><tr><th>Item</th><th>Qty</th></tr></thead>
-        <tbody>
-          <tr v-for="(item, index) in handItems" :key="`hand-${index}`">
-            <td><span class="catalog-label">{{ item.displayName }}</span></td>
-            <td><span class="catalog-label">{{ item.Quantity }}</span></td>
-          </tr>
-        </tbody>
-      </table>
-      <hr class="trade-divider" />
-
-      <!-- Player's Offer -->
-      <div v-if="casinoStatusKey !== 'stopped'" class="trade-hint">Trade limits: max {{ maxUniqueItemsInput }} unique items, max {{ maxQuantityPerItemInput }} per item</div>
-      <h2 class="section-title">Player Offer</h2>
-      <div v-if="tradeItems.length === 0" class="trade-empty">
-        No active trade items detected.<br />
-        <span style="font-size:12px;color:#666">Items appear here when the partner places furniture in the trade.</span>
-      </div>
-      <table v-else class="catalog-table">
-        <thead><tr><th>Item</th><th>Qty</th></tr></thead>
-        <tbody>
-          <tr v-for="(item, index) in tradeItems" :key="`trade-${index}`">
-            <td><span class="catalog-label">{{ item.displayName }}</span></td>
-            <td><span class="catalog-label">{{ item.Quantity }}</span></td>
-          </tr>
-        </tbody>
-      </table>
-
-      <hr class="trade-divider" />
-
-      <!-- Your Offer -->
-      <h2 class="section-title">Your Offer To Them</h2>
-      <div v-if="ownTradeItems.length === 0" class="trade-empty">
-        Nothing added by you yet.
-      </div>
-      <table v-else class="catalog-table">
-        <thead><tr><th>Item</th><th>Qty</th></tr></thead>
-        <tbody>
-          <tr v-for="(item, index) in ownTradeItems" :key="`own-trade-${index}`">
-            <td><span class="catalog-label">{{ item.displayName }}</span></td>
-            <td><span class="catalog-label">{{ item.Quantity }}</span></td>
-          </tr>
-        </tbody>
-      </table>
-
-    </div>
+    <!-- Trade tab removed -->
 
     <div v-if="activeTab === 'Game History'">
       <h2 class="section-title">Game History</h2>
@@ -993,10 +910,7 @@ export default {
         },
         
       ],
-      tradeItems: [],
-      activeGameBetItems: [],
-      ownTradeItems: [],
-      handItems: [],
+      // trade UI/state removed
       gameHistory: [],
       abortedOffers: [],
       abortedItemStats: [],
@@ -1108,68 +1022,8 @@ export default {
     };
   },
   computed: {
-    tradeItemsWithDisplay() {
-      return this.tradeItems.map(item => {
-        return { ...item, displayName: this.formatItemName(item.Name) };
-      });
-    },
-    ownTradeItemsWithDisplay() {
-      return this.ownTradeItems.map(item => {
-        return { ...item, displayName: this.formatItemName(item.Name) };
-      });
-    },
-    handItemsWithDisplay() {
-      return this.handItems.map(item => {
-        return { ...item, displayName: this.formatItemName(item.Name) };
-      });
-    },
-    payoutRows() {
-      const handByName = this.handItems.reduce((acc, item) => {
-        acc[item.Name] = (acc[item.Name] || 0) + item.Quantity;
-        return acc;
-      }, {});
-
-      const liveIncomingByName = this.tradeItems.reduce((acc, item) => {
-        acc[item.Name] = (acc[item.Name] || 0) + item.Quantity;
-        return acc;
-      }, {});
-
-      return this.activeBetItemsWithDisplay.map(item => {
-        const required = item.Quantity;
-        const payoutTotal = item.Quantity * 2;
-        const includeLiveIncoming = this.tradeItems.length > 0 ? (liveIncomingByName[item.Name] || 0) : 0;
-        const have = (handByName[item.Name] || 0) + includeLiveIncoming;
-        const short = Math.max(required - have, 0);
-        return {
-          name: item.Name,
-          displayName: item.displayName,
-          betQty: item.Quantity,
-          required,
-          payoutTotal,
-          have,
-          short,
-        };
-      });
-    },
-    canCoverPayout() {
-      return this.payoutRows.every((row) => row.short === 0);
-    },
-    activeBetItems() {
-      return this.tradeItems.length > 0 ? this.tradeItems : this.activeGameBetItems;
-    },
-    activeBetItemsWithDisplay() {
-      return this.activeBetItems.map(item => {
-        return { ...item, displayName: this.formatItemName(item.Name) };
-      });
-    },
-    activeBetSourceLabel() {
-      if (this.tradeItems.length > 0) {
-        return 'live trade';
-      }
-      if (this.activeGameBetItems.length > 0) {
-        return 'current round';
-      }
-      return '';
+    activeUsers() {
+      return [];
     },
     filteredGameHistory() {
       const q = this.historySearch.trim().toLowerCase();
@@ -1200,11 +1054,7 @@ export default {
       }
       return names.filter(n => n.toLowerCase().includes(q)).slice(0, 10);
     },
-    activeUsers() {
-      return (this.roomIdentity || []).filter((u) => {
-        return this.isUserTrading(u) || this.isUserInGame(u);
-      });
-    },
+    // activeUsers simplified (trade/user-game highlights removed)
     activeStats() {
       return this.casinoStatsMap[this.statsRangeKey] || {};
     },
@@ -1652,16 +1502,7 @@ export default {
       if (!entry || !entry.name || !name) return false;
       return String(entry.name).trim().toLowerCase() === String(name).trim().toLowerCase();
     },
-    isUserTrading(entry) {
-      if (!entry) return false;
-      if (!this.currentTraderName) return false;
-      return this.isNameMatch(entry, this.currentTraderName) && (this.tradeItems && this.tradeItems.length > 0);
-    },
-    isUserInGame(entry) {
-      if (!entry) return false;
-      if (!this.currentGamePlayerName) return false;
-      return this.isNameMatch(entry, this.currentGamePlayerName) && (this.activeGameBetItems && this.activeGameBetItems.length > 0);
-    },
+    // trade-related helpers removed
     async loadStats(rangeKey) {
       this.statsRangeKey = rangeKey;
       try {
@@ -2237,51 +2078,9 @@ export default {
       this.scrollBox('chatlogbox');
     });
 
-    window.runtime.EventsOn("tradeItemsUpdate", (jsonStr) => {
-      try {
-        this.tradeItems = (JSON.parse(jsonStr) || []).map(item => ({
-          ...item,
-          displayName: this.formatItemName(item.Name),
-        }));
-      } catch (_) {
-        this.tradeItems = [];
-      }
-      // Update current trader name from backend when partner items present
-      try {
-        if (this.tradeItems && this.tradeItems.length > 0) {
-          window.go.main.App.GetLastTradePartnerName().then(name => {
-            this.currentTraderName = name || '';
-          }).catch(() => { this.currentTraderName = ''; });
-        } else {
-          this.currentTraderName = '';
-        }
-      } catch (e) {
-        this.currentTraderName = '';
-      }
-    });
+    // tradeItemsUpdate listener removed
 
-    window.runtime.EventsOn("activeGameBetItemsUpdate", (jsonStr) => {
-      try {
-        this.activeGameBetItems = (JSON.parse(jsonStr) || []).map(item => ({
-          ...item,
-          displayName: this.formatItemName(item.Name),
-        }));
-      } catch (_) {
-        this.activeGameBetItems = [];
-      }
-      // Update current game player (who is in-game with dealer)
-      try {
-        if (this.activeGameBetItems && this.activeGameBetItems.length > 0) {
-          window.go.main.App.GetLastTradePartnerName().then(name => {
-            this.currentGamePlayerName = name || '';
-          }).catch(() => { this.currentGamePlayerName = ''; });
-        } else {
-          this.currentGamePlayerName = '';
-        }
-      } catch (e) {
-        this.currentGamePlayerName = '';
-      }
-    });
+    // activeGameBetItemsUpdate listener removed
 
     // Listen for backend updates to the UO7 payout multiplier
     window.runtime.EventsOn("underOver7PayoutMultiplierChanged", (val) => {
@@ -2293,27 +2092,9 @@ export default {
       }
     });
 
-    window.runtime.EventsOn("ownTradeItemsUpdate", (jsonStr) => {
-      try {
-        this.ownTradeItems = (JSON.parse(jsonStr) || []).map(item => ({
-          ...item,
-          displayName: this.formatItemName(item.Name),
-        }));
-      } catch (_) {
-        this.ownTradeItems = [];
-      }
-    });
+    // ownTradeItemsUpdate listener removed
 
-    window.runtime.EventsOn("handItemsUpdate", (jsonStr) => {
-      try {
-        this.handItems = (JSON.parse(jsonStr) || []).map(item => ({
-          ...item,
-          displayName: this.formatItemName(item.Name),
-        }));
-      } catch (_) {
-        this.handItems = [];
-      }
-    });
+    // handItemsUpdate listener removed
 
     window.runtime.EventsOn("roomIdentityUpdate", (jsonStr) => {
       try {
