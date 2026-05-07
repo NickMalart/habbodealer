@@ -382,3 +382,57 @@ java.net.SocketException: Connection reset
 	at java.base/java.lang.Thread.run(Unknown Source)
 2026-05-06 19:51:26.721 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@1898b7c6
 2026-05-06 19:57:56.124 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@55ae4ecc
+2026-05-06 22:33:43.409 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
+2026-05-07 07:42:47.405 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
+2026-05-07 07:42:59.785 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
+2026-05-07 07:42:59.786 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 35.71.185.64:40001
+2026-05-07 07:43:00.905 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
+2026-05-07 07:43:03.279 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
+2026-05-07 07:43:40.194 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
+2026-05-07 07:43:53.754 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
+2026-05-07 07:43:53.755 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 15.197.201.180:40001
+2026-05-07 07:43:58.997 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@7cdeb5ad
+2026-05-07 07:51:31.976 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
+2026-05-07 07:52:28.549 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
+2026-05-07 07:52:43.145 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
+2026-05-07 07:52:43.146 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 15.197.201.180:40001
+2026-05-07 07:52:46.281 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
+2026-05-07 07:54:09.123 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
+2026-05-07 07:54:54.972 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
+2026-05-07 07:54:56.387 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
+2026-05-07 07:54:56.388 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 15.197.201.180:40001
+2026-05-07 07:54:59.114 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
+2026-05-07 07:55:15.289 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
+2026-05-07 07:55:17.336 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
+2026-05-07 07:55:17.337 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 15.197.201.180:40001
+2026-05-07 08:00:26.837 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
+2026-05-07 08:04:18.564 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
+2026-05-07 08:04:31.777 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
+2026-05-07 08:04:31.778 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 35.71.185.64:40001
+2026-05-07 08:04:34.699 INFO  g.a.s.p.p.RemotePacketInfoProvider - Fetching packet info from https://api.sulek.dev/releases/shockwave-windows/297/messages
+2026-05-07 08:04:36.978 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Stopped proxy thread.
+2026-05-07 08:05:28.080 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@532e2b1e
+2026-05-07 08:05:40.118 ERROR g.a.s.e.e.i.n.NetworkExtensionServer - Channel exception caught (channel=[id: 0xb2b0f054, L:/127.0.0.1:9092 - R:/127.0.0.1:50849]), closing channel
+java.net.SocketException: Connection reset
+	at java.base/sun.nio.ch.SocketChannelImpl.throwConnectionReset(Unknown Source)
+	at java.base/sun.nio.ch.SocketChannelImpl.read(Unknown Source)
+	at io.netty.buffer.AdaptivePoolingAllocator$AdaptiveByteBuf.setBytes(AdaptivePoolingAllocator.java:1301)
+	at io.netty.buffer.AbstractByteBuf.writeBytes(AbstractByteBuf.java:1132)
+	at io.netty.channel.socket.nio.NioSocketChannel.doReadBytes(NioSocketChannel.java:350)
+	at io.netty.channel.nio.AbstractNioByteChannel$NioByteUnsafe.read(AbstractNioByteChannel.java:152)
+	at io.netty.channel.nio.AbstractNioChannel$AbstractNioUnsafe.handle(AbstractNioChannel.java:445)
+	at io.netty.channel.nio.NioIoHandler$DefaultNioRegistration.handle(NioIoHandler.java:383)
+	at io.netty.channel.nio.NioIoHandler.processSelectedKey(NioIoHandler.java:577)
+	at io.netty.channel.nio.NioIoHandler.processSelectedKeysOptimized(NioIoHandler.java:552)
+	at io.netty.channel.nio.NioIoHandler.processSelectedKeys(NioIoHandler.java:493)
+	at io.netty.channel.nio.NioIoHandler.run(NioIoHandler.java:470)
+	at io.netty.channel.SingleThreadIoEventLoop.runIo(SingleThreadIoEventLoop.java:204)
+	at io.netty.channel.SingleThreadIoEventLoop.run(SingleThreadIoEventLoop.java:175)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$5.run(SingleThreadEventExecutor.java:1073)
+	at io.netty.util.internal.ThreadExecutorMap$2.run(ThreadExecutorMap.java:74)
+	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
+	at java.base/java.lang.Thread.run(Unknown Source)
+2026-05-07 08:06:36.061 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Intercepting shockwave connection.
+2026-05-07 08:06:49.146 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Shockwave connection has been intercepted, starting proxy thread.
+2026-05-07 08:06:49.147 INFO  g.a.p.c.p.shockwave.ShockwaveProxy - Connected to shockwave server 35.71.185.64:40001
+2026-05-07 08:07:26.982 INFO  g.a.s.e.e.i.n.NetworkExtensionServer - Successfully authenticated client gearth.app.services.extension_handler.extensions.implementations.network.NetworkExtensionClient@143d6e08

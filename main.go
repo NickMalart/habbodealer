@@ -12307,8 +12307,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	if awaitingUOChoice {
 		cleaned := strings.ToLower(strings.TrimSpace(msg))
 		cleaned = gameChoiceCleanupRe.ReplaceAllString(cleaned, "")
-		// Accept over, under, short forms o/u, or 7 (allow "seven" too)
-		if cleaned != "over" && cleaned != "under" && cleaned != "o" && cleaned != "u" && cleaned != "7" && cleaned != "seven" {
+		// Accept over, under, short forms o/u/o7/u7/over7/under7, or 7 (allow "seven" too)
+		if cleaned != "over" && cleaned != "under" && cleaned != "o" && cleaned != "u" && cleaned != "o7" && cleaned != "u7" && cleaned != "over7" && cleaned != "under7" && cleaned != "7" && cleaned != "seven" {
 			a.AddLogMsg(fmt.Sprintf("[UO_DEBUG] awaiting UO choice from %q(index=%d), ignored non-choice message=%q", awaitingUOChoicePartnerName, awaitingUOChoicePartnerID, msg))
 			return
 		}
@@ -12337,10 +12337,10 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			cleaned = "7"
 		}
 
-		// Accept shorthand letters: 'o' -> over, 'u' -> under
-		if cleaned == "o" {
+		// Accept shorthand letters: 'o'/'o7'/'over7' -> over, 'u'/'u7'/'under7' -> under
+		if cleaned == "o" || cleaned == "o7" || cleaned == "over7" {
 			cleaned = "over"
-		} else if cleaned == "u" {
+		} else if cleaned == "u" || cleaned == "u7" || cleaned == "under7" {
 			cleaned = "under"
 		}
 
@@ -13111,10 +13111,6 @@ func normalizeIncomingGameChoice(msg string) (string, bool) {
 		return "uo", true
 	case "uo7", "underover7":
 		return "uo7", true
-	case "over", "o", "over7", "o7":
-		return "uo_over", true
-	case "under", "u", "under7", "u7":
-		return "uo_under", true
 	case "trih":
 		return "trihigh", true
 	case "trihigh":
@@ -13156,10 +13152,6 @@ func normalizeLooseGameChoice(msg string) (string, bool) {
 		return "uo", true
 	case "uo7", "underover7":
 		return "uo7", true
-	case "over", "o", "over7", "o7":
-		return "uo_over", true
-	case "under", "u", "under7", "u7":
-		return "uo_under", true
 	case "trih":
 		return "trihigh", true
 	case "trihigh":
