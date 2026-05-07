@@ -1057,15 +1057,14 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 
 	if strings.TrimSpace(session.WinnerProofURL) != "" {
 		trackerEmbed["image"] = map[string]interface{}{"url": strings.TrimSpace(session.WinnerProofURL)}
-	}
-	if strings.TrimSpace(session.WinnerProofID) != "" && strings.TrimSpace(session.WinnerProofFile) != "" {
+	} else if strings.TrimSpace(session.WinnerProofID) != "" && strings.TrimSpace(session.WinnerProofFile) != "" {
 		trackerEmbed["image"] = map[string]interface{}{"url": "attachment://" + strings.TrimSpace(session.WinnerProofFile)}
 	}
 
-	if heroAttachmentID != "" && heroAttachmentFile != "" {
-		promoEmbed["image"] = map[string]interface{}{"url": "attachment://" + heroAttachmentFile}
-	} else if heroImageURL != "" {
+	if heroImageURL != "" {
 		promoEmbed["image"] = map[string]interface{}{"url": heroImageURL}
+	} else if heroAttachmentID != "" && heroAttachmentFile != "" {
+		promoEmbed["image"] = map[string]interface{}{"url": "attachment://" + heroAttachmentFile}
 	}
 
 	payload := map[string]interface{}{
@@ -1105,11 +1104,9 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			// Keep the hero attachment and replace the proof attachment in-place.
 			attachmentsList := []map[string]interface{}{}
 			nextFileIdx := 0
-			if heroAttachmentID != "" {
+			if heroAttachmentID != "" && heroAttachmentFile != "" && heroImageURL == "" {
 				heroAttachment := map[string]interface{}{"id": heroAttachmentID}
-				if heroAttachmentFile != "" {
-					heroAttachment["filename"] = heroAttachmentFile
-				}
+				heroAttachment["filename"] = heroAttachmentFile
 				attachmentsList = append(attachmentsList, heroAttachment)
 			}
 			attachmentsList = append(attachmentsList, map[string]interface{}{"id": strconv.Itoa(nextFileIdx), "filename": proofFileName})
@@ -1141,24 +1138,15 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			}
 			patchReq.Header.Set("Content-Type", mpWriter.FormDataContentType())
 		} else {
-			if existingProofAttachmentID != "" && existingProofFileName != "" {
-				payload["attachments"] = []map[string]interface{}{
-					{"id": existingProofAttachmentID, "filename": existingProofFileName},
-				}
-				if heroAttachmentID != "" {
-					heroAttachment := map[string]interface{}{"id": heroAttachmentID}
-					if heroAttachmentFile != "" {
-						heroAttachment["filename"] = heroAttachmentFile
-					}
-					payload["attachments"] = append(payload["attachments"].([]map[string]interface{}), heroAttachment)
-				}
-			} else if heroAttachmentID != "" {
-				heroAttachment := map[string]interface{}{"id": heroAttachmentID}
-				if heroAttachmentFile != "" {
-					heroAttachment["filename"] = heroAttachmentFile
-				}
-				payload["attachments"] = []map[string]interface{}{heroAttachment}
+			attachmentsList := []map[string]interface{}{}
+			// Only keep attachments that are still referenced by attachment:// in embeds.
+			if heroAttachmentID != "" && heroAttachmentFile != "" && heroImageURL == "" {
+				attachmentsList = append(attachmentsList, map[string]interface{}{"id": heroAttachmentID, "filename": heroAttachmentFile})
 			}
+			if existingProofAttachmentID != "" && existingProofFileName != "" && strings.TrimSpace(session.WinnerProofURL) == "" {
+				attachmentsList = append(attachmentsList, map[string]interface{}{"id": existingProofAttachmentID, "filename": existingProofFileName})
+			}
+			payload["attachments"] = attachmentsList
 			jb, err := json.Marshal(payload)
 			if err != nil {
 				return err
