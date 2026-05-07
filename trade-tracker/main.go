@@ -889,6 +889,50 @@ func (a *App) handleIncomingTradeOpen(e *g.Intercept) {
 		}
 		a.lastAllTradeItems = allItems
 		a.mu.Unlock()
+
+		// TRADE_CLOSE incoming 110 or outgoing 70: persist aborted offers when trade wasn't recorded
+		if (hdr.Dir == g.In && hdr.Value == 110) || (hdr.Dir == g.Out && hdr.Value == 70) {
+			a.mu.Lock()
+			recorded := a.tradeRecorded
+			db := a.db
+			dbSessionID := int64(0)
+			if a.currentSession != nil {
+				dbSessionID = a.currentSession.DBID
+			}
+			partnerName := a.currentTradePartnerName
+			partnerTradeID := a.currentTradePartnerID
+			allCopy := append([]TradeItem(nil), a.lastAllTradeItems...)
+			ownCopy := append([]TradeItem(nil), a.ownTradeItems...)
+			a.mu.Unlock()
+
+			if !recorded {
+				partnerItems := diffItems(allCopy, ownCopy)
+				payload := "TRADE_CLOSE_NO_ACCEPT " + fmt.Sprintf("% X", e.Packet.Data)
+				occurredAt := time.Now().UTC()
+
+				a.logDebug("aborted offer detected: partner=%q tradeID=%d items=%d dbReady=%t dbSessionID=%d", partnerName, partnerTradeID, len(partnerItems), db != nil, dbSessionID)
+
+				a.mu.Lock()
+				a.tradeRecorded = true
+				a.partnerAccepted = false
+				a.ourAccepted = false
+				a.partnerAcceptedSnapshot = nil
+				a.lastAllTradeItems = nil
+				a.ownTradeItems = nil
+				a.mu.Unlock()
+
+				if db != nil && dbSessionID > 0 {
+					go func(items []TradeItem) {
+						if err := a.persistAbortedOffer(dbSessionID, partnerName, partnerTradeID, items, payload, occurredAt); err != nil {
+							a.logDebug("async persist aborted offer failed: dbSessionID=%d err=%v", dbSessionID, err)
+						}
+					}(partnerItems)
+				}
+				a.emitUpdate()
+			}
+			return
+		}
+
 		return
 	}
 
@@ -1224,6 +1268,68 @@ func (a *App) persistTradeEntry(dbSessionID int64, partnerName string, partnerTr
 	return nil
 }
 
+func (a *App) persistAbortedOffer(dbSessionID int64, partnerName string, partnerTradeID int, items []TradeItem, payload string, occurredAt time.Time) error {
+	if a.db == nil {
+		a.logDebug("persist aborted offer: db not initialized")
+		return fmt.Errorf("db not initialized")
+	}
+
+	itemsJSON, _ := json.Marshal(items)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	a.logDebug("persist aborted insert attempt: dbSessionID=%d partner=%q tradeID=%d items=%d ownerKey=%q", dbSessionID, partnerName, partnerTradeID, len(items), a.ownerKey)
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		a.logDebug("persist aborted begin tx failed: dbSessionID=%d err=%v", dbSessionID, err)
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var abortedID int64
+	if err := tx.QueryRow(ctx, `INSERT INTO aborted_trade_offers (session_id, occurred_at, partner_name, partner_trade_id, payload_hex, furni_items, owner_key, closed_reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+		dbSessionID,
+		occurredAt,
+		partnerName,
+		partnerTradeID,
+		payload,
+		itemsJSON,
+		a.ownerKey,
+		"TRADE_CLOSE_NO_ACCEPT",
+	).Scan(&abortedID); err != nil {
+		a.logDebug("persist aborted insert failed: dbSessionID=%d err=%v", dbSessionID, err)
+		return err
+	}
+
+	for _, item := range items {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			continue
+		}
+		qty := item.Quantity
+		if qty <= 0 {
+			qty = 1
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO aborted_trade_offer_items (aborted_offer_id, item_name, quantity, raw_data, owner_key)
+			VALUES ($1,$2,$3,$4,$5)
+			ON CONFLICT (aborted_offer_id, item_name)
+			DO UPDATE SET quantity = EXCLUDED.quantity, raw_data = EXCLUDED.raw_data
+		`, abortedID, name, qty, item.Raw, a.ownerKey); err != nil {
+			a.logDebug("persist aborted item row failed: abortedID=%d item=%q qty=%d err=%v", abortedID, name, qty, err)
+			return err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		a.logDebug("persist aborted commit failed: abortedID=%d err=%v", abortedID, err)
+		return err
+	}
+	a.logDebug("persist aborted insert ok: dbSessionID=%d", dbSessionID)
+	return nil
+}
+
 func (a *App) ensureTables() error {
 	a.mu.Lock()
 	db := a.db
@@ -1264,6 +1370,28 @@ func (a *App) ensureTables() error {
 			owner_key TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			UNIQUE (trade_entry_id, item_name)
+		)`,
+		`CREATE TABLE IF NOT EXISTS aborted_trade_offers (
+			id BIGSERIAL PRIMARY KEY,
+			session_id BIGINT NULL,
+			occurred_at TIMESTAMPTZ NOT NULL,
+			partner_name TEXT NOT NULL DEFAULT '',
+			partner_trade_id INTEGER NOT NULL DEFAULT 0,
+			payload_hex TEXT NOT NULL DEFAULT '',
+			furni_items JSONB DEFAULT '[]'::jsonb,
+			owner_key TEXT NOT NULL DEFAULT '',
+			closed_reason TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS aborted_trade_offer_items (
+			id BIGSERIAL PRIMARY KEY,
+			aborted_offer_id BIGINT NOT NULL REFERENCES aborted_trade_offers(id) ON DELETE CASCADE,
+			item_name TEXT NOT NULL,
+			quantity INTEGER NOT NULL DEFAULT 1,
+			raw_data TEXT NOT NULL DEFAULT '',
+			owner_key TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (aborted_offer_id, item_name)
 		)`,
 	}
 

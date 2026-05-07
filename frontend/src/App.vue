@@ -4,7 +4,7 @@
     <!-- Tab bar -->
       <div class="tab-bar">
       <button
-        v-for="tab in ['Home', 'Trade', 'Game History', 'Stats', 'Logs', 'Utility']"
+        v-for="tab in ['Home', 'Trade', 'Game History', 'Aborted Offers', 'Stats', 'Logs', 'Utility']"
         :key="tab"
         :class="['tab-btn', { active: activeTab === tab }]"
         @click="activeTab = tab"
@@ -155,6 +155,36 @@
         </div>
       </div>
 
+    </div>
+
+    <div v-if="activeTab === 'Aborted Offers'">
+      <h2 class="section-title">Aborted Offers</h2>
+      <p class="config-intro">Offers that closed without accept; useful to review items players tried to give you.</p>
+
+      <div class="history-actions">
+        <button type="button" class="copy-btn" @click="refreshAbortedOffers">Refresh</button>
+      </div>
+
+      <div v-if="(abortedOffers || []).length === 0" class="trade-empty">
+        No aborted offers recorded.
+      </div>
+
+      <div v-else class="history-list">
+        <button
+          v-for="offer in abortedOffers"
+          :key="offer.id"
+          type="button"
+          class="history-card"
+        >
+          <div class="history-card-top">
+            <span class="history-player">{{ offer.partnerName || 'Unknown' }}</span>
+            <span class="history-status">{{ formatDateTime(offer.occurredAt) }}</span>
+          </div>
+          <div class="history-summary">
+            Items: {{ summarizeTradeItems(offer.items) || 'No items recorded' }}
+          </div>
+        </button>
+      </div>
     </div>
 
       <div class="dice-setup-modal-backdrop" v-if="showDiceSetupModal" @click="showDiceSetupModal = false">
@@ -934,6 +964,7 @@ export default {
       ownTradeItems: [],
       handItems: [],
       gameHistory: [],
+      abortedOffers: [],
       historySearch: '',
       selectedHistory: null,
       showClearHistoryConfirm: false,
@@ -1448,6 +1479,15 @@ export default {
         this.gameHistory = JSON.parse(jsonStr || '[]') || [];
       } catch (error) {
         this.addLogMsg('Error loading game history');
+        console.error(error);
+      }
+    },
+    async refreshAbortedOffers() {
+      try {
+        const jsonStr = await window.go.main.App.GetAbortedOffersJSON();
+        this.abortedOffers = JSON.parse(jsonStr || '[]') || [];
+      } catch (error) {
+        this.addLogMsg('Error loading aborted offers');
         console.error(error);
       }
     },

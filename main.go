@@ -618,6 +618,16 @@ type GameHistoryEntry struct {
 	PayoutMultiplier int    `json:"payoutMultiplier,omitempty"`
 }
 
+type AbortedOffer struct {
+	ID             int64       `json:"id"`
+	OccurredAt     string      `json:"occurredAt"`
+	PartnerName    string      `json:"partnerName"`
+	PartnerTradeID int         `json:"partnerTradeId"`
+	Payload        string      `json:"payload"`
+	Items          []TradeItem `json:"items"`
+	ClosedReason   string      `json:"closedReason"`
+}
+
 type tradeShortage struct {
 	Name        string
 	Required    int
@@ -2244,6 +2254,31 @@ func (a *App) ensureGameHistoryTables() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_game_history_owner_started ON game_history_entries(owner_key, started_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_game_history_items_owner_entry ON game_history_items(owner_key, entry_id, item_type, item_index)`,
+		`CREATE TABLE IF NOT EXISTS aborted_trade_offers (
+			id BIGSERIAL PRIMARY KEY,
+			session_id BIGINT NULL,
+			occurred_at TIMESTAMPTZ NOT NULL,
+			partner_name TEXT NOT NULL DEFAULT '',
+			partner_trade_id INTEGER NOT NULL DEFAULT 0,
+			payload_hex TEXT NOT NULL DEFAULT '',
+			furni_items JSONB DEFAULT '[]'::jsonb,
+			owner_key TEXT NOT NULL DEFAULT '',
+			closed_reason TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS aborted_trade_offer_items (
+			id BIGSERIAL PRIMARY KEY,
+			aborted_offer_id BIGINT NOT NULL REFERENCES aborted_trade_offers(id) ON DELETE CASCADE,
+			item_name TEXT NOT NULL,
+			quantity INTEGER NOT NULL DEFAULT 1,
+			raw_data TEXT NOT NULL DEFAULT '',
+			owner_key TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_aborted_offers_owner ON aborted_trade_offers(owner_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_aborted_offers_occurred ON aborted_trade_offers(occurred_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_aborted_items_name ON aborted_trade_offer_items(item_name)`,
 	}
 
 	for _, q := range queries {
@@ -2775,6 +2810,119 @@ func (a *App) GetGameHistoryJSON() string {
 		return "[]"
 	}
 	return string(jsonData)
+}
+
+func (a *App) loadAbortedOffersFromDB() ([]AbortedOffer, error) {
+	db, owner := a.getHistoryDB()
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	rows, err := db.Query(ctx, `
+		SELECT id, occurred_at, partner_name, partner_trade_id, payload_hex, furni_items, closed_reason
+		FROM aborted_trade_offers
+		WHERE owner_key = $1
+		ORDER BY occurred_at DESC, id DESC
+	`, owner)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	offers := make([]AbortedOffer, 0)
+	for rows.Next() {
+		var o AbortedOffer
+		var rawItems []byte
+		if err := rows.Scan(&o.ID, &o.OccurredAt, &o.PartnerName, &o.PartnerTradeID, &o.Payload, &rawItems, &o.ClosedReason); err != nil {
+			return nil, err
+		}
+		if len(rawItems) > 0 {
+			_ = json.Unmarshal(rawItems, &o.Items)
+		}
+		offers = append(offers, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return offers, nil
+}
+
+func (a *App) GetAbortedOffersJSON() string {
+	offers, err := a.loadAbortedOffersFromDB()
+	if err != nil {
+		return "[]"
+	}
+	b, err := json.Marshal(offers)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+type AbortedItemStat struct {
+	Name          string `json:"name"`
+	Occurrences   int    `json:"occurrences"`
+	TotalQuantity int    `json:"totalQuantity"`
+	LastSeen      string `json:"lastSeen"`
+}
+
+func (a *App) loadAbortedItemStatsFromDB(limit int) ([]AbortedItemStat, error) {
+	db, owner := a.getHistoryDB()
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	rows, err := db.Query(ctx, `
+		SELECT i.item_name, COUNT(DISTINCT i.aborted_offer_id) AS occurrences, COALESCE(SUM(i.quantity),0) AS total_quantity, MAX(o.occurred_at) AS last_seen
+		FROM aborted_trade_offer_items i
+		JOIN aborted_trade_offers o ON o.id = i.aborted_offer_id
+		WHERE i.owner_key = $1
+		GROUP BY i.item_name
+		ORDER BY occurrences DESC, last_seen DESC
+		LIMIT $2
+	`, owner, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]AbortedItemStat, 0)
+	for rows.Next() {
+		var name string
+		var occ int
+		var totalQty int
+		var last time.Time
+		if err := rows.Scan(&name, &occ, &totalQty, &last); err != nil {
+			return nil, err
+		}
+		out = append(out, AbortedItemStat{
+			Name:          name,
+			Occurrences:   occ,
+			TotalQuantity: totalQty,
+			LastSeen:      last.UTC().Format(time.RFC3339),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (a *App) GetAbortedItemStatsJSON(limit int) string {
+	stats, err := a.loadAbortedItemStatsFromDB(limit)
+	if err != nil {
+		return "[]"
+	}
+	b, err := json.Marshal(stats)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
 }
 
 func (a *App) ClearGameHistory() {
