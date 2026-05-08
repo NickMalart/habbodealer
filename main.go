@@ -6803,7 +6803,24 @@ func handleRoomResetPacket(a *App, e *g.Intercept) {
 
 func (a *App) resetDealerSessionState(reason string) {
 	if strings.TrimSpace(a.currentGameHistoryID) != "" {
-		a.markCurrentGameHistoryIssue(fmt.Sprintf("Dealer session reset before round fully resolved (%s)", reason), true)
+		// If the current history entry is already Completed (for example
+		// payout finished and capture cleared issue flags), do not overwrite
+		// it with an Issue due to a session reset.
+		a.gameHistoryMu.Lock()
+		var shouldMarkIssue = true
+		for _, e := range a.gameHistory {
+			if e.ID == a.currentGameHistoryID {
+				if strings.EqualFold(e.Status, "Completed") {
+					shouldMarkIssue = false
+				}
+				break
+			}
+		}
+		a.gameHistoryMu.Unlock()
+
+		if shouldMarkIssue {
+			a.markCurrentGameHistoryIssue(fmt.Sprintf("Dealer session reset before round fully resolved (%s)", reason), true)
+		}
 	}
 
 	// Stop any active game-choice timeout when resetting the dealer session.

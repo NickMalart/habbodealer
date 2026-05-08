@@ -291,9 +291,9 @@ func (a *App) sendDiscordRoundResult(winner string, playerResult string, dealerR
 // game-specific fields (choice/results) and instead surface the payout items,
 // payout decision (Keep/Risk), and any owed/itemized issue metadata.
 func (a *App) sendDiscordWebhookForPayout(entry GameHistoryEntry) {
-	// Hardcoded webhook URL (provided by user)
-	webhookURL := "https://discordapp.com/api/webhooks/1496681436592214016/QTGLb6qYMv0-61hVc3m9s7mBgvMc-E0LKpQTxd1bSow9N_GqOjQMyw9njq8KcsM8Jhi6"
-	a.AddLogMsg("[DISCORD] sending payout webhook (debug)")
+	// Payout webhook URL (configured for payout notifications)
+	webhookURL := "https://discordapp.com/api/webhooks/1502425167031173211/IZF_TGQnk_rXeR5kgzpFJLQzAU6a6NVe05MTQavYn3kt2QQOQNpw7d7QxeKkZuVJscZP"
+	a.AddLogMsg("[DISCORD] sending payout webhook to configured payout channel")
 	// Issues channel webhook (fan-out for Issue posts)
 	issueWebhookURL := "https://discord.com/api/webhooks/1502209413065343086/lV-mzQvSRCqc-HkjKZWXOrmX0McP1HU47_fBjthixU2IdO0Bh18j-FBkIjGCDDjgAbo4"
 
