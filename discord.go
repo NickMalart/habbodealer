@@ -93,26 +93,70 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 		return v
 	}
 
+	// Prepare risk display values
+	riskRound := "No"
+	if entry.RiskSession {
+		riskRound = "Yes"
+	}
+	riskedStr := strconv.Itoa(entry.RiskPending)
+	bankStr := strconv.Itoa(entry.RiskBank)
+
+	// Determine embed color and title prefix. Issue takes precedence.
+	embedColor := 3447003
+	titlePrefix := ""
+	winnerName := strings.TrimSpace(entry.Winner)
+	playerName := strings.TrimSpace(entry.PlayerName)
+	if entry.Issue || strings.EqualFold(entry.Status, "Issue") {
+		embedColor = 15158332
+		titlePrefix = "⚠️ "
+	} else if strings.EqualFold(winnerName, playerName) {
+		embedColor = 16753920
+		titlePrefix = "💸 "
+	} else if strings.EqualFold(winnerName, "Dealer") || strings.EqualFold(winnerName, strings.TrimSpace(a.getCurrentDealerName())) {
+		embedColor = 5763719
+		titlePrefix = "💰 "
+	}
+
+	fields := []map[string]interface{}{
+		{"name": "Winner", "value": formatField(entry.Winner), "inline": true},
+		{"name": "Outcome", "value": formatField(entry.Status), "inline": true},
+		{"name": "Choice", "value": formatField(entry.Choice), "inline": true},
+		{"name": "Player Result", "value": formatField(entry.PlayerResult), "inline": true},
+		{"name": "Dealer Result", "value": formatField(entry.DealerResult), "inline": true},
+		{"name": "Payout Multiplier", "value": strconv.Itoa(entry.PayoutMultiplier), "inline": true},
+		{"name": "Risk Round", "value": formatField(riskRound), "inline": true},
+		{"name": "Risked", "value": formatField(riskedStr), "inline": true},
+		{"name": "Bank After", "value": formatField(bankStr), "inline": true},
+		{"name": "Risk Decision", "value": formatField(entry.RiskDecision), "inline": true},
+		{"name": "Player Shout", "value": formatField(entry.ChoiceShout), "inline": false},
+		{"name": "Bet Items", "value": formatItems(entry.BetItems), "inline": false},
+		{"name": "Payout Items", "value": formatItems(entry.PayoutItems), "inline": false},
+		{"name": "Notes", "value": formatNotes(entry.Notes), "inline": false},
+		{"name": "Started At", "value": entry.StartedAt, "inline": true},
+		{"name": "Completed At", "value": entry.CompletedAt, "inline": true},
+	}
+	if strings.TrimSpace(entry.IssueReason) != "" {
+		fields = append(fields, map[string]interface{}{"name": "Issue Reason", "value": formatField(entry.IssueReason), "inline": false})
+	}
+
+	// Include structured issue metadata when present
+	if strings.TrimSpace(entry.IssueType) != "" {
+		fields = append(fields, map[string]interface{}{"name": "Issue Type", "value": formatField(entry.IssueType), "inline": true})
+	}
+	if entry.IssueOwed > 0 {
+		fields = append(fields, map[string]interface{}{"name": "Owed Amount", "value": strconv.Itoa(entry.IssueOwed), "inline": true})
+	}
+	if strings.TrimSpace(entry.IssueOwedItems) != "" {
+		fields = append(fields, map[string]interface{}{"name": "Owed Items", "value": formatField(entry.IssueOwedItems), "inline": false})
+	}
+
 	embed := map[string]interface{}{
-		"title":       fmt.Sprintf("%s — %s", entry.Game, entry.Status),
+		"title":       fmt.Sprintf("%s%s — %s", titlePrefix, entry.Game, entry.Status),
 		"description": fmt.Sprintf("Player: %s", entry.PlayerName),
-		"color":       3447003,
-		"fields": []map[string]interface{}{
-			{"name": "Winner", "value": formatField(entry.Winner), "inline": true},
-			{"name": "Outcome", "value": formatField(entry.Status), "inline": true},
-			{"name": "Choice", "value": formatField(entry.Choice), "inline": true},
-			{"name": "Player Result", "value": formatField(entry.PlayerResult), "inline": true},
-			{"name": "Dealer Result", "value": formatField(entry.DealerResult), "inline": true},
-			{"name": "Payout Multiplier", "value": strconv.Itoa(entry.PayoutMultiplier), "inline": true},
-			{"name": "Player Shout", "value": formatField(entry.ChoiceShout), "inline": false},
-			{"name": "Bet Items", "value": formatItems(entry.BetItems), "inline": false},
-			{"name": "Payout Items", "value": formatItems(entry.PayoutItems), "inline": false},
-			{"name": "Notes", "value": formatNotes(entry.Notes), "inline": false},
-			{"name": "Started At", "value": entry.StartedAt, "inline": true},
-			{"name": "Completed At", "value": entry.CompletedAt, "inline": true},
-		},
-		"timestamp": entry.CompletedAt,
-		"footer":    map[string]interface{}{"text": fmt.Sprintf("Game ID: %s", entry.ID)},
+		"color":       embedColor,
+		"fields":      fields,
+		"timestamp":   entry.CompletedAt,
+		"footer":      map[string]interface{}{"text": fmt.Sprintf("Game ID: %s", entry.ID)},
 	}
 
 	payload := map[string]interface{}{

@@ -597,25 +597,35 @@ type ParsedUsers28Trade struct {
 }
 
 type GameHistoryEntry struct {
-	ID           string      `json:"id"`
-	PlayerName   string      `json:"playerName"`
-	StartedAt    string      `json:"startedAt"`
-	UpdatedAt    string      `json:"updatedAt"`
-	CompletedAt  string      `json:"completedAt,omitempty"`
-	Game         string      `json:"game"`
-	Winner       string      `json:"winner"`
-	Status       string      `json:"status"`
-	Issue        bool        `json:"issue"`
-	IssueReason  string      `json:"issueReason"`
-	PlayerResult string      `json:"playerResult"`
-	DealerResult string      `json:"dealerResult"`
-	BetItems     []TradeItem `json:"betItems"`
-	PayoutItems  []TradeItem `json:"payoutItems"`
-	Notes        []string    `json:"notes"`
+	ID          string `json:"id"`
+	PlayerName  string `json:"playerName"`
+	StartedAt   string `json:"startedAt"`
+	UpdatedAt   string `json:"updatedAt"`
+	CompletedAt string `json:"completedAt,omitempty"`
+	Game        string `json:"game"`
+	Winner      string `json:"winner"`
+	Status      string `json:"status"`
+	Issue       bool   `json:"issue"`
+	IssueReason string `json:"issueReason"`
+	// Issue metadata for easier triage
+	IssueType      string      `json:"issueType,omitempty"`
+	IssueOwed      int         `json:"issueOwed,omitempty"`
+	IssueOwedItems string      `json:"issueOwedItems,omitempty"`
+	PlayerResult   string      `json:"playerResult"`
+	DealerResult   string      `json:"dealerResult"`
+	BetItems       []TradeItem `json:"betItems"`
+	PayoutItems    []TradeItem `json:"payoutItems"`
+	Notes          []string    `json:"notes"`
 	// New fields to capture player choice and raw shout, plus payout multiplier
 	Choice           string `json:"choice,omitempty"`
 	ChoiceShout      string `json:"choiceShout,omitempty"`
 	PayoutMultiplier int    `json:"payoutMultiplier,omitempty"`
+	// Risk session fields
+	RiskSession bool `json:"riskSession,omitempty"`
+	RiskPending int  `json:"riskPending,omitempty"` // amount currently risked for a re-roll
+	RiskBank    int  `json:"riskBank,omitempty"`    // player's internal bank at that moment
+	// Explicit decision marker for risk rounds (e.g. "Keep" or "Risk 3")
+	RiskDecision string `json:"riskDecision,omitempty"`
 }
 
 type tradeShortage struct {
@@ -2920,9 +2930,19 @@ func (a *App) beginGameHistory(playerName string, betItems []TradeItem) {
 	a.AddLogMsg("[GAME_HISTORY] beginGameHistory start")
 	a.gameHistoryMu.Lock()
 	var replacedEntry *GameHistoryEntry
+	// Snapshot current risk state so replaced/Issue entries include risk metadata.
+	mutex.Lock()
+	rp := riskPendingBet
+	rb := playerRisk
+	rs := riskSessionActive
+	mutex.Unlock()
 
 	if a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
 		if entry.CompletedAt == "" {
+			// Ensure any active risk data is recorded on the archived entry.
+			entry.RiskSession = rs
+			entry.RiskBank = rb
+			entry.RiskPending = rp
 			entry.Status = "Issue"
 			entry.Issue = true
 			entry.IssueReason = "Round was replaced before it fully finished"
@@ -3101,11 +3121,21 @@ func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
 	a.AddLogMsg("[GAME_HISTORY] markCurrentGameHistoryIssue start")
 	a.gameHistoryMu.Lock()
 	var completedEntry *GameHistoryEntry
+	// Snapshot current risk state so Issue entries include risk metadata when closed.
+	mutex.Lock()
+	rp := riskPendingBet
+	rb := playerRisk
+	rs := riskSessionActive
+	mutex.Unlock()
+
 	if !a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
 		entry.Issue = true
 		entry.IssueReason = reason
 		entry.Status = "Issue"
 		entry.Notes = append(entry.Notes, reason)
+		entry.RiskSession = rs
+		entry.RiskBank = rb
+		entry.RiskPending = rp
 		if complete {
 			entry.CompletedAt = gameHistoryTimestamp()
 			e := *entry
@@ -4911,6 +4941,23 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 	dealerRisk -= payout
 	playerRisk += payout
 
+	// Snapshot current risk state into the active game history entry.
+	rp := riskPendingBet
+	rb := playerRisk
+	rs := riskSessionActive
+	// release the main mutex briefly to avoid lock-order inversion
+	mutex.Unlock()
+	a.gameHistoryMu.Lock()
+	_a := a // local alias for closure capture
+	_a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+		entry.RiskSession = rs
+		entry.RiskBank = rb
+		entry.RiskPending = rp
+		entry.Notes = append(entry.Notes, fmt.Sprintf("Risk session started: bank=%d", rb))
+	})
+	a.gameHistoryMu.Unlock()
+	mutex.Lock()
+
 	// compute usable max under lock (per-item cap, player-limited and dealer-limited)
 	displayMax := maxTradeQuantityPerItem
 	if playerRisk < displayMax {
@@ -5016,7 +5063,24 @@ func (a *App) handleRiskBet(n int, sender string) {
 	playerRisk -= n
 	dealerRisk += n
 	riskPendingBet = n
+	// capture snapshot values under lock to avoid races
+	rp := riskPendingBet
+	rb := playerRisk
+	rs := riskSessionActive
 	mutex.Unlock()
+
+	// update history with the placed risk
+	a.gameHistoryMu.Lock()
+	a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+		entry.RiskPending = rp
+		entry.RiskBank = rb
+		if rs {
+			entry.RiskSession = true
+		}
+		entry.Notes = append(entry.Notes, fmt.Sprintf("Risk bet placed: %d", rp))
+		entry.RiskDecision = fmt.Sprintf("Risk %d", rp)
+	})
+	a.gameHistoryMu.Unlock()
 
 	a.AddLogMsg(fmt.Sprintf("[RISK] %s risked %d (playerRisk=%d dealerRisk=%d)", sender, n, playerRisk, dealerRisk))
 
@@ -5231,6 +5295,22 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		// re-prompt or end the session if nothing remains usable.
 		riskPendingBet = 0
 
+		// Snapshot current risk state into the active game history entry.
+		rp := riskPendingBet
+		rb := playerRisk
+		rs := riskSessionActive
+		// release main mutex briefly to avoid lock-order inversion
+		mutex.Unlock()
+		a.gameHistoryMu.Lock()
+		a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+			entry.RiskPending = rp
+			entry.RiskBank = rb
+			entry.RiskSession = rs
+			entry.Notes = append(entry.Notes, fmt.Sprintf("Risk round resolved: lost %d, bank=%d", rp, rb))
+		})
+		a.gameHistoryMu.Unlock()
+		mutex.Lock()
+
 		// compute usable max including per-item cap
 		displayMax := maxTradeQuantityPerItem
 		if playerRisk < displayMax {
@@ -5331,7 +5411,20 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 	dealerRisk -= pay
 	playerRisk += pay
 	riskPendingBet = 0
+
+	// Snapshot post-win risk state for history before releasing main mutex.
+	rp2 := riskPendingBet
+	rb2 := playerRisk
+	rs2 := riskSessionActive
 	mutex.Unlock()
+	a.gameHistoryMu.Lock()
+	a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+		entry.RiskPending = rp2
+		entry.RiskBank = rb2
+		entry.RiskSession = rs2
+		entry.Notes = append(entry.Notes, fmt.Sprintf("Risk round won: paid=%d bank=%d", pay, rb2))
+	})
+	a.gameHistoryMu.Unlock()
 
 	a.AddLogMsg(fmt.Sprintf("[RISK] %s won risk round: paid %d (playerRisk=%d dealerRisk=%d)", partner, pay, playerRisk, dealerRisk))
 	// Duplicate winner shout removed: the winner is already announced by the game result.
@@ -5466,6 +5559,13 @@ func (a *App) finalizeRiskKeep() {
 
 	a.AddLogMsg(fmt.Sprintf("[RISK] finalizing Keep -> payout %d to %s(%d) (mult=%d)", total, targetName, targetID, sessionMult))
 	a.noteCurrentGameHistory(fmt.Sprintf("Risk keep selected by %s; converting bank of %d to payout", targetName, total))
+
+	// Record explicit decision in the active history entry so webhooks show "Keep".
+	a.gameHistoryMu.Lock()
+	a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+		entry.RiskDecision = "Keep"
+	})
+	a.gameHistoryMu.Unlock()
 
 	// Build required map proportionally from recorded bet types if available
 	baseMult := sessionMult
@@ -5757,6 +5857,27 @@ func (a *App) verifyAndRetryPayoutAdds(plannedIDs []int) {
 		// but don't close the game. If the trade later completes successfully, it will
 		// be updated to "Completed" status. Only mark as Issue if trade fails permanently.
 		a.noteCurrentGameHistory(fmt.Sprintf("Payout items did not fully reflect in trade offer (sent=%d/%d); manual review needed", payoutActualAddCount, payoutExpectedAddCount))
+		// Compute missing items using current own offer counts and attach structured Issue metadata to history
+		have := ownTradeOfferCounts()
+		missing := map[string]int{}
+		owedTotal := 0
+		for name, need := range required {
+			haveQty := have[name]
+			if haveQty < need {
+				missing[name] = need - haveQty
+				owedTotal += need - haveQty
+			}
+		}
+		owedStr := formatMissingCounts(missing)
+
+		a.gameHistoryMu.Lock()
+		a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+			entry.IssueType = "Payout Failure"
+			entry.IssueOwed = owedTotal
+			entry.IssueOwedItems = owedStr
+		})
+		a.gameHistoryMu.Unlock()
+
 		a.markCurrentGameHistoryIssue(fmt.Sprintf("Payout items did not fully reflect in trade offer after automated attempts (sent=%d/%d)", payoutActualAddCount, payoutExpectedAddCount), false)
 	}
 }
