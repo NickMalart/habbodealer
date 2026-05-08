@@ -4,9 +4,9 @@ $root = $PSScriptRoot
 
 Write-Host ('
 === [1/4] roll-origins (wails build) ===') -ForegroundColor Cyan
-Remove-Item (Join-Path $root 'build\bin\roll-origins.exe') -Force -ErrorAction SilentlyContinue
-Remove-Item (Join-Path $root 'build\bin\Gamba-Suite.exe') -Force -ErrorAction SilentlyContinue
-Push-Location $root
+Remove-Item (Join-Path $root 'roll-origins\build\bin\roll-origins.exe') -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $root 'roll-origins\build\bin\Gamba-Suite.exe') -Force -ErrorAction SilentlyContinue
+Push-Location (Join-Path $root 'roll-origins')
 wails build
 if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED' -ForegroundColor Red } else { Write-Host '  OK' -ForegroundColor Green }
 Pop-Location

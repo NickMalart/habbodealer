@@ -8,12 +8,12 @@
 *.prof
 
 # Project Specific Binaries/Outputs
-build/bin/
-frontend/dist/
-frontend/node_modules/
+roll-origins/build/bin/
+roll-origins/frontend/dist/
+roll-origins/frontend/node_modules/
 frontend@0.0.0/node_modules/
 frontend@0.0.0/dist/
-main.go.exe
+roll-origins/main.go.exe
 app-launcher/app-launcher.exe
 free-raffle-bot/free-raffle-bot.exe
 trade-tracker/trade-tracker.exe
@@ -23,7 +23,7 @@ wave-timer-app/wave-timer-app.exe
 *.log
 logs/
 G-Earth.windows-x64/logs/
-payload.json
+roll-origins/payload.json
 debug/
 
 # OS Specific
