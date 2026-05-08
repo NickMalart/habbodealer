@@ -1,0 +1,21 @@
+{
+  "username": "roll-origins",
+  "allowed_mentions": { "parse": [] },
+  "embeds": [
+    {
+      "title": "💸 Payout — Completed",
+      "description": "Payout for: lambojimmy",
+      "color": 16753920,
+      "fields": [
+        {"name": "Payout To", "value": "lambojimmy", "inline": true},
+        {"name": "Payout Decision", "value": "Keep", "inline": true},
+        {"name": "Payout Items", "value": "cf_5_coin_silver x16", "inline": false},
+        {"name": "Notes", "value": "Payout trade completed successfully", "inline": false},
+        {"name": "Started At", "value": "2026-05-07T10:37:36-07:00", "inline": true},
+        {"name": "Completed At", "value": "2026-05-07T10:39:23-07:00", "inline": true}
+      ],
+      "timestamp": "2026-05-07T10:39:23-07:00",
+      "footer": { "text": "Game ID: 1778175456755325800" }
+    }
+  ]
+}

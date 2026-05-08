@@ -20,6 +20,9 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 	webhookURL := "https://discordapp.com/api/webhooks/1496681436592214016/QTGLb6qYMv0-61hVc3m9s7mBgvMc-E0LKpQTxd1bSow9N_GqOjQMyw9njq8KcsM8Jhi6"
 	a.AddLogMsg("[DISCORD] using hardcoded webhook URL")
 
+	// Optional secondary webhook for Issue-only posts (provided by user)
+	issueWebhookURL := "https://discord.com/api/webhooks/1502209413065343086/lV-mzQvSRCqc-HkjKZWXOrmX0McP1HU47_fBjthixU2IdO0Bh18j-FBkIjGCDDjgAbo4"
+
 	// Validate webhook URL contains a numeric webhook ID (snowflake).
 	if u, perr := url.Parse(webhookURL); perr == nil {
 		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
@@ -207,6 +210,36 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 	} else {
 		a.AddLogMsg(fmt.Sprintf("[DISCORD] webhook responded: %d body=%q", resp.StatusCode, respBody))
 	}
+
+	// If this entry is an Issue, also fan-out the same payload to the issues channel
+	if entry.Issue || strings.EqualFold(entry.Status, "Issue") {
+		req2, err2 := http.NewRequest("POST", issueWebhookURL, bytes.NewReader(jb))
+		if err2 != nil {
+			a.AddErrorLog("[DISCORD] issue webhook request error", err2)
+			return
+		}
+		req2.Header.Set("Content-Type", "application/json")
+		req2.Header.Set("User-Agent", "roll-origins/1.0")
+
+		resp2, err2 := client.Do(req2)
+		if err2 != nil {
+			a.AddErrorLog("[DISCORD] issue webhook POST error", err2)
+			return
+		}
+		bodyBytes2, _ := io.ReadAll(resp2.Body)
+		respBody2 := strings.TrimSpace(string(bodyBytes2))
+		defer resp2.Body.Close()
+
+		if resp2.StatusCode >= 200 && resp2.StatusCode < 300 {
+			if respBody2 == "" {
+				a.AddLogMsg("[DISCORD] issue webhook sent (no response body)")
+			} else {
+				a.AddLogMsg(fmt.Sprintf("[DISCORD] issue webhook sent; body=%q", respBody2))
+			}
+		} else {
+			a.AddLogMsg(fmt.Sprintf("[DISCORD] issue webhook responded: %d body=%q", resp2.StatusCode, respBody2))
+		}
+	}
 }
 
 // sendDiscordRoundResult posts the game outcome to Discord immediately when the
@@ -251,4 +284,174 @@ func (a *App) sendDiscordRoundResult(winner string, playerResult string, dealerR
 			a.AddLogMsg("[GAME_HISTORY][DB] round-result stats persisted ok")
 		}
 	}()
+}
+
+// sendDiscordWebhookForPayout posts a focused embed about a completed payout
+// separate from the game result. Payout embeds intentionally avoid including
+// game-specific fields (choice/results) and instead surface the payout items,
+// payout decision (Keep/Risk), and any owed/itemized issue metadata.
+func (a *App) sendDiscordWebhookForPayout(entry GameHistoryEntry) {
+	// Hardcoded webhook URL (provided by user)
+	webhookURL := "https://discordapp.com/api/webhooks/1496681436592214016/QTGLb6qYMv0-61hVc3m9s7mBgvMc-E0LKpQTxd1bSow9N_GqOjQMyw9njq8KcsM8Jhi6"
+	a.AddLogMsg("[DISCORD] sending payout webhook (debug)")
+	// Issues channel webhook (fan-out for Issue posts)
+	issueWebhookURL := "https://discord.com/api/webhooks/1502209413065343086/lV-mzQvSRCqc-HkjKZWXOrmX0McP1HU47_fBjthixU2IdO0Bh18j-FBkIjGCDDjgAbo4"
+
+	formatItems := func(items []TradeItem) string {
+		if len(items) == 0 {
+			return "None"
+		}
+		parts := make([]string, 0, len(items))
+		for _, it := range items {
+			parts = append(parts, fmt.Sprintf("%s x%d", it.Name, it.Quantity))
+		}
+		s := strings.Join(parts, ", ")
+		if len(s) > 900 {
+			s = s[:900] + "…"
+		}
+		return s
+	}
+
+	formatNotes := func(notes []string) string {
+		if len(notes) == 0 {
+			return "None"
+		}
+		s := strings.Join(notes, "\n")
+		if len(s) > 900 {
+			s = s[:900] + "…"
+		}
+		return s
+	}
+
+	formatField := func(v string) string {
+		if strings.TrimSpace(v) == "" {
+			return "None"
+		}
+		if len(v) > 900 {
+			return v[:900] + "…"
+		}
+		return v
+	}
+
+	// Title / color selection: Issues take precedence.
+	embedColor := 16753920
+	titlePrefix := "💸 "
+	if entry.Issue || strings.EqualFold(entry.Status, "Issue") {
+		embedColor = 15158332
+		titlePrefix = "⚠️ "
+	}
+
+	fields := []map[string]interface{}{
+		{"name": "Payout To", "value": formatField(entry.PlayerName), "inline": true},
+		{"name": "Payout Decision", "value": formatField(entry.RiskDecision), "inline": true},
+		{"name": "Payout Items", "value": formatItems(entry.PayoutItems), "inline": false},
+	}
+
+	if strings.TrimSpace(entry.IssueType) != "" {
+		fields = append(fields, map[string]interface{}{"name": "Issue Type", "value": formatField(entry.IssueType), "inline": true})
+	}
+	if entry.IssueOwed > 0 {
+		fields = append(fields, map[string]interface{}{"name": "Owed Amount", "value": strconv.Itoa(entry.IssueOwed), "inline": true})
+	}
+	if strings.TrimSpace(entry.IssueOwedItems) != "" {
+		fields = append(fields, map[string]interface{}{"name": "Owed Items", "value": formatField(entry.IssueOwedItems), "inline": false})
+	}
+
+	if len(entry.Notes) > 0 {
+		fields = append(fields, map[string]interface{}{"name": "Notes", "value": formatNotes(entry.Notes), "inline": false})
+	}
+
+	// Use CompletedAt if present, otherwise timestamp now for the embed
+	timestamp := entry.CompletedAt
+	if strings.TrimSpace(timestamp) == "" {
+		timestamp = time.Now().Format(time.RFC3339)
+	}
+
+	embed := map[string]interface{}{
+		"title":       fmt.Sprintf("%sPayout — %s", titlePrefix, strings.Title(strings.ToLower(entry.Status))),
+		"description": fmt.Sprintf("Payout for: %s", entry.PlayerName),
+		"color":       embedColor,
+		"fields":      fields,
+		"timestamp":   timestamp,
+		"footer":      map[string]interface{}{"text": fmt.Sprintf("Game ID: %s", entry.ID)},
+	}
+
+	payload := map[string]interface{}{
+		"username": "roll-origins",
+		"embeds":   []interface{}{embed},
+		"allowed_mentions": map[string][]string{
+			"parse": []string{},
+		},
+	}
+
+	jb, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		a.AddErrorLog("[DISCORD] payout marshal error", err)
+		return
+	}
+
+	// Write a separate debug payload file for payout events
+	go func(b []byte) {
+		if err := os.WriteFile("payload_payout.json", b, 0600); err != nil {
+			a.AddLogMsg(fmt.Sprintf("[DISCORD] payout payload write failed: %v", err))
+		}
+	}(append([]byte(nil), jb...))
+
+	req, err := http.NewRequest("POST", webhookURL, bytes.NewReader(jb))
+	if err != nil {
+		a.AddErrorLog("[DISCORD] payout request error", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "roll-origins/1.0")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		a.AddErrorLog("[DISCORD] payout POST error", err)
+		return
+	}
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	respBody := strings.TrimSpace(string(bodyBytes))
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if respBody == "" {
+			a.AddLogMsg("[DISCORD] payout webhook sent (no response body)")
+		} else {
+			a.AddLogMsg(fmt.Sprintf("[DISCORD] payout webhook sent; body=%q", respBody))
+		}
+	} else {
+		a.AddLogMsg(fmt.Sprintf("[DISCORD] payout webhook responded: %d body=%q", resp.StatusCode, respBody))
+	}
+
+	// Fan-out payout Issues to the issues webhook as well
+	if entry.Issue || strings.EqualFold(entry.Status, "Issue") {
+		req2, err2 := http.NewRequest("POST", issueWebhookURL, bytes.NewReader(jb))
+		if err2 != nil {
+			a.AddErrorLog("[DISCORD] payout issue webhook request error", err2)
+			return
+		}
+		req2.Header.Set("Content-Type", "application/json")
+		req2.Header.Set("User-Agent", "roll-origins/1.0")
+
+		resp2, err2 := client.Do(req2)
+		if err2 != nil {
+			a.AddErrorLog("[DISCORD] payout issue webhook POST error", err2)
+			return
+		}
+		bodyBytes2, _ := io.ReadAll(resp2.Body)
+		respBody2 := strings.TrimSpace(string(bodyBytes2))
+		defer resp2.Body.Close()
+
+		if resp2.StatusCode >= 200 && resp2.StatusCode < 300 {
+			if respBody2 == "" {
+				a.AddLogMsg("[DISCORD] payout issue webhook sent (no response body)")
+			} else {
+				a.AddLogMsg(fmt.Sprintf("[DISCORD] payout issue webhook sent; body=%q", respBody2))
+			}
+		} else {
+			a.AddLogMsg(fmt.Sprintf("[DISCORD] payout issue webhook responded: %d body=%q", resp2.StatusCode, respBody2))
+		}
+	}
 }

@@ -3160,7 +3160,7 @@ func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
 	}
 }
 
-func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note string, complete bool) {
+func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note string, complete bool, isPayout bool) {
 	a.AddLogMsg("[GAME_HISTORY] captureCurrentGameHistoryPayoutItems start")
 	a.gameHistoryMu.Lock()
 	var completedEntry *GameHistoryEntry
@@ -3190,9 +3190,16 @@ func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note strin
 			entry.Notes = append(entry.Notes, note)
 		}
 		if complete {
-			entry.Status = "Completed"
-			entry.CompletedAt = gameHistoryTimestamp()
-			// copy out the completed entry for async webhook/send
+			// For normal game completion, mark the entry Completed so the
+			// game webhook reflects the game result. For payout-only
+			// completions, do NOT flip the entry Status/CompletedAt here so
+			// the game remains a separate historical record; instead send
+			// a dedicated payout webhook below.
+			if !isPayout {
+				entry.Status = "Completed"
+				entry.CompletedAt = gameHistoryTimestamp()
+			}
+			// copy out the completed snapshot for async webhook/send
 			e := *entry
 			completedEntry = &e
 		}
@@ -3200,16 +3207,20 @@ func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note strin
 		a.gameHistoryMu.Unlock()
 		return
 	}
-	if complete {
+	if complete && !isPayout {
 		a.currentGameHistoryID = ""
 	}
 	a.AddLogMsg("[GAME_HISTORY] captureCurrentGameHistoryPayoutItems mutation complete")
 	a.gameHistoryMu.Unlock()
 	a.AddLogMsg("[GAME_HISTORY] captureCurrentGameHistoryPayoutItems unlocked, syncing")
 	a.syncCurrentGameEntry()
-	// If this call marked the entry complete, send that single entry to Discord.
+	// If this call marked the entry complete, send the appropriate webhook.
 	if complete && completedEntry != nil {
-		go a.sendDiscordWebhookForGame(*completedEntry)
+		if isPayout {
+			go a.sendDiscordWebhookForPayout(*completedEntry)
+		} else {
+			go a.sendDiscordWebhookForGame(*completedEntry)
+		}
 	}
 }
 
@@ -3826,7 +3837,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			}
 
 			a.AddLogMsg("[TRADE_COMPLETED #112] payout trade completed")
-			a.captureCurrentGameHistoryPayoutItems(payoutItems, "Payout trade completed successfully", true)
+			a.captureCurrentGameHistoryPayoutItems(payoutItems, "Payout trade completed successfully", true, true)
 
 			// Persist completed payout trade for audit
 			go LogEvent("trade_completed", map[string]interface{}{"mode": "payout", "partner": partnerName, "payout_items": payoutItems}, fmt.Sprintf("Payout trade completed to %s", partnerName), nil)
@@ -3860,11 +3871,11 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				// player still has to choose a game and the app still needs to record the
 				// actual game, winner and results. We only persist a predicted payout so
 				// the history modal can show the expected return while the round is live.
-				a.captureCurrentGameHistoryPayoutItems(payoutPred, "Predicted payout (2x bet)", false)
+				a.captureCurrentGameHistoryPayoutItems(payoutPred, "Predicted payout (2x bet)", false, false)
 			} else {
 				// Do not complete the round here. A missing prediction should not clear
 				// currentGameHistoryID before the game result is recorded.
-				a.captureCurrentGameHistoryPayoutItems([]TradeItem{}, "No payout items recorded yet", false)
+				a.captureCurrentGameHistoryPayoutItems([]TradeItem{}, "No payout items recorded yet", false, false)
 			}
 			go func() {
 				if ok := a.forceRefreshHandSnapshot("trade completed"); ok {
