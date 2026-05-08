@@ -3838,6 +3838,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 			a.AddLogMsg("[TRADE_COMPLETED #112] payout trade completed")
 			a.captureCurrentGameHistoryPayoutItems(payoutItems, "Payout trade completed successfully", true, true)
+			appendPayoutTimeline(payoutSessionID, "TRADE_COMPLETED partner=%q items=%v", partnerName, payoutItems)
 
 			// Persist completed payout trade for audit
 			go LogEvent("trade_completed", map[string]interface{}{"mode": "payout", "partner": partnerName, "payout_items": payoutItems}, fmt.Sprintf("Payout trade completed to %s", partnerName), nil)
@@ -4397,15 +4398,21 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 				a.AddLogMsg(fmt.Sprintf("[PAYOUT] payout trade cancelled by %s, cancel count %d/5", retryTargetName, payoutCancelCount))
 				a.noteCurrentGameHistory(fmt.Sprintf("Payout trade closed before completion; retry %d/5", payoutCancelCount))
+				appendPayoutTimeline(payoutSessionID, "TRADE_CLOSE by %s cancel_count=%d", retryTargetName, payoutCancelCount)
 
 				playerName := strings.TrimSpace(retryTargetName)
 				if playerName == "" {
 					playerName = "Player"
 				}
 
-				// Public notice at most once every 45 seconds
+				// Public notice at most once every 45 seconds — be reassuring for early retries
 				if canAnnouncePayoutCancelNotice() {
-					msg := fmt.Sprintf("%q closed trade", playerName)
+					var msg string
+					if payoutCancelCount < 5 {
+						msg = fmt.Sprintf("%q closed trade; retrying payout — please reopen trade and remain while items are added.", playerName)
+					} else {
+						msg = fmt.Sprintf("%q closed trade", playerName)
+					}
 					sendShout(msg)
 					markPayoutCancelNoticeSent()
 				}
@@ -4561,6 +4568,24 @@ func resumeDealerAfterPayoutIssue(a *App, reason string) {
 	go a.reopenDealerIdle("payout issue: " + reason)
 }
 
+// appendPayoutTimeline writes a compact timestamped timeline entry for the
+// current payout session. Files are named payout_timeline_<session>.log.
+func appendPayoutTimeline(session int, format string, args ...interface{}) {
+	if session <= 0 {
+		session = payoutSessionID
+	}
+	fname := fmt.Sprintf("payout_timeline_%d.log", session)
+	f, err := os.OpenFile(fname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		log.Printf("[PAYOUT_LOG] failed to open timeline file %s: %v", fname, err)
+		return
+	}
+	defer f.Close()
+	ts := time.Now().Format(time.RFC3339Nano)
+	entry := fmt.Sprintf(format, args...)
+	fmt.Fprintf(f, "%s %s\n", ts, entry)
+}
+
 func (a *App) startPayoutResponseTimeoutMonitor(playerName string, targetID int, targetName string) {
 	stopPayoutResponseTimeoutMonitor()
 
@@ -4632,6 +4657,11 @@ func startPayout(a *App, targetID int, targetName string) {
 	payoutSessionID++
 	sessionID := payoutSessionID
 	a.noteCurrentGameHistory(fmt.Sprintf("Payout started for %s", targetName))
+	// Record timeline and notify player for large payouts
+	appendPayoutTimeline(sessionID, "Payout started target=%q id=%d session=%d", targetName, targetID, sessionID)
+	if strings.TrimSpace(targetName) != "" {
+		go sendMessageWithDelay(fmt.Sprintf("Payout started for %s — offering items now, please remain in trade until 'Trade Completed'.", targetName))
+	}
 
 	go func() {
 		// Small delay so the winner shout clears Habbo's rate limiter first
@@ -4688,11 +4718,13 @@ func startPayout(a *App, targetID int, targetName string) {
 			rememberOutgoingTradeOpenTarget(targetID)
 			outPreview := string(ext.NewPacket(out.TRADE_OPEN, targetID).Data)
 			a.AddLogMsg(fmt.Sprintf("[PAYOUT] outgoing[71] payload=%q", outPreview))
+			appendPayoutTimeline(sessionID, "Outgoing TRADE_OPEN attempt %d payload=%q", attempt, outPreview)
 			ext.Send(out.TRADE_OPEN, targetID)
 
 			// Fallback: send the raw VL64 payload form as well. Some sessions are picky about payload composition.
 			rawPayload := encodeVL64(targetID)
 			a.AddLogMsg(fmt.Sprintf("[PAYOUT] outgoing[71] raw payload fallback=%q", rawPayload))
+			appendPayoutTimeline(sessionID, "Outgoing TRADE_OPEN raw payload fallback=%q", rawPayload)
 			ext.Send(g.Out.Id("TRADE_OPEN"), []byte(rawPayload))
 
 			if attempt > 1 {
@@ -4731,7 +4763,7 @@ func startPayout(a *App, targetID int, targetName string) {
 }
 
 func (a *App) autoAddPayoutItems() {
-	time.Sleep(600 * time.Millisecond) // settle time after trade opens
+	time.Sleep(400 * time.Millisecond) // settle time after trade opens (shorter)
 
 	// Always begin payout selection from a fresh completed strip scan so we do
 	// not choose ids from a stale or partial hand snapshot from the previous
@@ -4784,6 +4816,12 @@ func (a *App) autoAddPayoutItems() {
 	}
 	payoutExpectedAddCount = requiredTotal
 	payoutActualAddCount = 0
+	// Announce and timeline for large payouts
+	if requiredTotal >= payoutLargePayoutThreshold {
+		estSecs := int((payoutAddInterval * time.Duration(requiredTotal)).Seconds())
+		go sendMessageWithDelay(fmt.Sprintf("Large payout in progress for %s: offering %d items (est %d s). Please remain in trade until 'Trade Completed'.", payoutTargetName, requiredTotal, estSecs))
+		appendPayoutTimeline(payoutSessionID, "Large payout started items=%d est_s=%d target=%q", requiredTotal, estSecs, payoutTargetName)
+	}
 	selectedByName := map[string][]int{}
 	usedIDs := map[int]struct{}{}
 
@@ -4843,16 +4881,24 @@ func (a *App) autoAddPayoutItems() {
 				a.AddLogMsg("[PAYOUT] trade closed mid-add, stopping")
 				return
 			}
-			time.Sleep(550 * time.Millisecond)
+			time.Sleep(payoutAddInterval)
 			ext.Send(out.TRADE_ADDITEM, -itemID)
 			plannedIDs = append(plannedIDs, itemID)
 			total++
 			payload := string(ext.NewPacket(out.TRADE_ADDITEM, -itemID).Data)
 			a.AddLogMsg(fmt.Sprintf("[PAYOUT] added item %d (%s) %d/%d payload=%q", itemID, betItem.Name, total, needed, payload))
 			a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] added id %d (planned so far %d/%d)", itemID, len(plannedIDs), payoutExpectedAddCount))
+
+			appendPayoutTimeline(payoutSessionID, "Sent TRADE_ADDITEM -%d item=%q progress=%d/%d payload=%q", itemID, betItem.Name, total, requiredTotal, payload)
+
+			if requiredTotal >= payoutLargePayoutThreshold && payoutProgressAnnounceEvery > 0 && (total%payoutProgressAnnounceEvery) == 0 {
+				go sendMessageWithDelay(fmt.Sprintf("Payout progress for %s: %d/%d items queued — please remain in trade.", payoutTargetName, total, requiredTotal))
+				appendPayoutTimeline(payoutSessionID, "Progress %d/%d", total, requiredTotal)
+			}
 		}
 	}
 	a.AddLogMsg(fmt.Sprintf("[PAYOUT] auto-add complete: %d item(s) offered", total))
+	appendPayoutTimeline(payoutSessionID, "Auto-add complete offered=%d planned=%d", total, payoutExpectedAddCount)
 
 	// Accept only after full payout placement has been queued.
 	fullyPlanned := true
@@ -4869,6 +4915,7 @@ func (a *App) autoAddPayoutItems() {
 			tradeAutoAccepted = true
 			tradeAutoAcceptPending = false
 			a.AddLogMsg(fmt.Sprintf("[PAYOUT] auto-accept sent after full payout placement (%d/%d sent=%d)", total, requiredTotal, payoutActualAddCount))
+			appendPayoutTimeline(payoutSessionID, "Auto-accept sent after full placement (%d/%d sent=%d)", total, requiredTotal, payoutActualAddCount)
 
 			// Start the payout response timeout monitor only after we've
 			// accepted the payout. This avoids the 30s partner-accept timeout
@@ -5808,6 +5855,8 @@ func (a *App) verifyAndRetryPayoutAdds(plannedIDs []int) {
 		return
 	}
 
+	appendPayoutTimeline(payoutSessionID, "verifyAndRetryPayoutAdds start planned=%d", len(plannedIDs))
+
 	required := payoutRequirementsFromBetItemsMult(gameBetItems, payoutMultiplierForRound)
 	if len(required) == 0 {
 		a.AddLogMsg("[PAYOUT_DEBUG] no payout requirements found while verifying add")
@@ -5826,6 +5875,7 @@ func (a *App) verifyAndRetryPayoutAdds(plannedIDs []int) {
 
 	ownTotal := ownTradeOfferTotal()
 	a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] post-add own offer total=%d planned=%d", ownTotal, len(plannedIDs)))
+	appendPayoutTimeline(payoutSessionID, "post-add ownTotal=%d planned=%d", ownTotal, len(plannedIDs))
 	if a.tryAcceptPayoutTrade(required, "after-negative-add") {
 		return
 	}
@@ -5844,6 +5894,7 @@ func (a *App) verifyAndRetryPayoutAdds(plannedIDs []int) {
 		payload := string(ext.NewPacket(out.TRADE_ADDITEM, itemID).Data)
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] retry add item +%d payload=%q", itemID, payload))
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] sent count now %d/%d", payoutActualAddCount, payoutExpectedAddCount))
+		appendPayoutTimeline(payoutSessionID, "Fallback retry add +%d payload=%q", itemID, payload)
 	}
 
 	// Wait again for trade echo, then only accept if exact payout offer is present.
