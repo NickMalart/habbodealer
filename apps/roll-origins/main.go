@@ -138,7 +138,11 @@ var (
 	payoutTradeSent           bool
 	payoutExpectedAddCount    int
 	payoutActualAddCount      int
-	lastPayoutCancelNoticeAt  time.Time
+	// Payout rate/threshold configuration
+	payoutAddInterval           time.Duration = 250 * time.Millisecond
+	payoutLargePayoutThreshold  int           = 12
+	payoutProgressAnnounceEvery int           = 5
+	lastPayoutCancelNoticeAt    time.Time
 
 	// Payout retry/monitor state
 	payoutResponseTimeoutMonitorID int
@@ -3133,6 +3137,9 @@ func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
 		entry.Issue = true
 		entry.IssueReason = reason
 		entry.Status = "Issue"
+		if strings.TrimSpace(entry.IssueType) == "" && strings.Contains(strings.ToLower(reason), "payout") {
+			entry.IssueType = "Payout Failure"
+		}
 		entry.Notes = append(entry.Notes, reason)
 		entry.RiskSession = rs
 		entry.RiskBank = rb
@@ -3154,8 +3161,15 @@ func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
 	a.AddLogMsg("[GAME_HISTORY] markCurrentGameHistoryIssue unlocked, syncing")
 	a.syncCurrentGameEntry()
 	if complete && completedEntry != nil {
-		go a.sendDiscordWebhookForGame(*completedEntry)
-		a.persistCurrentGameHistoryNow("game_issue")
+		isPayoutIssue := strings.Contains(strings.ToLower(strings.TrimSpace(completedEntry.IssueType)), "payout") ||
+			strings.Contains(strings.ToLower(strings.TrimSpace(completedEntry.IssueReason)), "payout")
+		if isPayoutIssue {
+			go a.sendDiscordWebhookForPayout(*completedEntry)
+			a.persistCurrentGameHistoryNow("payout_issue")
+		} else {
+			go a.sendDiscordWebhookForGame(*completedEntry)
+			a.persistCurrentGameHistoryNow("game_issue")
+		}
 		a.sendLiveDealerGames(5)
 		go LogEvent("game_issue", *completedEntry, "Game completed with issue", map[string]string{"player": completedEntry.PlayerName})
 	}
@@ -3166,6 +3180,19 @@ func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note strin
 	a.gameHistoryMu.Lock()
 	var completedEntry *GameHistoryEntry
 	if !a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+		if isPayout {
+			// A confirmed payout completion supersedes earlier temporary payout-review
+			// notes; keep history clean unless a real payout failure occurred.
+			entry.Issue = false
+			entry.IssueReason = ""
+			entry.IssueType = ""
+			entry.IssueOwed = 0
+			entry.IssueOwedItems = ""
+			if strings.EqualFold(strings.TrimSpace(entry.Status), "Issue") {
+				entry.Status = "Completed"
+			}
+		}
+
 		// If explicit payout items provided, use them. Otherwise, attempt
 		// to infer payout from the recorded bet items (2x each) so history
 		// isn't left with an empty payout list when the trade echo is delayed.
@@ -5935,13 +5962,13 @@ func (a *App) verifyAndRetryPayoutAdds(plannedIDs []int) {
 
 		a.gameHistoryMu.Lock()
 		a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
-			entry.IssueType = "Payout Failure"
+			entry.IssueType = "Payout Review"
 			entry.IssueOwed = owedTotal
 			entry.IssueOwedItems = owedStr
 		})
 		a.gameHistoryMu.Unlock()
 
-		a.markCurrentGameHistoryIssue(fmt.Sprintf("Payout items did not fully reflect in trade offer after automated attempts (sent=%d/%d)", payoutActualAddCount, payoutExpectedAddCount), false)
+		a.noteCurrentGameHistory(fmt.Sprintf("Payout items did not fully reflect in trade offer after automated attempts (sent=%d/%d)", payoutActualAddCount, payoutExpectedAddCount))
 	}
 }
 
@@ -6796,7 +6823,9 @@ func handleRoomResetPacket(a *App, e *g.Intercept) {
 }
 
 func (a *App) resetDealerSessionState(reason string) {
-	a.markCurrentGameHistoryIssue(fmt.Sprintf("Dealer session reset before round fully resolved (%s)", reason), true)
+	if strings.TrimSpace(a.currentGameHistoryID) != "" {
+		a.markCurrentGameHistoryIssue(fmt.Sprintf("Dealer session reset before round fully resolved (%s)", reason), true)
+	}
 
 	// Stop any active game-choice timeout when resetting the dealer session.
 	stopGameChoiceTimeoutMonitor()
