@@ -1,24 +1,67 @@
-# Ignore G-Earth log files
-G-Earth.windows-x64/logs/*.log
+# Executables and Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.prof
 
-# Ignore payload debug file
-payload.json
-
-# Node/Vite/Frontend build artifacts
-frontend/node_modules/
+# Project Specific Binaries/Outputs
+build/bin/
 frontend/dist/
+frontend/node_modules/
 frontend@0.0.0/node_modules/
 frontend@0.0.0/dist/
+main.go.exe
+app-launcher/app-launcher.exe
+free-raffle-bot/free-raffle-bot.exe
+trade-tracker/trade-tracker.exe
+wave-timer-app/wave-timer-app.exe
 
-# OS/Editor files
-*.DS_Store
+# Logs and Debug
+*.log
+logs/
+G-Earth.windows-x64/logs/
+payload.json
+debug/
+
+# OS Specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDEs and Editors
+.vscode/
+.idea/
 *.swp
 *.swo
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Go
+vendor/
+go.sum
+# Note: go.sum is often committed, but some prefer to ignore it if using vendoring. 
+# Usually it is COMMITTED. I will keep it commented out or remove it.
+
+# Node
+node_modules/
+package-lock.json.md5
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary Files
 *.tmp
 *.bak
-*.log
-.vscode/
-
-build/bin
-frontend/dist
-
+*.old
