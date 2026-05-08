@@ -19,6 +19,12 @@ free-raffle-bot/free-raffle-bot.exe
 trade-tracker/trade-tracker.exe
 wave-timer-app/wave-timer-app.exe
 
+# Local app-launcher build artifacts
+app-launcher/build/bin/
+
+# G-Earth local logs
+G-Earth.windows-x64/logs/
+
 # Logs and Debug
 *.log
 logs/
