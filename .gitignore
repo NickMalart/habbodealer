@@ -1,4 +1,24 @@
+# Ignore G-Earth log files
+G-Earth.windows-x64/logs/*.log
+
+# Ignore payload debug file
+payload.json
+
+# Node/Vite/Frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+frontend@0.0.0/node_modules/
+frontend@0.0.0/dist/
+
+# OS/Editor files
+*.DS_Store
+*.swp
+*.swo
+*.tmp
+*.bak
+*.log
+.vscode/
+
 build/bin
-node_modules
 frontend/dist
 
