@@ -119,26 +119,29 @@ var (
 	// Variant marker for the active Under/Over round: "uo" or "uo7".
 	uoVariantForRound string
 	// Pending variant selection when prompting for Over/Under (set by beginUO7ChoiceSequence)
-	pendingUoVariant          string
-	onlyUnderOver7Mode        bool // when true, dealer prompts only Under/Over-7
-	enabledGamePkr            bool = true
-	enabledGame21             bool = true
-	enabledGame13             bool = true
-	enabledGameTri            bool = true
-	enabledGameUO7            bool = false
-	pokerSequencePlayerName   string
-	pokerSequencePlayerResult PokerHandResult
-	pokerSequencePlayerHand   string
-	payoutActive              bool
-	payoutTradeActive         bool
-	payoutTargetID            int
-	payoutTargetName          string
-	payoutAttempts            int
-	payoutSessionID           int
-	payoutTradeSent           bool
-	payoutExpectedAddCount    int
-	payoutActualAddCount      int
-	lastPayoutCancelNoticeAt  time.Time
+	pendingUoVariant            string
+	onlyUnderOver7Mode          bool // when true, dealer prompts only Under/Over-7
+	enabledGamePkr              bool = true
+	enabledGame21               bool = true
+	enabledGame13               bool = true
+	enabledGameTri              bool = true
+	enabledGameUO7              bool = false
+	pokerSequencePlayerName     string
+	pokerSequencePlayerResult   PokerHandResult
+	pokerSequencePlayerHand     string
+	payoutActive                bool
+	payoutTradeActive           bool
+	payoutTargetID              int
+	payoutTargetName            string
+	payoutAttempts              int
+	payoutSessionID             int
+	payoutTradeSent             bool
+	payoutExpectedAddCount      int
+	payoutActualAddCount        int
+	lastPayoutCancelNoticeAt    time.Time
+	payoutLargePayoutThreshold  = 20
+	payoutAddInterval           = 120 * time.Millisecond
+	payoutProgressAnnounceEvery = 10
 
 	// Payout retry/monitor state
 	payoutResponseTimeoutMonitorID int
