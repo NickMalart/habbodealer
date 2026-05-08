@@ -12,6 +12,8 @@ export function GetBuildTargets():Promise<Array<Record<string, string>>>;
 
 export function GetGEarthStatus():Promise<main.GEarthStatus>;
 
+export function GetStopChildrenOnExit():Promise<boolean>;
+
 export function IsBuilding():Promise<boolean>;
 
 export function LaunchApp(arg1:string,arg2:string):Promise<string>;
@@ -19,3 +21,5 @@ export function LaunchApp(arg1:string,arg2:string):Promise<string>;
 export function LaunchGEarth():Promise<string>;
 
 export function RefreshApps():Promise<Array<main.LaunchAppItem>>;
+
+export function SetStopChildrenOnExit(arg1:boolean):Promise<void>;

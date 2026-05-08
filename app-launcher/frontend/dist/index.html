@@ -30,6 +30,7 @@ header h1{font-size:14px;font-weight:600;color:#e6edf3;flex:1}
   <button class="btn btn-orange" id="btnGEarth" onclick="launchGEarth()">Launch G-Earth</button>
   <h1>App Launcher</h1>
   <button class="btn btn-secondary" id="btnRefresh" onclick="refresh()">&#x21BA; Refresh</button>
+  <button class="btn btn-secondary" id="btnKillAll" onclick="killAll()">Kill All Tasks</button>
   <button class="btn btn-blue" id="btnBuildAll" onclick="buildAll()">&#x2699; Build All</button>
 </header>
 <div class="apps" id="appList">Loading&#x2026;</div>
@@ -38,7 +39,7 @@ header h1{font-size:14px;font-weight:600;color:#e6edf3;flex:1}
   <button class="btn btn-secondary" style="padding:2px 8px;font-size:11px" onclick="clearLog()">Clear</button>
 </div><div id="log"></div></div>
 <script>
-const { BuildAll, BuildSingle, GetApps, LaunchApp, RefreshApps, IsBuilding, LaunchGEarth, GetGEarthStatus } = window['go']['main']['App'];
+const { BuildAll, BuildSingle, GetApps, LaunchApp, RefreshApps, IsBuilding, LaunchGEarth, GetGEarthStatus, KillAllTasks } = window['go']['main']['App'];
 const { EventsOn } = window['runtime'];
 let building = false;
 let gEarthState = { exists: false, running: false };
@@ -52,6 +53,18 @@ async function launchGEarth(){const r=await LaunchGEarth();setStatus(r==='ok'?''
 EventsOn('buildLog',data=>{log(data.line,data.kind);if(data.kind==='success'&&(data.line.includes('complete')||data.line.includes('done'))){setTimeout(()=>{setBuilding(false);setStatus('');refresh();},200);}});
 async function refresh(){const apps=await RefreshApps();renderApps(apps);await refreshGEarth();}
 async function buildAll(){if(building)return;setBuilding(true);setStatus('Building all apps\u2026');clearLog();await BuildAll();}
+async function killAll(){
+  setStatus('Killing all tracked tasks...');
+  try{
+    const res = await KillAllTasks();
+    setStatus(res || '');
+    log(res, 'info');
+    setTimeout(refresh, 500);
+  }catch(e){
+    setStatus('KillAllTasks failed');
+    log('KillAllTasks error: '+e, 'error');
+  }
+}
 async function buildSingle(id,name){if(building)return;setBuilding(true);setStatus('Building '+name+'\u2026');clearLog();await BuildSingle(id);}
 async function launch(id,port){const r=await LaunchApp(id,port||'');setStatus(r==='ok'?'':r);setTimeout(refresh,300);}
 function renderApps(apps){const el=document.getElementById('appList');if(!apps||apps.length===0){el.innerHTML='<div style="color:#8b949e;padding:16px;font-size:13px">No apps found.</div>';return;}el.innerHTML='';for(const app of apps){const row=document.createElement('div');row.className='app-row'+(app.exists?'':' missing');row.dataset.missing=app.exists?'0':'1';const nm=document.createElement('div');nm.className='app-name';nm.textContent=app.name;const badge=document.createElement('span');badge.className='badge '+(app.running?'badge-running':app.exists?'badge-ready':'badge-missing');badge.textContent=app.running?'running':app.exists?'ready':'not built';const port=document.createElement('input');port.className='port-input';port.type='number';port.min='1';port.max='65535';port.placeholder='port';port.disabled=building;const bb=document.createElement('button');bb.className='btn btn-secondary btn-build';bb.textContent='\u2699 Build';bb.disabled=building;bb.onclick=()=>buildSingle(app.id,app.name);const bo=document.createElement('button');bo.className='btn btn-primary btn-open';bo.textContent='Open';bo.disabled=building||!app.exists;bo.onclick=()=>launch(app.id,port.value.trim());row.appendChild(nm);row.appendChild(badge);row.appendChild(port);row.appendChild(bb);row.appendChild(bo);el.appendChild(row);}}

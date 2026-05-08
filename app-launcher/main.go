@@ -108,10 +108,29 @@ type App struct {
 	apps      []LaunchAppItem
 	processes map[string]*os.Process
 	building  bool
+	// When true, App Launcher will stop/kill tracked and known apps on shutdown.
+	// Default is false to avoid unexpectedly terminating other apps when closing the
+	// launcher window.
+	stopChildrenOnExit bool
 }
 
 func NewApp() *App {
-	return &App{processes: map[string]*os.Process{}}
+	return &App{processes: map[string]*os.Process{}, stopChildrenOnExit: false}
+}
+
+// SetStopChildrenOnExit controls whether App Launcher will stop tracked/known
+// child processes when the launcher shuts down. Exposed for UI control.
+func (a *App) SetStopChildrenOnExit(v bool) {
+	a.mu.Lock()
+	a.stopChildrenOnExit = v
+	a.mu.Unlock()
+}
+
+func (a *App) GetStopChildrenOnExit() bool {
+	a.mu.Lock()
+	v := a.stopChildrenOnExit
+	a.mu.Unlock()
+	return v
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -680,6 +699,18 @@ func (a *App) IsBuilding() bool {
 // 笏笏 Main 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
 
 func (a *App) shutdown(ctx context.Context) {
+	a.emitLog("Shutdown requested", "info")
+
+	// Respect user preference: only stop children if explicitly enabled.
+	a.mu.Lock()
+	stopChildren := a.stopChildrenOnExit
+	a.mu.Unlock()
+
+	if !stopChildren {
+		a.emitLog("Shutdown: not terminating other apps (stopChildrenOnExit=false)", "info")
+		return
+	}
+
 	a.emitLog("Shutdown: stopping processes", "info")
 
 	root := a.resolveWorkspaceRoot()
@@ -736,6 +767,70 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 
 	a.emitLog("Shutdown complete", "info")
+}
+
+// KillAllTasks forcibly stops all known/ tracked child processes immediately
+// and clears the tracked process list. Returns a status string for UI display.
+func (a *App) KillAllTasks() string {
+	a.emitLog("KillAllTasks invoked", "info")
+
+	root := a.resolveWorkspaceRoot()
+	targets := knownBuildTargets()
+
+	for _, t := range targets {
+		a.closeBuildTargetProcesses(t, root)
+	}
+
+	// Stop G-Earth explicitly
+	gPath := a.gEarthExePath()
+	a.stopProcessByExePath(gPath)
+	a.stopProcessByExeName(gPath)
+
+	// Kill any remaining tracked processes
+	a.mu.Lock()
+	keys := make([]string, 0, len(a.processes))
+	procs := make([]*os.Process, 0, len(a.processes))
+	for k, p := range a.processes {
+		keys = append(keys, k)
+		procs = append(procs, p)
+	}
+	a.mu.Unlock()
+
+	killed := 0
+	for i, p := range procs {
+		if p == nil {
+			continue
+		}
+		if err := p.Kill(); err == nil {
+			killed++
+			a.emitLog(fmt.Sprintf("  killed tracked process %s", keys[i]), "info")
+		} else {
+			a.emitLog(fmt.Sprintf("  warn: could not kill tracked process %s: %v", keys[i], err), "error")
+		}
+	}
+
+	a.mu.Lock()
+	a.processes = map[string]*os.Process{}
+	a.mu.Unlock()
+
+	// Final fallback on Windows: taskkill known names
+	if runtime.GOOS == "windows" {
+		_ = exec.Command("taskkill", "/F", "/IM", "G-Earth.exe").Run()
+		for _, t := range targets {
+			for _, rel := range append([]string{t.OutExe}, t.CleanPaths...) {
+				if strings.TrimSpace(rel) == "" {
+					continue
+				}
+				name := filepath.Base(rel)
+				if name == "" {
+					continue
+				}
+				_ = exec.Command("taskkill", "/F", "/IM", name).Run()
+			}
+		}
+	}
+
+	return fmt.Sprintf("killed %d tracked process(es)", killed)
 }
 
 func main() {

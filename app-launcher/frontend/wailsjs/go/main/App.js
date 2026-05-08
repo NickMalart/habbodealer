@@ -22,6 +22,10 @@ export function GetGEarthStatus() {
   return window['go']['main']['App']['GetGEarthStatus']();
 }
 
+export function GetStopChildrenOnExit() {
+  return window['go']['main']['App']['GetStopChildrenOnExit']();
+}
+
 export function IsBuilding() {
   return window['go']['main']['App']['IsBuilding']();
 }
@@ -36,4 +40,8 @@ export function LaunchGEarth() {
 
 export function RefreshApps() {
   return window['go']['main']['App']['RefreshApps']();
+}
+
+export function SetStopChildrenOnExit(arg1) {
+  return window['go']['main']['App']['SetStopChildrenOnExit'](arg1);
 }
