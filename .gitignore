@@ -8,22 +8,23 @@
 *.prof
 
 # Project Specific Binaries/Outputs
-roll-origins/build/bin/
-roll-origins/frontend/dist/
-roll-origins/frontend/node_modules/
-frontend@0.0.0/node_modules/
-frontend@0.0.0/dist/
-roll-origins/main.go.exe
-app-launcher/app-launcher.exe
-free-raffle-bot/free-raffle-bot.exe
-trade-tracker/trade-tracker.exe
-wave-timer-app/wave-timer-app.exe
+apps/*/build/bin/
+apps/*/frontend/dist/
+apps/*/frontend/node_modules/
+apps/roll-origins/main.go.exe
+apps/app-launcher/app-launcher.exe
+apps/free-raffle-bot/free-raffle-bot.exe
+apps/trade-tracker/trade-tracker.exe
+apps/wave-timer-app/wave-timer-app.exe
+
+# Internal
+internal/logs/
+internal/payload_examples/
 
 # Logs and Debug
 *.log
-logs/
 G-Earth.windows-x64/logs/
-roll-origins/payload.json
+apps/roll-origins/payload.json
 debug/
 
 # OS Specific
@@ -49,8 +50,6 @@ Thumbs.db
 # Go
 vendor/
 go.sum
-# Note: go.sum is often committed, but some prefer to ignore it if using vendoring. 
-# Usually it is COMMITTED. I will keep it commented out or remove it.
 
 # Node
 node_modules/
