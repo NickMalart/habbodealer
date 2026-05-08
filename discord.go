@@ -292,10 +292,18 @@ func (a *App) sendDiscordRoundResult(winner string, playerResult string, dealerR
 // payout decision (Keep/Risk), and any owed/itemized issue metadata.
 func (a *App) sendDiscordWebhookForPayout(entry GameHistoryEntry) {
 	// Payout webhook URL (configured for payout notifications)
-	webhookURL := "https://discordapp.com/api/webhooks/1502425167031173211/IZF_TGQnk_rXeR5kgzpFJLQzAU6a6NVe05MTQavYn3kt2QQOQNpw7d7QxeKkZuVJscZP"
-	a.AddLogMsg("[DISCORD] sending payout webhook to configured payout channel")
-	// Issues channel webhook (fan-out for Issue posts)
+	payoutWebhookURL := "https://discordapp.com/api/webhooks/1502425167031173211/IZF_TGQnk_rXeR5kgzpFJLQzAU6a6NVe05MTQavYn3kt2QQOQNpw7d7QxeKkZuVJscZP"
+	// Issues channel webhook (only used for Issue posts)
 	issueWebhookURL := "https://discord.com/api/webhooks/1502209413065343086/lV-mzQvSRCqc-HkjKZWXOrmX0McP1HU47_fBjthixU2IdO0Bh18j-FBkIjGCDDjgAbo4"
+
+	// Decide destination: if this is an Issue, send only to the issues webhook.
+	targetWebhookURL := payoutWebhookURL
+	if entry.Issue || strings.EqualFold(entry.Status, "Issue") {
+		targetWebhookURL = issueWebhookURL
+		a.AddLogMsg("[DISCORD] sending payout Issue only to configured issues webhook")
+	} else {
+		a.AddLogMsg("[DISCORD] sending payout webhook to configured payout channel")
+	}
 
 	formatItems := func(items []TradeItem) string {
 		if len(items) == 0 {
@@ -401,7 +409,7 @@ func (a *App) sendDiscordWebhookForPayout(entry GameHistoryEntry) {
 		}
 	}(append([]byte(nil), jb...))
 
-	req, err := http.NewRequest("POST", webhookURL, bytes.NewReader(jb))
+	req, err := http.NewRequest("POST", targetWebhookURL, bytes.NewReader(jb))
 	if err != nil {
 		a.AddErrorLog("[DISCORD] payout request error", err)
 		return
@@ -429,33 +437,6 @@ func (a *App) sendDiscordWebhookForPayout(entry GameHistoryEntry) {
 		a.AddLogMsg(fmt.Sprintf("[DISCORD] payout webhook responded: %d body=%q", resp.StatusCode, respBody))
 	}
 
-	// Fan-out payout Issues to the issues webhook as well
-	if entry.Issue || strings.EqualFold(entry.Status, "Issue") {
-		req2, err2 := http.NewRequest("POST", issueWebhookURL, bytes.NewReader(jb))
-		if err2 != nil {
-			a.AddErrorLog("[DISCORD] payout issue webhook request error", err2)
-			return
-		}
-		req2.Header.Set("Content-Type", "application/json")
-		req2.Header.Set("User-Agent", "roll-origins/1.0")
-
-		resp2, err2 := client.Do(req2)
-		if err2 != nil {
-			a.AddErrorLog("[DISCORD] payout issue webhook POST error", err2)
-			return
-		}
-		bodyBytes2, _ := io.ReadAll(resp2.Body)
-		respBody2 := strings.TrimSpace(string(bodyBytes2))
-		defer resp2.Body.Close()
-
-		if resp2.StatusCode >= 200 && resp2.StatusCode < 300 {
-			if respBody2 == "" {
-				a.AddLogMsg("[DISCORD] payout issue webhook sent (no response body)")
-			} else {
-				a.AddLogMsg(fmt.Sprintf("[DISCORD] payout issue webhook sent; body=%q", respBody2))
-			}
-		} else {
-			a.AddLogMsg(fmt.Sprintf("[DISCORD] payout issue webhook responded: %d body=%q", resp2.StatusCode, respBody2))
-		}
-	}
+	// When this is an Issue we already sent to the issues webhook above;
+	// do not duplicate posts to the payout channel.
 }

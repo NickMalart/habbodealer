@@ -10856,7 +10856,12 @@ func (a *App) rollUnderOverDice() {
 			indices = []int{0, 4}
 		}
 		for _, index := range indices {
-			diceList[index].Value = rand.Intn(6) + 1
+			// For the special Under/Over-7 variant, restrict fake dice to 2-6
+			if uoVariantForRound == "uo7" {
+				diceList[index].Value = rand.Intn(5) + 2 // 2..6
+			} else {
+				diceList[index].Value = rand.Intn(6) + 1 // 1..6
+			}
 			diceList[index].IsClosed = false
 			currentSum += diceList[index].Value
 			a.AddLogMsg(fmt.Sprintf("Dice %d rolled: %d", diceList[index].ID, diceList[index].Value))
@@ -12724,6 +12729,12 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	if awaitingTriChoice {
 		cleaned := strings.ToLower(strings.TrimSpace(msg))
 		cleaned = gameChoiceCleanupRe.ReplaceAllString(cleaned, "")
+		// allow single-letter shortcuts 'h' and 'l' for high/low
+		if cleaned == "h" {
+			cleaned = "high"
+		} else if cleaned == "l" {
+			cleaned = "low"
+		}
 		if cleaned != "high" && cleaned != "low" {
 			a.AddLogMsg(fmt.Sprintf("[TRI_DEBUG] awaiting tri choice from %q(index=%d), ignored non-choice message=%q", awaitingTriChoicePartnerName, awaitingTriChoicePartnerID, msg))
 			return
