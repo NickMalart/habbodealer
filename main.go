@@ -3153,8 +3153,15 @@ func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
 	a.AddLogMsg("[GAME_HISTORY] markCurrentGameHistoryIssue unlocked, syncing")
 	a.syncCurrentGameEntry()
 	if complete && completedEntry != nil {
-		go a.sendDiscordWebhookForGame(*completedEntry)
-		a.persistCurrentGameHistoryNow("game_issue")
+		isPayoutIssue := strings.Contains(strings.ToLower(completedEntry.IssueType), "payout") ||
+			strings.Contains(strings.ToLower(completedEntry.IssueReason), "payout")
+		if isPayoutIssue {
+			go a.sendDiscordWebhookForPayout(*completedEntry)
+			a.persistCurrentGameHistoryNow("payout_issue")
+		} else {
+			go a.sendDiscordWebhookForGame(*completedEntry)
+			a.persistCurrentGameHistoryNow("game_issue")
+		}
 		a.sendLiveDealerGames(5)
 		go LogEvent("game_issue", *completedEntry, "Game completed with issue", map[string]string{"player": completedEntry.PlayerName})
 	}
@@ -3190,14 +3197,21 @@ func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note strin
 			entry.Notes = append(entry.Notes, note)
 		}
 		if complete {
-			// For normal game completion, mark the entry Completed so the
-			// game webhook reflects the game result. For payout-only
-			// completions, do NOT flip the entry Status/CompletedAt here so
-			// the game remains a separate historical record; instead send
-			// a dedicated payout webhook below.
 			if !isPayout {
+				// Normal game completion — mark entry Completed.
 				entry.Status = "Completed"
 				entry.CompletedAt = gameHistoryTimestamp()
+			} else {
+				// Payout completed successfully — clear any prior issue flags and mark Completed.
+				entry.Issue = false
+				entry.IssueReason = ""
+				entry.IssueType = ""
+				entry.IssueOwed = 0
+				entry.IssueOwedItems = ""
+				entry.Status = "Completed"
+				if strings.TrimSpace(entry.CompletedAt) == "" {
+					entry.CompletedAt = gameHistoryTimestamp()
+				}
 			}
 			// copy out the completed snapshot for async webhook/send
 			e := *entry
@@ -4656,6 +4670,13 @@ func startPayout(a *App, targetID int, targetName string) {
 	payoutTargetName = targetName
 	payoutSessionID++
 	sessionID := payoutSessionID
+	a.gameHistoryMu.Lock()
+	a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+		if strings.TrimSpace(entry.RiskDecision) == "" {
+			entry.RiskDecision = "Keep"
+		}
+	})
+	a.gameHistoryMu.Unlock()
 	a.noteCurrentGameHistory(fmt.Sprintf("Payout started for %s", targetName))
 	// Record timeline and notify player for large payouts
 	appendPayoutTimeline(sessionID, "Payout started target=%q id=%d session=%d", targetName, targetID, sessionID)
@@ -5915,32 +5936,15 @@ func (a *App) verifyAndRetryPayoutAdds(plannedIDs []int) {
 		a.noteCurrentGameHistory(fmt.Sprintf("Trade echo verification timed out but trade was already accepted — items sent=%d/%d; awaiting TRADE_COMPLETED confirmation", payoutActualAddCount, payoutExpectedAddCount))
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] echo timed out but trade accepted; leaving game open for TRADE_COMPLETED (sent=%d/%d)", payoutActualAddCount, payoutExpectedAddCount))
 	} else {
-		// Trade was never accepted yet — items echo didn't confirm. Mark as a note/warning
-		// but don't close the game. If the trade later completes successfully, it will
-		// be updated to "Completed" status. Only mark as Issue if trade fails permanently.
+		// Trade was never accepted yet — items echo didn't confirm. Add a review note
+		// but do NOT mark as Issue — if the trade later completes successfully it will
+		// be updated to "Completed". Only escalate to Issue if the trade fails permanently.
 		a.noteCurrentGameHistory(fmt.Sprintf("Payout items did not fully reflect in trade offer (sent=%d/%d); manual review needed", payoutActualAddCount, payoutExpectedAddCount))
-		// Compute missing items using current own offer counts and attach structured Issue metadata to history
-		have := ownTradeOfferCounts()
-		missing := map[string]int{}
-		owedTotal := 0
-		for name, need := range required {
-			haveQty := have[name]
-			if haveQty < need {
-				missing[name] = need - haveQty
-				owedTotal += need - haveQty
-			}
-		}
-		owedStr := formatMissingCounts(missing)
-
 		a.gameHistoryMu.Lock()
 		a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
-			entry.IssueType = "Payout Failure"
-			entry.IssueOwed = owedTotal
-			entry.IssueOwedItems = owedStr
+			entry.IssueType = "Payout Review"
 		})
 		a.gameHistoryMu.Unlock()
-
-		a.markCurrentGameHistoryIssue(fmt.Sprintf("Payout items did not fully reflect in trade offer after automated attempts (sent=%d/%d)", payoutActualAddCount, payoutExpectedAddCount), false)
 	}
 }
 
@@ -6795,7 +6799,9 @@ func handleRoomResetPacket(a *App, e *g.Intercept) {
 }
 
 func (a *App) resetDealerSessionState(reason string) {
-	a.markCurrentGameHistoryIssue(fmt.Sprintf("Dealer session reset before round fully resolved (%s)", reason), true)
+	if strings.TrimSpace(a.currentGameHistoryID) != "" {
+		a.markCurrentGameHistoryIssue(fmt.Sprintf("Dealer session reset before round fully resolved (%s)", reason), true)
+	}
 
 	// Stop any active game-choice timeout when resetting the dealer session.
 	stopGameChoiceTimeoutMonitor()
