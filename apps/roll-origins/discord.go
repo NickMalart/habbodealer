@@ -366,9 +366,13 @@ func (a *App) sendDiscordWebhookForPayout(entry GameHistoryEntry) {
 	if strings.TrimSpace(timestamp) == "" {
 		timestamp = time.Now().Format(time.RFC3339)
 	}
+	titleStatus := "Completed"
+	if entry.Issue || strings.EqualFold(entry.Status, "Issue") {
+		titleStatus = "Issue"
+	}
 
 	embed := map[string]interface{}{
-		"title":       fmt.Sprintf("%sPayout — %s", titlePrefix, strings.Title(strings.ToLower(entry.Status))),
+		"title":       fmt.Sprintf("%sPayout — %s", titlePrefix, titleStatus),
 		"description": fmt.Sprintf("Payout for: %s", entry.PlayerName),
 		"color":       embedColor,
 		"fields":      fields,

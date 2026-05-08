@@ -3218,12 +3218,13 @@ func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note strin
 			entry.Notes = append(entry.Notes, note)
 		}
 		if complete {
-			// For normal game completion, mark the entry Completed so the
-			// game webhook reflects the game result. For payout-only
-			// completions, do NOT flip the entry Status/CompletedAt here so
-			// the game remains a separate historical record; instead send
-			// a dedicated payout webhook below.
-			if !isPayout {
+			// Mark explicit completion for both game and payout webhook snapshots.
+			if isPayout {
+				entry.Status = "Completed"
+				if strings.TrimSpace(entry.CompletedAt) == "" {
+					entry.CompletedAt = gameHistoryTimestamp()
+				}
+			} else {
 				entry.Status = "Completed"
 				entry.CompletedAt = gameHistoryTimestamp()
 			}
@@ -4684,6 +4685,13 @@ func startPayout(a *App, targetID int, targetName string) {
 	payoutTargetName = targetName
 	payoutSessionID++
 	sessionID := payoutSessionID
+	a.gameHistoryMu.Lock()
+	a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+		if strings.TrimSpace(entry.RiskDecision) == "" {
+			entry.RiskDecision = "Keep"
+		}
+	})
+	a.gameHistoryMu.Unlock()
 	a.noteCurrentGameHistory(fmt.Sprintf("Payout started for %s", targetName))
 	// Record timeline and notify player for large payouts
 	appendPayoutTimeline(sessionID, "Payout started target=%q id=%d session=%d", targetName, targetID, sessionID)
