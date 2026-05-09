@@ -1183,16 +1183,56 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		}
 
 		var patchReq *http.Request
-		if proofBytes != nil && proofFileName != "" {
-			// Keep the hero attachment and replace the proof attachment in-place.
+		if (proofBytes != nil && proofFileName != "") || (heroDataURL != "" && heroFileName != "") {
+			// Multipart PATCH to upload new files (proof and/or hero).
 			attachmentsList := []map[string]interface{}{}
 			nextFileIdx := 0
-			if heroAttachmentID != "" && heroAttachmentFile != "" {
-				heroAttachment := map[string]interface{}{"id": heroAttachmentID}
-				heroAttachment["filename"] = heroAttachmentFile
-				attachmentsList = append(attachmentsList, heroAttachment)
+
+			// 1. Existing Hero (if not being replaced)
+			if heroDataURL == "" && heroAttachmentID != "" && heroAttachmentFile != "" {
+				attachmentsList = append(attachmentsList, map[string]interface{}{"id": heroAttachmentID, "filename": heroAttachmentFile})
 			}
-			attachmentsList = append(attachmentsList, map[string]interface{}{"id": strconv.Itoa(nextFileIdx), "filename": proofFileName})
+
+			// 2. New Hero upload
+			heroUploadIdx := -1
+			var heroBytes []byte
+			actualHeroName := heroFileName
+			if heroDataURL != "" {
+				raw, mimeType, err := decodeImageDataURL(heroDataURL)
+				if err == nil {
+					heroBytes = raw
+					if actualHeroName == "" {
+						switch mimeType {
+						case "image/jpeg":
+							actualHeroName = "raffle-hero.jpg"
+						case "image/gif":
+							actualHeroName = "raffle-hero.gif"
+						case "image/webp":
+							actualHeroName = "raffle-hero.webp"
+						default:
+							actualHeroName = "raffle-hero.png"
+						}
+					}
+					heroUploadIdx = nextFileIdx
+					promoEmbed["image"] = map[string]interface{}{"url": "attachment://" + actualHeroName}
+					attachmentsList = append(attachmentsList, map[string]interface{}{"id": strconv.Itoa(heroUploadIdx), "filename": actualHeroName})
+					nextFileIdx++
+				}
+			}
+
+			// 3. Existing Proof (if not being replaced)
+			if proofBytes == nil && existingProofAttachmentID != "" && existingProofFileName != "" {
+				attachmentsList = append(attachmentsList, map[string]interface{}{"id": existingProofAttachmentID, "filename": existingProofFileName})
+			}
+
+			// 4. New Proof upload
+			proofUploadIdx := -1
+			if proofBytes != nil && proofFileName != "" {
+				proofUploadIdx = nextFileIdx
+				trackerEmbed["image"] = map[string]interface{}{"url": "attachment://" + proofFileName}
+				attachmentsList = append(attachmentsList, map[string]interface{}{"id": strconv.Itoa(proofUploadIdx), "filename": proofFileName})
+				nextFileIdx++
+			}
 
 			payload["attachments"] = attachmentsList
 
@@ -1205,13 +1245,27 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			if err := mpWriter.WriteField("payload_json", string(jb)); err != nil {
 				return err
 			}
-			part, err := mpWriter.CreateFormFile(fmt.Sprintf("files[%d]", nextFileIdx), proofFileName)
-			if err != nil {
-				return err
+
+			if heroUploadIdx >= 0 && len(heroBytes) > 0 {
+				part, err := mpWriter.CreateFormFile(fmt.Sprintf("files[%d]", heroUploadIdx), actualHeroName)
+				if err != nil {
+					return err
+				}
+				if _, err := part.Write(heroBytes); err != nil {
+					return err
+				}
 			}
-			if _, err := part.Write(proofBytes); err != nil {
-				return err
+
+			if proofUploadIdx >= 0 && len(proofBytes) > 0 {
+				part, err := mpWriter.CreateFormFile(fmt.Sprintf("files[%d]", proofUploadIdx), proofFileName)
+				if err != nil {
+					return err
+				}
+				if _, err := part.Write(proofBytes); err != nil {
+					return err
+				}
 			}
+
 			if err := mpWriter.Close(); err != nil {
 				return err
 			}
@@ -1263,9 +1317,17 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 				newHeroID := ""
 				newHeroFile := ""
 				newHeroURL := ""
-				if heroAttachmentFile != "" {
+				// First try by filename match (best)
+				if heroAttachmentFile != "" || (heroDataURL != "" && heroFileName != "") {
+					targetName := heroAttachmentFile
+					if heroDataURL != "" {
+						// If we just uploaded a new hero, the filename we want to match is the one we sent.
+						// We don't have a reliable 'actualHeroName' here but we can try to guess or use the first non-proof.
+					}
+
 					for _, att := range patchResp.Attachments {
-						if strings.EqualFold(att.Filename, heroAttachmentFile) {
+						if (heroAttachmentFile != "" && strings.EqualFold(att.Filename, heroAttachmentFile)) ||
+							(heroFileName != "" && strings.EqualFold(att.Filename, heroFileName)) {
 							newHeroID = strings.TrimSpace(att.ID)
 							newHeroFile = strings.TrimSpace(att.Filename)
 							newHeroURL = strings.TrimSpace(att.URL)
@@ -1275,9 +1337,10 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 				}
 				// If the hero was present in the response by name but not found
 				// above (e.g. filename differs), fall back to any non-proof attachment.
-				if newHeroURL == "" && heroAttachmentID != "" {
+				if newHeroURL == "" {
 					for _, att := range patchResp.Attachments {
-						if strings.EqualFold(att.Filename, proofFileName) || strings.EqualFold(att.Filename, existingProofFileName) {
+						if (proofFileName != "" && strings.EqualFold(att.Filename, proofFileName)) ||
+							(existingProofFileName != "" && strings.EqualFold(att.Filename, existingProofFileName)) {
 							continue
 						}
 						newHeroID = strings.TrimSpace(att.ID)
@@ -1293,7 +1356,7 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 				proofAttachmentFile := ""
 				if proofBytes != nil || existingProofAttachmentID != "" {
 					for _, att := range patchResp.Attachments {
-						if strings.EqualFold(att.Filename, proofFileName) || (proofFileName == "" && strings.EqualFold(att.Filename, existingProofFileName)) {
+						if (proofFileName != "" && strings.EqualFold(att.Filename, proofFileName)) || (proofFileName == "" && existingProofFileName != "" && strings.EqualFold(att.Filename, existingProofFileName)) {
 							cdnURL = strings.TrimSpace(att.URL)
 							proofAttachmentID = strings.TrimSpace(att.ID)
 							proofAttachmentFile = strings.TrimSpace(att.Filename)
@@ -1310,6 +1373,10 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 
 				heroMetaChanged := false
 				a.mu.Lock()
+				// Clear the data URL so we don't try to re-upload it on every auto-update.
+				a.raffleHeroDataURL = ""
+				a.raffleHeroFileName = ""
+
 				// Update hero attachment state so future PATCHes use the fresh ID/URL.
 				if newHeroURL != "" && newHeroURL != a.raffleHeroImageURL {
 					a.raffleHeroImageURL = newHeroURL
@@ -1476,6 +1543,9 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	_ = json.Unmarshal(body, &respPayload)
 
 	a.mu.Lock()
+	a.raffleHeroDataURL = ""
+	a.raffleHeroFileName = ""
+
 	if strings.TrimSpace(respPayload.ID) != "" {
 		a.raffleMessageID = strings.TrimSpace(respPayload.ID)
 		if a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {

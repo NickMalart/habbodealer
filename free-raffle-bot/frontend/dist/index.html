@@ -873,6 +873,13 @@
         const result = await call('PostOrUpdateRaffleWebhook');
         if (result !== 'ok') {
           alert(`Discord webhook response: ${result}`);
+        } else {
+          raffleHeroDataUrl = '';
+          raffleHeroFileName = '';
+          document.getElementById('heroImage').value = '';
+          document.getElementById('heroImagePreview').style.display = 'none';
+          document.getElementById('heroImagePreview').src = '';
+          document.getElementById('heroImageMeta').textContent = 'No hero image selected.';
         }
         raffleFormDirty = false;
         await refresh();
@@ -900,6 +907,13 @@
         const result = await call('RepostRaffleWebhook');
         if (result !== 'ok') {
           alert(`Repost response: ${result}`);
+        } else {
+          raffleHeroDataUrl = '';
+          raffleHeroFileName = '';
+          document.getElementById('heroImage').value = '';
+          document.getElementById('heroImagePreview').style.display = 'none';
+          document.getElementById('heroImagePreview').src = '';
+          document.getElementById('heroImageMeta').textContent = 'No hero image selected.';
         }
         raffleFormDirty = false;
         await refresh();
