@@ -98,6 +98,7 @@ type RaffleState struct {
 	Enabled               bool            `json:"enabled"`
 	BonusEvery            int             `json:"bonusEvery"`
 	TicketAnnounceEnabled bool            `json:"ticketAnnounceEnabled"`
+	TicketProgressEnabled bool            `json:"ticketProgressEnabled"`
 	RaffleName            string          `json:"raffleName"`
 	RafflePrizeName       string          `json:"rafflePrizeName"`
 	RafflePrizeQty        int             `json:"rafflePrizeQty"`
@@ -124,6 +125,7 @@ type App struct {
 	enabled               bool
 	bonusEvery            int
 	ticketAnnounceEnabled bool
+	ticketProgressEnabled bool
 	nextSessionID         int
 	currentSession        *RaffleSession
 	sessions              []RaffleSession
@@ -225,7 +227,7 @@ func (a *App) GetDebugSnapshot() string {
 	lines = append(lines, fmt.Sprintf("last_query_rows: %d", a.lastQueryRows))
 	lines = append(lines, fmt.Sprintf("last_shout: %s", strings.TrimSpace(a.lastShout)))
 	a.mu.Lock()
-	lines = append(lines, fmt.Sprintf("connected: %t  inRoom: %t  ticketAnnounce: %t", a.connected, a.inRoom, a.ticketAnnounceEnabled))
+	lines = append(lines, fmt.Sprintf("connected: %t  inRoom: %t  ticketAnnounce: %t  ticketProgress: %t", a.connected, a.inRoom, a.ticketAnnounceEnabled, a.ticketProgressEnabled))
 	a.mu.Unlock()
 	lines = append(lines, "")
 	lines = append(lines, "--- Recent Logs ---")
@@ -347,6 +349,7 @@ func (a *App) GetState() RaffleState {
 		Enabled:               a.enabled,
 		BonusEvery:            a.bonusEvery,
 		TicketAnnounceEnabled: a.ticketAnnounceEnabled,
+		TicketProgressEnabled: a.ticketProgressEnabled,
 		RaffleName:            a.raffleName,
 		RafflePrizeName:       a.rafflePrizeName,
 		RafflePrizeQty:        a.rafflePrizeQty,
@@ -414,6 +417,20 @@ func (a *App) GetTicketAnnounceEnabled() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.ticketAnnounceEnabled
+}
+
+func (a *App) SetTicketProgressEnabled(v bool) RaffleState {
+	a.mu.Lock()
+	a.ticketProgressEnabled = v
+	a.mu.Unlock()
+	a.emitUpdate()
+	return a.GetState()
+}
+
+func (a *App) GetTicketProgressEnabled() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.ticketProgressEnabled
 }
 
 func (a *App) SetBonusEvery(v int) RaffleState {
@@ -2128,9 +2145,10 @@ func (a *App) processNewBets() {
 
 	upserts := make([]RaffleParticipant, 0, len(batch))
 	type ticketAnnounce struct {
-		name    string
-		tickets int
-		isNew   bool
+		name      string
+		tickets   int
+		isNew     bool
+		gamesAway int // if > 0, it's a progress shout
 	}
 	ticketAnnounces := make([]ticketAnnounce, 0, len(batch))
 	lastCursorAt := cursorAt
@@ -2143,6 +2161,7 @@ func (a *App) processNewBets() {
 	}
 
 	announceEnabled := a.ticketAnnounceEnabled
+	progressEnabled := a.ticketProgressEnabled
 	resumedAt := a.currentSession.ResumedAt
 
 	for _, row := range batch {
@@ -2183,8 +2202,18 @@ func (a *App) processNewBets() {
 			p.Tickets = effectiveTicketsForParticipant(p.BetCount, a.currentSession.BonusEvery, p.ManualDelta)
 			p.LastBet = row.EventAt.UTC().Format(time.RFC3339)
 			upserts = append(upserts, *p)
-			if announceEnabled && p.Tickets > oldTickets && (resumedAt.IsZero() || row.EventAt.UTC().After(resumedAt)) {
-				ticketAnnounces = append(ticketAnnounces, ticketAnnounce{name: p.Username, tickets: p.Tickets})
+
+			if resumedAt.IsZero() || row.EventAt.UTC().After(resumedAt) {
+				if p.Tickets > oldTickets {
+					if announceEnabled {
+						ticketAnnounces = append(ticketAnnounces, ticketAnnounce{name: p.Username, tickets: p.Tickets})
+					}
+				} else if progressEnabled {
+					gamesAway := bonusEvery - (p.BetCount % bonusEvery)
+					if gamesAway > 0 && gamesAway <= 2 { // Only shout when close to avoid spam
+						ticketAnnounces = append(ticketAnnounces, ticketAnnounce{name: p.Username, gamesAway: gamesAway})
+					}
+				}
 			}
 		}
 
@@ -2202,6 +2231,8 @@ func (a *App) processNewBets() {
 	for _, ta := range ticketAnnounces {
 		if ta.isNew {
 			a.shoutEntrant(ta.name, ta.tickets)
+		} else if ta.gamesAway > 0 {
+			a.shoutTicketProgress(ta.name, ta.gamesAway)
 		} else if announceEnabled {
 			a.shoutTicketCount(ta.name, ta.tickets)
 		}
@@ -2227,6 +2258,24 @@ func (a *App) processNewBets() {
 			}
 		}()
 	}
+}
+
+func (a *App) shoutTicketProgress(name string, gamesAway int) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return
+	}
+	var msg string
+	if gamesAway == 1 {
+		msg = fmt.Sprintf("%s is only 1 game away from another free raffle ticket! 🎟️", trimmed)
+	} else {
+		msg = fmt.Sprintf("%s is only %d games away from another free raffle ticket! 🎟️", trimmed, gamesAway)
+	}
+	ext.Send(out.SHOUT, msg)
+	a.debugMu.Lock()
+	a.lastShout = msg
+	a.debugMu.Unlock()
+	a.logDebug("progress shout sent: %s", msg)
 }
 
 func (a *App) shoutEntrant(name string, entries int) {

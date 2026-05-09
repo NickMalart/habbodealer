@@ -173,6 +173,9 @@
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
           <input type="checkbox" id="ticketAnnounceChk"> Announce tickets
         </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" id="ticketProgressChk"> Shout ticket progress
+        </label>
       </div>
       <div class="row" style="margin-top: 12px;">
         <label for="startAt">Raffle start</label>
@@ -422,6 +425,11 @@
       const ticketChk = document.getElementById('ticketAnnounceChk');
       if (document.activeElement !== ticketChk) {
         ticketChk.checked = !!state.ticketAnnounceEnabled;
+      }
+
+      const ticketProgressChk = document.getElementById('ticketProgressChk');
+      if (document.activeElement !== ticketProgressChk) {
+        ticketProgressChk.checked = !!state.ticketProgressEnabled;
       }
 
       const raffleName = document.getElementById('raffleName');
@@ -702,6 +710,10 @@
 
     document.getElementById('ticketAnnounceChk').addEventListener('change', async (e) => {
       await call('SetTicketAnnounceEnabled', e.target.checked);
+    });
+
+    document.getElementById('ticketProgressChk').addEventListener('change', async (e) => {
+      await call('SetTicketProgressEnabled', e.target.checked);
     });
 
     document.getElementById('saveBonus').addEventListener('click', async () => {

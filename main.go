@@ -1591,6 +1591,11 @@ func (a *App) runAutoShoutLoop(stopChan chan struct{}, phrase string, seconds in
 			continue
 		}
 
+		if dealerGameActive() {
+			a.AddLogMsg("[AUTO_SHOUT] suppressed because game is active")
+			continue
+		}
+
 		sendMessageWithDelay(currentPhrase)
 	}
 }
@@ -1726,6 +1731,11 @@ func (a *App) runAutoShoutLoop2(stopChan chan struct{}, phrase string, seconds i
 			continue
 		}
 
+		if dealerGameActive() {
+			a.AddLogMsg("[AUTO_SHOUT 2] suppressed because game is active")
+			continue
+		}
+
 		sendMessageWithDelay(currentPhrase)
 	}
 }
@@ -1744,6 +1754,7 @@ func dealerGameActive() bool {
 		awaitingBlackjackDecision ||
 		awaiting13Decision ||
 		awaitingTriChoice ||
+		riskSessionActive ||
 		payoutActive ||
 		payoutTradeActive ||
 		payoutTradeSent ||
@@ -6419,6 +6430,9 @@ func startDealerOpenHeartbeat(a *App) {
 			if isMuted {
 				addLog(fmt.Sprintf("[TRADE_REOPEN] jittered dealer-open announcer skipped due to mute (wait=%ds)", int(wait.Seconds())))
 				log.Printf("[TRADE_REOPEN] jittered dealer-open announcer skipped due to mute (wait=%ds)", int(wait.Seconds()))
+			} else if dealerGameActive() {
+				addLog("[TRADE_REOPEN] jittered dealer-open announcer suppressed because game is active")
+				log.Println("[TRADE_REOPEN] jittered dealer-open announcer suppressed because game is active")
 			} else {
 				addLog(fmt.Sprintf("[TRADE_REOPEN] jittered dealer-open announcer firing (base=%ds wait=%ds)", secs, int(wait.Seconds())))
 				log.Printf("[TRADE_REOPEN] jittered dealer-open announcer firing (base=%ds wait=%ds)", secs, int(wait.Seconds()))
