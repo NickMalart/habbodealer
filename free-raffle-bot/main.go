@@ -370,13 +370,20 @@ func (a *App) SetRaffleSponsorConfig(enabled bool, name string, roomName string)
 	a.sponsorEnabled = enabled
 	a.sponsorName = strings.TrimSpace(name)
 	a.sponsorRoomName = strings.TrimSpace(roomName)
+	var sessionDBID int64
 	if a.currentSession != nil {
 		a.currentSession.SponsorEnabled = a.sponsorEnabled
 		a.currentSession.SponsorName = a.sponsorName
 		a.currentSession.SponsorRoomName = a.sponsorRoomName
+		sessionDBID = a.currentSession.DBID
 	}
 	a.mu.Unlock()
 	a.emitUpdate()
+	if sessionDBID > 0 {
+		if err := a.saveSessionMeta(sessionDBID); err != nil {
+			a.logDebug("SetRaffleSponsorConfig save failed: %v", err)
+		}
+	}
 	return a.GetState()
 }
 
@@ -2594,6 +2601,9 @@ func (a *App) ensureTables() error {
 			hero_image_url TEXT NOT NULL DEFAULT '',
 			hero_attachment_id TEXT NOT NULL DEFAULT '',
 			hero_attachment_file TEXT NOT NULL DEFAULT '',
+			sponsor_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+			sponsor_name TEXT NOT NULL DEFAULT '',
+			sponsor_room_name TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
 		`CREATE TABLE IF NOT EXISTS raffle_participants (

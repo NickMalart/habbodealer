@@ -518,7 +518,11 @@
         for (const s of [...past].reverse()) {
           const tr = document.createElement('tr');
           const resumeBtn = hasActive ? '' : `<button class="alt" onclick="resumeSession(${s.id})">Resume</button>`;
-          tr.innerHTML = `<td>#${s.id}</td><td>${s.startedAt || ''}</td><td>${s.endedAt || 'open'}</td><td>${(s.participants || []).length}</td><td style="display:flex;gap:4px;">${resumeBtn}<button class="alt" onclick="loadTally(${s.id})">Tally</button></td>`;
+          let sponsorText = '';
+          if (s.sponsorEnabled && s.sponsorName) {
+            sponsorText = `<br/><span class="muted" style="font-size:10px;">💎 Sponsor: ${s.sponsorName}</span>`;
+          }
+          tr.innerHTML = `<td>#${s.id}</td><td>${s.startedAt || ''}${sponsorText}</td><td>${s.endedAt || 'open'}</td><td>${(s.participants || []).length}</td><td style="display:flex;gap:4px;">${resumeBtn}<button class="alt" onclick="loadTally(${s.id})">Tally</button></td>`;
           pastTbody.appendChild(tr);
         }
       }
