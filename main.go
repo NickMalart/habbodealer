@@ -11706,7 +11706,7 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 	for _, pair := range pairs {
 		for i, dice := range diceList {
 			if dice.ID == pair.diceID {
-				if dice.IsRolling && (isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling) {
+				if dice.IsRolling && (isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling || isPairUpRolling) {
 					dice.IsRolling = false
 					func() {
 						defer func() {
@@ -11720,7 +11720,7 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 				diceList[i].Value = pair.adjValue
 				diceList[i].IsClosed = diceList[i].Value == 0
 
-				if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling {
+				if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling || isPairUpRolling {
 					log.Printf("Dice %d rolled: %d\n", pair.diceID, pair.adjValue)
 					logRollResult := fmt.Sprintf("Dice %d rolled: %d\n", pair.diceID, pair.adjValue)
 					a.AddLogMsg(logRollResult)
@@ -13197,6 +13197,9 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	if choice != "tri" && choice != "uo" && choice != "uo7" {
 		// Combine the standard "Starting" ack with the player-roll prompt
 		ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay(choice))
+		if choice == "pairup" {
+			ack = "PU3! If you roll a double or triple you Win! Player Roll"
+		}
 		if riskSessionActive {
 			a.beginRiskRoundHistory(choice, msg, gameChoiceDisplay(choice))
 		} else {
@@ -13227,7 +13230,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected 13; starting 13 sequence", index))
 		a.begin13Sequence()
 	case "pairup":
-		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Pair Up; starting round", index))
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected PU3; starting round", index))
 		a.beginPairUpRound()
 	case "tri":
 		// Two-step Tri selection: prompt player for High or Low
@@ -13572,7 +13575,7 @@ func gameChoiceDisplay(choice string) string {
 	case "uo", "uo_over", "uo_under":
 		return "UO7"
 	case "pairup":
-		return "Pair Up"
+		return "PU3"
 	case "trih":
 		return "TriH"
 	case "trihigh":

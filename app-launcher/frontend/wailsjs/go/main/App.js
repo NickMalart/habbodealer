@@ -30,6 +30,10 @@ export function IsBuilding() {
   return window['go']['main']['App']['IsBuilding']();
 }
 
+export function KillAllTasks() {
+  return window['go']['main']['App']['KillAllTasks']();
+}
+
 export function LaunchApp(arg1, arg2) {
   return window['go']['main']['App']['LaunchApp'](arg1, arg2);
 }

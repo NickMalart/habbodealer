@@ -660,8 +660,8 @@ func (a *App) evaluateTriRound() {
 func (a *App) evaluatePairUpRound() {
 	defer func() {
 		if r := recover(); r != nil {
-			a.AddLogMsg(fmt.Sprintf("[PAIRUP_CRASH_GUARD] recovered panic in evaluatePairUpRound: %v", r))
-			log.Printf("[PAIRUP_CRASH_GUARD] recovered panic in evaluatePairUpRound: %v", r)
+			a.AddLogMsg(fmt.Sprintf("[PU3_CRASH_GUARD] recovered panic in evaluatePairUpRound: %v", r))
+			log.Printf("[PU3_CRASH_GUARD] recovered panic in evaluatePairUpRound: %v", r)
 			isPairUpRolling = false
 		}
 	}()
@@ -677,7 +677,7 @@ func (a *App) evaluatePairUpRound() {
 	v3 := diceList[4].Value
 	mutex.Unlock()
 
-	a.AddLogMsg(fmt.Sprintf("[PAIR_UP] evaluating: %d %d %d", v1, v2, v3))
+	a.AddLogMsg(fmt.Sprintf("[PU3] evaluating: %d %d %d", v1, v2, v3))
 
 	playerWins := (v1 == v2 || v1 == v3 || v2 == v3)
 
@@ -709,7 +709,7 @@ func (a *App) evaluatePairUpRound() {
 	if playerWins && payoutTargetID > 0 {
 		a.setCurrentGameHistoryResults(resultText, "", playerName, "Payout Pending", false)
 		a.noteCurrentGameHistory(winnerMsg)
-		a.AddLogMsg(fmt.Sprintf("[PAYOUT] pairup player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
+		a.AddLogMsg(fmt.Sprintf("[PAYOUT] pu3 player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
 		resetPayoutRetryState()
 		if isRiskEnabled {
 			if riskSessionActive {
@@ -718,7 +718,7 @@ func (a *App) evaluatePairUpRound() {
 				return
 			}
 			params := map[string]interface{}{}
-			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "Pair Up", params)
+			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "PU3", params)
 			a.sendDiscordRoundResult(playerName, resultText, "", winnerMsg)
 			return
 		}

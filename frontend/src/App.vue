@@ -240,7 +240,7 @@
               </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
                 <input type="checkbox" v-model="enableGamePairUp" :disabled="underOver7Mode" />
-                Pair Up (pu)
+                PU3 (pu)
               </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;border-top:1px solid #333;padding-top:6px;">
                 <input type="checkbox" v-model="riskModeEnabledInput" :disabled="underOver7Mode" />
@@ -933,11 +933,11 @@ export default {
         },
         {
           key: 'pairup',
-          title: 'Pair Up (3 Dice)',
+          title: 'PU3 (3 Dice)',
           summary: 'Fast binary game where matching dice wins.',
-          description: 'Pair Up is a simple game where the player rolls three dice. If any two dice match (a pair) or all three match (a triple), the player wins.',
+          description: 'PU3 is a simple game where the player rolls three dice. If any two dice match (a pair) or all three match (a triple), the player wins.',
           howItWorks: 'The app rolls three dice for the player. If there is a pair or triple, the player wins x2 payout. If all three dice are different, the dealer wins.',
-          playerFlow: 'Trade the bet, say pu or pairup when prompted, and watch the three dice.',
+          playerFlow: 'Trade the bet, say pu or pu3 when prompted, and watch the three dice.',
           dealerFlow: 'The dealer rolls three dice and automatically awards a win if a match is found.',
         },
         
@@ -1156,7 +1156,7 @@ export default {
     },
     gameKeys() {
       const keys = (this.activeStats && this.activeStats.byGame) ? Object.keys(this.activeStats.byGame) : [];
-      const preferred = ['Poker', '21', '13', 'Tri', 'Pair Up'];
+      const preferred = ['Poker', '21', '13', 'Tri', 'PU3'];
       const presentPreferred = preferred.filter(k => keys.includes(k));
       const rest = keys.filter(k => !preferred.includes(k)).sort();
       return presentPreferred.concat(rest);
@@ -1362,7 +1362,7 @@ export default {
         'Kai','Luca','Nico','Noel','Owen','Paige','Remy','Rory','Soren','Toby',
         'Violet','Will','Zara','Yuri','Ira','Mina','Gabe','Ivy','Brad','Nate'
       ];
-      const games = ['21','13','poker','tri','roll','pairup'];
+      const games = ['21','13','poker','tri','roll','PU3'];
       const now = Date.now();
       const rows = [];
       for (let i = 0; i < 1000; i++) {

@@ -16,6 +16,8 @@ export function GetStopChildrenOnExit():Promise<boolean>;
 
 export function IsBuilding():Promise<boolean>;
 
+export function KillAllTasks():Promise<string>;
+
 export function LaunchApp(arg1:string,arg2:string):Promise<string>;
 
 export function LaunchGEarth():Promise<string>;

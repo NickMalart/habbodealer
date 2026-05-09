@@ -1055,16 +1055,16 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		"timestamp":   now.Format(time.RFC3339),
 	}
 
-	if strings.TrimSpace(session.WinnerProofURL) != "" {
-		trackerEmbed["image"] = map[string]interface{}{"url": strings.TrimSpace(session.WinnerProofURL)}
-	} else if strings.TrimSpace(session.WinnerProofID) != "" && strings.TrimSpace(session.WinnerProofFile) != "" {
+	if strings.TrimSpace(session.WinnerProofID) != "" && strings.TrimSpace(session.WinnerProofFile) != "" {
 		trackerEmbed["image"] = map[string]interface{}{"url": "attachment://" + strings.TrimSpace(session.WinnerProofFile)}
+	} else if strings.TrimSpace(session.WinnerProofURL) != "" {
+		trackerEmbed["image"] = map[string]interface{}{"url": strings.TrimSpace(session.WinnerProofURL)}
 	}
 
-	if heroImageURL != "" {
-		promoEmbed["image"] = map[string]interface{}{"url": heroImageURL}
-	} else if heroAttachmentID != "" && heroAttachmentFile != "" {
+	if heroAttachmentID != "" && heroAttachmentFile != "" {
 		promoEmbed["image"] = map[string]interface{}{"url": "attachment://" + heroAttachmentFile}
+	} else if heroImageURL != "" {
+		promoEmbed["image"] = map[string]interface{}{"url": heroImageURL}
 	}
 
 	payload := map[string]interface{}{
@@ -1104,7 +1104,7 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			// Keep the hero attachment and replace the proof attachment in-place.
 			attachmentsList := []map[string]interface{}{}
 			nextFileIdx := 0
-			if heroAttachmentID != "" && heroAttachmentFile != "" && heroImageURL == "" {
+			if heroAttachmentID != "" && heroAttachmentFile != "" {
 				heroAttachment := map[string]interface{}{"id": heroAttachmentID}
 				heroAttachment["filename"] = heroAttachmentFile
 				attachmentsList = append(attachmentsList, heroAttachment)
@@ -1139,11 +1139,11 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			patchReq.Header.Set("Content-Type", mpWriter.FormDataContentType())
 		} else {
 			attachmentsList := []map[string]interface{}{}
-			// Only keep attachments that are still referenced by attachment:// in embeds.
-			if heroAttachmentID != "" && heroAttachmentFile != "" && heroImageURL == "" {
+			// Always keep existing attachments that are referenced by attachment:// in embeds.
+			if heroAttachmentID != "" && heroAttachmentFile != "" {
 				attachmentsList = append(attachmentsList, map[string]interface{}{"id": heroAttachmentID, "filename": heroAttachmentFile})
 			}
-			if existingProofAttachmentID != "" && existingProofFileName != "" && strings.TrimSpace(session.WinnerProofURL) == "" {
+			if existingProofAttachmentID != "" && existingProofFileName != "" {
 				attachmentsList = append(attachmentsList, map[string]interface{}{"id": existingProofAttachmentID, "filename": existingProofFileName})
 			}
 			payload["attachments"] = attachmentsList
@@ -1250,7 +1250,11 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 					heroMetaChanged = true
 				}
 				// Update proof attachment state.
+				proofMetaChanged := false
 				if cdnURL != "" && a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
+					if cdnURL != a.currentSession.WinnerProofURL || proofAttachmentID != a.currentSession.WinnerProofID {
+						proofMetaChanged = true
+					}
 					a.currentSession.WinnerProofURL = cdnURL
 					a.currentSession.WinnerProofID = proofAttachmentID
 					a.currentSession.WinnerProofFile = proofAttachmentFile
@@ -1258,7 +1262,7 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 				a.pendingProofBytes = nil
 				a.pendingProofFileName = ""
 				var metaSessionDBID int64
-				if heroMetaChanged && session != nil {
+				if (heroMetaChanged || proofMetaChanged || reason == "winner-draw" || reason == "winner-proof") && session != nil {
 					metaSessionDBID = session.DBID
 				}
 				a.mu.Unlock()
@@ -1270,7 +1274,7 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 				}
 				if metaSessionDBID > 0 {
 					if err := a.saveSessionMeta(metaSessionDBID); err != nil {
-						a.logDebug("saveSessionMeta after patch hero refresh failed: %v", err)
+						a.logDebug("saveSessionMeta after patch metadata refresh failed: %v", err)
 					}
 				}
 				a.logDebug("raffle webhook updated message id=%s reason=%s heroRefreshed=%v", messageID, reason, heroMetaChanged)
@@ -2225,13 +2229,58 @@ func (a *App) saveSessionMeta(sessionDBID int64) error {
 	a.mu.Lock()
 	db := a.db
 	owner := a.ownerKey
+
+	// Start with global defaults
 	raffleName := strings.TrimSpace(a.raffleName)
 	prizeName := strings.TrimSpace(a.rafflePrizeName)
 	prizeQty := a.rafflePrizeQty
 	heroImageURL := strings.TrimSpace(a.raffleHeroImageURL)
 	heroAttachmentID := strings.TrimSpace(a.raffleHeroAttachmentID)
 	heroAttachmentFile := strings.TrimSpace(a.raffleHeroAttachmentFile)
+
+	winnerName := ""
+	winnerTickets := 0
+	winnerOdds := ""
+	var winnerDrawnAt *time.Time
+	winnerMethod := ""
+	winnerSummary := ""
+	winnerProofURL := ""
+	winnerProofID := ""
+	winnerProofFile := ""
+
+	// If this is for the current session, use its frozen metadata instead of globals.
+	if a.currentSession != nil && a.currentSession.DBID == sessionDBID {
+		if n := strings.TrimSpace(a.currentSession.RaffleName); n != "" {
+			raffleName = n
+		}
+		if n := strings.TrimSpace(a.currentSession.PrizeName); n != "" {
+			prizeName = n
+		}
+		if a.currentSession.PrizeQty > 0 {
+			prizeQty = a.currentSession.PrizeQty
+		}
+		// Hero image fields should always be synced from the session if it exists.
+		heroImageURL = strings.TrimSpace(a.currentSession.HeroImageURL)
+		heroAttachmentID = strings.TrimSpace(a.currentSession.HeroAttachmentID)
+		heroAttachmentFile = strings.TrimSpace(a.currentSession.HeroAttachmentFile)
+
+		winnerName = strings.TrimSpace(a.currentSession.WinnerName)
+		winnerTickets = a.currentSession.WinnerTickets
+		winnerOdds = strings.TrimSpace(a.currentSession.WinnerOdds)
+		if a.currentSession.WinnerDrawnAt != "" {
+			if t, err := time.Parse(time.RFC3339, a.currentSession.WinnerDrawnAt); err == nil {
+				ut := t.UTC()
+				winnerDrawnAt = &ut
+			}
+		}
+		winnerMethod = strings.TrimSpace(a.currentSession.WinnerMethod)
+		winnerSummary = strings.TrimSpace(a.currentSession.WinnerSummary)
+		winnerProofURL = strings.TrimSpace(a.currentSession.WinnerProofURL)
+		winnerProofID = strings.TrimSpace(a.currentSession.WinnerProofID)
+		winnerProofFile = strings.TrimSpace(a.currentSession.WinnerProofFile)
+	}
 	a.mu.Unlock()
+
 	if db == nil || sessionDBID <= 0 {
 		return nil
 	}
@@ -2249,10 +2298,16 @@ func (a *App) saveSessionMeta(sessionDBID int64) error {
 	_, err := db.Exec(ctx,
 		`UPDATE raffle_sessions
 		 SET raffle_name = $1, prize_name = $2, prize_qty = $3,
-		     hero_image_url = $4, hero_attachment_id = $5, hero_attachment_file = $6
-		 WHERE id = $7 AND owner_key = $8`,
+		     hero_image_url = $4, hero_attachment_id = $5, hero_attachment_file = $6,
+		     winner_name = $7, winner_tickets = $8, winner_odds = $9, winner_drawn_at = $10,
+		     winner_method = $11, winner_summary = $12, winner_proof_url = $13,
+		     winner_proof_id = $14, winner_proof_file = $15
+		 WHERE id = $16 AND owner_key = $17`,
 		raffleName, prizeName, prizeQty,
 		heroImageURL, heroAttachmentID, heroAttachmentFile,
+		winnerName, winnerTickets, winnerOdds, winnerDrawnAt,
+		winnerMethod, winnerSummary, winnerProofURL,
+		winnerProofID, winnerProofFile,
 		sessionDBID, owner,
 	)
 	return err
@@ -2550,6 +2605,15 @@ func (a *App) ensureTables() error {
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS hero_image_url TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS hero_attachment_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS hero_attachment_file TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_tickets INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_odds TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_drawn_at TIMESTAMPTZ NULL`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_method TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_summary TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_proof_url TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_proof_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_proof_file TEXT NOT NULL DEFAULT ''`,
 		// Fix existing rows that still have the old hardcoded defaults
 		`UPDATE raffle_sessions SET raffle_name = 'Flame Raffle' WHERE raffle_name = 'Weekend Raffle'`,
 		`UPDATE raffle_sessions SET prize_name = 'Purple Dragon Lamp' WHERE prize_name = 'Mystery Prize'`,
@@ -2583,7 +2647,9 @@ func (a *App) loadSessionsFromDB() error {
 
 	sRows, err := db.Query(ctx, `
 		SELECT id, started_at, scheduled_end_at, ended_at, bonus_every, last_seen_created_at, last_seen_entry_id, webhook_message_id,
-		       raffle_name, prize_name, prize_qty, hero_image_url, hero_attachment_id, hero_attachment_file
+		       raffle_name, prize_name, prize_qty, hero_image_url, hero_attachment_id, hero_attachment_file,
+		       winner_name, winner_tickets, winner_odds, winner_drawn_at, winner_method, winner_summary,
+		       winner_proof_url, winner_proof_id, winner_proof_file
 		FROM raffle_sessions
 		WHERE owner_key = $1
 		ORDER BY id ASC
@@ -2608,6 +2674,15 @@ func (a *App) loadSessionsFromDB() error {
 		heroImageURL       string
 		heroAttachmentID   string
 		heroAttachmentFile string
+		winnerName         string
+		winnerTickets      int
+		winnerOdds         string
+		winnerDrawnAt      *time.Time
+		winnerMethod       string
+		winnerSummary      string
+		winnerProofURL     string
+		winnerProofID      string
+		winnerProofFile    string
 	}
 	sessionsByID := map[int64]*RaffleSession{}
 	orderedIDs := make([]int64, 0)
@@ -2621,13 +2696,24 @@ func (a *App) loadSessionsFromDB() error {
 		heroImageURL       string
 		heroAttachmentID   string
 		heroAttachmentFile string
+		winnerName         string
+		winnerTickets      int
+		winnerOdds         string
+		winnerDrawnAt      string
+		winnerMethod       string
+		winnerSummary      string
+		winnerProofURL     string
+		winnerProofID      string
+		winnerProofFile    string
 	}
 	metaByID := map[int64]sessionMeta{}
 
 	for sRows.Next() {
 		var s dbSession
 		if err := sRows.Scan(&s.id, &s.startedAt, &s.scheduledEndAt, &s.endedAt, &s.bonusEvery, &s.cursorAt, &s.cursorID, &s.webhookMessageID,
-			&s.raffleName, &s.prizeName, &s.prizeQty, &s.heroImageURL, &s.heroAttachmentID, &s.heroAttachmentFile); err != nil {
+			&s.raffleName, &s.prizeName, &s.prizeQty, &s.heroImageURL, &s.heroAttachmentID, &s.heroAttachmentFile,
+			&s.winnerName, &s.winnerTickets, &s.winnerOdds, &s.winnerDrawnAt, &s.winnerMethod, &s.winnerSummary,
+			&s.winnerProofURL, &s.winnerProofID, &s.winnerProofFile); err != nil {
 			return err
 		}
 		rs := &RaffleSession{
@@ -2645,6 +2731,17 @@ func (a *App) loadSessionsFromDB() error {
 			HeroImageURL:       strings.TrimSpace(s.heroImageURL),
 			HeroAttachmentID:   strings.TrimSpace(s.heroAttachmentID),
 			HeroAttachmentFile: strings.TrimSpace(s.heroAttachmentFile),
+			WinnerName:         strings.TrimSpace(s.winnerName),
+			WinnerTickets:      s.winnerTickets,
+			WinnerOdds:         strings.TrimSpace(s.winnerOdds),
+			WinnerMethod:       strings.TrimSpace(s.winnerMethod),
+			WinnerSummary:      strings.TrimSpace(s.winnerSummary),
+			WinnerProofURL:     strings.TrimSpace(s.winnerProofURL),
+			WinnerProofID:      strings.TrimSpace(s.winnerProofID),
+			WinnerProofFile:    strings.TrimSpace(s.winnerProofFile),
+		}
+		if s.winnerDrawnAt != nil {
+			rs.WinnerDrawnAt = s.winnerDrawnAt.UTC().Format(time.RFC3339)
 		}
 		metaByID[s.id] = sessionMeta{
 			raffleName:         strings.TrimSpace(s.raffleName),
@@ -2653,6 +2750,15 @@ func (a *App) loadSessionsFromDB() error {
 			heroImageURL:       strings.TrimSpace(s.heroImageURL),
 			heroAttachmentID:   strings.TrimSpace(s.heroAttachmentID),
 			heroAttachmentFile: strings.TrimSpace(s.heroAttachmentFile),
+			winnerName:         strings.TrimSpace(s.winnerName),
+			winnerTickets:      s.winnerTickets,
+			winnerOdds:         strings.TrimSpace(s.winnerOdds),
+			winnerDrawnAt:      rs.WinnerDrawnAt,
+			winnerMethod:       strings.TrimSpace(s.winnerMethod),
+			winnerSummary:      strings.TrimSpace(s.winnerSummary),
+			winnerProofURL:     strings.TrimSpace(s.winnerProofURL),
+			winnerProofID:      strings.TrimSpace(s.winnerProofID),
+			winnerProofFile:    strings.TrimSpace(s.winnerProofFile),
 		}
 		if s.scheduledEndAt != nil {
 			rs.ScheduledEndAt = s.scheduledEndAt.UTC().Format(time.RFC3339)
