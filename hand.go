@@ -657,6 +657,85 @@ func (a *App) evaluateTriRound() {
 	isTriRolling = false
 }
 
+func (a *App) evaluatePairUpRound() {
+	defer func() {
+		if r := recover(); r != nil {
+			a.AddLogMsg(fmt.Sprintf("[PAIRUP_CRASH_GUARD] recovered panic in evaluatePairUpRound: %v", r))
+			log.Printf("[PAIRUP_CRASH_GUARD] recovered panic in evaluatePairUpRound: %v", r)
+			isPairUpRolling = false
+		}
+	}()
+
+	mutex.Lock()
+	if len(diceList) < 5 {
+		mutex.Unlock()
+		isPairUpRolling = false
+		return
+	}
+	v1 := diceList[0].Value
+	v2 := diceList[2].Value
+	v3 := diceList[4].Value
+	mutex.Unlock()
+
+	a.AddLogMsg(fmt.Sprintf("[PAIR_UP] evaluating: %d %d %d", v1, v2, v3))
+
+	playerWins := (v1 == v2 || v1 == v3 || v2 == v3)
+
+	resultText := fmt.Sprintf("%d-%d-%d", v1, v2, v3)
+	
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	winnerName := "Dealer"
+	if playerWins {
+		winnerName = playerName
+	}
+
+	winnerMsg := fmt.Sprintf("%s Wins - %s: %d-%d-%d", winnerName, playerName, v1, v2, v3)
+
+	if !ChatIsDisabled {
+		if !isMuted {
+			sendMessageWithDelay(winnerMsg)
+		} else {
+			messageQueue = append(messageQueue, winnerMsg)
+		}
+	}
+
+	payoutTargetID := lastTradePartnerID
+	payoutTargetName := playerName
+
+	if playerWins && payoutTargetID > 0 {
+		a.setCurrentGameHistoryResults(resultText, "", playerName, "Payout Pending", false)
+		a.noteCurrentGameHistory(winnerMsg)
+		a.AddLogMsg(fmt.Sprintf("[PAYOUT] pairup player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
+		resetPayoutRetryState()
+		if isRiskEnabled {
+			if riskSessionActive {
+				a.sendDiscordRoundResult(playerName, resultText, "", winnerMsg)
+				go a.applyRiskOutcome(true)
+				return
+			}
+			params := map[string]interface{}{}
+			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "Pair Up", params)
+			a.sendDiscordRoundResult(playerName, resultText, "", winnerMsg)
+			return
+		}
+		startPayout(a, payoutTargetID, payoutTargetName)
+		return
+	}
+
+	a.setCurrentGameHistoryResults(resultText, "", "Dealer", "Completed", true)
+	a.noteCurrentGameHistory(winnerMsg)
+	if isRiskEnabled && riskSessionActive {
+		go a.applyRiskOutcome(false)
+		return
+	}
+	go a.openDealerAfterRound()
+	isPairUpRolling = false
+}
+
 // Sum the values of the dice and return a string representation
 func sumHand(values []int) string {
 	sum := 0

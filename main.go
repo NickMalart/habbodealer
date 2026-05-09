@@ -126,6 +126,7 @@ var (
 	enabledGame13               bool = true
 	enabledGameTri              bool = true
 	enabledGameUO7              bool = false
+	enabledGamePairUp           bool = true
 	pokerSequencePlayerName     string
 	pokerSequencePlayerResult   PokerHandResult
 	pokerSequencePlayerHand     string
@@ -182,6 +183,7 @@ var (
 	isBJRolling            bool
 	is13Rolling            bool
 	is13Hitting            bool
+	isPairUpRolling        bool
 	isHitting              bool
 	isClosing              bool
 	ChatIsDisabled         bool
@@ -9551,6 +9553,7 @@ func setEnabledGamesFromSelection(codes []string) {
 	enabledGame13 = true
 	enabledGameTri = true
 	enabledGameUO7 = false
+	enabledGamePairUp = true
 
 	if len(codes) == 0 {
 		return
@@ -9561,6 +9564,7 @@ func setEnabledGamesFromSelection(codes []string) {
 	enabledGame13 = false
 	enabledGameTri = false
 	enabledGameUO7 = false
+	enabledGamePairUp = false
 
 	for _, raw := range codes {
 		s := strings.ToLower(strings.TrimSpace(raw))
@@ -9576,19 +9580,22 @@ func setEnabledGamesFromSelection(codes []string) {
 			enabledGameTri = true
 		case "uo", "uo7", "underover", "underover7":
 			enabledGameUO7 = true
+		case "pu", "pu3", "pairup":
+			enabledGamePairUp = true
 		}
 	}
 
-	if !enabledGamePkr && !enabledGame21 && !enabledGame13 && !enabledGameTri && !enabledGameUO7 {
+	if !enabledGamePkr && !enabledGame21 && !enabledGame13 && !enabledGameTri && !enabledGameUO7 && !enabledGamePairUp {
 		enabledGamePkr = true
 		enabledGame21 = true
 		enabledGame13 = true
 		enabledGameTri = true
+		enabledGamePairUp = true
 	}
 }
 
 func enabledGameChoicePartsLocked() []string {
-	parts := make([]string, 0, 5)
+	parts := make([]string, 0, 6)
 	if enabledGamePkr {
 		parts = append(parts, "pkr")
 	}
@@ -9604,8 +9611,11 @@ func enabledGameChoicePartsLocked() []string {
 	if enabledGameUO7 {
 		parts = append(parts, "uo7")
 	}
+	if enabledGamePairUp {
+		parts = append(parts, "pairup")
+	}
 	if len(parts) == 0 {
-		parts = append(parts, "pkr", "21", "13", "tri")
+		parts = append(parts, "pkr", "21", "13", "tri", "pairup")
 	}
 	return parts
 }
@@ -9636,6 +9646,8 @@ func isGameChoiceEnabledLocked(choice string) bool {
 		return enabledGameTri
 	case "uo", "uo7", "uo_over", "uo_under":
 		return enabledGameUO7
+	case "pairup":
+		return enabledGamePairUp
 	default:
 		return false
 	}
@@ -11216,7 +11228,7 @@ func resetDiceState() {
 	tradeOpen = false
 	dealerResyncInProgress = false
 	fakeDiceTestingMode = false
-	isPokerRolling, isTriRolling, isBJRolling, is13Rolling, isHitting, is13Hitting, isClosing = false, false, false, false, false, false, false
+	isPokerRolling, isTriRolling, isBJRolling, is13Rolling, isHitting, is13Hitting, isPairUpRolling, isClosing = false, false, false, false, false, false, false, false
 
 	// Ensure any pending game-choice timeout is stopped when resetting dice.
 	resetTradeAutoFlow()
@@ -12061,6 +12073,71 @@ func (a *App) waitForBlackjackDiceResults(slots []int, timeout time.Duration, re
 
 		time.Sleep(75 * time.Millisecond)
 	}
+}
+
+func (a *App) beginPairUpRound() {
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	resetPokerSequence()
+	resetBlackjackSequence()
+	reset13Sequence()
+	resetTriSequence()
+
+	a.setCurrentGameHistoryGame("Pair Up")
+
+	go func() {
+		time.Sleep(1400 * time.Millisecond)
+		isPairUpRolling = true
+		a.rollPairUpDice()
+	}()
+}
+
+func (a *App) rollPairUpDice() {
+	if fakeDiceTestingMode {
+		mutex.Lock()
+		if len(diceList) < 5 {
+			mutex.Unlock()
+			log.Println("Not enough dice to roll")
+			isPairUpRolling = false
+			return
+		}
+		for _, index := range []int{0, 2, 4} {
+			diceList[index].Value = rand.Intn(6) + 1
+			diceList[index].IsClosed = false
+			logRollResult := fmt.Sprintf("Dice %d rolled: %d\n", diceList[index].ID, diceList[index].Value)
+			a.AddLogMsg(logRollResult)
+		}
+		mutex.Unlock()
+		a.evaluatePairUpRound()
+		isPairUpRolling = false
+		return
+	}
+
+	mutex.Lock()
+
+	if len(diceList) < 5 {
+		mutex.Unlock()
+		log.Println("Not enough dice to roll")
+		isPairUpRolling = false
+		return
+	}
+
+	resultsWaitGroup.Add(3)
+	mutex.Unlock()
+
+	for _, index := range []int{0, 2, 4} {
+		diceList[index].Roll()
+		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
+	}
+
+	time.Sleep(1000 * time.Millisecond)
+	resultsWaitGroup.Wait()
+
+	a.evaluatePairUpRound()
+	isPairUpRolling = false
 }
 
 // Roll dice for blackjack-style game
@@ -13125,6 +13202,9 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		// Start the 13-game sequence (similar flow to 21)
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected 13; starting 13 sequence", index))
 		a.begin13Sequence()
+	case "pairup":
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Pair Up; starting round", index))
+		a.beginPairUpRound()
 	case "tri":
 		// Two-step Tri selection: prompt player for High or Low
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Tri; prompting for High/Low", index))
@@ -13336,6 +13416,8 @@ func normalizeIncomingGameChoice(msg string) (string, bool) {
 		return "uo", true
 	case "uo7", "underover7", "u7", "o7":
 		return "uo7", true
+	case "pu", "pu3", "pairup", "pair":
+		return "pairup", true
 	case "trih":
 		return "trihigh", true
 	case "trihigh":
@@ -13377,6 +13459,8 @@ func normalizeLooseGameChoice(msg string) (string, bool) {
 		return "uo", true
 	case "uo7", "underover7", "u7", "o7":
 		return "uo7", true
+	case "pu", "pu3", "pairup", "pair":
+		return "pairup", true
 	case "trih":
 		return "trihigh", true
 	case "trihigh":
@@ -13463,6 +13547,8 @@ func gameChoiceDisplay(choice string) string {
 		return "UO7"
 	case "uo", "uo_over", "uo_under":
 		return "UO7"
+	case "pairup":
+		return "Pair Up"
 	case "trih":
 		return "TriH"
 	case "trihigh":

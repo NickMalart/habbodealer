@@ -238,6 +238,10 @@
                 <input type="checkbox" v-model="enableGameUO7" :disabled="underOver7Mode" />
                 Under/Over-7 (uo7)
               </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
+                <input type="checkbox" v-model="enableGamePairUp" :disabled="underOver7Mode" />
+                Pair Up (pu)
+              </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;border-top:1px solid #333;padding-top:6px;">
                 <input type="checkbox" v-model="riskModeEnabledInput" :disabled="underOver7Mode" />
                 Enable Risk Mode
@@ -927,6 +931,15 @@ export default {
           playerFlow: 'Use the Tri command when needed and let the app roll the three dice.',
           dealerFlow: 'The dealer/app handles the roll output and result logging automatically, but the house rules for who wins depend on how you are using the tri command.',
         },
+        {
+          key: 'pairup',
+          title: 'Pair Up (3 Dice)',
+          summary: 'Fast binary game where matching dice wins.',
+          description: 'Pair Up is a simple game where the player rolls three dice. If any two dice match (a pair) or all three match (a triple), the player wins.',
+          howItWorks: 'The app rolls three dice for the player. If there is a pair or triple, the player wins x2 payout. If all three dice are different, the dealer wins.',
+          playerFlow: 'Trade the bet, say pu or pairup when prompted, and watch the three dice.',
+          dealerFlow: 'The dealer rolls three dice and automatically awards a win if a match is found.',
+        },
         
       ],
       tradeItems: [],
@@ -998,8 +1011,8 @@ export default {
       enableGame13: false,
       enableGameTri: false,
       enableGameUO7: false,
-      // Risk mode: when true, enable Risk banking mechanic
-      riskModeEnabledInput: false,
+      enableGamePairUp: true,
+      // Risk mode: when true, enable Risk banking mechanic      riskModeEnabledInput: false,
       // Block recommended-rooms packet
       blockRecommendedRooms: true,
       // Block slide-object-bundle packet
@@ -1143,7 +1156,7 @@ export default {
     },
     gameKeys() {
       const keys = (this.activeStats && this.activeStats.byGame) ? Object.keys(this.activeStats.byGame) : [];
-      const preferred = ['Poker', '21', '13', 'Tri'];
+      const preferred = ['Poker', '21', '13', 'Tri', 'Pair Up'];
       const presentPreferred = preferred.filter(k => keys.includes(k));
       const rest = keys.filter(k => !preferred.includes(k)).sort();
       return presentPreferred.concat(rest);
@@ -1282,10 +1295,11 @@ export default {
           if (this.enableGame13) selectedGames.push('13');
           if (this.enableGameTri) selectedGames.push('tri');
           if (this.enableGameUO7) selectedGames.push('uo7');
+          if (this.enableGamePairUp) selectedGames.push('pairup');
 
           const standaloneMode = this.underOver7Mode;
           if (!standaloneMode && selectedGames.length === 0) {
-            this.addLogMsg('[UI] Start cancelled: select at least one enabled game (pkr, 21, 13, tri, uo7)');
+            this.addLogMsg('[UI] Start cancelled: select at least one enabled game (pkr, 21, 13, tri, uo7, pairup)');
             return;
           }
 
@@ -1348,7 +1362,7 @@ export default {
         'Kai','Luca','Nico','Noel','Owen','Paige','Remy','Rory','Soren','Toby',
         'Violet','Will','Zara','Yuri','Ira','Mina','Gabe','Ivy','Brad','Nate'
       ];
-      const games = ['21','13','poker','tri','roll'];
+      const games = ['21','13','poker','tri','roll','pairup'];
       const now = Date.now();
       const rows = [];
       for (let i = 0; i < 1000; i++) {
