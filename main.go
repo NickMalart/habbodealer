@@ -10675,7 +10675,7 @@ func (a *App) beginUOChoiceSequence() {
 		awaitingUOChoicePartnerID = lastTradePartnerID
 	}
 
-	msg := "Shout U (1-6) or O (8-12)? - Just shout U or O!"
+	msg := "Shout U (2-6) or O (8-12)? - Just shout U or O!"
 	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
 	sendShout(msg)
 }
@@ -10715,7 +10715,7 @@ func (a *App) beginUO7ChoiceSequence() {
 		awaitingUOChoicePartnerID = lastTradePartnerID
 	}
 
-	msg := "UO7 selected. Shout U (1-6), O (8-12), or 7."
+	msg := "UO7 selected. Shout U (2-6), O (8-12), or 7."
 	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
 	sendShout(msg)
 }
