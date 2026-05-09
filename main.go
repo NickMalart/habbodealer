@@ -13475,7 +13475,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			riskSessionPayoutMultiplier = 2
 			mutex.Unlock()
 			a.setCurrentGameHistoryGame(gameLabel)
-			ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay("uo7"))
+			ack := "o7 (8-12)! Starting, Player Roll"
 			sendShout(ack)
 			go func() {
 				time.Sleep(1400 * time.Millisecond)
@@ -13483,6 +13483,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			}()
 		} else {
 			a.setCurrentGameHistoryGame("UO7")
+			ack := "o7 (8-12)! Starting, Player Roll"
+			sendShout(ack)
 			a.beginUnderOverRound("over")
 		}
 	case "uo_under":
@@ -13502,7 +13504,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			riskSessionPayoutMultiplier = 2
 			mutex.Unlock()
 			a.setCurrentGameHistoryGame(gameLabel)
-			ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay("uo7"))
+			ack := "u7 (2-6)! Starting, Player Roll"
 			sendShout(ack)
 			go func() {
 				time.Sleep(1400 * time.Millisecond)
@@ -13510,6 +13512,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			}()
 		} else {
 			a.setCurrentGameHistoryGame("UO7")
+			ack := "u7 (2-6)! Starting, Player Roll"
+			sendShout(ack)
 			a.beginUnderOverRound("under")
 		}
 	case "trihigh":
