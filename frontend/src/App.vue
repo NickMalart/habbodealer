@@ -247,6 +247,18 @@
                 Enable Risk Mode
               </label>
             </div>
+            <div class="game-guide-block">
+              <div class="game-guide-label">Raffle Session (Optional)</div>
+              <select v-model="selectedRaffleID" style="width:100%;padding:8px;border-radius:4px;border:1px solid #ccc;max-width:420px;background:#2e2e2e;color:#fff;">
+                <option :value="0">No Raffle / Use Time-based</option>
+                <option v-for="s in activeRaffles" :key="s.id" :value="s.id">
+                  #{{ s.id }} - {{ s.raffleName }} ({{ s.prizeName }})
+                </option>
+              </select>
+              <div style="font-size:12px;color:#bdbdbd;margin-top:4px;">
+                Link games from this casino session to a specific raffle.
+              </div>
+            </div>
             <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
               <button class="copy-btn" @click="cancelDealerName">Cancel</button>
               <button class="copy-btn" @click="confirmDealerName">Start</button>
@@ -1047,6 +1059,9 @@ export default {
       // Live UI indicators for partner activity
       currentTraderName: '',
       currentGamePlayerName: '',
+      // Raffle selection
+      activeRaffles: [],
+      selectedRaffleID: 0,
       // Event log browser state
       eventDates: [],
       selectedEventDate: '',
@@ -1247,6 +1262,15 @@ export default {
       async startCasino() {
         try {
           if (this.casinoStatusKey === 'stopped') {
+              // Fetch active raffles
+              try {
+                this.activeRaffles = await window.go.main.App.GetActiveRaffles() || [];
+              } catch (e) {
+                console.error('Failed to fetch active raffles', e);
+                this.activeRaffles = [];
+              }
+              this.selectedRaffleID = 0;
+
               // preserve previously entered dealer name and limits if present,
               // otherwise ensure sane defaults are set before showing modal
               if (!this.dealerNameInput) this.dealerNameInput = '';
@@ -1302,6 +1326,9 @@ export default {
             this.addLogMsg('[UI] Start cancelled: select at least one enabled game (pkr, 21, 13, tri, uo7, pairup)');
             return;
           }
+
+          // Set the active raffle session ID before starting
+          await window.go.main.App.SetActiveRaffleSessionID(Number(this.selectedRaffleID || 0));
 
           // set the UO7 payout multiplier before enabling mode / starting
           await window.go.main.App.SetUnderOver7PayoutMultiplier(this.uo7Multiplier);

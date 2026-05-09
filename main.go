@@ -622,9 +622,10 @@ type GameHistoryEntry struct {
 	PayoutItems    []TradeItem `json:"payoutItems"`
 	Notes          []string    `json:"notes"`
 	// New fields to capture player choice and raw shout, plus payout multiplier
-	Choice           string `json:"choice,omitempty"`
-	ChoiceShout      string `json:"choiceShout,omitempty"`
-	PayoutMultiplier int    `json:"payoutMultiplier,omitempty"`
+	Choice           string      `json:"choice,omitempty"`
+	ChoiceShout      string      `json:"choiceShout,omitempty"`
+	PayoutMultiplier int         `json:"payoutMultiplier,omitempty"`
+	RaffleSessionID  int64       `json:"raffleSessionId,omitempty"`
 	// Risk session fields
 	RiskSession bool `json:"riskSession,omitempty"`
 	RiskPending int  `json:"riskPending,omitempty"` // amount currently risked for a re-roll
@@ -668,6 +669,7 @@ type App struct {
 	currentRoomName       string
 	users28PythonExec     string
 	users28ParserScript   string
+	activeRaffleSessionID int64
 }
 
 type DBConfig struct {
@@ -2211,6 +2213,52 @@ func (a *App) ensureHistoryDatabaseConnected() error {
 	return fmt.Errorf("history database not connected")
 }
 
+type RaffleSession struct {
+	ID         int64  `json:"id"`
+	RaffleName string `json:"raffleName"`
+	PrizeName  string `json:"prizeName"`
+	StartedAt  string `json:"startedAt"`
+}
+
+func (a *App) GetActiveRaffles() []RaffleSession {
+	db, owner := a.getHistoryDB()
+	if db == nil {
+		return []RaffleSession{}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	rows, err := db.Query(ctx, `
+		SELECT id, raffle_name, prize_name, started_at
+		FROM raffle_sessions
+		WHERE owner_key = $1 AND ended_at IS NULL
+		ORDER BY id DESC
+	`, owner)
+	if err != nil {
+		a.logDebug("GetActiveRaffles query failed: %v", err)
+		return []RaffleSession{}
+	}
+	defer rows.Close()
+
+	var sessions []RaffleSession
+	for rows.Next() {
+		var s RaffleSession
+		var t time.Time
+		if err := rows.Scan(&s.ID, &s.RaffleName, &s.PrizeName, &t); err != nil {
+			continue
+		}
+		s.StartedAt = t.UTC().Format(time.RFC3339)
+		sessions = append(sessions, s)
+	}
+	return sessions
+}
+
+func (a *App) SetActiveRaffleSessionID(id int64) {
+	a.activeRaffleSessionID = id
+	a.AddLogMsg(fmt.Sprintf("[CONFIG] Active raffle session set to #%d", id))
+}
+
 func (a *App) ensureGameHistoryTables() error {
 	db, _ := a.getHistoryDB()
 	if db == nil {
@@ -2239,10 +2287,12 @@ func (a *App) ensureGameHistoryTables() error {
 			choice TEXT NOT NULL DEFAULT '',
 			choice_shout TEXT NOT NULL DEFAULT '',
 			payout_multiplier INTEGER NOT NULL DEFAULT 0,
+			raffle_session_id BIGINT NOT NULL DEFAULT 0,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_db_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			PRIMARY KEY (id, owner_key)
 		)`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS raffle_session_id BIGINT NOT NULL DEFAULT 0`,
 		`CREATE TABLE IF NOT EXISTS game_history_items (
 			entry_id TEXT NOT NULL,
 			owner_key TEXT NOT NULL DEFAULT '',
@@ -2295,7 +2345,8 @@ func (a *App) loadGameHistoryFromDB() ([]GameHistoryEntry, error) {
 			notes,
 			choice,
 			choice_shout,
-			payout_multiplier
+			payout_multiplier,
+			raffle_session_id
 		FROM game_history_entries
 		WHERE owner_key = $1
 		ORDER BY started_at DESC, id DESC
@@ -2326,6 +2377,7 @@ func (a *App) loadGameHistoryFromDB() ([]GameHistoryEntry, error) {
 			&e.Choice,
 			&e.ChoiceShout,
 			&e.PayoutMultiplier,
+			&e.RaffleSessionID,
 		); err != nil {
 			return nil, err
 		}
@@ -2419,11 +2471,11 @@ func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
 					INSERT INTO game_history_entries (
 						id, owner_key, player_name, started_at, updated_at, completed_at,
 						game, winner, status, issue, issue_reason, player_result, dealer_result,
-						notes, choice, choice_shout, payout_multiplier, updated_db_at
+						notes, choice, choice_shout, payout_multiplier, raffle_session_id, updated_db_at
 					) VALUES (
 						$1,$2,$3,$4,$5,$6,
 						$7,$8,$9,$10,$11,$12,$13,
-						$14,$15,$16,$17,NOW()
+						$14,$15,$16,$17,$18,NOW()
 					)
 					ON CONFLICT (id, owner_key) DO UPDATE SET
 						player_name = EXCLUDED.player_name,
@@ -2441,6 +2493,7 @@ func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
 						choice = EXCLUDED.choice,
 						choice_shout = EXCLUDED.choice_shout,
 						payout_multiplier = EXCLUDED.payout_multiplier,
+						raffle_session_id = EXCLUDED.raffle_session_id,
 						updated_db_at = NOW()
 				`,
 					e.ID,
@@ -2460,6 +2513,7 @@ func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
 					e.Choice,
 					e.ChoiceShout,
 					e.PayoutMultiplier,
+					e.RaffleSessionID,
 				); err != nil {
 					return err
 				}
@@ -2962,15 +3016,16 @@ func (a *App) beginGameHistory(playerName string, betItems []TradeItem) {
 
 	startedAt := gameHistoryTimestamp()
 	entry := GameHistoryEntry{
-		ID:         fmt.Sprintf("%d", time.Now().UnixNano()),
-		PlayerName: strings.TrimSpace(playerName),
-		StartedAt:  startedAt,
-		UpdatedAt:  startedAt,
-		Game:       "Waiting For Choice",
-		Winner:     "",
-		Status:     "Awaiting Game Choice",
-		BetItems:   cloneTradeItems(betItems),
-		Notes:      []string{"Trade completed and bet recorded"},
+		ID:              fmt.Sprintf("%d", time.Now().UnixNano()),
+		PlayerName:      strings.TrimSpace(playerName),
+		StartedAt:       startedAt,
+		UpdatedAt:       startedAt,
+		Game:            "Waiting For Choice",
+		Winner:          "",
+		Status:          "Awaiting Game Choice",
+		BetItems:        cloneTradeItems(betItems),
+		Notes:           []string{"Trade completed and bet recorded"},
+		RaffleSessionID: a.activeRaffleSessionID,
 	}
 	if entry.PlayerName == "" {
 		entry.PlayerName = "Unknown"

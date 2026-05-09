@@ -1824,7 +1824,7 @@ func (a *App) GetSessionTally(dbID int64) (SessionTally, error) {
 	}
 
 	// Sum bet items (won by dealer = came in) and payout items (lost by dealer = went out)
-	// Cast the TEXT started_at to timestamptz for proper comparison
+	// Prioritize raffle_session_id, but fall back to time window for games with ID 0 (unassigned)
 	query := fmt.Sprintf(`
 		SELECT
 			i.item_name,
@@ -1834,9 +1834,10 @@ func (a *App) GetSessionTally(dbID int64) (SessionTally, error) {
 		FROM game_history_entries e
 		JOIN game_history_items i ON i.entry_id = e.id AND i.owner_key = e.owner_key
 		WHERE e.owner_key = $1
-		  AND trim(COALESCE(e.started_at, '')) <> ''
-		  AND to_timestamp(trim(e.started_at), 'YYYY-MM-DD"T"HH24:MI:SS') AT TIME ZONE 'UTC' >= $2
-		  %s
+		  AND (
+			e.raffle_session_id = $2
+			OR (e.raffle_session_id = 0 AND trim(COALESCE(e.started_at, '')) <> '' AND to_timestamp(trim(e.started_at), 'YYYY-MM-DD"T"HH24:MI:SS') AT TIME ZONE 'UTC' >= $3 %s)
+		  )
 		  AND e.status = 'Completed'
 		GROUP BY i.item_name
 		ORDER BY (SUM(CASE WHEN i.item_type = 'bet' THEN i.quantity ELSE 0 END) -
@@ -1844,7 +1845,7 @@ func (a *App) GetSessionTally(dbID int64) (SessionTally, error) {
 		         i.item_name
 	`, endClause)
 
-	rows, err := db.Query(ctx, query, args...)
+	rows, err := db.Query(ctx, query, append([]interface{}{owner, dbID}, args[1:]...)...)
 	if err != nil {
 		return tally, err
 	}
@@ -1873,11 +1874,12 @@ func (a *App) GetSessionTally(dbID int64) (SessionTally, error) {
 	_ = db.QueryRow(ctx, fmt.Sprintf(`
 		SELECT COUNT(*) FROM game_history_entries
 		WHERE owner_key = $1
-		  AND trim(COALESCE(started_at, '')) <> ''
-		  AND to_timestamp(trim(started_at), 'YYYY-MM-DD"T"HH24:MI:SS') AT TIME ZONE 'UTC' >= $2
-		  %s
+		  AND (
+			raffle_session_id = $2
+			OR (raffle_session_id = 0 AND trim(COALESCE(started_at, '')) <> '' AND to_timestamp(trim(started_at), 'YYYY-MM-DD"T"HH24:MI:SS') AT TIME ZONE 'UTC' >= $3 %s)
+		  )
 		  AND status = 'Completed'
-	`, endClause), args...).Scan(&totalGamesRow)
+	`, endClause), append([]interface{}{owner, dbID}, args[1:]...)...).Scan(&totalGamesRow)
 	if totalGamesRow > totalGames {
 		totalGames = totalGamesRow
 	}
@@ -2039,9 +2041,10 @@ func (a *App) processNewBets() {
 		FROM game_history_entries e
 		WHERE e.owner_key = $1
 		  AND trim(COALESCE(e.started_at, '')) <> ''
+		  AND (e.raffle_session_id = $2 OR e.raffle_session_id = 0)
 		ORDER BY e.started_at ASC, e.id ASC
 		LIMIT 500
-	`, owner)
+	`, owner, sessionDBID)
 	if err != nil {
 		a.logDebug("poll query failed: %v", err)
 		return
