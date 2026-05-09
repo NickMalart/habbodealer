@@ -9636,10 +9636,10 @@ func enabledGameChoicePartsLocked() []string {
 		parts = append(parts, "uo7")
 	}
 	if enabledGamePairUp {
-		parts = append(parts, "pairup")
+		parts = append(parts, "pu")
 	}
 	if len(parts) == 0 {
-		parts = append(parts, "pkr", "21", "13", "tri", "pairup")
+		parts = append(parts, "pkr", "21", "13", "tri", "pu")
 	}
 	return parts
 }
@@ -13198,7 +13198,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		// Combine the standard "Starting" ack with the player-roll prompt
 		ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay(choice))
 		if choice == "pairup" {
-			ack = "PU3! If you roll a double or triple you Win! Player Roll"
+			ack = "PU! If you roll a double or triple you Win! Player Roll"
 		}
 		if riskSessionActive {
 			a.beginRiskRoundHistory(choice, msg, gameChoiceDisplay(choice))
@@ -13230,7 +13230,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected 13; starting 13 sequence", index))
 		a.begin13Sequence()
 	case "pairup":
-		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected PU3; starting round", index))
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected PU; starting round", index))
 		a.beginPairUpRound()
 	case "tri":
 		// Two-step Tri selection: prompt player for High or Low
@@ -13575,7 +13575,7 @@ func gameChoiceDisplay(choice string) string {
 	case "uo", "uo_over", "uo_under":
 		return "UO7"
 	case "pairup":
-		return "PU3"
+		return "PU"
 	case "trih":
 		return "TriH"
 	case "trihigh":
