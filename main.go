@@ -13475,16 +13475,12 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			riskSessionPayoutMultiplier = 2
 			mutex.Unlock()
 			a.setCurrentGameHistoryGame(gameLabel)
-			ack := "o7 (8-12)! Starting, Player Roll"
-			sendShout(ack)
 			go func() {
 				time.Sleep(1400 * time.Millisecond)
 				a.executeRiskRound()
 			}()
 		} else {
 			a.setCurrentGameHistoryGame("UO7")
-			ack := "o7 (8-12)! Starting, Player Roll"
-			sendShout(ack)
 			a.beginUnderOverRound("over")
 		}
 	case "uo_under":
@@ -13504,16 +13500,12 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			riskSessionPayoutMultiplier = 2
 			mutex.Unlock()
 			a.setCurrentGameHistoryGame(gameLabel)
-			ack := "u7 (2-6)! Starting, Player Roll"
-			sendShout(ack)
 			go func() {
 				time.Sleep(1400 * time.Millisecond)
 				a.executeRiskRound()
 			}()
 		} else {
 			a.setCurrentGameHistoryGame("UO7")
-			ack := "u7 (2-6)! Starting, Player Roll"
-			sendShout(ack)
 			a.beginUnderOverRound("under")
 		}
 	case "trihigh":
@@ -13680,8 +13672,12 @@ func gameChoiceDisplay(choice string) string {
 		return "Tri"
 	case "uo7":
 		return "UO7"
-	case "uo", "uo_over", "uo_under":
-		return "UO7"
+	case "uo_over":
+		return "o7 (8-12)"
+	case "uo_under":
+		return "u7 (2-6)"
+	case "uo":
+		return "UO"
 	case "pairup":
 		return "PU"
 	case "trih":
