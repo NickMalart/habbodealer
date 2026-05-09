@@ -86,6 +86,10 @@ type RaffleSession struct {
 	CursorAt           time.Time           `json:"-"`
 	CursorEntry        string              `json:"-"`
 	ResumedAt          time.Time           `json:"-"` // zero if never resumed; bets before this time skip shouts
+
+	SponsorEnabled  bool   `json:"sponsorEnabled"`
+	SponsorName     string `json:"sponsorName,omitempty"`
+	SponsorRoomName string `json:"sponsorRoomName,omitempty"`
 }
 
 type RaffleState struct {
@@ -102,6 +106,10 @@ type RaffleState struct {
 	RaffleMessageID       string          `json:"raffleMessageId"`
 	CurrentSession        *RaffleSession  `json:"currentSession,omitempty"`
 	Sessions              []RaffleSession `json:"sessions"`
+
+	SponsorEnabled  bool   `json:"sponsorEnabled"`
+	SponsorName     string `json:"sponsorName"`
+	SponsorRoomName string `json:"sponsorRoomName"`
 }
 
 type App struct {
@@ -139,6 +147,10 @@ type App struct {
 	raffleHeroAttachmentFile string
 	raffleAutoUpdate         bool
 	raffleMessageID          string
+
+	sponsorEnabled  bool
+	sponsorName     string
+	sponsorRoomName string
 
 	pendingProofBytes    []byte
 	pendingProofFileName string
@@ -316,6 +328,9 @@ func copySession(s *RaffleSession) *RaffleSession {
 		DBID:               s.DBID,
 		CursorAt:           s.CursorAt,
 		CursorEntry:        s.CursorEntry,
+		SponsorEnabled:     s.SponsorEnabled,
+		SponsorName:        s.SponsorName,
+		SponsorRoomName:    s.SponsorRoomName,
 		Participants:       make([]RaffleParticipant, len(s.Participants)),
 	}
 	copy(out.Participants, s.Participants)
@@ -338,6 +353,9 @@ func (a *App) GetState() RaffleState {
 		RaffleHeroImageName:   a.raffleHeroFileName,
 		RaffleAutoUpdate:      a.raffleAutoUpdate,
 		RaffleMessageID:       a.raffleMessageID,
+		SponsorEnabled:        a.sponsorEnabled,
+		SponsorName:           a.sponsorName,
+		SponsorRoomName:       a.sponsorRoomName,
 		Sessions:              make([]RaffleSession, len(a.sessions)),
 	}
 	for i := range a.sessions {
@@ -345,6 +363,21 @@ func (a *App) GetState() RaffleState {
 	}
 	state.CurrentSession = copySession(a.currentSession)
 	return state
+}
+
+func (a *App) SetRaffleSponsorConfig(enabled bool, name string, roomName string) RaffleState {
+	a.mu.Lock()
+	a.sponsorEnabled = enabled
+	a.sponsorName = strings.TrimSpace(name)
+	a.sponsorRoomName = strings.TrimSpace(roomName)
+	if a.currentSession != nil {
+		a.currentSession.SponsorEnabled = a.sponsorEnabled
+		a.currentSession.SponsorName = a.sponsorName
+		a.currentSession.SponsorRoomName = a.sponsorRoomName
+	}
+	a.mu.Unlock()
+	a.emitUpdate()
+	return a.GetState()
 }
 
 func (a *App) emitUpdate() {
@@ -913,6 +946,9 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	heroAttachmentID := strings.TrimSpace(a.raffleHeroAttachmentID)
 	heroAttachmentFile := strings.TrimSpace(a.raffleHeroAttachmentFile)
 	messageID := strings.TrimSpace(a.raffleMessageID)
+	sponsorEnabled := a.sponsorEnabled
+	sponsorName := strings.TrimSpace(a.sponsorName)
+	sponsorRoomName := strings.TrimSpace(a.sponsorRoomName)
 
 	var session *RaffleSession
 	if sessionOverride != nil {
@@ -941,6 +977,15 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		}
 		if n := strings.TrimSpace(session.HeroAttachmentFile); n != "" {
 			heroAttachmentFile = n
+		}
+		if session.SponsorEnabled {
+			sponsorEnabled = true
+			if n := strings.TrimSpace(session.SponsorName); n != "" {
+				sponsorName = n
+			}
+			if n := strings.TrimSpace(session.SponsorRoomName); n != "" {
+				sponsorRoomName = n
+			}
 		}
 	}
 	a.mu.Unlock()
@@ -998,18 +1043,32 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 
 	ticketBoard := buildTicketBoard(participants)
 	headerLine := fmt.Sprintf("🎉 NEW RAFFLE! 🎉 %s | 🎁 %s | 🎟️ %d total tickets", raffleName, prizeDisplay, totalTickets)
+	if sponsorEnabled && sponsorName != "" {
+		headerLine = fmt.Sprintf("🎉 NEW RAFFLE! 🎉 %s | 🎁 %s | 💎 Sponsored by %s", raffleName, prizeDisplay, sponsorName)
+	}
+
+	promoEmbedFields := []map[string]interface{}{
+		{"name": "🔥 How To Enter", "value": clampEmbedText("Find a live dealer at rollorigins.club and place a bet for your chance to win.", 1000), "inline": false},
+		{"name": "🎟️ Ticket Boost", "value": "Every 5th bet gives 1 extra ticket.", "inline": false},
+		{"name": "📣 Heads Up", "value": "Ticket board below updates automatically whenever someone earns tickets.", "inline": false},
+	}
+	if sponsorEnabled && sponsorName != "" {
+		sponsorVal := sponsorName
+		if sponsorRoomName != "" {
+			sponsorVal = fmt.Sprintf("**%s**\n📍 Room: *%s*", sponsorName, sponsorRoomName)
+		}
+		promoEmbedFields = append([]map[string]interface{}{
+			{"name": "💎 Sponsored By", "value": sponsorVal, "inline": false},
+		}, promoEmbedFields...)
+	}
 
 	promoEmbed := map[string]interface{}{
 		"title":       fmt.Sprintf("🎁 WHAT'S UP FOR GRABS 🎁"),
 		"description": fmt.Sprintf("🎁 **%s**\n🔥 **%s**", prizeDisplay, raffleName),
 		"color":       0xF1C40F,
-		"fields": []map[string]interface{}{
-			{"name": "🔥 How To Enter", "value": clampEmbedText("Find a live dealer at rollorigins.club and place a bet for your chance to win.", 1000), "inline": false},
-			{"name": "🎟️ Ticket Boost", "value": "Every 5th bet gives 1 extra ticket.", "inline": false},
-			{"name": "📣 Heads Up", "value": "Ticket board below updates automatically whenever someone earns tickets.", "inline": false},
-		},
-		"footer":    map[string]interface{}{"text": "✨ Roll Origins Free Raffle"},
-		"timestamp": now.Format(time.RFC3339),
+		"fields":      promoEmbedFields,
+		"footer":      map[string]interface{}{"text": "✨ Roll Origins Free Raffle"},
+		"timestamp":   now.Format(time.RFC3339),
 	}
 
 	trackerFields := []map[string]interface{}{
@@ -1483,6 +1542,9 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 	var heroImageURL string
 	var heroAttachmentID string
 	var heroAttachmentFile string
+	var sponsorEnabled bool
+	var sponsorName string
+	var sponsorRoomName string
 
 	a.mu.Lock()
 	if a.currentSession == nil {
@@ -1511,6 +1573,10 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 		heroImageURL = strings.TrimSpace(a.raffleHeroImageURL)
 		heroAttachmentID = strings.TrimSpace(a.raffleHeroAttachmentID)
 		heroAttachmentFile = strings.TrimSpace(a.raffleHeroAttachmentFile)
+		sponsorEnabled = a.sponsorEnabled
+		sponsorName = strings.TrimSpace(a.sponsorName)
+		sponsorRoomName = strings.TrimSpace(a.sponsorRoomName)
+
 		a.currentSession = &RaffleSession{
 			ID:                 sessionID,
 			StartedAt:          startedAt,
@@ -1524,6 +1590,9 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 			HeroImageURL:       heroImageURL,
 			HeroAttachmentID:   heroAttachmentID,
 			HeroAttachmentFile: heroAttachmentFile,
+			SponsorEnabled:     sponsorEnabled,
+			SponsorName:        sponsorName,
+			SponsorRoomName:    sponsorRoomName,
 		}
 	} else {
 		a.mu.Unlock()
@@ -1541,8 +1610,9 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 		var dbSessionID int64
 		err := db.QueryRow(ctx,
 			`INSERT INTO raffle_sessions (started_at, scheduled_end_at, owner_key, bonus_every, last_seen_created_at, last_seen_entry_id, webhook_message_id,
-			                              raffle_name, prize_name, prize_qty, hero_image_url, hero_attachment_id, hero_attachment_file)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+			                              raffle_name, prize_name, prize_qty, hero_image_url, hero_attachment_id, hero_attachment_file,
+			                              sponsor_enabled, sponsor_name, sponsor_room_name)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 			 RETURNING id`,
 			startAt,
 			func() interface{} {
@@ -1562,6 +1632,9 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 			heroImageURL,
 			heroAttachmentID,
 			heroAttachmentFile,
+			sponsorEnabled,
+			sponsorName,
+			sponsorRoomName,
 		).Scan(&dbSessionID)
 		if err != nil {
 			a.logDebug("start session insert failed: %v", err)
@@ -2247,6 +2320,9 @@ func (a *App) saveSessionMeta(sessionDBID int64) error {
 	winnerProofURL := ""
 	winnerProofID := ""
 	winnerProofFile := ""
+	sponsorEnabled := false
+	sponsorName := ""
+	sponsorRoomName := ""
 
 	// If this is for the current session, use its frozen metadata instead of globals.
 	if a.currentSession != nil && a.currentSession.DBID == sessionDBID {
@@ -2278,6 +2354,9 @@ func (a *App) saveSessionMeta(sessionDBID int64) error {
 		winnerProofURL = strings.TrimSpace(a.currentSession.WinnerProofURL)
 		winnerProofID = strings.TrimSpace(a.currentSession.WinnerProofID)
 		winnerProofFile = strings.TrimSpace(a.currentSession.WinnerProofFile)
+		sponsorEnabled = a.currentSession.SponsorEnabled
+		sponsorName = strings.TrimSpace(a.currentSession.SponsorName)
+		sponsorRoomName = strings.TrimSpace(a.currentSession.SponsorRoomName)
 	}
 	a.mu.Unlock()
 
@@ -2301,13 +2380,15 @@ func (a *App) saveSessionMeta(sessionDBID int64) error {
 		     hero_image_url = $4, hero_attachment_id = $5, hero_attachment_file = $6,
 		     winner_name = $7, winner_tickets = $8, winner_odds = $9, winner_drawn_at = $10,
 		     winner_method = $11, winner_summary = $12, winner_proof_url = $13,
-		     winner_proof_id = $14, winner_proof_file = $15
-		 WHERE id = $16 AND owner_key = $17`,
+		     winner_proof_id = $14, winner_proof_file = $15,
+		     sponsor_enabled = $16, sponsor_name = $17, sponsor_room_name = $18
+		 WHERE id = $19 AND owner_key = $20`,
 		raffleName, prizeName, prizeQty,
 		heroImageURL, heroAttachmentID, heroAttachmentFile,
 		winnerName, winnerTickets, winnerOdds, winnerDrawnAt,
 		winnerMethod, winnerSummary, winnerProofURL,
 		winnerProofID, winnerProofFile,
+		sponsorEnabled, sponsorName, sponsorRoomName,
 		sessionDBID, owner,
 	)
 	return err
@@ -2614,6 +2695,9 @@ func (a *App) ensureTables() error {
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_proof_url TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_proof_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_proof_file TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS sponsor_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS sponsor_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS sponsor_room_name TEXT NOT NULL DEFAULT ''`,
 		// Fix existing rows that still have the old hardcoded defaults
 		`UPDATE raffle_sessions SET raffle_name = 'Flame Raffle' WHERE raffle_name = 'Weekend Raffle'`,
 		`UPDATE raffle_sessions SET prize_name = 'Purple Dragon Lamp' WHERE prize_name = 'Mystery Prize'`,
@@ -2649,7 +2733,7 @@ func (a *App) loadSessionsFromDB() error {
 		SELECT id, started_at, scheduled_end_at, ended_at, bonus_every, last_seen_created_at, last_seen_entry_id, webhook_message_id,
 		       raffle_name, prize_name, prize_qty, hero_image_url, hero_attachment_id, hero_attachment_file,
 		       winner_name, winner_tickets, winner_odds, winner_drawn_at, winner_method, winner_summary,
-		       winner_proof_url, winner_proof_id, winner_proof_file
+		       winner_proof_url, winner_proof_id, winner_proof_file, sponsor_enabled, sponsor_name, sponsor_room_name
 		FROM raffle_sessions
 		WHERE owner_key = $1
 		ORDER BY id ASC
@@ -2683,6 +2767,9 @@ func (a *App) loadSessionsFromDB() error {
 		winnerProofURL     string
 		winnerProofID      string
 		winnerProofFile    string
+		sponsorEnabled     bool
+		sponsorName        string
+		sponsorRoomName    string
 	}
 	sessionsByID := map[int64]*RaffleSession{}
 	orderedIDs := make([]int64, 0)
@@ -2705,6 +2792,9 @@ func (a *App) loadSessionsFromDB() error {
 		winnerProofURL     string
 		winnerProofID      string
 		winnerProofFile    string
+		sponsorEnabled     bool
+		sponsorName        string
+		sponsorRoomName    string
 	}
 	metaByID := map[int64]sessionMeta{}
 
@@ -2713,7 +2803,7 @@ func (a *App) loadSessionsFromDB() error {
 		if err := sRows.Scan(&s.id, &s.startedAt, &s.scheduledEndAt, &s.endedAt, &s.bonusEvery, &s.cursorAt, &s.cursorID, &s.webhookMessageID,
 			&s.raffleName, &s.prizeName, &s.prizeQty, &s.heroImageURL, &s.heroAttachmentID, &s.heroAttachmentFile,
 			&s.winnerName, &s.winnerTickets, &s.winnerOdds, &s.winnerDrawnAt, &s.winnerMethod, &s.winnerSummary,
-			&s.winnerProofURL, &s.winnerProofID, &s.winnerProofFile); err != nil {
+			&s.winnerProofURL, &s.winnerProofID, &s.winnerProofFile, &s.sponsorEnabled, &s.sponsorName, &s.sponsorRoomName); err != nil {
 			return err
 		}
 		rs := &RaffleSession{
@@ -2739,6 +2829,9 @@ func (a *App) loadSessionsFromDB() error {
 			WinnerProofURL:     strings.TrimSpace(s.winnerProofURL),
 			WinnerProofID:      strings.TrimSpace(s.winnerProofID),
 			WinnerProofFile:    strings.TrimSpace(s.winnerProofFile),
+			SponsorEnabled:     s.sponsorEnabled,
+			SponsorName:        strings.TrimSpace(s.sponsorName),
+			SponsorRoomName:    strings.TrimSpace(s.sponsorRoomName),
 		}
 		if s.winnerDrawnAt != nil {
 			rs.WinnerDrawnAt = s.winnerDrawnAt.UTC().Format(time.RFC3339)
@@ -2759,6 +2852,9 @@ func (a *App) loadSessionsFromDB() error {
 			winnerProofURL:     strings.TrimSpace(s.winnerProofURL),
 			winnerProofID:      strings.TrimSpace(s.winnerProofID),
 			winnerProofFile:    strings.TrimSpace(s.winnerProofFile),
+			sponsorEnabled:     s.sponsorEnabled,
+			sponsorName:        strings.TrimSpace(s.sponsorName),
+			sponsorRoomName:    strings.TrimSpace(s.sponsorRoomName),
 		}
 		if s.scheduledEndAt != nil {
 			rs.ScheduledEndAt = s.scheduledEndAt.UTC().Format(time.RFC3339)
@@ -2853,6 +2949,12 @@ func (a *App) loadSessionsFromDB() error {
 			current.HeroImageURL = m.heroImageURL
 			current.HeroAttachmentID = m.heroAttachmentID
 			current.HeroAttachmentFile = m.heroAttachmentFile
+			a.sponsorEnabled = m.sponsorEnabled
+			a.sponsorName = m.sponsorName
+			a.sponsorRoomName = m.sponsorRoomName
+			current.SponsorEnabled = m.sponsorEnabled
+			current.SponsorName = m.sponsorName
+			current.SponsorRoomName = m.sponsorRoomName
 		}
 	}
 	if a.nextSessionID < maxID {

@@ -213,6 +213,23 @@
         </label>
       </div>
 
+      <div class="row" style="margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px;">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" id="sponsorEnabledChk"> Sponsor (Add sponsorship info to post)
+        </label>
+      </div>
+
+      <div id="sponsorFields" class="hidden" style="margin-top: 8px;">
+        <div class="row" style="margin-bottom: 8px;">
+          <label for="sponsorName" style="min-width: 140px;">Name of Sponsor</label>
+          <input id="sponsorName" type="text" placeholder="e.g. Neon Casino" />
+        </div>
+        <div class="row" style="margin-bottom: 8px;">
+          <label for="sponsorRoom" style="min-width: 140px;">Room Name</label>
+          <input id="sponsorRoom" type="text" placeholder="e.g. The VIP Lounge" />
+        </div>
+      </div>
+
       <div class="row" style="margin-top: 12px;">
         <button class="alt" id="saveDiscordCfgBtn">Save Discord Settings</button>
         <button id="postRaffleWebhookBtn">Post / Update Raffle Message</button>
@@ -426,6 +443,22 @@
       const raffleAutoUpdateChk = document.getElementById('raffleAutoUpdateChk');
       if (!raffleFormDirty && document.activeElement !== raffleAutoUpdateChk) {
         raffleAutoUpdateChk.checked = !!state.raffleAutoUpdate;
+      }
+
+      const sponsorEnabledChk = document.getElementById('sponsorEnabledChk');
+      if (!raffleFormDirty && document.activeElement !== sponsorEnabledChk) {
+        sponsorEnabledChk.checked = !!state.sponsorEnabled;
+        document.getElementById('sponsorFields').classList.toggle('hidden', !state.sponsorEnabled);
+      }
+
+      const sponsorName = document.getElementById('sponsorName');
+      if (!raffleFormDirty && document.activeElement !== sponsorName) {
+        sponsorName.value = state.sponsorName || '';
+      }
+
+      const sponsorRoom = document.getElementById('sponsorRoom');
+      if (!raffleFormDirty && document.activeElement !== sponsorRoom) {
+        sponsorRoom.value = state.sponsorRoomName || '';
       }
 
       const heroMeta = document.getElementById('heroImageMeta');
@@ -753,6 +786,13 @@
     document.getElementById('rafflePrize').addEventListener('input', () => { raffleFormDirty = true; });
     document.getElementById('rafflePrizeQty').addEventListener('input', () => { raffleFormDirty = true; });
     document.getElementById('raffleAutoUpdateChk').addEventListener('change', () => { raffleFormDirty = true; });
+    document.getElementById('sponsorEnabledChk').addEventListener('change', (e) => {
+      raffleFormDirty = true;
+      document.getElementById('sponsorFields').classList.toggle('hidden', !e.target.checked);
+    });
+    document.getElementById('sponsorName').addEventListener('input', () => { raffleFormDirty = true; });
+    document.getElementById('sponsorRoom').addEventListener('input', () => { raffleFormDirty = true; });
+
     document.getElementById('manualParticipantName').addEventListener('input', () => { manualParticipantDirty = true; });
     document.getElementById('manualParticipantBets').addEventListener('input', () => { manualParticipantDirty = true; });
     document.getElementById('manualParticipantTickets').addEventListener('input', () => { manualParticipantDirty = true; });
@@ -786,6 +826,11 @@
       const rafflePrizeQty = Math.max(1, parseInt(document.getElementById('rafflePrizeQty').value || '1', 10) || 1);
       const autoUpdate = !!document.getElementById('raffleAutoUpdateChk').checked;
       try {
+        await call('SetRaffleSponsorConfig',
+          !!document.getElementById('sponsorEnabledChk').checked,
+          (document.getElementById('sponsorName').value || '').trim(),
+          (document.getElementById('sponsorRoom').value || '').trim(),
+        );
         await call('SetRaffleDiscordConfig', raffleName, rafflePrize, rafflePrizeQty, raffleHeroDataUrl, raffleHeroFileName, autoUpdate);
         raffleFormDirty = false;
         await refresh();
@@ -796,6 +841,11 @@
 
     document.getElementById('postRaffleWebhookBtn').addEventListener('click', async () => {
       try {
+        await call('SetRaffleSponsorConfig',
+          !!document.getElementById('sponsorEnabledChk').checked,
+          (document.getElementById('sponsorName').value || '').trim(),
+          (document.getElementById('sponsorRoom').value || '').trim(),
+        );
         await call('SetRaffleDiscordConfig',
           (document.getElementById('raffleName').value || '').trim(),
           (document.getElementById('rafflePrize').value || '').trim(),
@@ -818,6 +868,11 @@
     document.getElementById('repostRaffleWebhookBtn').addEventListener('click', async () => {
       if (!confirm('This will send a brand-new Discord message (the old one stays). Continue?')) return;
       try {
+        await call('SetRaffleSponsorConfig',
+          !!document.getElementById('sponsorEnabledChk').checked,
+          (document.getElementById('sponsorName').value || '').trim(),
+          (document.getElementById('sponsorRoom').value || '').trim(),
+        );
         await call('SetRaffleDiscordConfig',
           (document.getElementById('raffleName').value || '').trim(),
           (document.getElementById('rafflePrize').value || '').trim(),
