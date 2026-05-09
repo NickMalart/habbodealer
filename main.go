@@ -524,22 +524,12 @@ func (a *App) rejectTradeForLimitViolation(v *tradeLimitViolation) {
 	}
 	msg := formatTradeLimitViolationMessage(v)
 	a.AddLogMsg("[TRADE_LIMIT] " + msg)
-	// Decide whether to shout. Prefer to dedupe by message text but also
-	// enforce a cooldown so repeated partner changes don't spam public chat
-	// and trigger self-mute. We still log the event regardless.
-	changed := msg != lastTradeLimitNotice
-	lastTradeLimitNotice = msg
 
-	now := time.Now()
-	allowed := lastTradeLimitShoutAt.IsZero() || now.Sub(lastTradeLimitShoutAt) > tradeShoutCooldown
-	if (v.TooMuchQuantity || changed) && allowed {
-		lastTradeLimitShoutAt = now
-		go func(m string) {
-			time.Sleep(350 * time.Millisecond)
-			sendShout(m)
-		}(msg)
+	// Whisper the partner about the limit violation instead of shouting.
+	if lastTradePartnerID > 0 {
+		sendWhisper(lastTradePartnerID, msg)
 	} else {
-		a.AddLogMsg("[TRADE_LIMIT] shout suppressed by cooldown/suppression")
+		sendShout(msg)
 	}
 
 	// Start a short-lived grace timer instead of closing immediately so the
@@ -3379,6 +3369,38 @@ func startShoutWorker() {
 	})
 }
 
+var (
+	shoutThrottler   = make(map[string]time.Time)
+	shoutThrottlerMu sync.Mutex
+)
+
+// sendWhisper sends a private message to a specific user index.
+func sendWhisper(targetID int, msg string) {
+	trimmed := strings.TrimSpace(msg)
+	if trimmed == "" || targetID <= 0 {
+		return
+	}
+	// Whispers are generally not flood-controlled as strictly as shouts,
+	// but we'll still use the shout worker logic for consistency if we wanted.
+	// For now, simple direct send with the user index prefix.
+	ext.Send(out.WHISPER, fmt.Sprintf("%d %s", targetID, trimmed))
+	log.Printf("[WHISPER] to %d: %q", targetID, trimmed)
+}
+
+// sendShoutThrottled sends a shout only if it hasn't been sent within the cooldown.
+func sendShoutThrottled(msg string, cooldown time.Duration) {
+	shoutThrottlerMu.Lock()
+	last, ok := shoutThrottler[msg]
+	if ok && time.Since(last) < cooldown {
+		shoutThrottlerMu.Unlock()
+		return
+	}
+	shoutThrottler[msg] = time.Now()
+	shoutThrottlerMu.Unlock()
+
+	sendShout(msg)
+}
+
 // sendShout is a mute-aware helper for sending public shouts. It enqueues
 // into the shout worker if possible, or falls back to a synchronous send.
 func sendShout(msg string) {
@@ -3928,7 +3950,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			// Persist completed payout trade for audit
 			go LogEvent("trade_completed", map[string]interface{}{"mode": "payout", "partner": partnerName, "payout_items": payoutItems}, fmt.Sprintf("Payout trade completed to %s", partnerName), nil)
 
-			completeMsg := fmt.Sprintf("Trade Completed: \"%s\"", partnerName)
+			completeMsg := fmt.Sprintf("T-Done: %s", partnerName)
 			a.AddLogMsg(fmt.Sprintf("[TRADE_COMPLETED] shouting: %q", completeMsg))
 			sendShout(completeMsg)
 		} else {
@@ -4340,7 +4362,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				return
 			}
 		}
-		openMsg := fmt.Sprintf("Trade Opened: \"%s\"", partnerName)
+		openMsg := fmt.Sprintf("T-Open: %s", partnerName)
 		shouldAnnounceTradeOpen := true
 		if payoutActive || payoutTradeSent || payoutTradeActive {
 			shouldAnnounceTradeOpen = false
@@ -4437,7 +4459,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		suppressNextTradeCloseAnnouncement = false
 
 		if !tradeCompleted && !tradeCloseAnnounced && !suppressCloseAnnouncement {
-			closeMsg := fmt.Sprintf("Trade Closed: \"%s\"", partnerName)
+			closeMsg := fmt.Sprintf("T-Closed: %s", partnerName)
 			a.AddLogMsg(fmt.Sprintf("[TRADE_CLOSE] shouting: %q", closeMsg))
 			sendShout(closeMsg)
 			tradeCloseAnnounced = true
@@ -5195,7 +5217,7 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 
 // handleRiskBet validates and applies a player's risk bet (internal state move)
 // then prompts the player to choose a game for the re-roll (do not auto-roll).
-func (a *App) handleRiskBet(n int, sender string) {
+func (a *App) handleRiskBet(n int, sender string, userID int) {
 	mutex.Lock()
 	// Only the partner who won may place risk bets while a session is active.
 	if !riskSessionActive || (riskPartnerName != "" && !strings.EqualFold(sender, riskPartnerName)) {
@@ -5208,7 +5230,7 @@ func (a *App) handleRiskBet(n int, sender string) {
 	// Defensive guards: reject if player's internal bank is empty or dealer reopened.
 	if playerRisk <= 0 {
 		mutex.Unlock()
-		sendShout("No bank available to risk.")
+		sendWhisper(userID, "No bank available to risk.")
 		a.AddLogMsg(fmt.Sprintf("[RISK] rejected r%d from %s: no player bank", n, sender))
 		// If there's no bank left, ensure dealer reopens cleanly.
 		go a.openDealerAfterRound()
@@ -5216,7 +5238,7 @@ func (a *App) handleRiskBet(n int, sender string) {
 	}
 	if dealerAcceptingTrades || awaitingTradeOpen {
 		mutex.Unlock()
-		sendShout("Risk unavailable while dealer is open.")
+		sendWhisper(userID, "Risk unavailable while dealer is open.")
 		a.AddLogMsg(fmt.Sprintf("[RISK] rejected r%d from %s: dealer open", n, sender))
 		return
 	}
@@ -5230,7 +5252,7 @@ func (a *App) handleRiskBet(n int, sender string) {
 	}
 	if n <= 0 || n > max {
 		mutex.Unlock()
-		sendShout(fmt.Sprintf("Invalid risk amount. Max: %d", max))
+		sendWhisper(userID, fmt.Sprintf("Invalid risk amount. Max: %d", max))
 		return
 	}
 
@@ -6282,7 +6304,11 @@ func startShortageMonitor(a *App, timeout time.Duration) {
 					partnerName = "Player"
 				}
 				a.AddLogMsg(fmt.Sprintf("[TRADE_COVERAGE] shortage unresolved; force-closing trade with %s", partnerName))
-				sendShout("Shortage unresolved; closing trade")
+				if lastTradePartnerID > 0 {
+					sendWhisper(lastTradePartnerID, "Shortage unresolved; closing trade")
+				} else {
+					sendShout("Shortage unresolved; closing trade")
+				}
 				ext.Send(out.TRADE_CLOSE)
 				stopShortageMonitor()
 				return
@@ -6340,7 +6366,11 @@ func startTradeLimitMonitor(a *App, timeout time.Duration) {
 					partnerName = "Player"
 				}
 				a.AddLogMsg(fmt.Sprintf("[TRADE_LIMIT] unresolved; force-closing trade with %s", partnerName))
-				sendShout("Trade still over limit; closing now.")
+				if lastTradePartnerID > 0 {
+					sendWhisper(lastTradePartnerID, "Trade still over limit; closing now.")
+				} else {
+					sendShout("Trade still over limit; closing now.")
+				}
 				ext.Send(out.TRADE_CLOSE)
 				stopTradeLimitMonitor()
 				return
@@ -9603,8 +9633,11 @@ func (a *App) sendTradeCompletionMessage() {
 	a.AddLogMsg("[TRADE_FLOW] beginGameHistory returned")
 
 	mutex.Lock()
-	msg := buildGameChoicePromptLocked()
+	menu := buildGameChoicePromptLocked()
 	mutex.Unlock()
+
+	msg := fmt.Sprintf("%s: %s", partnerName, menu)
+
 	awaitingGameChoice = true
 	gameChoiceUnreadableWarned = false
 	awaitingGameChoicePartnerName = normalizeUsername(strings.TrimSpace(tradeStarterName))
@@ -9717,14 +9750,14 @@ func buildGameChoicePromptLocked() string {
 	if underOver7GameModeEnabled {
 		m := underOver7PayoutMultiplier
 		if pendingUoVariant == "uo" {
-			return "Shout U (2-6), O (8-12) to DOUBLE!"
+			return "U/O (x2)"
 		}
-		return fmt.Sprintf("Shout U (2-6), O (8-12) to DOUBLE! or 7 to WIN x%d!", m)
+		return fmt.Sprintf("U/O (x2) or 7 (x%d)", m)
 	}
 	if onlyUnderOver7Mode {
-		return "Shout U (2-6) or O (8-12) to DOUBLE!"
+		return "U/O (x2)"
 	}
-	return "Shout " + strings.Join(enabledGameChoicePartsLocked(), ", ")
+	return strings.Join(enabledGameChoicePartsLocked(), "/")
 }
 
 func isGameChoiceEnabledLocked(choice string) bool {
@@ -12599,7 +12632,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			if m := re.FindStringSubmatch(msg); len(m) == 2 {
 				amt, _ := strconv.Atoi(m[1])
 				e.Block()
-				go a.handleRiskBet(amt, senderName)
+				go a.handleRiskBet(amt, senderName, index)
 				return
 			}
 		}
@@ -13181,7 +13214,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 				gameChoiceUnreadableWarned = true
 				warn := fmt.Sprintf("%q Please shout, I can not hear you.", playerName)
 				a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] unreadable game choice from %s: %q", playerName, msg))
-				sendShout(warn)
+				sendWhisper(index, warn)
 			}
 		}
 		return
@@ -13243,7 +13276,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		mutex.Unlock()
 		if !enabled {
 			a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] ignoring disabled choice %q; allowed prompt: %q", choice, prompt))
-			sendShout("That game is disabled. " + prompt)
+			sendWhisper(index, "That game is disabled. "+prompt)
 			return
 		}
 	}

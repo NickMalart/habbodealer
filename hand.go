@@ -45,7 +45,7 @@ func (a *App) evaluatePokerHand() {
 		if !isMuted {
 			if pokerSequenceStage == 1 {
 				// Send the player's result and immediately indicate dealer will roll
-				sendMessageWithDelay(fmt.Sprintf("%s, Now dealer Roll", hand))
+				sendMessageWithDelay(fmt.Sprintf("%s | Rolling...", hand))
 			} else if pokerSequenceStage == 2 {
 				// Suppress separate dealer-hand announcement; final winner message will include dealer result
 			} else {
@@ -55,8 +55,8 @@ func (a *App) evaluatePokerHand() {
 		} else {
 			// If the user is muted, log/queue appropriately
 			if pokerSequenceStage == 1 {
-				log.Printf("User is muted. Queuing message: %s", fmt.Sprintf("%s, Now dealer Roll", hand))
-				messageQueue = append(messageQueue, fmt.Sprintf("%s, Now dealer Roll", hand))
+				log.Printf("User is muted. Queuing message: %s", fmt.Sprintf("%s | Rolling...", hand))
+				messageQueue = append(messageQueue, fmt.Sprintf("%s | Rolling...", hand))
 			} else if pokerSequenceStage == 2 {
 				log.Printf("User is muted. Suppressing dealer-hand announcement (winner will be posted)")
 			} else {
@@ -195,7 +195,7 @@ func (a *App) evaluateBlackjackHand() {
 			}
 
 			// Announce player result and indicate dealer roll in one message
-			msg := fmt.Sprintf("%s got 21, Now dealer Roll", playerLabel)
+			msg := fmt.Sprintf("%s got 21 | Rolling...", playerLabel)
 			a.AddLogMsg(fmt.Sprintf("[BJ] announcing: %q", msg))
 			log.Printf("[BJ] announcing: %q", msg)
 			if !ChatIsDisabled {
@@ -456,7 +456,7 @@ func (a *App) evaluate13Hand() {
 			}
 
 			// Announce player result and indicate dealer roll in one message
-			msg := fmt.Sprintf("%s got 13, Now dealer Roll", playerLabel)
+			msg := fmt.Sprintf("%s got 13 | Rolling...", playerLabel)
 			a.AddLogMsg(fmt.Sprintf("[13] announcing: %q", msg))
 			log.Printf("[13] announcing: %q", msg)
 			if !ChatIsDisabled {
@@ -621,14 +621,14 @@ func (a *App) evaluateTriRound() {
 		if !isMuted {
 			if triPlayerTurn {
 				// Send player total and indicate dealer will roll
-				sendMessageWithDelay(fmt.Sprintf("%s, Now dealer Roll", totalText))
+				sendMessageWithDelay(fmt.Sprintf("%s | Rolling...", totalText))
 			} else {
 				// Suppress separate dealer total announcement; final winner message will include dealer result
 			}
 		} else {
 			if triPlayerTurn {
-				log.Printf("User is muted. Queuing message: %s", fmt.Sprintf("%s, Now dealer Roll", totalText))
-				messageQueue = append(messageQueue, fmt.Sprintf("%s, Now dealer Roll", totalText))
+				log.Printf("User is muted. Queuing message: %s", fmt.Sprintf("%s | Rolling...", totalText))
+				messageQueue = append(messageQueue, fmt.Sprintf("%s | Rolling...", totalText))
 			}
 		}
 	}
