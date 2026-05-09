@@ -4998,7 +4998,7 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 		} else {
 			initialQty = dealerSnapshotQty
 		}
-		dealerRisk = initialQty + betQty
+		dealerRisk = initialQty
 		playerRisk = 0
 		riskInitialized = true
 		riskPartnerID = playerID
@@ -5093,6 +5093,30 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 		time.Sleep(800 * time.Millisecond)
 		mutex.Lock()
 		canPrompt = riskSessionActive && playerRisk > 0 && dealerRisk > 0
+
+		// Belt-and-suspenders: validate live snapshot covers dealerRisk before
+		// prompting. If the snapshot is short (e.g. stale from a prior trade),
+		// cap dealerRisk so we never over-promise.
+		handItemsMu.Lock()
+		snap := make([]TradeItem, len(riskHandSnapshot))
+		copy(snap, riskHandSnapshot)
+		handItemsMu.Unlock()
+		liveCover := riskRelevantHandQuantity(snap, gameBetItems)
+		totalCommitted := playerRisk + dealerRisk
+		if liveCover < totalCommitted {
+			diff := totalCommitted - liveCover
+			if diff > dealerRisk {
+				diff = dealerRisk
+			}
+			a.AddLogMsg(fmt.Sprintf("[RISK] live cover %d < committed %d; capping dealerRisk by %d", liveCover, totalCommitted, diff))
+			dealerRisk -= diff
+		}
+		if dealerRisk <= 0 {
+			mutex.Unlock()
+			go a.finalizeRiskKeep()
+			return
+		}
+
 		msg, ok := buildRiskPromptLocked()
 		mutex.Unlock()
 		if !canPrompt || !ok {
