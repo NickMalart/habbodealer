@@ -2237,7 +2237,7 @@ func (a *App) GetActiveRaffles() []RaffleSession {
 		ORDER BY id DESC
 	`, owner)
 	if err != nil {
-		a.logDebug("GetActiveRaffles query failed: %v", err)
+		a.AddDebugLog("GetActiveRaffles query failed: %v", err)
 		return []RaffleSession{}
 	}
 	defer rows.Close()

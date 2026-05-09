@@ -2163,6 +2163,7 @@ func (a *App) processNewBets() {
 	announceEnabled := a.ticketAnnounceEnabled
 	progressEnabled := a.ticketProgressEnabled
 	resumedAt := a.currentSession.ResumedAt
+	bonusEvery := a.currentSession.BonusEvery
 
 	for _, row := range batch {
 		name := normalizeUsername(row.Player)
@@ -2225,7 +2226,6 @@ func (a *App) processNewBets() {
 
 	a.currentSession.CursorAt = lastCursorAt
 	a.currentSession.CursorEntry = lastCursorEntry
-	bonusEvery := a.currentSession.BonusEvery
 	a.mu.Unlock()
 
 	for _, ta := range ticketAnnounces {
