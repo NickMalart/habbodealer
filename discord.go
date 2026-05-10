@@ -183,9 +183,18 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 		}
 	}(append([]byte(nil), jb...))
 
-	req, err := http.NewRequest("POST", webhookURL, bytes.NewReader(jb))
+	isIssue := entry.Issue || strings.EqualFold(entry.Status, "Issue")
+	targetURL := webhookURL
+	channelName := "history"
+	if isIssue {
+		targetURL = issueWebhookURL
+		channelName = "issue"
+		a.AddLogMsg("[DISCORD] game is an issue; routing exclusively to issues channel")
+	}
+
+	req, err := http.NewRequest("POST", targetURL, bytes.NewReader(jb))
 	if err != nil {
-		a.AddErrorLog("[DISCORD] request error", err)
+		a.AddErrorLog(fmt.Sprintf("[DISCORD] %s webhook request error", channelName), err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -194,7 +203,7 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		a.AddErrorLog("[DISCORD] POST error", err)
+		a.AddErrorLog(fmt.Sprintf("[DISCORD] %s webhook POST error", channelName), err)
 		return
 	}
 	bodyBytes, _ := io.ReadAll(resp.Body)
@@ -203,42 +212,12 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if respBody == "" {
-			a.AddLogMsg("[DISCORD] webhook sent (no response body)")
+			a.AddLogMsg(fmt.Sprintf("[DISCORD] %s webhook sent (no response body)", channelName))
 		} else {
-			a.AddLogMsg(fmt.Sprintf("[DISCORD] webhook sent; body=%q", respBody))
+			a.AddLogMsg(fmt.Sprintf("[DISCORD] %s webhook sent; body=%q", channelName, respBody))
 		}
 	} else {
-		a.AddLogMsg(fmt.Sprintf("[DISCORD] webhook responded: %d body=%q", resp.StatusCode, respBody))
-	}
-
-	// If this entry is an Issue, also fan-out the same payload to the issues channel
-	if entry.Issue || strings.EqualFold(entry.Status, "Issue") {
-		req2, err2 := http.NewRequest("POST", issueWebhookURL, bytes.NewReader(jb))
-		if err2 != nil {
-			a.AddErrorLog("[DISCORD] issue webhook request error", err2)
-			return
-		}
-		req2.Header.Set("Content-Type", "application/json")
-		req2.Header.Set("User-Agent", "roll-origins/1.0")
-
-		resp2, err2 := client.Do(req2)
-		if err2 != nil {
-			a.AddErrorLog("[DISCORD] issue webhook POST error", err2)
-			return
-		}
-		bodyBytes2, _ := io.ReadAll(resp2.Body)
-		respBody2 := strings.TrimSpace(string(bodyBytes2))
-		defer resp2.Body.Close()
-
-		if resp2.StatusCode >= 200 && resp2.StatusCode < 300 {
-			if respBody2 == "" {
-				a.AddLogMsg("[DISCORD] issue webhook sent (no response body)")
-			} else {
-				a.AddLogMsg(fmt.Sprintf("[DISCORD] issue webhook sent; body=%q", respBody2))
-			}
-		} else {
-			a.AddLogMsg(fmt.Sprintf("[DISCORD] issue webhook responded: %d body=%q", resp2.StatusCode, respBody2))
-		}
+		a.AddLogMsg(fmt.Sprintf("[DISCORD] %s webhook responded: %d body=%q", channelName, resp.StatusCode, respBody))
 	}
 }
 
