@@ -242,6 +242,10 @@
                 <input type="checkbox" v-model="enableGamePairUp" :disabled="underOver7Mode" />
                 PU (pu)
               </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
+                <input type="checkbox" v-model="enableGameH18" :disabled="underOver7Mode" />
+                H18 (h18)
+              </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;border-top:1px solid #333;padding-top:6px;">
                 <input type="checkbox" v-model="riskModeEnabledInput" :disabled="underOver7Mode" />
                 Enable Risk Mode
@@ -952,7 +956,15 @@ export default {
           playerFlow: 'Trade the bet, say pu when prompted, and watch the three dice.',
           dealerFlow: 'The dealer rolls three dice and automatically awards a win if a match is found.',
         },
-        
+        {
+          key: 'h18',
+          title: 'H18 (5 Dice)',
+          summary: 'Sum-based game with a central house edge.',
+          description: 'H18 is a 5-dice game focused on the total sum. Win on 19+, lose on 17-, and 18 is a house win.',
+          howItWorks: 'The app rolls 5 dice for the player and calculates the sum. 19 or higher wins x2, 17 or lower loses, and exactly 18 is a dealer win.',
+          playerFlow: 'Trade the bet, say h18 when prompted, and watch the 5 dice.',
+          dealerFlow: 'The dealer rolls 5 dice, sums them up, and determines the outcome based on the 18-pivot rule.',
+        },
       ],
       tradeItems: [],
       activeGameBetItems: [],
@@ -1024,6 +1036,7 @@ export default {
       enableGameTri: false,
       enableGameUO7: false,
       enableGamePairUp: false,
+      enableGameH18: false,
       // Risk mode: when true, enable Risk banking mechanic      riskModeEnabledInput: false,
       // Block recommended-rooms packet
       blockRecommendedRooms: true,
@@ -1171,7 +1184,7 @@ export default {
     },
     gameKeys() {
       const keys = (this.activeStats && this.activeStats.byGame) ? Object.keys(this.activeStats.byGame) : [];
-      const preferred = ['Poker', '21', '13', 'Tri', 'PU'];
+      const preferred = ['Poker', '21', '13', 'Tri', 'PU', 'H18'];
       const presentPreferred = preferred.filter(k => keys.includes(k));
       const rest = keys.filter(k => !preferred.includes(k)).sort();
       return presentPreferred.concat(rest);
@@ -1320,10 +1333,11 @@ export default {
           if (this.enableGameTri) selectedGames.push('tri');
           if (this.enableGameUO7) selectedGames.push('uo7');
           if (this.enableGamePairUp) selectedGames.push('pairup');
+          if (this.enableGameH18) selectedGames.push('h18');
 
           const standaloneMode = this.underOver7Mode;
           if (!standaloneMode && selectedGames.length === 0) {
-            this.addLogMsg('[UI] Start cancelled: select at least one enabled game (pkr, 21, 13, tri, uo7, pairup)');
+            this.addLogMsg('[UI] Start cancelled: select at least one enabled game (pkr, 21, 13, tri, uo7, pairup, h18)');
             return;
           }
 

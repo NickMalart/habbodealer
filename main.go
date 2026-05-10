@@ -110,6 +110,7 @@ var (
 	// Under/Over-7 state
 	isUORolling    bool
 	uoRoundActive  bool
+	h18RoundActive bool
 	uoPlayerChoice string // "over", "under" or "7"
 	// When true the dealer has selected the special UnderOver7 game-mode
 	// which allows a player to shout "7" for a potential 3x payout.
@@ -127,6 +128,7 @@ var (
 	enabledGameTri              bool = true
 	enabledGameUO7              bool = false
 	enabledGamePairUp           bool = true
+	enabledGameH18              bool = true
 	pokerSequencePlayerName     string
 	pokerSequencePlayerResult   PokerHandResult
 	pokerSequencePlayerHand     string
@@ -184,6 +186,7 @@ var (
 	is13Rolling            bool
 	is13Hitting            bool
 	isPairUpRolling        bool
+	isH18Rolling           bool
 	isHitting              bool
 	isClosing              bool
 	ChatIsDisabled         bool
@@ -1751,6 +1754,8 @@ func dealerGameActive() bool {
 		blackjackRoundActive ||
 		thirteenRoundActive ||
 		triRoundActive ||
+		h18RoundActive ||
+		uoRoundActive ||
 		pokerSequenceStage > 0 ||
 		isPokerRolling ||
 		isTriRolling ||
@@ -1758,6 +1763,9 @@ func dealerGameActive() bool {
 		is13Rolling ||
 		isHitting ||
 		is13Hitting ||
+		isPairUpRolling ||
+		isH18Rolling ||
+		isUORolling ||
 		isClosing
 }
 
@@ -4183,7 +4191,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		pokerSequenceStage = 0
 		pokerSequencePlayerName = ""
 		stopDealerOpenHeartbeat()
-		if !isPayoutTradeOpen && openedDuringDealerWindow {
+		if isPayoutTradeOpen || openedDuringDealerWindow {
 			startTradeWindowTimeoutMonitor(a)
 		}
 
@@ -4695,6 +4703,7 @@ func appendPayoutTimeline(session int, format string, args ...interface{}) {
 
 func (a *App) startPayoutResponseTimeoutMonitor(playerName string, targetID int, targetName string) {
 	stopPayoutResponseTimeoutMonitor()
+	stopTradeWindowTimeoutMonitor()
 
 	payoutResponseTimeoutMonitorID++
 	monitorID := payoutResponseTimeoutMonitorID
@@ -6123,12 +6132,14 @@ func extendTradeWindowTimeoutForPartnerActivity(a *App) {
 	if base < 1 {
 		base = 1
 	}
-	maxDeadline := tradeWindowOpenedAt.Add(time.Duration(base*2) * time.Second)
+	// Allow up to 10x the base window (e.g. 7.5 mins) for very large payouts
+	maxDeadline := tradeWindowOpenedAt.Add(time.Duration(base*10) * time.Second)
 	if now.After(maxDeadline) {
 		return
 	}
 
-	extendedDeadline := now.Add(20 * time.Second)
+	// Extend by the full base window (e.g. 45s) on every activity packet
+	extendedDeadline := now.Add(time.Duration(base) * time.Second)
 	if extendedDeadline.After(maxDeadline) {
 		extendedDeadline = maxDeadline
 	}
@@ -9679,6 +9690,7 @@ func setEnabledGamesFromSelection(codes []string) {
 	enabledGameTri = true
 	enabledGameUO7 = false
 	enabledGamePairUp = true
+	enabledGameH18 = true
 
 	if len(codes) == 0 {
 		return
@@ -9690,6 +9702,7 @@ func setEnabledGamesFromSelection(codes []string) {
 	enabledGameTri = false
 	enabledGameUO7 = false
 	enabledGamePairUp = false
+	enabledGameH18 = false
 
 	for _, raw := range codes {
 		s := strings.ToLower(strings.TrimSpace(raw))
@@ -9707,20 +9720,23 @@ func setEnabledGamesFromSelection(codes []string) {
 			enabledGameUO7 = true
 		case "pu", "pu3", "pairup":
 			enabledGamePairUp = true
+		case "h18":
+			enabledGameH18 = true
 		}
 	}
 
-	if !enabledGamePkr && !enabledGame21 && !enabledGame13 && !enabledGameTri && !enabledGameUO7 && !enabledGamePairUp {
+	if !enabledGamePkr && !enabledGame21 && !enabledGame13 && !enabledGameTri && !enabledGameUO7 && !enabledGamePairUp && !enabledGameH18 {
 		enabledGamePkr = true
 		enabledGame21 = true
 		enabledGame13 = true
 		enabledGameTri = true
 		enabledGamePairUp = true
+		enabledGameH18 = true
 	}
 }
 
 func enabledGameChoicePartsLocked() []string {
-	parts := make([]string, 0, 6)
+	parts := make([]string, 0, 7)
 	if enabledGamePkr {
 		parts = append(parts, "pkr")
 	}
@@ -9739,8 +9755,11 @@ func enabledGameChoicePartsLocked() []string {
 	if enabledGamePairUp {
 		parts = append(parts, "pu")
 	}
+	if enabledGameH18 {
+		parts = append(parts, "h18")
+	}
 	if len(parts) == 0 {
-		parts = append(parts, "pkr", "21", "13", "tri", "pu")
+		parts = append(parts, "pkr", "21", "13", "tri", "pu", "h18")
 	}
 	return parts
 }
@@ -9773,6 +9792,8 @@ func isGameChoiceEnabledLocked(choice string) bool {
 		return enabledGameUO7
 	case "pairup":
 		return enabledGamePairUp
+	case "h18":
+		return enabledGameH18
 	default:
 		return false
 	}
@@ -11331,6 +11352,145 @@ func (a *App) finalizeTriRound() {
 	go a.openDealerAfterRound()
 }
 
+func (a *App) beginH18Round() {
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	resetPokerSequence()
+	resetBlackjackSequence()
+	reset13Sequence()
+	resetTriSequence()
+	resetDiceState() // Just in case
+
+	h18RoundActive = true
+	a.setCurrentGameHistoryGame("H18")
+
+	go func() {
+		// Combined ack already announced; delay then start player's H18 roll
+		time.Sleep(1400 * time.Millisecond)
+		isH18Rolling = true
+		a.rollH18Dice()
+	}()
+}
+
+func (a *App) rollH18Dice() {
+	if fakeDiceTestingMode {
+		mutex.Lock()
+		if len(diceList) < 5 {
+			mutex.Unlock()
+			log.Println("Not enough dice to roll")
+			isH18Rolling = false
+			return
+		}
+		for i := range diceList {
+			diceList[i].Value = rand.Intn(6) + 1
+			diceList[i].IsClosed = false
+			logRollResult := fmt.Sprintf("Dice %d rolled: %d\n", diceList[i].ID, diceList[i].Value)
+			a.AddLogMsg(logRollResult)
+		}
+		mutex.Unlock()
+		a.evaluateH18Round()
+		isH18Rolling = false
+		return
+	}
+
+	mutex.Lock()
+	if len(diceList) < 5 {
+		mutex.Unlock()
+		log.Println("Not enough dice to roll")
+		isH18Rolling = false
+		return
+	}
+	resultsWaitGroup.Add(5)
+	mutex.Unlock()
+
+	for i := 0; i < 5; i++ {
+		diceList[i].Roll()
+		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
+	}
+
+	time.Sleep(1000 * time.Millisecond)
+	resultsWaitGroup.Wait()
+
+	a.evaluateH18Round()
+	isH18Rolling = false
+}
+
+func (a *App) evaluateH18Round() {
+	mutex.Lock()
+	total := 0
+	for i := 0; i < 5; i++ {
+		total += diceList[i].Value
+	}
+	h18RoundActive = false
+	mutex.Unlock()
+
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	resultMsg := fmt.Sprintf("%s rolled %d.", playerName, total)
+	var status string
+	var multiplier int
+
+	if total >= 19 {
+		status = "WIN"
+		multiplier = 2
+	} else if total <= 17 {
+		status = "LOSE"
+		multiplier = 0
+	} else {
+		// House edge: Total is exactly 18
+		status = "Dealer WIN"
+		multiplier = 0
+	}
+
+	msg := fmt.Sprintf("%s - %s!", resultMsg, status)
+	a.AddLogMsg(fmt.Sprintf("[H18_RULES] player=%s total=%d status=%s", playerName, total, status))
+	sendShout(msg)
+
+	payoutTargetID := lastTradePartnerID
+	payoutTargetName := playerName
+
+	if multiplier > 0 && payoutTargetID > 0 {
+		payoutMultiplierForRound = multiplier
+		a.setCurrentGameHistoryPayoutMultiplier(multiplier)
+		a.setCurrentGameHistoryResults(strconv.Itoa(total), "", playerName, "Payout Pending", false)
+		a.noteCurrentGameHistory(msg)
+		resetPayoutRetryState()
+
+		if isRiskEnabled {
+			if riskSessionActive {
+				// Post round result to Discord for visibility
+				a.sendDiscordRoundResult(playerName, strconv.Itoa(total), "", msg)
+				go a.applyRiskOutcome(true)
+				return
+			}
+			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "H18", nil)
+			a.sendDiscordRoundResult(playerName, strconv.Itoa(total), "", msg)
+			return
+		}
+
+		go startPayout(a, payoutTargetID, payoutTargetName)
+	} else {
+		a.setCurrentGameHistoryResults(strconv.Itoa(total), "", "Dealer", "Completed", true)
+		a.noteCurrentGameHistory(msg)
+		if isRiskEnabled && riskSessionActive {
+			go a.applyRiskOutcome(false)
+			return
+		}
+		go a.openDealerAfterRound()
+	}
+}
+
+func resetH18Sequence() {
+	isH18Rolling = false
+	h18RoundActive = false
+}
+
 // Reset all saved dice states
 func resetDiceState() {
 	stopDealerOpenHeartbeat()
@@ -11353,7 +11513,7 @@ func resetDiceState() {
 	tradeOpen = false
 	dealerResyncInProgress = false
 	fakeDiceTestingMode = false
-	isPokerRolling, isTriRolling, isBJRolling, is13Rolling, isHitting, is13Hitting, isPairUpRolling, isClosing = false, false, false, false, false, false, false, false
+	isPokerRolling, isTriRolling, isBJRolling, is13Rolling, isHitting, is13Hitting, isPairUpRolling, isH18Rolling, isUORolling, isClosing = false, false, false, false, false, false, false, false, false, false
 
 	// Ensure any pending game-choice timeout is stopped when resetting dice.
 	resetTradeAutoFlow()
@@ -11361,6 +11521,7 @@ func resetDiceState() {
 	resetBlackjackSequence()
 	reset13Sequence()
 	resetTriSequence()
+	resetH18Sequence()
 	lastTradePartnerID = 0
 	lastTradePartnerName = ""
 	lastTradePartnerToken = ""
@@ -11807,7 +11968,7 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 	for _, pair := range pairs {
 		for i, dice := range diceList {
 			if dice.ID == pair.diceID {
-				if dice.IsRolling && (isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling || isPairUpRolling) {
+				if dice.IsRolling && (isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling || isPairUpRolling || isH18Rolling) {
 					dice.IsRolling = false
 					func() {
 						defer func() {
@@ -11821,7 +11982,7 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 				diceList[i].Value = pair.adjValue
 				diceList[i].IsClosed = diceList[i].Value == 0
 
-				if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling || isPairUpRolling {
+				if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling || isPairUpRolling || isH18Rolling {
 					log.Printf("Dice %d rolled: %d\n", pair.diceID, pair.adjValue)
 					logRollResult := fmt.Sprintf("Dice %d rolled: %d\n", pair.diceID, pair.adjValue)
 					a.AddLogMsg(logRollResult)
@@ -13296,6 +13457,9 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		if choice == "pairup" {
 			ack = "PU! If you roll a double or triple you Win! Player Roll"
 		}
+		if choice == "h18" {
+			ack = "H18! 19+ Win / 17- Lose / 18 House! Player Roll"
+		}
 		if riskSessionActive {
 			a.beginRiskRoundHistory(choice, msg, gameChoiceDisplay(choice))
 		} else {
@@ -13328,6 +13492,9 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	case "pairup":
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected PU; starting round", index))
 		a.beginPairUpRound()
+	case "h18":
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected H18; starting round", index))
+		a.beginH18Round()
 	case "tri":
 		// Two-step Tri selection: prompt player for High or Low
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Tri; prompting for High/Low", index))
@@ -13549,6 +13716,8 @@ func normalizeIncomingGameChoice(msg string) (string, bool) {
 		return "trilow", true
 	case "trilow":
 		return "trilow", true
+	case "h18", "highfive18", "hf18":
+		return "h18", true
 	default:
 		return "", false
 	}
@@ -13596,6 +13765,8 @@ func normalizeLooseGameChoice(msg string) (string, bool) {
 		return "trilow", true
 	case "trilow":
 		return "trilow", true
+	case "h18", "highfive18", "hf18":
+		return "h18", true
 	default:
 		return "", false
 	}
@@ -13688,6 +13859,8 @@ func gameChoiceDisplay(choice string) string {
 		return "TriL"
 	case "trilow":
 		return "TriL"
+	case "h18":
+		return "H18"
 	default:
 		return choice
 	}
