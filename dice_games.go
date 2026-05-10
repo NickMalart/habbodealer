@@ -103,7 +103,6 @@ func (a *App) evaluateDoubleTroubleRound() {
 		startPayout(a, payoutTargetID, payoutTargetName)
 		return
 	}
-
 	a.setCurrentGameHistoryResults(resultText, "", a.getCurrentDealerName(), "Completed", true)
 	a.noteCurrentGameHistory(winnerMsg)
 	if isRiskEnabled && riskSessionActive {
