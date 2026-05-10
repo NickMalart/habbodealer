@@ -196,9 +196,11 @@ var (
 	isPairUpRolling        bool
 	isH18Rolling           bool
 	isHitting              bool
-	isClosing              bool
-	ChatIsDisabled         bool
-	mutex                  sync.Mutex
+	isClosing                            bool
+	ChatIsDisabled                       bool
+	ChatMinimalMode                      bool = true
+	mutex                                sync.Mutex
+
 	resultsWaitGroup       sync.WaitGroup
 	rollDelay              = 550 * time.Millisecond
 	stripNextDelay         = 2250 * time.Millisecond
@@ -405,9 +407,9 @@ var (
 	// Centralized shout worker/queue to avoid flood-control mutes
 	shoutQueue         chan string
 	shoutWorkerOnce    sync.Once
-	shoutSpacing       = 2500 * time.Millisecond
+	shoutSpacing       = 3000 * time.Millisecond
 	shoutSpacingMu     sync.Mutex
-	shoutReplaySpacing = 2500 * time.Millisecond
+	shoutReplaySpacing = 3000 * time.Millisecond
 
 	autoShoutStopChan chan struct{}
 	autoShoutMu       sync.Mutex
@@ -1003,10 +1005,10 @@ func (a *App) GetShoutSpacingMs() int {
 }
 
 // SaveShoutSpacingMs updates the shout spacing (milliseconds).
-// Enforces a minimum of 250ms to avoid insane values. Emits UI event when available.
+// Enforces a minimum of 1000ms to avoid flooding. Emits UI event when available.
 func (a *App) SaveShoutSpacingMs(ms int) int {
-	if ms < 250 {
-		ms = 250
+	if ms < 1000 {
+		ms = 1000
 	}
 	shoutSpacingMu.Lock()
 	shoutSpacing = time.Duration(ms) * time.Millisecond
@@ -1016,6 +1018,20 @@ func (a *App) SaveShoutSpacingMs(ms int) int {
 		runtime.EventsEmit(a.ctx, "shoutSpacingUpdate", fmt.Sprintf("%d", ms))
 	}
 	return ms
+}
+
+// GetChatMinimalMode returns the current status of Minimal Chat mode.
+func (a *App) GetChatMinimalMode() bool {
+	return ChatMinimalMode
+}
+
+// ToggleChatMinimalMode enables or disables Minimal Chat mode.
+func (a *App) ToggleChatMinimalMode(enabled bool) bool {
+	ChatMinimalMode = enabled
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "chatMinimalModeUpdate", enabled)
+	}
+	return ChatMinimalMode
 }
 
 // SaveAutoShoutConfig updates phrase and seconds. If auto-shout is
@@ -3431,16 +3447,36 @@ func startShoutWorker() {
 				if s == "" {
 					continue
 				}
+
+				// If queue has multiple items, consolidate short messages to reduce spam.
+				// This significantly reduces room flooding during busy games.
+				for len(shoutQueue) > 0 && len(s) < 80 {
+					select {
+					case next := <-shoutQueue:
+						s = s + " | " + strings.TrimSpace(next)
+					default:
+						break
+					}
+					if len(s) > 120 {
+						break
+					}
+				}
+
 				if isMuted {
 					// If muted, keep it in the muted queue for later replay.
 					messageQueue = append(messageQueue, s)
 					log.Printf("[SHOUT_WORKER] muted while dequeued at %s: %q", time.Now().Format(time.RFC3339Nano), s)
 					continue
 				}
-				// Ensure a controlled spacing before each actual send so the
-				// worker enforces the flood-control delay regardless of how
-				// quickly callers enqueue messages.
-				sleepDur := shoutSpacing + time.Duration(rand.Intn(600))*time.Millisecond
+
+				// Enforce dynamic spacing. If queue is backing up, slow down slightly
+				// more to be safe against server-side flood filters.
+				currentSpacing := shoutSpacing
+				if len(shoutQueue) > 5 {
+					currentSpacing += 1000 * time.Millisecond
+				}
+
+				sleepDur := currentSpacing + time.Duration(rand.Intn(600))*time.Millisecond
 				log.Printf("[SHOUT_WORKER] dequeued at %s, sleeping %s before send: %q", time.Now().Format(time.RFC3339Nano), sleepDur, s)
 				time.Sleep(sleepDur)
 				ext.Send(out.SHOUT, s)
@@ -3461,10 +3497,13 @@ func sendWhisper(targetID int, msg string) {
 	if trimmed == "" {
 		return
 	}
-	// Whisper is not supported reliably in this environment; use public shout instead.
-	// This ensures the partner always receives the notification.
-	sendShout(trimmed)
-	log.Printf("[WHISPER->SHOUT] target=%d msg=%q", targetID, trimmed)
+	// Use regular CHAT instead of SHOUT for "whispers" to reduce visual noise.
+	// We don't use real WHISPER packets because they require usernames and are often unreliable.
+	if isMuted {
+		return
+	}
+	ext.Send(out.CHAT, trimmed)
+	log.Printf("[WHISPER->CHAT] target=%d msg=%q", targetID, trimmed)
 }
 
 // sendShoutThrottled sends a shout only if it hasn't been sent within the cooldown.
@@ -3488,6 +3527,17 @@ func sendShout(msg string) {
 	if trimmed == "" {
 		return
 	}
+
+	// Filter out fluff if Minimal Mode is enabled.
+	if ChatMinimalMode {
+		fluff := []string{"Rolling...", "GOOD LUCK!", "GOOD LUCK", "No bank available"}
+		for _, f := range fluff {
+			if strings.Contains(strings.ToLower(trimmed), strings.ToLower(f)) {
+				return
+			}
+		}
+	}
+
 	if isMuted {
 		messageQueue = append(messageQueue, trimmed)
 		log.Printf("[SHOUT_QUEUE] muted enqueue at %s: %q", time.Now().Format(time.RFC3339Nano), trimmed)
@@ -3496,8 +3546,7 @@ func sendShout(msg string) {
 	startShoutWorker()
 	log.Printf("[SHOUT_QUEUE] enqueue at %s: %q", time.Now().Format(time.RFC3339Nano), trimmed)
 	// Block until there is room in the queue so every shout goes through the
-	// centralized shout worker and is rate-limited. This ensures consistent
-	// 2.5s spacing between actual sends.
+	// centralized shout worker and is rate-limited.
 	shoutQueue <- trimmed
 }
 
