@@ -32,6 +32,12 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 		issueWebhookURL = "https://discord.com/api/webhooks/1502209413065343086/lV-mzQvSRCqc-HkjKZWXOrmX0McP1HU47_fBjthixU2IdO0Bh18j-FBkIjGCDDjgAbo4"
 	}
 
+	// Optional dedicated Bandit webhook for game/payout/issue posts (env override: DISCORD_BANDIT_WEBHOOK_URL)
+	banditWebhookURL := os.Getenv("DISCORD_BANDIT_WEBHOOK_URL")
+	if strings.TrimSpace(banditWebhookURL) == "" {
+		banditWebhookURL = "https://discordapp.com/api/webhooks/1502995064811425885/1_18izV6OFWGOeF-PxjFfLMtqna3vZv2Suo1DezK7BEBfaNc5bDAQfAHt4_aFTipQsEM"
+	}
+
 	// Validate webhook URL contains a numeric webhook ID (snowflake).
 	if u, perr := url.Parse(webhookURL); perr == nil {
 		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
@@ -135,7 +141,7 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 		{"name": "Choice", "value": formatField(entry.Choice), "inline": true},
 		{"name": "Player Result", "value": formatField(entry.PlayerResult), "inline": true},
 		{"name": "Dealer Result", "value": formatField(entry.DealerResult), "inline": true},
-		{"name": "Payout Multiplier", "value": strconv.Itoa(entry.PayoutMultiplier), "inline": true},
+		{"name": "Payout Multiplier", "value": fmt.Sprintf("%.2fx", entry.PayoutMultiplier), "inline": true},
 		{"name": "Risk Round", "value": formatField(riskRound), "inline": true},
 		{"name": "Risked", "value": formatField(riskedStr), "inline": true},
 		{"name": "Bank After", "value": formatField(bankStr), "inline": true},
@@ -193,9 +199,14 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 	}(append([]byte(nil), jb...))
 
 	isIssue := entry.Issue || strings.EqualFold(entry.Status, "Issue")
+	isBandit := strings.EqualFold(entry.Game, "Bandit")
 	targetURL := webhookURL
 	channelName := "history"
-	if isIssue {
+	if isBandit {
+		targetURL = banditWebhookURL
+		channelName = "bandit"
+		a.AddLogMsg("[DISCORD] game is Bandit; routing to dedicated bandit webhook")
+	} else if isIssue {
 		targetURL = issueWebhookURL
 		channelName = "issue"
 		a.AddLogMsg("[DISCORD] game is an issue; routing exclusively to issues channel")
@@ -291,9 +302,18 @@ func (a *App) sendDiscordWebhookForPayout(entry GameHistoryEntry) {
 		issueWebhookURL = "https://discord.com/api/webhooks/1502209413065343086/lV-mzQvSRCqc-HkjKZWXOrmX0McP1HU47_fBjthixU2IdO0Bh18j-FBkIjGCDDjgAbo4"
 	}
 
+	// Bandit webhook for all bandit-related events
+	banditWebhookURL := os.Getenv("DISCORD_BANDIT_WEBHOOK_URL")
+	if strings.TrimSpace(banditWebhookURL) == "" {
+		banditWebhookURL = "https://discordapp.com/api/webhooks/1502995064811425885/1_18izV6OFWGOeF-PxjFfLMtqna3vZv2Suo1DezK7BEBfaNc5bDAQfAHt4_aFTipQsEM"
+	}
+
 	// Decide destination: successful payouts go to payout channel, issues go to issues channel.
 	targetWebhookURL := payoutWebhookURL
-	if entry.Issue || strings.EqualFold(entry.Status, "Issue") {
+	if strings.EqualFold(entry.Game, "Bandit") {
+		targetWebhookURL = banditWebhookURL
+		a.AddLogMsg("[DISCORD] sending bandit payout (success or issue) to dedicated bandit webhook")
+	} else if entry.Issue || strings.EqualFold(entry.Status, "Issue") {
 		targetWebhookURL = issueWebhookURL
 		a.AddLogMsg("[DISCORD] sending payout Issue only to configured issues webhook")
 	} else {

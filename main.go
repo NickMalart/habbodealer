@@ -117,8 +117,8 @@ var (
 	// When true the dealer has selected the special UnderOver7 game-mode
 	// which allows a player to shout "7" for a potential 3x payout.
 	underOver7GameModeEnabled bool
-	// Payout multiplier selected for the current payout round (2 or 3).
-	payoutMultiplierForRound int = 2
+	// Payout multiplier selected for the current payout round.
+	payoutMultiplierForRound float64 = 2.0
 	// Variant marker for the active Under/Over round: "uo" or "uo7".
 	uoVariantForRound string
 	// Pending variant selection when prompting for Over/Under (set by beginUO7ChoiceSequence)
@@ -132,6 +132,11 @@ var (
 	enabledGameUO7              bool = false
 	enabledGamePairUp           bool = true
 	enabledGameH18              bool = true
+	enabledGameBandit           bool = false
+	banditJackpotPayout         float64 = 20.0
+	banditTriplesPayout         float64 = 5.0
+	isBanditRolling             bool = false
+	banditRoundActive           bool = false
 	pokerSequencePlayerName     string
 	pokerSequencePlayerResult   PokerHandResult
 	pokerSequencePlayerHand     string
@@ -543,13 +548,28 @@ func (a *App) rejectTradeForLimitViolation(v *tradeLimitViolation) {
 		return
 	}
 	msg := formatTradeLimitViolationMessage(v)
-	a.AddLogMsg("[TRADE_LIMIT] " + msg)
 
-	// Whisper the partner about the limit violation instead of shouting.
-	if lastTradePartnerID > 0 {
-		sendWhisper(lastTradePartnerID, msg)
+	now := time.Now()
+	mutex.Lock()
+	cooldown := now.Sub(lastTradeLimitShoutAt) < 10*time.Second
+	isDuplicate := msg == lastTradeLimitNotice
+	if !isDuplicate {
+		lastTradeLimitNotice = msg
+	}
+	if !isDuplicate || !cooldown {
+		lastTradeLimitShoutAt = now
+		mutex.Unlock()
+
+		a.AddLogMsg("[TRADE_LIMIT] " + msg)
+
+		// Whisper the partner about the limit violation instead of shouting.
+		if lastTradePartnerID > 0 {
+			sendWhisper(lastTradePartnerID, msg)
+		} else {
+			sendShout(msg)
+		}
 	} else {
-		sendShout(msg)
+		mutex.Unlock()
 	}
 
 	// Start a short-lived grace timer instead of closing immediately so the
@@ -634,8 +654,8 @@ type GameHistoryEntry struct {
 	// New fields to capture player choice and raw shout, plus payout multiplier
 	Choice           string `json:"choice,omitempty"`
 	ChoiceShout      string `json:"choiceShout,omitempty"`
-	PayoutMultiplier int    `json:"payoutMultiplier,omitempty"`
-	RaffleSessionID  int64  `json:"raffleSessionId,omitempty"`
+	PayoutMultiplier float64 `json:"payoutMultiplier,omitempty"`
+	RaffleSessionID  int64   `json:"raffleSessionId,omitempty"`
 	// Risk session fields
 	RiskSession bool `json:"riskSession,omitempty"`
 	RiskPending int  `json:"riskPending,omitempty"` // amount currently risked for a re-roll
@@ -1774,6 +1794,9 @@ func (a *App) runAutoShoutLoop2(stopChan chan struct{}, phrase string, seconds i
 }
 
 func (a *App) dealerOpenMessage() string {
+	if enabledGameBandit {
+		return "One Arm Bandit - 1 Item Bet - Check What I Have --> rollorigins.club"
+	}
 	u := maxTradeUniqueItems
 	q := maxTradeQuantityPerItem
 	if u <= 1 {
@@ -1796,6 +1819,7 @@ func dealerGameActive() bool {
 		triRoundActive ||
 		h18RoundActive ||
 		uoRoundActive ||
+		banditRoundActive ||
 		pokerSequenceStage > 0 ||
 		isPokerRolling ||
 		isTriRolling ||
@@ -1805,6 +1829,7 @@ func dealerGameActive() bool {
 		is13Hitting ||
 		isPairUpRolling ||
 		isH18Rolling ||
+		isBanditRolling ||
 		isUORolling ||
 		isClosing
 }
@@ -3124,6 +3149,11 @@ func (a *App) setCurrentGameHistoryGame(game string) {
 		if changed {
 			entry.Notes = append(entry.Notes, fmt.Sprintf("Game selected: %s", game))
 		}
+		// Bandit games should never enter a raffle.
+		// Setting to -1 explicitly opts out even if a raffle is active.
+		if strings.EqualFold(game, "Bandit") {
+			entry.RaffleSessionID = -1
+		}
 	}) {
 		a.gameHistoryMu.Unlock()
 		return
@@ -3156,13 +3186,13 @@ func (a *App) setCurrentGameHistoryChoice(choice string, shout string) {
 }
 
 // setCurrentGameHistoryPayoutMultiplier stores the payout multiplier for the current entry
-func (a *App) setCurrentGameHistoryPayoutMultiplier(mult int) {
+func (a *App) setCurrentGameHistoryPayoutMultiplier(mult float64) {
 	a.AddLogMsg("[GAME_HISTORY] setCurrentGameHistoryPayoutMultiplier start")
 	a.gameHistoryMu.Lock()
 	if !a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
 		if mult > 0 {
 			entry.PayoutMultiplier = mult
-			entry.Notes = append(entry.Notes, fmt.Sprintf("Payout multiplier: %dx", mult))
+			entry.Notes = append(entry.Notes, fmt.Sprintf("Payout multiplier: %.2fx", mult))
 		}
 	}) {
 		a.gameHistoryMu.Unlock()
@@ -3295,11 +3325,11 @@ func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note strin
 				if b.Quantity <= 0 {
 					continue
 				}
-				inferred = append(inferred, TradeItem{Name: b.Name, Quantity: b.Quantity * payoutMultiplierForRound, RawData: b.RawData})
+				inferred = append(inferred, TradeItem{Name: b.Name, Quantity: int(float64(b.Quantity) * payoutMultiplierForRound), RawData: b.RawData})
 			}
 			entry.PayoutItems = inferred
 			if len(inferred) > 0 {
-				entry.Notes = append(entry.Notes, fmt.Sprintf("Predicted payout (%dx bet)", payoutMultiplierForRound))
+				entry.Notes = append(entry.Notes, fmt.Sprintf("Predicted payout (%.2fx bet)", payoutMultiplierForRound))
 			}
 		} else {
 			entry.PayoutItems = cloneTradeItems(items)
@@ -5851,7 +5881,7 @@ func (a *App) finalizeRiskKeep() {
 
 	// Build required map proportionally from recorded bet types if available
 	baseMult := sessionMult
-	base := payoutRequirementsFromBetItemsMult(gameBetItems, baseMult)
+	base := payoutRequirementsFromBetItemsMult(gameBetItems, float64(baseMult))
 	baseTotal := 0
 	for _, v := range base {
 		baseTotal += v
@@ -5972,16 +6002,16 @@ func ownTradeOfferTotal() int {
 
 // payoutRequirementsFromBetItemsMult returns a map of required payout quantities
 // per item given the bet items and a multiplier (2 for normal wins, 3 for UO7 "7" wins).
-func payoutRequirementsFromBetItemsMult(betItems []TradeItem, mult int) map[string]int {
+func payoutRequirementsFromBetItemsMult(betItems []TradeItem, mult float64) map[string]int {
 	required := map[string]int{}
 	if mult <= 0 {
-		mult = 2
+		mult = 2.0
 	}
 	for _, item := range betItems {
 		if item.Quantity <= 0 {
 			continue
 		}
-		required[item.Name] += item.Quantity * mult
+		required[item.Name] += int(float64(item.Quantity) * mult)
 	}
 	return required
 }
@@ -9576,7 +9606,13 @@ func (a *App) notifyTradeQuantityCoverage() {
 	// Build a human-friendly shortage message: distinguish "none available"
 	// from "insufficient quantity" and show hand/incoming counts.
 	var msg string
-	if len(shortages) == 1 {
+	mutex.Lock()
+	isBandit := enabledGameBandit
+	mutex.Unlock()
+
+	if isBandit {
+		msg = "We don't have enough for the multiplier"
+	} else if len(shortages) == 1 {
 		s := shortages[0]
 		if s.HaveHand == 0 && s.Incoming == 0 {
 			msg = fmt.Sprintf("No %s available", formatTradeItemName(s.Name))
@@ -9656,19 +9692,22 @@ func (a *App) getTradeCoverageShortages() []tradeShortage {
 
 	// required payout quantities: use configured UO7 multiplier when dealer-level
 	// UnderOver7 game-mode is enabled (worst-case coverage for a shouted "7"),
-	// otherwise 2x. If we've already forced Over/Under for this trade
+	// or the Jackpot payout for Bandit mode, otherwise 2x.
+	// If we've already forced Over/Under for this trade
 	// (pendingUoVariant == "uo"), compute requirements as 2x so coverage
 	// checks accept Over/Under offers.
-	mult := 2
-	if underOver7GameModeEnabled {
-		mutex.Lock()
-		mult = underOver7PayoutMultiplier
+	mult := 2.0
+	mutex.Lock()
+	if enabledGameBandit {
+		mult = banditJackpotPayout
+	} else if underOver7GameModeEnabled {
+		mult = float64(underOver7PayoutMultiplier)
 		// treat forced Over/Under as 2x
 		if pendingUoVariant == "uo" {
-			mult = 2
+			mult = 2.0
 		}
-		mutex.Unlock()
 	}
+	mutex.Unlock()
 	required := payoutRequirementsFromBetItemsMult(partnerItems, mult)
 	if len(required) == 0 {
 		return nil
@@ -9704,7 +9743,7 @@ func (a *App) getTradeCoverageShortages() []tradeShortage {
 		if it.Quantity <= 0 {
 			continue
 		}
-		requiredCanon[key] += it.Quantity * mult
+		requiredCanon[key] += int(float64(it.Quantity) * mult)
 	}
 
 	shortages := make([]tradeShortage, 0)
@@ -9876,8 +9915,14 @@ func (a *App) sendTradeCompletionMessage() {
 	a.AddLogMsg("[TRADE_FLOW] beginGameHistory returned")
 
 	mutex.Lock()
+	isBandit := enabledGameBandit
 	menu := buildGameChoicePromptLocked()
 	mutex.Unlock()
+
+	if isBandit {
+		a.beginBanditRound()
+		return
+	}
 
 	msg := fmt.Sprintf("%s: %s", partnerName, menu)
 
@@ -9925,6 +9970,7 @@ func setEnabledGamesFromSelection(codes []string) {
 	enabledGameUO7 = false
 	enabledGamePairUp = true
 	enabledGameH18 = true
+	enabledGameBandit = false
 
 	if len(codes) == 0 {
 		return
@@ -9938,6 +9984,7 @@ func setEnabledGamesFromSelection(codes []string) {
 	enabledGameUO7 = false
 	enabledGamePairUp = false
 	enabledGameH18 = false
+	enabledGameBandit = false
 
 	for _, raw := range codes {
 		s := strings.ToLower(strings.TrimSpace(raw))
@@ -9959,10 +10006,12 @@ func setEnabledGamesFromSelection(codes []string) {
 			enabledGamePairUp = true
 		case "h18":
 			enabledGameH18 = true
+		case "bandit", "oab", "onearmbandit":
+			enabledGameBandit = true
 		}
 	}
 
-	if !enabledGamePkr && !enabledGame21 && !enabledGame13 && !enabledGameTri && !enabledGameUO7 && !enabledGamePairUp && !enabledGameH18 {
+	if !enabledGamePkr && !enabledGame21 && !enabledGame13 && !enabledGameTri && !enabledGameUO7 && !enabledGamePairUp && !enabledGameH18 && !enabledGameBandit {
 		enabledGamePkr = true
 		enabledGame21 = true
 		enabledGame13 = true
@@ -9998,6 +10047,9 @@ func enabledGameChoicePartsLocked() []string {
 	if enabledGameH18 {
 		parts = append(parts, "h18")
 	}
+	if enabledGameBandit {
+		parts = append(parts, "bandit")
+	}
 	if len(parts) == 0 {
 		parts = append(parts, "pkr", "21", "13", "tri", "pu", "h18")
 	}
@@ -10005,6 +10057,9 @@ func enabledGameChoicePartsLocked() []string {
 }
 
 func buildGameChoicePromptLocked() string {
+	if enabledGameBandit {
+		return "Bandit Mode"
+	}
 	if underOver7GameModeEnabled {
 		m := underOver7PayoutMultiplier
 		if pendingUoVariant == "uo" {
@@ -10036,9 +10091,27 @@ func isGameChoiceEnabledLocked(choice string) bool {
 		return enabledGamePairUp
 	case "h18":
 		return enabledGameH18
+	case "bandit":
+		return enabledGameBandit
 	default:
 		return false
 	}
+}
+
+// SetBanditJackpotPayout sets the payout multiplier for Triple 6s in One Arm Bandit.
+func (a *App) SetBanditJackpotPayout(payout float64) {
+	mutex.Lock()
+	banditJackpotPayout = payout
+	mutex.Unlock()
+	a.AddLogMsg(fmt.Sprintf("[CONFIG] Bandit Jackpot Payout set to x%.2f", payout))
+}
+
+// SetBanditTriplesPayout sets the payout multiplier for other triples in One Arm Bandit.
+func (a *App) SetBanditTriplesPayout(payout float64) {
+	mutex.Lock()
+	banditTriplesPayout = payout
+	mutex.Unlock()
+	a.AddLogMsg(fmt.Sprintf("[CONFIG] Bandit Triples Payout set to x%.2f", payout))
 }
 
 func formatTradeItemName(name string) string {
@@ -11431,9 +11504,9 @@ func (a *App) evaluateUnderOverRound() {
 	}
 
 	// Persist multiplier for payout routines that will auto-add items.
-	payoutMultiplierForRound = mult
+	payoutMultiplierForRound = float64(mult)
 	// Record multiplier in game history so UI/webhooks reflect the correct payout
-	a.setCurrentGameHistoryPayoutMultiplier(mult)
+	a.setCurrentGameHistoryPayoutMultiplier(float64(mult))
 
 	playerName := strings.TrimSpace(lastTradePartnerName)
 	if playerName == "" {
@@ -11776,8 +11849,8 @@ func (a *App) evaluateH18Round() {
 	payoutTargetName := playerName
 
 	if multiplier > 0 && payoutTargetID > 0 {
-		payoutMultiplierForRound = multiplier
-		a.setCurrentGameHistoryPayoutMultiplier(multiplier)
+		payoutMultiplierForRound = float64(multiplier)
+		a.setCurrentGameHistoryPayoutMultiplier(float64(multiplier))
 		a.setCurrentGameHistoryResults(strconv.Itoa(total), "", playerName, "Payout Pending", false)
 		a.noteCurrentGameHistory(msg)
 		resetPayoutRetryState()
@@ -11811,6 +11884,11 @@ func resetH18Sequence() {
 	h18RoundActive = false
 }
 
+func resetBanditSequence() {
+	isBanditRolling = false
+	banditRoundActive = false
+}
+
 // Reset all saved dice states
 func resetDiceState() {
 	stopDealerOpenHeartbeat()
@@ -11833,7 +11911,7 @@ func resetDiceState() {
 	tradeOpen = false
 	dealerResyncInProgress = false
 	fakeDiceTestingMode = false
-	isPokerRolling, isTriRolling, isBJRolling, is13Rolling, isHitting, is13Hitting, isPairUpRolling, isH18Rolling, isUORolling, isClosing = false, false, false, false, false, false, false, false, false, false
+	isPokerRolling, isTriRolling, isBJRolling, is13Rolling, isHitting, is13Hitting, isPairUpRolling, isH18Rolling, isBanditRolling, isUORolling, isClosing = false, false, false, false, false, false, false, false, false, false, false
 
 	// Ensure any pending game-choice timeout is stopped when resetting dice.
 	resetTradeAutoFlow()
@@ -11842,6 +11920,7 @@ func resetDiceState() {
 	reset13Sequence()
 	resetTriSequence()
 	resetH18Sequence()
+	resetBanditSequence()
 	lastTradePartnerID = 0
 	lastTradePartnerName = ""
 	lastTradePartnerToken = ""
@@ -11858,6 +11937,10 @@ func resetDiceState() {
 // the current dealer mode. Under/Over-7 mode requires only 2 dice; otherwise
 // the default is 5.
 func getExpectedDiceCount() int {
+	// Use 3 dice for One Arm Bandit mode.
+	if enabledGameBandit {
+		return 3
+	}
 	// Use 2 dice when either 'only under/over' dealer mode is enabled
 	// or when the separate UnderOver7 game-mode (7-for-3x) is enabled.
 	if onlyUnderOver7Mode || underOver7GameModeEnabled {
@@ -12288,7 +12371,7 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 	for _, pair := range pairs {
 		for i, dice := range diceList {
 			if dice.ID == pair.diceID {
-				if dice.IsRolling && (isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling || isDTRolling || isPairUpRolling || isH18Rolling) {
+				if dice.IsRolling && (isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling || isDTRolling || isPairUpRolling || isH18Rolling || isBanditRolling) {
 					dice.IsRolling = false
 					func() {
 						defer func() {
@@ -12302,7 +12385,7 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 				diceList[i].Value = pair.adjValue
 				diceList[i].IsClosed = diceList[i].Value == 0
 
-				if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling || isPairUpRolling || isH18Rolling {
+				if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling || isDTRolling || isPairUpRolling || isH18Rolling || isBanditRolling {
 					log.Printf("Dice %d rolled: %d\n", pair.diceID, pair.adjValue)
 					logRollResult := fmt.Sprintf("Dice %d rolled: %d\n", pair.diceID, pair.adjValue)
 					a.AddLogMsg(logRollResult)

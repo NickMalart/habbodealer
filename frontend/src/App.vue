@@ -207,51 +207,65 @@
               Max Unique Items = how many different item types the player may offer. Max Quantity Per Item = max allowed amount for any one item type.
             </div>
             <div class="game-guide-block" style="margin-top:8px;">
-              <div class="game-guide-label">Standalone Mode (2-dice, no Risk)</div>
+              <div class="game-guide-label">Standalone Mode (no Risk)</div>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;">
-                <input type="checkbox" v-model="underOver7Mode" />
-                Enable Under/Over-7 mode (allow '7' x{{ uo7Multiplier }} payout)
+                <input type="checkbox" v-model="underOver7Mode" :disabled="enableGameBandit" />
+                Enable Under/Over-7 mode (2-dice, allow '7' x{{ uo7Multiplier }} payout)
                 <select v-model.number="uo7Multiplier" :disabled="!underOver7Mode" style="margin-left:8px;">
                   <option v-for="n in [2,3,4,5]" :key="n" :value="n">x{{ n }}</option>
                 </select>
               </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:8px;">
+                <input type="checkbox" v-model="enableGameBandit" :disabled="underOver7Mode" />
+                Enable One Arm Bandit mode (3-dice, auto-run)
+              </label>
+              <div v-if="enableGameBandit" style="margin-top:8px;padding-left:24px;display:flex;flex-direction:column;gap:8px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="font-size:12px;color:#bdbdbd;">Jackpot (6-6-6) Payout: x</span>
+                  <input type="number" v-model.number="banditJackpotPayout" style="width:60px;padding:4px;background:#2e2e2e;color:#fff;border:1px solid #444;border-radius:4px;" />
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="font-size:12px;color:#bdbdbd;">Triples (1-5) Payout: x</span>
+                  <input type="number" v-model.number="banditTriplesPayout" style="width:60px;padding:4px;background:#2e2e2e;color:#fff;border:1px solid #444;border-radius:4px;" />
+                </div>
+              </div>
             </div>
             <div class="game-guide-block" style="margin-top:8px;">
               <div class="game-guide-label">Enabled Games</div>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;">
-                <input type="checkbox" v-model="enableGamePkr" :disabled="underOver7Mode" />
+                <input type="checkbox" v-model="enableGamePkr" :disabled="underOver7Mode || enableGameBandit" />
                 Poker (pkr)
               </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
-                <input type="checkbox" v-model="enableGame21" :disabled="underOver7Mode" />
+                <input type="checkbox" v-model="enableGame21" :disabled="underOver7Mode || enableGameBandit" />
                 21
               </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
-                <input type="checkbox" v-model="enableGame13" :disabled="underOver7Mode" />
+                <input type="checkbox" v-model="enableGame13" :disabled="underOver7Mode || enableGameBandit" />
                 13
               </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
-                <input type="checkbox" v-model="enableGameTri" :disabled="underOver7Mode" />
+                <input type="checkbox" v-model="enableGameTri" :disabled="underOver7Mode || enableGameBandit" />
                 Tri
               </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
-                <input type="checkbox" v-model="enableGameUO7" :disabled="underOver7Mode" />
+                <input type="checkbox" v-model="enableGameUO7" :disabled="underOver7Mode || enableGameBandit" />
                 Under/Over-7 (uo7)
               </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
-                <input type="checkbox" v-model="enableGamePairUp" :disabled="underOver7Mode" />
+                <input type="checkbox" v-model="enableGamePairUp" :disabled="underOver7Mode || enableGameBandit" />
                 PU (pu)
               </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
-                <input type="checkbox" v-model="enableGameH18" :disabled="underOver7Mode" />
+                <input type="checkbox" v-model="enableGameH18" :disabled="underOver7Mode || enableGameBandit" />
                 H18 (h18)
               </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
-                <input type="checkbox" v-model="enableGameDT" :disabled="underOver7Mode" />
+                <input type="checkbox" v-model="enableGameDT" :disabled="underOver7Mode || enableGameBandit" />
                 Double Trouble (dt)
               </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;border-top:1px solid #333;padding-top:6px;">
-                <input type="checkbox" v-model="riskModeEnabledInput" :disabled="underOver7Mode" />
+                <input type="checkbox" v-model="riskModeEnabledInput" :disabled="underOver7Mode || enableGameBandit" />
                 Enable Risk Mode
               </label>
             </div>
@@ -978,6 +992,15 @@ export default {
             playerFlow: 'Trade the bet, say dt when prompted, and watch the 2 dice.',
             dealerFlow: 'The dealer rolls 2 dice, and the outcome is determined by the sum.',
             },
+            {
+              key: 'bandit',
+              title: 'Bandit (3 Dice)',
+              summary: 'High Volatility Solo Game with re-rolls.',
+              description: 'One Arm Bandit is a solo game that auto-runs after trade completion. It uses 3 dice and features a re-roll mechanic for consecutive pairs.',
+              howItWorks: 'Rolls 3 dice. Triple 6 is Jackpot (configurable xN). Triples 1-5 pay configured xM. Consecutive Pairs (XXY or YXX) give a FREE RE-ROLL. Split Pairs (XYX) or No Match (XYZ) are a House Win.',
+              playerFlow: 'Trade 1 coin (or as configured) and the game starts automatically. Watch for pairs to get free re-rolls!',
+              dealerFlow: 'The dealer accepts the trade and immediately starts the Bandit sequence. It handles re-rolls and payouts automatically.',
+            },
           ],
       tradeItems: [],
       activeGameBetItems: [],
@@ -1042,6 +1065,10 @@ export default {
       underOver7Mode: false,
       // Dealer-selected UO7 payout multiplier (2..5)
       uo7Multiplier: 3,
+      // One Arm Bandit mode
+      enableGameBandit: false,
+      banditJackpotPayout: 20,
+      banditTriplesPayout: 5,
       // Enabled games for normal mixed mode (when standalone UO modes are off)
       enableGamePkr: false,
       enableGame21: false,
@@ -1350,10 +1377,11 @@ export default {
           if (this.enableGamePairUp) selectedGames.push('pairup');
           if (this.enableGameH18) selectedGames.push('h18');
           if (this.enableGameDT) selectedGames.push('dt');
+          if (this.enableGameBandit) selectedGames.push('bandit');
 
-          const standaloneMode = this.underOver7Mode;
+          const standaloneMode = this.underOver7Mode || this.enableGameBandit;
           if (!standaloneMode && selectedGames.length === 0) {
-            this.addLogMsg('[UI] Start cancelled: select at least one enabled game (pkr, 21, 13, tri, uo7, pairup, h18, dt)');
+            this.addLogMsg('[UI] Start cancelled: select at least one enabled game (pkr, 21, 13, tri, uo7, pairup, h18, dt, bandit)');
             return;
           }
 
@@ -1363,10 +1391,17 @@ export default {
           // set the UO7 payout multiplier before enabling mode / starting
           await window.go.main.App.SetUnderOver7PayoutMultiplier(this.uo7Multiplier);
           await window.go.main.App.SetUnderOver7Mode(this.underOver7Mode);
+
+          // set the Bandit payouts
+          if (this.enableGameBandit) {
+            await window.go.main.App.SetBanditJackpotPayout(Number(this.banditJackpotPayout || 20));
+            await window.go.main.App.SetBanditTriplesPayout(Number(this.banditTriplesPayout || 5));
+          }
+
           await window.go.main.App.StartCasinoSetup(name, roomName, maxUnique, maxPer, this.riskModeEnabledInput, selectedGames);
 
           this.showDealerNameModal = false;
-          const expected = this.underOver7Mode ? 2 : 5;
+          const expected = this.enableGameBandit ? 3 : (this.underOver7Mode ? 2 : 5);
           this.diceSetup = Array.from({ length: expected }).map(() => ({ rolled: false, id: 0, value: 0 }));
           this.showDiceSetupModal = true;
           this.casinoStatus = 'Awaiting dice rolls';

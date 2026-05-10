@@ -74,6 +74,8 @@ export function GetLastTradePartnerName():Promise<string>;
 
 export function GetRiskEnabled():Promise<boolean>;
 
+export function GetShoutSpacingMs():Promise<number>;
+
 export function GetTradeItemsJSON():Promise<string>;
 
 export function ListEventDatesJSON():Promise<string>;
@@ -104,7 +106,13 @@ export function SaveConfig(arg1:main.PokerDisplayConfig):Promise<void>;
 
 export function SaveDealerOpenConfig(arg1:boolean,arg2:number,arg3:number):Promise<main.DealerOpenConfig>;
 
+export function SaveShoutSpacingMs(arg1:number):Promise<number>;
+
 export function SetActiveRaffleSessionID(arg1:number):Promise<void>;
+
+export function SetBanditJackpotPayout(arg1:number):Promise<void>;
+
+export function SetBanditTriplesPayout(arg1:number):Promise<void>;
 
 export function SetOnlyUnderOver(arg1:boolean):Promise<void>;
 

@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"math/rand"
 	"strings"
+	"time"
 )
 
 // Double Trouble (2 Dice) Rules:
@@ -119,5 +121,144 @@ func (a *App) evaluateDoubleTroubleRound() {
 		go a.applyRiskOutcome(false)
 		return
 	}
+	go a.openDealerAfterRound()
+}
+
+func (a *App) beginBanditRound() {
+	mutex.Lock()
+	banditRoundActive = true
+	isBanditRolling = true
+	mutex.Unlock()
+
+	a.AddLogMsg("[BANDIT] starting One Arm Bandit round")
+	a.setCurrentGameHistoryGame("Bandit")
+
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	msg := fmt.Sprintf("%s! Player Roll — One Arm Bandit: GOOD LUCK!", playerName)
+	if !ChatIsDisabled {
+		if !isMuted {
+			sendMessageWithDelay(msg)
+		} else {
+			messageQueue = append(messageQueue, msg)
+		}
+	} else {
+		sendShout(msg)
+	}
+
+	go a.rollBanditDice()
+}
+
+func (a *App) rollBanditDice() {
+	if fakeDiceTestingMode {
+		time.Sleep(1 * time.Second)
+		mutex.Lock()
+		for i := 0; i < 3 && i < len(diceList); i++ {
+			diceList[i].Value = rand.Intn(6) + 1
+			diceList[i].IsRolling = false
+		}
+		mutex.Unlock()
+		a.evaluateBanditRound()
+		return
+	}
+
+	mutex.Lock()
+	numDice := len(diceList)
+	if numDice < 3 {
+		mutex.Unlock()
+		a.AddLogMsg("[BANDIT] Error: not enough dice for Bandit (need 3)")
+		sendShout("Error: Setup requires 3 dice for Bandit.")
+		return
+	}
+
+	// Reset wait group
+	resultsWaitGroup.Add(3)
+	for i := 0; i < 3; i++ {
+		diceList[i].Roll()
+		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
+	}
+	mutex.Unlock()
+
+	resultsWaitGroup.Wait()
+	a.evaluateBanditRound()
+}
+
+func (a *App) evaluateBanditRound() {
+	mutex.Lock()
+	if len(diceList) < 3 {
+		mutex.Unlock()
+		return
+	}
+	d1 := diceList[0].Value
+	d2 := diceList[1].Value
+	d3 := diceList[2].Value
+	jackpotMult := banditJackpotPayout
+	triplesMult := banditTriplesPayout
+	mutex.Unlock()
+
+	a.AddLogMsg(fmt.Sprintf("[BANDIT] evaluation: %d-%d-%d", d1, d2, d3))
+
+	resultText := fmt.Sprintf("%d-%d-%d", d1, d2, d3)
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	// Triple Logic
+	if d1 == d2 && d2 == d3 {
+		mult := triplesMult
+		winnerMsg := fmt.Sprintf("%s: TRIPLES! %d-%d-%d", playerName, d1, d2, d3)
+		if d1 == 6 {
+			mult = jackpotMult
+			winnerMsg = fmt.Sprintf("%s: JACKPOT! %d-%d-%d", playerName, d1, d2, d3)
+		}
+
+		sendShout(winnerMsg)
+
+		payoutTargetID := lastTradePartnerID
+		payoutTargetName := playerName
+
+		if payoutTargetID > 0 {
+			a.setCurrentGameHistoryResults(resultText, "", playerName, "Payout Pending", false)
+			a.noteCurrentGameHistory(winnerMsg)
+			resetPayoutRetryState()
+
+			mutex.Lock()
+			payoutMultiplierForRound = mult
+			banditRoundActive = false
+			isBanditRolling = false
+			mutex.Unlock()
+
+			a.AddLogMsg(fmt.Sprintf("[PAYOUT] bandit player won x%.2f, initiating payout", mult))
+			startPayout(a, payoutTargetID, payoutTargetName)
+			return
+		}
+	}
+
+	// Consecutive Pair Logic (XXY or YXX) -> Re-roll
+	if (d1 == d2) || (d2 == d3) {
+		msg := fmt.Sprintf("%s: Pair! %d-%d-%d - FREE RE-ROLL!", playerName, d1, d2, d3)
+		sendShout(msg)
+		a.AddLogMsg("[BANDIT] re-roll triggered")
+		time.Sleep(2 * time.Second)
+		go a.rollBanditDice()
+		return
+	}
+
+	// Loss (Split Pair XYX or No Match XYZ)
+	winnerMsg := fmt.Sprintf("Dealer Wins: %d-%d-%d", d1, d2, d3)
+	sendShout(winnerMsg)
+
+	a.setCurrentGameHistoryResults(resultText, "", a.getCurrentDealerName(), "Completed", true)
+	a.noteCurrentGameHistory(winnerMsg)
+
+	mutex.Lock()
+	banditRoundActive = false
+	isBanditRolling = false
+	mutex.Unlock()
+
 	go a.openDealerAfterRound()
 }

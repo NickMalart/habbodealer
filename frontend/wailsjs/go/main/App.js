@@ -146,6 +146,10 @@ export function GetRiskEnabled() {
   return window['go']['main']['App']['GetRiskEnabled']();
 }
 
+export function GetShoutSpacingMs() {
+  return window['go']['main']['App']['GetShoutSpacingMs']();
+}
+
 export function GetTradeItemsJSON() {
   return window['go']['main']['App']['GetTradeItemsJSON']();
 }
@@ -206,8 +210,20 @@ export function SaveDealerOpenConfig(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveDealerOpenConfig'](arg1, arg2, arg3);
 }
 
+export function SaveShoutSpacingMs(arg1) {
+  return window['go']['main']['App']['SaveShoutSpacingMs'](arg1);
+}
+
 export function SetActiveRaffleSessionID(arg1) {
   return window['go']['main']['App']['SetActiveRaffleSessionID'](arg1);
+}
+
+export function SetBanditJackpotPayout(arg1) {
+  return window['go']['main']['App']['SetBanditJackpotPayout'](arg1);
+}
+
+export function SetBanditTriplesPayout(arg1) {
+  return window['go']['main']['App']['SetBanditTriplesPayout'](arg1);
 }
 
 export function SetOnlyUnderOver(arg1) {

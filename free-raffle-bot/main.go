@@ -2185,6 +2185,8 @@ func (a *App) processNewBets() {
 		WHERE e.owner_key = $1
 		  AND trim(COALESCE(e.started_at, '')) <> ''
 		  AND (e.raffle_session_id = $2 OR e.raffle_session_id = 0)
+		  AND e.raffle_session_id <> -1
+		  AND lower(e.game) <> 'bandit'
 		  AND (
 			e.started_at::timestamptz > $3
 			OR (e.started_at::timestamptz = $3 AND e.id::bigint > $4)
