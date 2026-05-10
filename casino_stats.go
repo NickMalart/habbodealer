@@ -367,7 +367,3 @@ func (a *App) GetCasinoStatsJSON(rangeKey string) string {
 	}
 	return string(b)
 }
-turn "{}"
-	}
-	return string(b)
-}

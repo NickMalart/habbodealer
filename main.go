@@ -3048,6 +3048,9 @@ func (a *App) beginGameHistory(playerName string, betItems []TradeItem) {
 		BetItems:        cloneTradeItems(betItems),
 		Notes:           []string{"Trade completed and bet recorded"},
 		RaffleSessionID: a.activeRaffleSessionID,
+		RiskSession:     rs,
+		RiskBank:        rb,
+		RiskPending:     rp,
 	}
 	if entry.PlayerName == "" {
 		entry.PlayerName = "Unknown"
