@@ -1063,6 +1063,8 @@ export default {
       enableGameUO7: false,
       enableGamePairUp: false,
       enableGameH18: false,
+      enableGameDT: false,
+      enableGameTT: false,
       // Risk mode: when true, enable Risk banking mechanic
       riskModeEnabledInput: false,
       // Block recommended-rooms packet
@@ -1361,10 +1363,12 @@ export default {
           if (this.enableGameUO7) selectedGames.push('uo7');
           if (this.enableGamePairUp) selectedGames.push('pairup');
           if (this.enableGameH18) selectedGames.push('h18');
+          if (this.enableGameDT) selectedGames.push('dt');
+          if (this.enableGameTT) selectedGames.push('tt');
 
           const standaloneMode = this.underOver7Mode;
           if (!standaloneMode && selectedGames.length === 0) {
-            this.addLogMsg('[UI] Start cancelled: select at least one enabled game (pkr, 21, 13, tri, uo7, pairup, h18)');
+            this.addLogMsg('[UI] Start cancelled: select at least one enabled game (pkr, 21, 13, tri, uo7, pairup, h18, dt, tt)');
             return;
           }
 
