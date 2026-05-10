@@ -25,6 +25,9 @@ export namespace main {
 	    startedAt: string;
 	    scheduledEndAt?: string;
 	    endedAt?: string;
+	    raffleName?: string;
+	    prizeName?: string;
+	    prizeQty?: number;
 	    bonusEvery: number;
 	    webhookMessageId?: string;
 	    participants: RaffleParticipant[];
@@ -35,6 +38,9 @@ export namespace main {
 	    winnerMethod?: string;
 	    winnerSummary?: string;
 	    winnerProofUrl?: string;
+	    sponsorEnabled: boolean;
+	    sponsorName?: string;
+	    sponsorRoomName?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new RaffleSession(source);
@@ -46,6 +52,9 @@ export namespace main {
 	        this.startedAt = source["startedAt"];
 	        this.scheduledEndAt = source["scheduledEndAt"];
 	        this.endedAt = source["endedAt"];
+	        this.raffleName = source["raffleName"];
+	        this.prizeName = source["prizeName"];
+	        this.prizeQty = source["prizeQty"];
 	        this.bonusEvery = source["bonusEvery"];
 	        this.webhookMessageId = source["webhookMessageId"];
 	        this.participants = this.convertValues(source["participants"], RaffleParticipant);
@@ -56,6 +65,9 @@ export namespace main {
 	        this.winnerMethod = source["winnerMethod"];
 	        this.winnerSummary = source["winnerSummary"];
 	        this.winnerProofUrl = source["winnerProofUrl"];
+	        this.sponsorEnabled = source["sponsorEnabled"];
+	        this.sponsorName = source["sponsorName"];
+	        this.sponsorRoomName = source["sponsorRoomName"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -82,6 +94,7 @@ export namespace main {
 	    enabled: boolean;
 	    bonusEvery: number;
 	    ticketAnnounceEnabled: boolean;
+	    ticketProgressEnabled: boolean;
 	    raffleName: string;
 	    rafflePrizeName: string;
 	    rafflePrizeQty: number;
@@ -90,6 +103,9 @@ export namespace main {
 	    raffleMessageId: string;
 	    currentSession?: RaffleSession;
 	    sessions: RaffleSession[];
+	    sponsorEnabled: boolean;
+	    sponsorName: string;
+	    sponsorRoomName: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new RaffleState(source);
@@ -102,6 +118,7 @@ export namespace main {
 	        this.enabled = source["enabled"];
 	        this.bonusEvery = source["bonusEvery"];
 	        this.ticketAnnounceEnabled = source["ticketAnnounceEnabled"];
+	        this.ticketProgressEnabled = source["ticketProgressEnabled"];
 	        this.raffleName = source["raffleName"];
 	        this.rafflePrizeName = source["rafflePrizeName"];
 	        this.rafflePrizeQty = source["rafflePrizeQty"];
@@ -110,6 +127,9 @@ export namespace main {
 	        this.raffleMessageId = source["raffleMessageId"];
 	        this.currentSession = this.convertValues(source["currentSession"], RaffleSession);
 	        this.sessions = this.convertValues(source["sessions"], RaffleSession);
+	        this.sponsorEnabled = source["sponsorEnabled"];
+	        this.sponsorName = source["sponsorName"];
+	        this.sponsorRoomName = source["sponsorRoomName"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

@@ -16,6 +16,8 @@ export function GetState():Promise<main.RaffleState>;
 
 export function GetTicketAnnounceEnabled():Promise<boolean>;
 
+export function GetTicketProgressEnabled():Promise<boolean>;
+
 export function PostOrUpdateRaffleWebhook():Promise<string>;
 
 export function PostWinnerProofForCurrentSession(arg1:string,arg2:string):Promise<string>;
@@ -32,7 +34,11 @@ export function SetEnabled(arg1:boolean):Promise<main.RaffleState>;
 
 export function SetRaffleDiscordConfig(arg1:string,arg2:string,arg3:number,arg4:string,arg5:string,arg6:boolean):Promise<main.RaffleState>;
 
+export function SetRaffleSponsorConfig(arg1:boolean,arg2:string,arg3:string):Promise<main.RaffleState>;
+
 export function SetTicketAnnounceEnabled(arg1:boolean):Promise<main.RaffleState>;
+
+export function SetTicketProgressEnabled(arg1:boolean):Promise<main.RaffleState>;
 
 export function StartRaffle():Promise<main.RaffleState>;
 

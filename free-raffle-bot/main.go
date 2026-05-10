@@ -1319,7 +1319,6 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 				newHeroURL := ""
 				// First try by filename match (best)
 				if heroAttachmentFile != "" || (heroDataURL != "" && heroFileName != "") {
-					targetName := heroAttachmentFile
 					if heroDataURL != "" {
 						// If we just uploaded a new hero, the filename we want to match is the one we sent.
 						// We don't have a reliable 'actualHeroName' here but we can try to guess or use the first non-proof.

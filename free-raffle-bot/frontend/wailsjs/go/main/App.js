@@ -30,6 +30,10 @@ export function GetTicketAnnounceEnabled() {
   return window['go']['main']['App']['GetTicketAnnounceEnabled']();
 }
 
+export function GetTicketProgressEnabled() {
+  return window['go']['main']['App']['GetTicketProgressEnabled']();
+}
+
 export function PostOrUpdateRaffleWebhook() {
   return window['go']['main']['App']['PostOrUpdateRaffleWebhook']();
 }
@@ -62,8 +66,16 @@ export function SetRaffleDiscordConfig(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['SetRaffleDiscordConfig'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
+export function SetRaffleSponsorConfig(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SetRaffleSponsorConfig'](arg1, arg2, arg3);
+}
+
 export function SetTicketAnnounceEnabled(arg1) {
   return window['go']['main']['App']['SetTicketAnnounceEnabled'](arg1);
+}
+
+export function SetTicketProgressEnabled(arg1) {
+  return window['go']['main']['App']['SetTicketProgressEnabled'](arg1);
 }
 
 export function StartRaffle() {
