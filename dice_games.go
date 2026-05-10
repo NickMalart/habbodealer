@@ -37,9 +37,19 @@ func (a *App) evaluateDoubleTroubleRound() {
 		return
 	}
 
-	// Assuming first two dice are used for this game.
-	dice1 := diceList[0].Value
-	dice2 := diceList[1].Value
+	// Prefer using slots 1 and 5 (indices 0 and 4) when available, otherwise
+	// fall back to the first two configured dice (indices 0 and 1).
+	var dice1, dice2 int
+	if len(diceList) >= 5 {
+		dice1 = diceList[0].Value
+		dice2 = diceList[4].Value
+	} else if len(diceList) >= 2 {
+		dice1 = diceList[0].Value
+		dice2 = diceList[1].Value
+	} else {
+		a.AddLogMsg("[DT] Error: not enough dice found for Double Trouble")
+		return
+	}
 
 	total, result := evaluateDoubleTrouble(dice1, dice2)
 

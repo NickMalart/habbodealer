@@ -11312,6 +11312,9 @@ func (a *App) rollDoubleTroubleDice() {
 		}
 		currentSum = 0
 		indices := []int{0, 1}
+		if len(diceList) >= 5 {
+			indices = []int{0, 4}
+		}
 		for _, index := range indices {
 			diceList[index].Value = rand.Intn(6) + 1
 			diceList[index].IsClosed = false
@@ -11326,7 +11329,9 @@ func (a *App) rollDoubleTroubleDice() {
 
 	mutex.Lock()
 	var indices []int
-	if len(diceList) >= 2 {
+	if len(diceList) >= 5 {
+		indices = []int{0, 4}
+	} else if len(diceList) >= 2 {
 		indices = []int{0, 1}
 	}
 	if len(indices) < 2 {
