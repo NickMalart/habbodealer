@@ -4763,7 +4763,7 @@ func (a *App) startPayoutResponseTimeoutMonitor(playerName string, targetID int,
 		payoutResponseTimeoutActive = false
 		payoutResponseTimeoutAttempts++
 
-		a.AddLogMsg(fmt.Sprintf("[PAYOUT_TIMEOUT] payout response timeout %d/3 for %s", payoutResponseTimeoutAttempts, player))
+		a.AddLogMsg(fmt.Sprintf("[PAYOUT_TIMEOUT] payout response timeout %d/5 for %s", payoutResponseTimeoutAttempts, player))
 
 		timeoutMsg := fmt.Sprintf("%q did not accept trade", player)
 		sendShout(timeoutMsg)
@@ -4777,13 +4777,13 @@ func (a *App) startPayoutResponseTimeoutMonitor(playerName string, targetID int,
 		suppressNextTradeCloseAnnouncement = true
 		ext.Send(out.TRADE_CLOSE)
 
-		if payoutResponseTimeoutAttempts >= 3 {
+		if payoutResponseTimeoutAttempts >= 5 {
 			flagMsg := "We have flagged the issues, Please go to rollorigins.club to resolve."
 			time.Sleep(1200 * time.Millisecond)
 			sendShout(flagMsg)
 
 			a.markCurrentGameHistoryIssue(
-				fmt.Sprintf("Payout trade timed out 3 times waiting for %s to accept", player),
+				fmt.Sprintf("Payout trade timed out 5 times waiting for %s to accept", player),
 				true,
 			)
 
