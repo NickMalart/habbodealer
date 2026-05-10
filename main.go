@@ -12259,7 +12259,7 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 	for _, pair := range pairs {
 		for i, dice := range diceList {
 			if dice.ID == pair.diceID {
-				if dice.IsRolling && (isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling || isPairUpRolling || isH18Rolling) {
+				if dice.IsRolling && (isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling || isDTRolling || isPairUpRolling || isH18Rolling) {
 					dice.IsRolling = false
 					func() {
 						defer func() {
