@@ -13755,7 +13755,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		case "h18":
 			ack = "H18! 19+ Win / 17- Lose / 18 House! Player Roll"
 		case "dt":
-			ack = fmt.Sprintf("%s! Player Roll — Double Trouble: beat the dealer's score to win", gameChoiceDisplay(choice))
+			ack = fmt.Sprintf("%s! Player Roll — Double Trouble: land on even to win", gameChoiceDisplay(choice))
 		default:
 			ack = fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay(choice))
 		}

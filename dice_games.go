@@ -43,6 +43,9 @@ func (a *App) evaluateDoubleTroubleRound() {
 
 	total, result := evaluateDoubleTrouble(dice1, dice2)
 
+	// Log the resolved dice and result for debugging and visibility
+	a.AddLogMsg(fmt.Sprintf("[DT] evaluating dice: %d + %d = %d -> result=%v", dice1, dice2, total, result))
+
 	playerName := strings.TrimSpace(lastTradePartnerName)
 	if playerName == "" {
 		playerName = "Player"
@@ -71,20 +74,41 @@ func (a *App) evaluateDoubleTroubleRound() {
 		} else {
 			messageQueue = append(messageQueue, winnerMsg)
 		}
+	} else {
+		// Chat is disabled; use a public shout so results are still visible.
+		sendShout(winnerMsg)
 	}
 
 	payoutTargetID := lastTradePartnerID
 	payoutTargetName := playerName
 
-	a.setCurrentGameHistoryResults(resultText, "", winnerName, "Completed", !playerWins)
-	a.noteCurrentGameHistory(winnerMsg)
-
 	if playerWins && payoutTargetID > 0 {
-		a.AddLogMsg(fmt.Sprintf("[PAYOUT] dt player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
+		a.setCurrentGameHistoryResults(resultText, "", playerName, "Payout Pending", false)
+		a.noteCurrentGameHistory(winnerMsg)
 		resetPayoutRetryState()
+		if isRiskEnabled {
+			if riskSessionActive {
+				// Post the round outcome immediately so external integrations see it.
+				a.sendDiscordRoundResult(playerName, resultText, "", winnerMsg)
+				go a.applyRiskOutcome(true)
+				return
+			}
+			params := map[string]interface{}{}
+			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "DT", params)
+			// Post round outcome so external integrations show the win while risk prompt is pending.
+			a.sendDiscordRoundResult(playerName, resultText, "", winnerMsg)
+			return
+		}
+		a.AddLogMsg(fmt.Sprintf("[PAYOUT] dt player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
 		startPayout(a, payoutTargetID, payoutTargetName)
 		return
 	}
 
+	a.setCurrentGameHistoryResults(resultText, "", a.getCurrentDealerName(), "Completed", true)
+	a.noteCurrentGameHistory(winnerMsg)
+	if isRiskEnabled && riskSessionActive {
+		go a.applyRiskOutcome(false)
+		return
+	}
 	go a.openDealerAfterRound()
 }

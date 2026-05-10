@@ -684,7 +684,7 @@ func (a *App) evaluatePairUpRound() {
 	playerWins := (v1 == v2 || v1 == v3 || v2 == v3)
 
 	resultText := fmt.Sprintf("%d-%d-%d", v1, v2, v3)
-	
+
 	playerName := strings.TrimSpace(lastTradePartnerName)
 	if playerName == "" {
 		playerName = "Player"

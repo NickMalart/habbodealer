@@ -684,7 +684,6 @@ func (a *App) CreateRaffle(name, prize string, qty int, heroDataUrl, heroFileNam
 	return a.StartRaffleWithWindow(startAt, endAt)
 }
 
-
 func (a *App) PostOrUpdateRaffleWebhook() string {
 	if err := a.postOrUpdateRaffleWebhook(nil, true, "manual"); err != nil {
 		a.logDebug("raffle webhook manual sync failed: %v", err)
@@ -1401,7 +1400,6 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 						}
 					}
 				}
-
 
 				// Extract proof attachment state from response.
 				cdnURL := ""
