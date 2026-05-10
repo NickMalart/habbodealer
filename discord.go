@@ -17,7 +17,7 @@ import (
 // game to the configured Discord webhook (read from DISCORD_WEBHOOK_URL).
 func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 	// Hardcoded webhook URL (provided by user)
-	webhookURL := "https://discordapp.com/api/webhooks/1496681436592214016/QTGLb6qYMv0-61hVc3m9s7mBgvMc-E0LKpQTxd1bSow9N_GqOjQMyw9njq8KcsM8Jhi6"
+	webhookURL := "https://discord.com/api/webhooks/1496681436592214016/QTGLb6qYMv0-61hVc3m9s7mBgvMc-E0LKpQTxd1bSow9N_GqOjQMyw9njq8KcsM8Jhi6"
 	a.AddLogMsg("[DISCORD] using hardcoded webhook URL")
 
 	// Optional secondary webhook for Issue-only posts (provided by user)
@@ -191,7 +191,7 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "roll-origins/1.0")
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		a.AddErrorLog("[DISCORD] POST error", err)
@@ -292,11 +292,11 @@ func (a *App) sendDiscordRoundResult(winner string, playerResult string, dealerR
 // payout decision (Keep/Risk), and any owed/itemized issue metadata.
 func (a *App) sendDiscordWebhookForPayout(entry GameHistoryEntry) {
 	// Payout webhook URL (configured for payout notifications)
-	payoutWebhookURL := "https://discordapp.com/api/webhooks/1502425167031173211/IZF_TGQnk_rXeR5kgzpFJLQzAU6a6NVe05MTQavYn3kt2QQOQNpw7d7QxeKkZuVJscZP"
+	payoutWebhookURL := "https://discord.com/api/webhooks/1502425167031173211/IZF_TGQnk_rXeR5kgzpFJLQzAU6a6NVe05MTQavYn3kt2QQOQNpw7d7QxeKkZuVJscZP"
 	// Issues channel webhook (only used for Issue posts)
 	issueWebhookURL := "https://discord.com/api/webhooks/1502209413065343086/lV-mzQvSRCqc-HkjKZWXOrmX0McP1HU47_fBjthixU2IdO0Bh18j-FBkIjGCDDjgAbo4"
 
-	// Decide destination: if this is an Issue, send only to the issues webhook.
+	// Decide destination: successful payouts go to payout channel, issues go to issues channel.
 	targetWebhookURL := payoutWebhookURL
 	if entry.Issue || strings.EqualFold(entry.Status, "Issue") {
 		targetWebhookURL = issueWebhookURL
@@ -417,7 +417,7 @@ func (a *App) sendDiscordWebhookForPayout(entry GameHistoryEntry) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "roll-origins/1.0")
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		a.AddErrorLog("[DISCORD] payout POST error", err)
