@@ -107,9 +107,8 @@ var (
 	triPlayerTotal              int
 	triDealerTotal              int
 	triPlayerName               string
-	// Double/Triple Trouble rolling state
+	// Double Trouble rolling state
 	isDTRolling bool
-	isTTRolling bool
 	// Under/Over-7 state
 	isUORolling    bool
 	uoRoundActive  bool
@@ -130,7 +129,6 @@ var (
 	enabledGame13               bool = true
 	enabledGameTri              bool = true
 	enabledGameDT               bool = true
-	enabledGameTT               bool = true
 	enabledGameUO7              bool = false
 	enabledGamePairUp           bool = true
 	enabledGameH18              bool = true
@@ -9905,7 +9903,6 @@ func setEnabledGamesFromSelection(codes []string) {
 	enabledGame13 = true
 	enabledGameTri = true
 	enabledGameDT = true
-	enabledGameTT = true
 	enabledGameUO7 = false
 	enabledGamePairUp = true
 	enabledGameH18 = true
@@ -9919,7 +9916,6 @@ func setEnabledGamesFromSelection(codes []string) {
 	enabledGame13 = false
 	enabledGameTri = false
 	enabledGameDT = false
-	enabledGameTT = false
 	enabledGameUO7 = false
 	enabledGamePairUp = false
 	enabledGameH18 = false
@@ -9938,8 +9934,6 @@ func setEnabledGamesFromSelection(codes []string) {
 			enabledGameTri = true
 		case "dt", "double", "doubletrouble":
 			enabledGameDT = true
-		case "tt", "triple", "tripletrouble":
-			enabledGameTT = true
 		case "uo", "uo7", "underover", "underover7":
 			enabledGameUO7 = true
 		case "pu", "pu3", "pairup":
@@ -9975,9 +9969,6 @@ func enabledGameChoicePartsLocked() []string {
 	}
 	if enabledGameDT {
 		parts = append(parts, "dt")
-	}
-	if enabledGameTT {
-		parts = append(parts, "tt")
 	}
 	if enabledGameUO7 {
 		parts = append(parts, "u7", "o7")
@@ -10020,8 +10011,6 @@ func isGameChoiceEnabledLocked(choice string) bool {
 		return enabledGameTri
 	case "dt":
 		return enabledGameDT
-	case "tt":
-		return enabledGameTT
 	case "uo", "uo7", "uo_over", "uo_under":
 		return enabledGameUO7
 	case "pairup":
@@ -13843,8 +13832,6 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			ack = "H18! 19+ Win / 17- Lose / 18 House! Player Roll"
 		case "dt":
 			ack = fmt.Sprintf("%s! Player Roll — Double Trouble: beat the dealer's score to win", gameChoiceDisplay(choice))
-		case "tt":
-			ack = fmt.Sprintf("%s! Player Roll — Triple Trouble: beat the dealer's score to win", gameChoiceDisplay(choice))
 		default:
 			ack = fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay(choice))
 		}
