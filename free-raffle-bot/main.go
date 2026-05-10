@@ -92,21 +92,33 @@ type RaffleSession struct {
 	SponsorRoomName string `json:"sponsorRoomName,omitempty"`
 }
 
+type RaffleSessionSummary struct {
+	ID             int    `json:"id"`
+	StartedAt      string `json:"startedAt"`
+	ScheduledEndAt string `json:"scheduledEndAt,omitempty"`
+	EndedAt        string `json:"endedAt,omitempty"`
+	RaffleName     string `json:"raffleName,omitempty"`
+	PrizeName      string `json:"prizeName,omitempty"`
+	PrizeQty       int    `json:"prizeQty,omitempty"`
+	WinnerName     string `json:"winnerName,omitempty"`
+	DBID           int64  `json:"dbId"`
+}
+
 type RaffleState struct {
-	Connected             bool            `json:"connected"`
-	InRoom                bool            `json:"inRoom"`
-	Enabled               bool            `json:"enabled"`
-	BonusEvery            int             `json:"bonusEvery"`
-	TicketAnnounceEnabled bool            `json:"ticketAnnounceEnabled"`
-	TicketProgressEnabled bool            `json:"ticketProgressEnabled"`
-	RaffleName            string          `json:"raffleName"`
-	RafflePrizeName       string          `json:"rafflePrizeName"`
-	RafflePrizeQty        int             `json:"rafflePrizeQty"`
-	RaffleHeroImageName   string          `json:"raffleHeroImageName"`
-	RaffleAutoUpdate      bool            `json:"raffleAutoUpdate"`
-	RaffleMessageID       string          `json:"raffleMessageId"`
-	CurrentSession        *RaffleSession  `json:"currentSession,omitempty"`
-	Sessions              []RaffleSession `json:"sessions"`
+	Connected             bool                   `json:"connected"`
+	InRoom                bool                   `json:"inRoom"`
+	Enabled               bool                   `json:"enabled"`
+	BonusEvery            int                    `json:"bonusEvery"`
+	TicketAnnounceEnabled bool                   `json:"ticketAnnounceEnabled"`
+	TicketProgressEnabled bool                   `json:"ticketProgressEnabled"`
+	RaffleName            string                 `json:"raffleName"`
+	RafflePrizeName       string                 `json:"rafflePrizeName"`
+	RafflePrizeQty        int                    `json:"rafflePrizeQty"`
+	RaffleHeroImageName   string                 `json:"raffleHeroImageName"`
+	RaffleAutoUpdate      bool                   `json:"raffleAutoUpdate"`
+	RaffleMessageID       string                 `json:"raffleMessageId"`
+	CurrentSession        *RaffleSession         `json:"currentSession,omitempty"`
+	Sessions              []RaffleSessionSummary `json:"sessions"`
 
 	SponsorEnabled  bool   `json:"sponsorEnabled"`
 	SponsorName     string `json:"sponsorName"`
@@ -359,10 +371,20 @@ func (a *App) GetState() RaffleState {
 		SponsorEnabled:        a.sponsorEnabled,
 		SponsorName:           a.sponsorName,
 		SponsorRoomName:       a.sponsorRoomName,
-		Sessions:              make([]RaffleSession, len(a.sessions)),
+		Sessions:              make([]RaffleSessionSummary, len(a.sessions)),
 	}
-	for i := range a.sessions {
-		state.Sessions[i] = *copySession(&a.sessions[i])
+	for i, s := range a.sessions {
+		state.Sessions[i] = RaffleSessionSummary{
+			ID:             s.ID,
+			StartedAt:      s.StartedAt,
+			ScheduledEndAt: s.ScheduledEndAt,
+			EndedAt:        s.EndedAt,
+			RaffleName:     s.RaffleName,
+			PrizeName:      s.PrizeName,
+			PrizeQty:       s.PrizeQty,
+			WinnerName:     s.WinnerName,
+			DBID:           s.DBID,
+		}
 	}
 	state.CurrentSession = copySession(a.currentSession)
 	return state
@@ -633,6 +655,35 @@ func (a *App) SetRaffleDiscordConfig(
 	}
 	return a.GetState()
 }
+
+func (a *App) CreateRaffle(name, prize string, qty int, heroDataUrl, heroFileName string, startAt, endAt string) (RaffleState, error) {
+	a.mu.Lock()
+	a.raffleName = name
+	a.rafflePrizeName = prize
+	if qty > 0 {
+		a.rafflePrizeQty = qty
+	} else {
+		a.rafflePrizeQty = 1
+	}
+
+	if heroDataUrl != "" {
+		a.raffleHeroDataURL = heroDataUrl
+		a.raffleHeroFileName = heroFileName
+		// New image file selected — clear stale Discord attachment IDs.
+		a.raffleHeroImageURL = ""
+		a.raffleHeroAttachmentID = ""
+		a.raffleHeroAttachmentFile = ""
+	}
+	// Let's assume auto-update should be on for new raffles.
+	a.raffleAutoUpdate = true
+	a.mu.Unlock()
+
+	a.emitUpdate()
+
+	// 2. Start the session.
+	return a.StartRaffleWithWindow(startAt, endAt)
+}
+
 
 func (a *App) PostOrUpdateRaffleWebhook() string {
 	if err := a.postOrUpdateRaffleWebhook(nil, true, "manual"); err != nil {
@@ -1317,16 +1368,32 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 				newHeroID := ""
 				newHeroFile := ""
 				newHeroURL := ""
-				// First try by filename match (best)
-				if heroAttachmentFile != "" || (heroDataURL != "" && heroFileName != "") {
-					if heroDataURL != "" {
-						// If we just uploaded a new hero, the filename we want to match is the one we sent.
-						// We don't have a reliable 'actualHeroName' here but we can try to guess or use the first non-proof.
-					}
 
+				heroFilenameToFind := heroAttachmentFile
+				if heroDataURL != "" {
+					// Replicate logic to find the name of the file that was just uploaded
+					if heroFileName != "" {
+						heroFilenameToFind = heroFileName
+					} else {
+						_, mimeType, err := decodeImageDataURL(heroDataURL)
+						if err == nil {
+							switch mimeType {
+							case "image/jpeg":
+								heroFilenameToFind = "raffle-hero.jpg"
+							case "image/gif":
+								heroFilenameToFind = "raffle-hero.gif"
+							case "image/webp":
+								heroFilenameToFind = "raffle-hero.webp"
+							default:
+								heroFilenameToFind = "raffle-hero.png"
+							}
+						}
+					}
+				}
+
+				if heroFilenameToFind != "" {
 					for _, att := range patchResp.Attachments {
-						if (heroAttachmentFile != "" && strings.EqualFold(att.Filename, heroAttachmentFile)) ||
-							(heroFileName != "" && strings.EqualFold(att.Filename, heroFileName)) {
+						if strings.EqualFold(att.Filename, heroFilenameToFind) {
 							newHeroID = strings.TrimSpace(att.ID)
 							newHeroFile = strings.TrimSpace(att.Filename)
 							newHeroURL = strings.TrimSpace(att.URL)
@@ -1334,20 +1401,7 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 						}
 					}
 				}
-				// If the hero was present in the response by name but not found
-				// above (e.g. filename differs), fall back to any non-proof attachment.
-				if newHeroURL == "" {
-					for _, att := range patchResp.Attachments {
-						if (proofFileName != "" && strings.EqualFold(att.Filename, proofFileName)) ||
-							(existingProofFileName != "" && strings.EqualFold(att.Filename, existingProofFileName)) {
-							continue
-						}
-						newHeroID = strings.TrimSpace(att.ID)
-						newHeroFile = strings.TrimSpace(att.Filename)
-						newHeroURL = strings.TrimSpace(att.URL)
-						break
-					}
-				}
+
 
 				// Extract proof attachment state from response.
 				cdnURL := ""
@@ -2119,6 +2173,11 @@ func (a *App) processNewBets() {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
 
+	var cursorEntryNum int64
+	if strings.TrimSpace(cursorEntry) != "" {
+		cursorEntryNum, _ = strconv.ParseInt(strings.TrimSpace(cursorEntry), 10, 64)
+	}
+
 	rows, err := db.Query(ctx, `
 		SELECT
 			e.id::text,
@@ -2128,9 +2187,13 @@ func (a *App) processNewBets() {
 		WHERE e.owner_key = $1
 		  AND trim(COALESCE(e.started_at, '')) <> ''
 		  AND (e.raffle_session_id = $2 OR e.raffle_session_id = 0)
-		ORDER BY e.started_at ASC, e.id ASC
+		  AND (
+			e.started_at::timestamptz > $3
+			OR (e.started_at::timestamptz = $3 AND e.id::bigint > $4)
+		  )
+		ORDER BY e.started_at::timestamptz ASC, e.id ASC
 		LIMIT 500
-	`, owner, sessionDBID)
+	`, owner, sessionDBID, cursorAt, cursorEntryNum)
 	if err != nil {
 		a.logDebug("poll query failed: %v", err)
 		return
@@ -2168,13 +2231,10 @@ func (a *App) processNewBets() {
 		if eventAt.Before(sessionStartedAt) {
 			continue
 		}
+
 		if latestSeenAt.IsZero() || eventAt.After(latestSeenAt) || (eventAt.Equal(latestSeenAt) && raw.EntryID > latestSeenEntry) {
 			latestSeenAt = eventAt
 			latestSeenEntry = raw.EntryID
-		}
-
-		if !isAfterCursor(eventAt, raw.EntryID, cursorAt, cursorEntry) {
-			continue
 		}
 
 		batch = append(batch, betRow{

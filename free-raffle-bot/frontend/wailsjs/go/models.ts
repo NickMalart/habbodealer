@@ -88,6 +88,34 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class RaffleSessionSummary {
+	    id: number;
+	    startedAt: string;
+	    scheduledEndAt?: string;
+	    endedAt?: string;
+	    raffleName?: string;
+	    prizeName?: string;
+	    prizeQty?: number;
+	    winnerName?: string;
+	    dbId: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RaffleSessionSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.startedAt = source["startedAt"];
+	        this.scheduledEndAt = source["scheduledEndAt"];
+	        this.endedAt = source["endedAt"];
+	        this.raffleName = source["raffleName"];
+	        this.prizeName = source["prizeName"];
+	        this.prizeQty = source["prizeQty"];
+	        this.winnerName = source["winnerName"];
+	        this.dbId = source["dbId"];
+	    }
+	}
 	export class RaffleState {
 	    connected: boolean;
 	    inRoom: boolean;
@@ -102,7 +130,7 @@ export namespace main {
 	    raffleAutoUpdate: boolean;
 	    raffleMessageId: string;
 	    currentSession?: RaffleSession;
-	    sessions: RaffleSession[];
+	    sessions: RaffleSessionSummary[];
 	    sponsorEnabled: boolean;
 	    sponsorName: string;
 	    sponsorRoomName: string;
@@ -126,7 +154,7 @@ export namespace main {
 	        this.raffleAutoUpdate = source["raffleAutoUpdate"];
 	        this.raffleMessageId = source["raffleMessageId"];
 	        this.currentSession = this.convertValues(source["currentSession"], RaffleSession);
-	        this.sessions = this.convertValues(source["sessions"], RaffleSession);
+	        this.sessions = this.convertValues(source["sessions"], RaffleSessionSummary);
 	        this.sponsorEnabled = source["sponsorEnabled"];
 	        this.sponsorName = source["sponsorName"];
 	        this.sponsorRoomName = source["sponsorRoomName"];

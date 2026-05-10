@@ -34,6 +34,10 @@ export function ExportEventsForDate(arg1) {
   return window['go']['main']['App']['ExportEventsForDate'](arg1);
 }
 
+export function GetActiveRaffles() {
+  return window['go']['main']['App']['GetActiveRaffles']();
+}
+
 export function GetAutoShoutConfig() {
   return window['go']['main']['App']['GetAutoShoutConfig']();
 }
@@ -200,6 +204,10 @@ export function SaveConfig(arg1) {
 
 export function SaveDealerOpenConfig(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveDealerOpenConfig'](arg1, arg2, arg3);
+}
+
+export function SetActiveRaffleSessionID(arg1) {
+  return window['go']['main']['App']['SetActiveRaffleSessionID'](arg1);
 }
 
 export function SetOnlyUnderOver(arg1) {

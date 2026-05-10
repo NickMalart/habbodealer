@@ -18,6 +18,8 @@ export function ClearTradeItems():Promise<void>;
 
 export function ExportEventsForDate(arg1:string):Promise<string>;
 
+export function GetActiveRaffles():Promise<Array<main.RaffleSession>>;
+
 export function GetAutoShoutConfig():Promise<main.AutoShoutConfig>;
 
 export function GetAutoShoutConfig2():Promise<main.AutoShoutConfig>;
@@ -101,6 +103,8 @@ export function SaveCatalog(arg1:Array<main.CatalogItem>):Promise<void>;
 export function SaveConfig(arg1:main.PokerDisplayConfig):Promise<void>;
 
 export function SaveDealerOpenConfig(arg1:boolean,arg2:number,arg3:number):Promise<main.DealerOpenConfig>;
+
+export function SetActiveRaffleSessionID(arg1:number):Promise<void>;
 
 export function SetOnlyUnderOver(arg1:boolean):Promise<void>;
 

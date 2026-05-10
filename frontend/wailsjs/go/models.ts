@@ -430,6 +430,24 @@ export namespace main {
 	        this.nothing = source["nothing"];
 	    }
 	}
+	export class RaffleSession {
+	    id: number;
+	    raffleName: string;
+	    prizeName: string;
+	    startedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RaffleSession(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.raffleName = source["raffleName"];
+	        this.prizeName = source["prizeName"];
+	        this.startedAt = source["startedAt"];
+	    }
+	}
 	
 	export class TradeItem {
 	    Name: string;

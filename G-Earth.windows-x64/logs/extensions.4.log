@@ -1,56 +1,40 @@
-2026-05-03 09:24:26.723 INFO  [] - Launching G-Programmer_1.4.0...
-2026-05-03 09:24:26.747 INFO  [] - Launching main-193856529808.py...
-2026-05-03 09:24:26.758 INFO  [] - Launching main-214337305396.py...
-2026-05-03 09:24:26.899 ERROR [main-193856529808.py] - Traceback (most recent call last):
-2026-05-03 09:24:26.900 ERROR [main-193856529808.py] -   File "C:\Users\Dubbo\habbodealer\habbodealer\G-Earth.windows-x64\Extensions\main-193856529808.py", line 4, in <module>
-2026-05-03 09:24:26.900 ERROR [main-193856529808.py] -     from dice_tracker import DiceSniffer # This looks for dice_tracker.py in the same folder
-2026-05-03 09:24:26.900 ERROR [main-193856529808.py] -     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-2026-05-03 09:24:26.900 ERROR [main-193856529808.py] - ModuleNotFoundError: No module named 'dice_tracker'
-2026-05-03 09:24:26.909 ERROR [main-214337305396.py] - Traceback (most recent call last):
-2026-05-03 09:24:26.909 ERROR [main-214337305396.py] -   File "C:\Users\Dubbo\habbodealer\habbodealer\G-Earth.windows-x64\Extensions\main-214337305396.py", line 5, in <module>
-2026-05-03 09:24:26.909 ERROR [main-214337305396.py] -     from dice_tracker import DiceSniffer
-2026-05-03 09:24:26.909 ERROR [main-214337305396.py] - ModuleNotFoundError: No module named 'dice_tracker'
-2026-05-03 09:24:27.140 ERROR [G-Programmer_1.4.0] - Exception in Application start method
-2026-05-03 09:24:27.145 ERROR [G-Programmer_1.4.0] - Exception in thread "main" java.lang.RuntimeException: Exception in Application start method
-2026-05-03 09:24:27.145 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.javafx.application.LauncherImpl.launchApplication1(Unknown Source)
-2026-05-03 09:24:27.145 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.javafx.application.LauncherImpl.lambda$launchApplication$2(Unknown Source)
-2026-05-03 09:24:27.145 ERROR [G-Programmer_1.4.0] - 	at java.base/java.lang.Thread.run(Unknown Source)
-2026-05-03 09:24:27.145 ERROR [G-Programmer_1.4.0] - Caused by: java.lang.NoClassDefFoundError: jdk/nashorn/api/scripting/NashornScriptEngineFactory
-2026-05-03 09:24:27.145 ERROR [G-Programmer_1.4.0] - 	at G_Earth.GProgrammer.ExecuteScript.<init>(ExecuteScript.java:26)
-2026-05-03 09:24:27.145 ERROR [G-Programmer_1.4.0] - 	at G_Earth.GProgrammer.GProgrammer.<init>(GProgrammer.java:44)
-2026-05-03 09:24:27.145 ERROR [G-Programmer_1.4.0] - 	at java.base/jdk.internal.reflect.DirectConstructorHandleAccessor.newInstance(Unknown Source)
-2026-05-03 09:24:27.146 ERROR [G-Programmer_1.4.0] - 	at java.base/java.lang.reflect.Constructor.newInstanceWithCaller(Unknown Source)
-2026-05-03 09:24:27.146 ERROR [G-Programmer_1.4.0] - 	at java.base/java.lang.reflect.ReflectAccess.newInstance(Unknown Source)
-2026-05-03 09:24:27.146 ERROR [G-Programmer_1.4.0] - 	at java.base/jdk.internal.reflect.ReflectionFactory.newInstance(Unknown Source)
-2026-05-03 09:24:27.146 ERROR [G-Programmer_1.4.0] - 	at java.base/java.lang.Class.newInstance(Unknown Source)
-2026-05-03 09:24:27.146 ERROR [G-Programmer_1.4.0] - 	at gearth.extensions.ExtensionFormLauncher.start(ExtensionFormLauncher.java:19)
-2026-05-03 09:24:27.146 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.javafx.application.LauncherImpl.lambda$launchApplication1$9(Unknown Source)
-2026-05-03 09:24:27.146 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runAndWait$12(Unknown Source)
-2026-05-03 09:24:27.146 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runLater$10(Unknown Source)
-2026-05-03 09:24:27.146 ERROR [G-Programmer_1.4.0] - 	at java.base/java.security.AccessController.doPrivileged(Unknown Source)
-2026-05-03 09:24:27.146 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runLater$11(Unknown Source)
-2026-05-03 09:24:27.146 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.glass.ui.InvokeLaterDispatcher$Future.run(Unknown Source)
-2026-05-03 09:24:27.146 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.glass.ui.win.WinApplication._runLoop(Native Method)
-2026-05-03 09:24:27.146 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.glass.ui.win.WinApplication.lambda$runLoop$3(Unknown Source)
-2026-05-03 09:24:27.146 ERROR [G-Programmer_1.4.0] - 	... 1 more
-2026-05-03 09:24:27.147 ERROR [G-Programmer_1.4.0] - Caused by: java.lang.ClassNotFoundException: jdk.nashorn.api.scripting.NashornScriptEngineFactory
-2026-05-03 09:24:27.147 ERROR [G-Programmer_1.4.0] - 	at java.base/jdk.internal.loader.BuiltinClassLoader.loadClass(Unknown Source)
-2026-05-03 09:24:27.147 ERROR [G-Programmer_1.4.0] - 	at java.base/jdk.internal.loader.ClassLoaders$AppClassLoader.loadClass(Unknown Source)
-2026-05-03 09:24:27.147 ERROR [G-Programmer_1.4.0] - 	at java.base/java.lang.ClassLoader.loadClass(Unknown Source)
-2026-05-03 09:24:27.147 ERROR [G-Programmer_1.4.0] - 	... 17 more
-2026-05-03 14:08:28.701 INFO  [] - Launching Trade Tracker_2.0...
-2026-05-03 14:08:29.074 ERROR [Trade Tracker_2.0] - panic: unhandled error: failed to resolve incoming header: "TRADE_COMPLETED_2"
-2026-05-03 14:08:29.074 ERROR [Trade Tracker_2.0] - 
-2026-05-03 14:08:29.074 ERROR [Trade Tracker_2.0] - goroutine 1 [running]:
-2026-05-03 14:08:29.074 ERROR [Trade Tracker_2.0] - xabbo.b7c.io/goearth.(*Ext).Run(...)
-2026-05-03 14:08:29.074 ERROR [Trade Tracker_2.0] - 	xabbo.b7c.io/goearth@v0.4.0/extension.go:292
-2026-05-03 14:08:29.074 ERROR [Trade Tracker_2.0] - main.main()
-2026-05-03 14:08:29.074 ERROR [Trade Tracker_2.0] - 	github.com/thauanvargas/arcade-tracker/main.go:82 +0x787
-2026-05-03 14:08:30.419 INFO  [] - Launching Trade Tracker_2.0...
-2026-05-03 14:08:30.470 ERROR [Trade Tracker_2.0] - panic: unhandled error: failed to resolve incoming header: "TRADE_COMPLETED_2"
-2026-05-03 14:08:30.470 ERROR [Trade Tracker_2.0] - 
-2026-05-03 14:08:30.470 ERROR [Trade Tracker_2.0] - goroutine 1 [running]:
-2026-05-03 14:08:30.470 ERROR [Trade Tracker_2.0] - xabbo.b7c.io/goearth.(*Ext).Run(...)
-2026-05-03 14:08:30.470 ERROR [Trade Tracker_2.0] - 	xabbo.b7c.io/goearth@v0.4.0/extension.go:292
-2026-05-03 14:08:30.470 ERROR [Trade Tracker_2.0] - main.main()
-2026-05-03 14:08:30.470 ERROR [Trade Tracker_2.0] - 	github.com/thauanvargas/arcade-tracker/main.go:82 +0x787
+2026-05-03 16:28:49.949 INFO  [] - Launching G-Programmer_1.4.0...
+2026-05-03 16:28:49.974 INFO  [] - Launching main-193856529808.py...
+2026-05-03 16:28:49.987 INFO  [] - Launching main-214337305396.py...
+2026-05-03 16:28:50.159 ERROR [main-193856529808.py] - Traceback (most recent call last):
+2026-05-03 16:28:50.160 ERROR [main-193856529808.py] -   File "C:\Users\Dubbo\habbodealer\habbodealer\G-Earth.windows-x64\Extensions\main-193856529808.py", line 4, in <module>
+2026-05-03 16:28:50.160 ERROR [main-193856529808.py] -     from dice_tracker import DiceSniffer # This looks for dice_tracker.py in the same folder
+2026-05-03 16:28:50.160 ERROR [main-193856529808.py] -     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-05-03 16:28:50.160 ERROR [main-193856529808.py] - ModuleNotFoundError: No module named 'dice_tracker'
+2026-05-03 16:28:50.167 ERROR [main-214337305396.py] - Traceback (most recent call last):
+2026-05-03 16:28:50.167 ERROR [main-214337305396.py] -   File "C:\Users\Dubbo\habbodealer\habbodealer\G-Earth.windows-x64\Extensions\main-214337305396.py", line 5, in <module>
+2026-05-03 16:28:50.167 ERROR [main-214337305396.py] -     from dice_tracker import DiceSniffer
+2026-05-03 16:28:50.167 ERROR [main-214337305396.py] - ModuleNotFoundError: No module named 'dice_tracker'
+2026-05-03 16:28:50.440 ERROR [G-Programmer_1.4.0] - Exception in Application start method
+2026-05-03 16:28:50.447 ERROR [G-Programmer_1.4.0] - Exception in thread "main" java.lang.RuntimeException: Exception in Application start method
+2026-05-03 16:28:50.448 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.javafx.application.LauncherImpl.launchApplication1(Unknown Source)
+2026-05-03 16:28:50.448 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.javafx.application.LauncherImpl.lambda$launchApplication$2(Unknown Source)
+2026-05-03 16:28:50.448 ERROR [G-Programmer_1.4.0] - 	at java.base/java.lang.Thread.run(Unknown Source)
+2026-05-03 16:28:50.448 ERROR [G-Programmer_1.4.0] - Caused by: java.lang.NoClassDefFoundError: jdk/nashorn/api/scripting/NashornScriptEngineFactory
+2026-05-03 16:28:50.448 ERROR [G-Programmer_1.4.0] - 	at G_Earth.GProgrammer.ExecuteScript.<init>(ExecuteScript.java:26)
+2026-05-03 16:28:50.449 ERROR [G-Programmer_1.4.0] - 	at G_Earth.GProgrammer.GProgrammer.<init>(GProgrammer.java:44)
+2026-05-03 16:28:50.449 ERROR [G-Programmer_1.4.0] - 	at java.base/jdk.internal.reflect.DirectConstructorHandleAccessor.newInstance(Unknown Source)
+2026-05-03 16:28:50.449 ERROR [G-Programmer_1.4.0] - 	at java.base/java.lang.reflect.Constructor.newInstanceWithCaller(Unknown Source)
+2026-05-03 16:28:50.449 ERROR [G-Programmer_1.4.0] - 	at java.base/java.lang.reflect.ReflectAccess.newInstance(Unknown Source)
+2026-05-03 16:28:50.449 ERROR [G-Programmer_1.4.0] - 	at java.base/jdk.internal.reflect.ReflectionFactory.newInstance(Unknown Source)
+2026-05-03 16:28:50.449 ERROR [G-Programmer_1.4.0] - 	at java.base/java.lang.Class.newInstance(Unknown Source)
+2026-05-03 16:28:50.449 ERROR [G-Programmer_1.4.0] - 	at gearth.extensions.ExtensionFormLauncher.start(ExtensionFormLauncher.java:19)
+2026-05-03 16:28:50.449 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.javafx.application.LauncherImpl.lambda$launchApplication1$9(Unknown Source)
+2026-05-03 16:28:50.449 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runAndWait$12(Unknown Source)
+2026-05-03 16:28:50.449 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runLater$10(Unknown Source)
+2026-05-03 16:28:50.449 ERROR [G-Programmer_1.4.0] - 	at java.base/java.security.AccessController.doPrivileged(Unknown Source)
+2026-05-03 16:28:50.449 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.javafx.application.PlatformImpl.lambda$runLater$11(Unknown Source)
+2026-05-03 16:28:50.449 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.glass.ui.InvokeLaterDispatcher$Future.run(Unknown Source)
+2026-05-03 16:28:50.449 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.glass.ui.win.WinApplication._runLoop(Native Method)
+2026-05-03 16:28:50.450 ERROR [G-Programmer_1.4.0] - 	at javafx.graphics/com.sun.glass.ui.win.WinApplication.lambda$runLoop$3(Unknown Source)
+2026-05-03 16:28:50.450 ERROR [G-Programmer_1.4.0] - 	... 1 more
+2026-05-03 16:28:50.450 ERROR [G-Programmer_1.4.0] - Caused by: java.lang.ClassNotFoundException: jdk.nashorn.api.scripting.NashornScriptEngineFactory
+2026-05-03 16:28:50.450 ERROR [G-Programmer_1.4.0] - 	at java.base/jdk.internal.loader.BuiltinClassLoader.loadClass(Unknown Source)
+2026-05-03 16:28:50.450 ERROR [G-Programmer_1.4.0] - 	at java.base/jdk.internal.loader.ClassLoaders$AppClassLoader.loadClass(Unknown Source)
+2026-05-03 16:28:50.450 ERROR [G-Programmer_1.4.0] - 	at java.base/java.lang.ClassLoader.loadClass(Unknown Source)
+2026-05-03 16:28:50.450 ERROR [G-Programmer_1.4.0] - 	... 17 more
