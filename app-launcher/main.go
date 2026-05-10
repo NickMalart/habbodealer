@@ -84,6 +84,17 @@ func knownBuildTargets() []buildTarget {
 			},
 			OutExe: filepath.Join("free-raffle-bot", "build", "bin", "free-raffle-bot.exe"),
 		},
+		{
+			ID:        "winner-picker",
+			Name:      "Winner Picker",
+			SrcDir:    "winner-picker",
+			BuildType: "wails",
+			CleanPaths: []string{
+				filepath.Join("winner-picker", "build", "bin", "winner-picker.exe"),
+				filepath.Join("winner-picker", "winner-picker.exe"),
+			},
+			OutExe: filepath.Join("winner-picker", "build", "bin", "winner-picker.exe"),
+		},
 	}
 }
 
