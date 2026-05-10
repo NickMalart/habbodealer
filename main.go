@@ -401,6 +401,7 @@ var (
 	shoutQueue         chan string
 	shoutWorkerOnce    sync.Once
 	shoutSpacing       = 2500 * time.Millisecond
+	shoutSpacingMu     sync.Mutex
 	shoutReplaySpacing = 2500 * time.Millisecond
 
 	autoShoutStopChan chan struct{}
@@ -972,6 +973,29 @@ func (a *App) GetAutoShoutConfig() AutoShoutConfig {
 		Phrase:  autoShoutPhrase,
 		Seconds: autoShoutSeconds,
 	}
+}
+
+// GetShoutSpacingMs returns the configured shout spacing in milliseconds.
+func (a *App) GetShoutSpacingMs() int {
+	shoutSpacingMu.Lock()
+	defer shoutSpacingMu.Unlock()
+	return int(shoutSpacing / time.Millisecond)
+}
+
+// SaveShoutSpacingMs updates the shout spacing (milliseconds).
+// Enforces a minimum of 250ms to avoid insane values. Emits UI event when available.
+func (a *App) SaveShoutSpacingMs(ms int) int {
+	if ms < 250 {
+		ms = 250
+	}
+	shoutSpacingMu.Lock()
+	shoutSpacing = time.Duration(ms) * time.Millisecond
+	shoutSpacingMu.Unlock()
+
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "shoutSpacingUpdate", fmt.Sprintf("%d", ms))
+	}
+	return ms
 }
 
 // SaveAutoShoutConfig updates phrase and seconds. If auto-shout is
