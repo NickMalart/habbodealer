@@ -263,6 +263,7 @@ func (a *App) evaluateBlackjackHand() {
 			a.AddLogMsg("[BJ_DEBUG] sending hit/stay prompt to chat")
 			log.Printf("[BJ_DEBUG] sending hit/stay prompt to chat")
 			sendMessageWithDelay(prompt)
+			a.startBlackjackDecisionTimeoutMonitor(awaitingBlackjackDecisionPartnerName)
 		} else {
 			a.AddLogMsg("[BJ] prompt not sent (chat disabled or muted); auto-staying")
 			log.Printf("[BJ] prompt not sent (chat disabled or muted); auto-staying")
@@ -525,6 +526,7 @@ func (a *App) evaluate13Hand() {
 			a.AddLogMsg("[13_DEBUG] sending hit/stay prompt to chat")
 			log.Printf("[13_DEBUG] sending hit/stay prompt to chat")
 			sendMessageWithDelay(prompt)
+			a.startThirteenDecisionTimeoutMonitor(awaiting13DecisionPartnerName)
 		} else {
 			a.AddLogMsg("[13] prompt not sent (chat disabled or muted); auto-staying")
 			log.Printf("[13] prompt not sent (chat disabled or muted); auto-staying")

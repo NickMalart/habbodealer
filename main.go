@@ -264,6 +264,19 @@ var (
 	// Risk decision monitor (initial "Keep or Risk" prompt)
 	riskDecisionTimeoutMonitorID int
 	riskDecisionTimeoutActive    bool
+
+	blackjackDecisionTimeoutMonitorID int
+	blackjackDecisionTimeoutActive    bool
+
+	thirteenDecisionTimeoutMonitorID int
+	thirteenDecisionTimeoutActive    bool
+
+	triChoiceTimeoutMonitorID int
+	triChoiceTimeoutActive    bool
+
+	uoChoiceTimeoutMonitorID int
+	uoChoiceTimeoutActive    bool
+
 	gameChoiceUnreadableWarned   bool
 	dealerResyncInProgress       bool
 	// When true, the UI has enabled dice setup mode and incoming dice IDs
@@ -4599,7 +4612,13 @@ func resetPokerSequence() {
 	pokerSequencePlayerHand = ""
 }
 
+func stopBlackjackDecisionTimeoutMonitor() {
+	blackjackDecisionTimeoutMonitorID++
+	blackjackDecisionTimeoutActive = false
+}
+
 func resetBlackjackSequence() {
+	stopBlackjackDecisionTimeoutMonitor()
 	awaitingBlackjackDecision = false
 	awaitingBlackjackDecisionPartnerID = 0
 	awaitingBlackjackDecisionPartnerName = ""
@@ -4612,7 +4631,13 @@ func resetBlackjackSequence() {
 	blackjackNextHitIndex = 3
 }
 
+func stopThirteenDecisionTimeoutMonitor() {
+	thirteenDecisionTimeoutMonitorID++
+	thirteenDecisionTimeoutActive = false
+}
+
 func reset13Sequence() {
+	stopThirteenDecisionTimeoutMonitor()
 	awaiting13Decision = false
 	awaiting13DecisionPartnerID = 0
 	awaiting13DecisionPartnerName = ""
@@ -4625,7 +4650,13 @@ func reset13Sequence() {
 	thirteenNextHitIndex = 2
 }
 
+func stopTriChoiceTimeoutMonitor() {
+	triChoiceTimeoutMonitorID++
+	triChoiceTimeoutActive = false
+}
+
 func resetTriSequence() {
+	stopTriChoiceTimeoutMonitor()
 	awaitingTriChoice = false
 	awaitingTriChoicePartnerID = 0
 	awaitingTriChoicePartnerName = ""
@@ -4635,6 +4666,19 @@ func resetTriSequence() {
 	triPlayerTotal = 0
 	triDealerTotal = 0
 	triPlayerName = ""
+}
+
+func stopUOChoiceTimeoutMonitor() {
+	uoChoiceTimeoutMonitorID++
+	uoChoiceTimeoutActive = false
+}
+
+func resetUOSequence() {
+	stopUOChoiceTimeoutMonitor()
+	awaitingUOChoice = false
+	awaitingUOChoicePartnerID = 0
+	awaitingUOChoicePartnerName = ""
+	uoRoundActive = false
 }
 
 func stopPayout() {
@@ -6211,6 +6255,161 @@ func (a *App) startRiskDecisionTimeoutMonitor(player string) {
 		time.Sleep(1200 * time.Millisecond)
 
 		// Convert bank -> payout and start normal payout flow.
+		go a.finalizeRiskKeep()
+	}(monitorID, player)
+}
+
+func (a *App) startBlackjackDecisionTimeoutMonitor(player string) {
+	stopBlackjackDecisionTimeoutMonitor()
+
+	blackjackDecisionTimeoutMonitorID++
+	monitorID := blackjackDecisionTimeoutMonitorID
+	blackjackDecisionTimeoutActive = true
+
+	go func(id int, p string) {
+		for attempt := 1; attempt <= 4; attempt++ {
+			time.Sleep(30 * time.Second)
+
+			if id != blackjackDecisionTimeoutMonitorID || !blackjackDecisionTimeoutActive || !awaitingBlackjackDecision {
+				return
+			}
+
+			a.AddLogMsg(fmt.Sprintf("[BJ_TIMEOUT] repeating hit/stay prompt %d/4 for %s", attempt, p))
+			sendShout(fmt.Sprintf("%s: Hit or Stay? (Round active)", p))
+		}
+
+		if id != blackjackDecisionTimeoutMonitorID || !blackjackDecisionTimeoutActive || !awaitingBlackjackDecision {
+			return
+		}
+
+		// Final timeout: auto-stay to unhang bot
+		a.AddLogMsg(fmt.Sprintf("[BJ_TIMEOUT] final timeout for %s; auto-staying", p))
+		a.markCurrentGameHistoryIssue(fmt.Sprintf("Blackjack decision timed out for %s; forced auto-stay", p), false)
+		sendShout(fmt.Sprintf("No response from %q — auto-staying to continue.", p))
+
+		mutex.Lock()
+		awaitingBlackjackDecision = false
+		blackjackDecisionTimeoutActive = false
+		mutex.Unlock()
+
+		a.startBlackjackDealerTurn("decision timeout auto-stay")
+	}(monitorID, player)
+}
+
+func (a *App) startThirteenDecisionTimeoutMonitor(player string) {
+	stopThirteenDecisionTimeoutMonitor()
+
+	thirteenDecisionTimeoutMonitorID++
+	monitorID := thirteenDecisionTimeoutMonitorID
+	thirteenDecisionTimeoutActive = true
+
+	go func(id int, p string) {
+		for attempt := 1; attempt <= 4; attempt++ {
+			time.Sleep(30 * time.Second)
+
+			if id != thirteenDecisionTimeoutMonitorID || !thirteenDecisionTimeoutActive || !awaiting13Decision {
+				return
+			}
+
+			a.AddLogMsg(fmt.Sprintf("[13_TIMEOUT] repeating hit/stay prompt %d/4 for %s", attempt, p))
+			sendShout(fmt.Sprintf("%s: Hit or Stay? (13 active)", p))
+		}
+
+		if id != thirteenDecisionTimeoutMonitorID || !thirteenDecisionTimeoutActive || !awaiting13Decision {
+			return
+		}
+
+		// Final timeout: auto-stay to unhang bot
+		a.AddLogMsg(fmt.Sprintf("[13_TIMEOUT] final timeout for %s; auto-staying", p))
+		a.markCurrentGameHistoryIssue(fmt.Sprintf("13 decision timed out for %s; forced auto-stay", p), false)
+		sendShout(fmt.Sprintf("No response from %q — auto-staying to continue.", p))
+
+		mutex.Lock()
+		awaiting13Decision = false
+		thirteenDecisionTimeoutActive = false
+		mutex.Unlock()
+
+		a.start13DealerTurn("decision timeout auto-stay")
+	}(monitorID, player)
+}
+
+func (a *App) startTriChoiceTimeoutMonitor(player string) {
+	stopTriChoiceTimeoutMonitor()
+
+	triChoiceTimeoutMonitorID++
+	monitorID := triChoiceTimeoutMonitorID
+	triChoiceTimeoutActive = true
+
+	go func(id int, p string) {
+		for attempt := 1; attempt <= 4; attempt++ {
+			time.Sleep(30 * time.Second)
+
+			if id != triChoiceTimeoutMonitorID || !triChoiceTimeoutActive || !awaitingTriChoice {
+				return
+			}
+
+			a.AddLogMsg(fmt.Sprintf("[TRI_TIMEOUT] repeating High/Low prompt %d/4 for %s", attempt, p))
+			sendShout(fmt.Sprintf("%s: High or Low?", p))
+		}
+
+		if id != triChoiceTimeoutMonitorID || !triChoiceTimeoutActive || !awaitingTriChoice {
+			return
+		}
+
+		// Final timeout: auto-finalize Keep since game never started
+		a.AddLogMsg(fmt.Sprintf("[TRI_TIMEOUT] final timeout for %s; auto-finalizing Keep", p))
+		a.markCurrentGameHistoryIssue(fmt.Sprintf("Tri choice timed out for %s; forced auto-finalize", p), true)
+		sendShout(fmt.Sprintf("No response from %q — finalizing Keep.", p))
+
+		mutex.Lock()
+		awaitingTriChoice = false
+		triChoiceTimeoutActive = false
+		mutex.Unlock()
+
+		go a.finalizeRiskKeep()
+	}(monitorID, player)
+}
+
+func (a *App) startUOChoiceTimeoutMonitor(player string) {
+	stopUOChoiceTimeoutMonitor()
+
+	uoChoiceTimeoutMonitorID++
+	monitorID := uoChoiceTimeoutMonitorID
+	uoChoiceTimeoutActive = true
+
+	go func(id int, p string) {
+		for attempt := 1; attempt <= 4; attempt++ {
+			time.Sleep(30 * time.Second)
+
+			if id != uoChoiceTimeoutMonitorID || !uoChoiceTimeoutActive || !awaitingUOChoice {
+				return
+			}
+
+			mutex.Lock()
+			msg := "Pick O (8-12) gl or U (2-6) gl"
+			if uoVariantForRound == "uo7" || underOver7GameModeEnabled {
+				msg = "Pick O (8-12) gl, U (2-6) gl or 7"
+			}
+			mutex.Unlock()
+
+			a.AddLogMsg(fmt.Sprintf("[UO_TIMEOUT] repeating prompt %d/4 for %s", attempt, p))
+			sendShout(fmt.Sprintf("%s: %s", p, msg))
+		}
+
+		if id != uoChoiceTimeoutMonitorID || !uoChoiceTimeoutActive || !awaitingUOChoice {
+			return
+		}
+
+		// Final timeout: auto-finalize Keep
+		a.AddLogMsg(fmt.Sprintf("[UO_TIMEOUT] final timeout for %s; auto-finalizing Keep", p))
+		a.markCurrentGameHistoryIssue(fmt.Sprintf("UO choice timed out for %s; forced auto-finalize", p), true)
+		sendShout(fmt.Sprintf("No response from %q — finalizing Keep.", p))
+
+		mutex.Lock()
+		awaitingUOChoice = false
+		uoChoiceTimeoutActive = false
+		mutex.Unlock()
+
 		go a.finalizeRiskKeep()
 	}(monitorID, player)
 }
@@ -10740,6 +10939,7 @@ func (a *App) beginTriChoiceSequence() {
 	msg := "High or Low?"
 	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
 	sendShout(msg)
+	a.startTriChoiceTimeoutMonitor(playerName)
 }
 
 func (a *App) beginTriRound(mode string) {
@@ -10800,10 +11000,10 @@ func (a *App) beginUOChoiceSequence() {
 	msg := "Pick O (8-12) gl or U (2-6) gl"
 	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
 	sendShout(msg)
+	a.startUOChoiceTimeoutMonitor(playerName)
 }
 
 // beginUO7ChoiceSequence prompts the player to choose Over, Under or 7
-// for the UnderOver7 variant (allows a 3x payout if player picks 7 and wins).
 func (a *App) beginUO7ChoiceSequence() {
 	playerName := strings.TrimSpace(lastTradePartnerName)
 	if playerName == "" {
@@ -10840,6 +11040,7 @@ func (a *App) beginUO7ChoiceSequence() {
 	msg := "UO7 selected. Pick O (8-12) gl, U (2-6) gl or 7"
 	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
 	sendShout(msg)
+	a.startUOChoiceTimeoutMonitor(playerName)
 }
 
 // beginUnderOverRound starts the Under/Over-7 round with the given player choice: "over" or "under".
@@ -12785,6 +12986,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			lower := strings.ToLower(cleaned)
 			if strings.EqualFold(lower, "keep") {
 				e.Block()
+				stopRiskDecisionTimeoutMonitor()
 				go a.finalizeRiskKeep()
 				return
 			}
@@ -12792,6 +12994,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			if m := re.FindStringSubmatch(msg); len(m) == 2 {
 				amt, _ := strconv.Atoi(m[1])
 				e.Block()
+				stopRiskDecisionTimeoutMonitor()
 				go a.handleRiskBet(amt, senderName, index)
 				return
 			}
@@ -12825,6 +13028,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 
 		e.Block()
 		awaitingBlackjackDecision = false
+		stopBlackjackDecisionTimeoutMonitor()
 		a.AddLogMsg(fmt.Sprintf("[BJ_DEBUG] accepted decision=%q from sender=%q index=%d (expectedName=%q expectedIndex=%d)", decision, senderName, index, awaitingBlackjackDecisionPartnerName, awaitingBlackjackDecisionPartnerID))
 
 		if decision == "hit" {
@@ -12866,6 +13070,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 
 		e.Block()
 		awaiting13Decision = false
+		stopThirteenDecisionTimeoutMonitor()
 		a.AddLogMsg(fmt.Sprintf("[13_DEBUG] accepted decision=%q from sender=%q index=%d (expectedName=%q expectedIndex=%d)", decision, senderName, index, awaiting13DecisionPartnerName, awaiting13DecisionPartnerID))
 
 		if decision == "hit" {
