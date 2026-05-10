@@ -13834,14 +13834,21 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	// For Tri and Under/Over variants (two-step selection) we must first ask
 	// High/Low or Over/Under before starting the round.
 	if choice != "tri" && choice != "uo" && choice != "uo7" {
-		// Combine the standard "Starting" ack with the player-roll prompt
-		ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay(choice))
-		if choice == "pairup" {
+		// Build a context-aware ack: special-case DT/TT for clearer prompts
+		var ack string
+		switch choice {
+		case "pairup":
 			ack = "PU! If you roll a double or triple you Win! Player Roll"
-		}
-		if choice == "h18" {
+		case "h18":
 			ack = "H18! 19+ Win / 17- Lose / 18 House! Player Roll"
+		case "dt":
+			ack = fmt.Sprintf("%s! Player Roll — Double Trouble: beat the dealer's score to win", gameChoiceDisplay(choice))
+		case "tt":
+			ack = fmt.Sprintf("%s! Player Roll — Triple Trouble: beat the dealer's score to win", gameChoiceDisplay(choice))
+		default:
+			ack = fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay(choice))
 		}
+
 		if riskSessionActive {
 			a.beginRiskRoundHistory(choice, msg, gameChoiceDisplay(choice))
 		} else {
