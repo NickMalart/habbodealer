@@ -277,8 +277,8 @@ var (
 	uoChoiceTimeoutMonitorID int
 	uoChoiceTimeoutActive    bool
 
-	gameChoiceUnreadableWarned   bool
-	dealerResyncInProgress       bool
+	gameChoiceUnreadableWarned bool
+	dealerResyncInProgress     bool
 	// When true, the UI has enabled dice setup mode and incoming dice IDs
 	// should be recorded for the bot setup. Must be enabled by the Start Casino
 	// button in the frontend.
@@ -628,10 +628,10 @@ type GameHistoryEntry struct {
 	PayoutItems    []TradeItem `json:"payoutItems"`
 	Notes          []string    `json:"notes"`
 	// New fields to capture player choice and raw shout, plus payout multiplier
-	Choice           string      `json:"choice,omitempty"`
-	ChoiceShout      string      `json:"choiceShout,omitempty"`
-	PayoutMultiplier int         `json:"payoutMultiplier,omitempty"`
-	RaffleSessionID  int64       `json:"raffleSessionId,omitempty"`
+	Choice           string `json:"choice,omitempty"`
+	ChoiceShout      string `json:"choiceShout,omitempty"`
+	PayoutMultiplier int    `json:"payoutMultiplier,omitempty"`
+	RaffleSessionID  int64  `json:"raffleSessionId,omitempty"`
 	// Risk session fields
 	RiskSession bool `json:"riskSession,omitempty"`
 	RiskPending int  `json:"riskPending,omitempty"` // amount currently risked for a re-roll
@@ -3401,14 +3401,13 @@ var (
 // sendWhisper sends a private message to a specific user index.
 func sendWhisper(targetID int, msg string) {
 	trimmed := strings.TrimSpace(msg)
-	if trimmed == "" || targetID <= 0 {
+	if trimmed == "" {
 		return
 	}
-	// Whispers are generally not flood-controlled as strictly as shouts,
-	// but we'll still use the shout worker logic for consistency if we wanted.
-	// For now, simple direct send with the user index prefix.
-	ext.Send(out.WHISPER, fmt.Sprintf("%d %s", targetID, trimmed))
-	log.Printf("[WHISPER] to %d: %q", targetID, trimmed)
+	// Whisper is not supported reliably in this environment; use public shout instead.
+	// This ensures the partner always receives the notification.
+	sendShout(trimmed)
+	log.Printf("[WHISPER->SHOUT] target=%d msg=%q", targetID, trimmed)
 }
 
 // sendShoutThrottled sends a shout only if it hasn't been sent within the cooldown.
