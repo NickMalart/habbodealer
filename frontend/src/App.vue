@@ -246,6 +246,14 @@
                 <input type="checkbox" v-model="enableGameH18" :disabled="underOver7Mode" />
                 H18 (h18)
               </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
+                <input type="checkbox" v-model="enableGameDT" :disabled="underOver7Mode" />
+                Double Trouble (dt)
+              </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
+                <input type="checkbox" v-model="enableGameTT" :disabled="underOver7Mode" />
+                Triple Trouble (tt)
+              </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;border-top:1px solid #333;padding-top:6px;">
                 <input type="checkbox" v-model="riskModeEnabledInput" :disabled="underOver7Mode" />
                 Enable Risk Mode
@@ -964,6 +972,42 @@ export default {
           howItWorks: 'The app rolls 5 dice for the player and calculates the sum. 19 or higher wins x2, 17 or lower loses, and exactly 18 is a dealer win.',
           playerFlow: 'Trade the bet, say h18 when prompted, and watch the 5 dice.',
           dealerFlow: 'The dealer rolls 5 dice, sums them up, and determines the outcome based on the 18-pivot rule.',
+          },
+          {
+          key: 'dt',
+          title: 'Double Trouble (2 Dice)',
+          summary: 'Even total wins, odd loses, but 7 is the house\'s.',
+          description: 'Double Trouble is a 2-dice game. Even totals win, odd totals (except 7) lose. A total of 7 is a house win.',
+          howItWorks: 'The app rolls 2 dice. If the sum is 7, the house wins. Otherwise, if the sum is even, the player wins. If it\'s odd, the player loses.',
+          playerFlow: 'Trade the bet, say dt when prompted, and watch the 2 dice.',
+          dealerFlow: 'The dealer rolls 2 dice, and the outcome is determined by the sum.',
+          },
+          {
+          key: 'tt',
+          title: 'Triple Trouble (3 Dice)',
+          summary: 'Even total wins, odd loses, but 11 is the house\'s.',
+          description: 'Triple Trouble is a 3-dice game. Even totals win, odd totals (except 11) lose. A total of 11 is a house win.',
+          howItWorks: 'The app rolls 3 dice. If the sum is 11, the house wins. Otherwise, if the sum is even, the player wins. If it\'s odd, the player loses.',
+          playerFlow: 'Trade the bet, say tt when prompted, and watch the 3 dice.',
+          dealerFlow: 'The dealer rolls 3 dice, and the outcome is determined by the sum.',
+          },
+          ],
+          key: 'dt',
+          title: 'Double Trouble (2 Dice)',
+          summary: 'Even total wins, odd loses, but 7 is the house\'s.',
+          description: 'Double Trouble is a 2-dice game. Even totals win, odd totals (except 7) lose. A total of 7 is a house win.',
+          howItWorks: 'The app rolls 2 dice. If the sum is 7, the house wins. Otherwise, if the sum is even, the player wins. If it\'s odd, the player loses.',
+          playerFlow: 'Trade the bet, say dt when prompted, and watch the 2 dice.',
+          dealerFlow: 'The dealer rolls 2 dice, and the outcome is determined by the sum.',
+        },
+        {
+          key: 'tt',
+          title: 'Triple Trouble (3 Dice)',
+          summary: 'Even total wins, odd loses, but 11 is the house\'s.',
+          description: 'Triple Trouble is a 3-dice game. Even totals win, odd totals (except 11) lose. A total of 11 is a house win.',
+          howItWorks: 'The app rolls 3 dice. If the sum is 11, the house wins. Otherwise, if the sum is even, the player wins. If it\'s odd, the player loses.',
+          playerFlow: 'Trade the bet, say tt when prompted, and watch the 3 dice.',
+          dealerFlow: 'The dealer rolls 3 dice, and the outcome is determined by the sum.',
         },
       ],
       tradeItems: [],

@@ -277,7 +277,9 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 			"PU":    {Game: "PU"},
 			"H18":   {Game: "H18"},
 			"UO7":   {Game: "UO7"},
-			},
+			"DT":    {Game: "DT"},
+			"TT":    {Game: "TT"},
+		},
 	}
 
 	var start, end time.Time
@@ -362,6 +364,10 @@ func (a *App) GetCasinoStatsJSON(rangeKey string) string {
 	b, err := json.Marshal(stats)
 	if err != nil {
 		return "{}"
+	}
+	return string(b)
+}
+turn "{}"
 	}
 	return string(b)
 }
