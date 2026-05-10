@@ -157,6 +157,13 @@ func tradeItemsToCountMap(items []TradeItem) map[string]int {
 
 func normalizeGameName(game string) string {
 	g := strings.TrimSpace(strings.ToLower(game))
+	// Prefer explicit Double/Triple Trouble mappings before broad 'tri' checks
+	if strings.Contains(g, "double") || g == "dt" || strings.Contains(g, "doubletrouble") {
+		return "DT"
+	}
+	if strings.Contains(g, "triple") || g == "tt" || strings.Contains(g, "tripletrouble") {
+		return "TT"
+	}
 	// Tri variants: treat all tri variants as a single "Tri" bucket for stats
 	if strings.Contains(g, "tri") {
 		return "Tri"

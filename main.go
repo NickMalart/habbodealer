@@ -107,6 +107,9 @@ var (
 	triPlayerTotal              int
 	triDealerTotal              int
 	triPlayerName               string
+	// Double/Triple Trouble rolling state
+	isDTRolling bool
+	isTTRolling bool
 	// Under/Over-7 state
 	isUORolling    bool
 	uoRoundActive  bool
@@ -126,6 +129,8 @@ var (
 	enabledGame21               bool = true
 	enabledGame13               bool = true
 	enabledGameTri              bool = true
+	enabledGameDT               bool = true
+	enabledGameTT               bool = true
 	enabledGameUO7              bool = false
 	enabledGamePairUp           bool = true
 	enabledGameH18              bool = true
@@ -5523,6 +5528,16 @@ func (a *App) executeRiskRound() {
 		isBJRolling = true
 		mutex.Unlock()
 		a.rollBjDice()
+	case "DT":
+		mutex.Lock()
+		isDTRolling = true
+		mutex.Unlock()
+		a.rollDoubleTroubleDice()
+	case "TT":
+		mutex.Lock()
+		isTTRolling = true
+		mutex.Unlock()
+		a.rollTripleTroubleDice()
 	default:
 		// Unknown game: simple coin flip fallback
 		win := rand.Intn(2) == 0
@@ -9889,6 +9904,8 @@ func setEnabledGamesFromSelection(codes []string) {
 	enabledGame21 = true
 	enabledGame13 = true
 	enabledGameTri = true
+	enabledGameDT = true
+	enabledGameTT = true
 	enabledGameUO7 = false
 	enabledGamePairUp = true
 	enabledGameH18 = true
@@ -9901,6 +9918,8 @@ func setEnabledGamesFromSelection(codes []string) {
 	enabledGame21 = false
 	enabledGame13 = false
 	enabledGameTri = false
+	enabledGameDT = false
+	enabledGameTT = false
 	enabledGameUO7 = false
 	enabledGamePairUp = false
 	enabledGameH18 = false
@@ -9917,6 +9936,10 @@ func setEnabledGamesFromSelection(codes []string) {
 			enabledGame13 = true
 		case "tri", "trih", "tril", "trihigh", "trilow":
 			enabledGameTri = true
+		case "dt", "double", "doubletrouble":
+			enabledGameDT = true
+		case "tt", "triple", "tripletrouble":
+			enabledGameTT = true
 		case "uo", "uo7", "underover", "underover7":
 			enabledGameUO7 = true
 		case "pu", "pu3", "pairup":
@@ -9949,6 +9972,12 @@ func enabledGameChoicePartsLocked() []string {
 	}
 	if enabledGameTri {
 		parts = append(parts, "tri")
+	}
+	if enabledGameDT {
+		parts = append(parts, "dt")
+	}
+	if enabledGameTT {
+		parts = append(parts, "tt")
 	}
 	if enabledGameUO7 {
 		parts = append(parts, "u7", "o7")
@@ -9989,6 +10018,10 @@ func isGameChoiceEnabledLocked(choice string) bool {
 		return enabledGame13
 	case "tri", "trihigh", "trilow":
 		return enabledGameTri
+	case "dt":
+		return enabledGameDT
+	case "tt":
+		return enabledGameTT
 	case "uo", "uo7", "uo_over", "uo_under":
 		return enabledGameUO7
 	case "pairup":
@@ -10974,6 +11007,48 @@ func (a *App) beginTriRound(mode string) {
 	}()
 }
 
+// beginDoubleTroubleRound starts the Double Trouble (2-dice) round.
+func (a *App) beginDoubleTroubleRound() {
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	resetPokerSequence()
+	resetBlackjackSequence()
+	reset13Sequence()
+	resetTriSequence()
+
+	isDTRolling = true
+	a.setCurrentGameHistoryGame("DT")
+
+	go func() {
+		time.Sleep(1400 * time.Millisecond)
+		a.rollDoubleTroubleDice()
+	}()
+}
+
+// beginTripleTroubleRound starts the Triple Trouble (3-dice) round.
+func (a *App) beginTripleTroubleRound() {
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	resetPokerSequence()
+	resetBlackjackSequence()
+	reset13Sequence()
+	resetTriSequence()
+
+	isTTRolling = true
+	a.setCurrentGameHistoryGame("TT")
+
+	go func() {
+		time.Sleep(1400 * time.Millisecond)
+		a.rollTripleTroubleDice()
+	}()
+}
+
 // beginUOChoiceSequence prompts the player to choose Over or Under for the Under/Over-7 game.
 func (a *App) beginUOChoiceSequence() {
 	playerName := strings.TrimSpace(lastTradePartnerName)
@@ -11260,6 +11335,106 @@ func (a *App) rollUnderOverDice() {
 
 	a.evaluateUnderOverRound()
 	isUORolling = false
+}
+
+// rollDoubleTroubleDice rolls two dice for Double Trouble and evaluates the result.
+func (a *App) rollDoubleTroubleDice() {
+	if fakeDiceTestingMode {
+		mutex.Lock()
+		if len(diceList) < 2 {
+			mutex.Unlock()
+			a.AddLogMsg("[DT] Not enough dice to roll")
+			isDTRolling = false
+			return
+		}
+		currentSum = 0
+		indices := []int{0, 1}
+		for _, index := range indices {
+			diceList[index].Value = rand.Intn(6) + 1
+			diceList[index].IsClosed = false
+			currentSum += diceList[index].Value
+			a.AddLogMsg(fmt.Sprintf("Dice %d rolled: %d", diceList[index].ID, diceList[index].Value))
+		}
+		mutex.Unlock()
+		a.evaluateDoubleTroubleRound()
+		isDTRolling = false
+		return
+	}
+
+	mutex.Lock()
+	var indices []int
+	if len(diceList) >= 2 {
+		indices = []int{0, 1}
+	}
+	if len(indices) < 2 {
+		mutex.Unlock()
+		a.AddLogMsg("[DT] Not enough dice to roll")
+		isDTRolling = false
+		return
+	}
+	resultsWaitGroup.Add(len(indices))
+	mutex.Unlock()
+
+	for _, index := range indices {
+		diceList[index].Roll()
+		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
+	}
+
+	time.Sleep(1000 * time.Millisecond)
+	resultsWaitGroup.Wait()
+
+	a.evaluateDoubleTroubleRound()
+	isDTRolling = false
+}
+
+// rollTripleTroubleDice rolls three dice for Triple Trouble and evaluates the result.
+func (a *App) rollTripleTroubleDice() {
+	if fakeDiceTestingMode {
+		mutex.Lock()
+		if len(diceList) < 3 {
+			mutex.Unlock()
+			a.AddLogMsg("[TT] Not enough dice to roll")
+			isTTRolling = false
+			return
+		}
+		currentSum = 0
+		indices := []int{0, 1, 2}
+		for _, index := range indices {
+			diceList[index].Value = rand.Intn(6) + 1
+			diceList[index].IsClosed = false
+			currentSum += diceList[index].Value
+			a.AddLogMsg(fmt.Sprintf("Dice %d rolled: %d", diceList[index].ID, diceList[index].Value))
+		}
+		mutex.Unlock()
+		a.evaluateTripleTroubleRound()
+		isTTRolling = false
+		return
+	}
+
+	mutex.Lock()
+	var indices []int
+	if len(diceList) >= 3 {
+		indices = []int{0, 1, 2}
+	}
+	if len(indices) < 3 {
+		mutex.Unlock()
+		a.AddLogMsg("[TT] Not enough dice to roll")
+		isTTRolling = false
+		return
+	}
+	resultsWaitGroup.Add(len(indices))
+	mutex.Unlock()
+
+	for _, index := range indices {
+		diceList[index].Roll()
+		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
+	}
+
+	time.Sleep(1000 * time.Millisecond)
+	resultsWaitGroup.Wait()
+
+	a.evaluateTripleTroubleRound()
+	isTTRolling = false
 }
 
 // evaluateUnderOverRound computes the result of the Under/Over-7 roll and resolves payout.
@@ -13702,6 +13877,12 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	case "h18":
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected H18; starting round", index))
 		a.beginH18Round()
+	case "dt":
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected DT; starting round", index))
+		a.beginDoubleTroubleRound()
+	case "tt":
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected TT; starting round", index))
+		a.beginTripleTroubleRound()
 	case "tri":
 		// Two-step Tri selection: prompt player for High or Low
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Tri; prompting for High/Low", index))
@@ -13923,6 +14104,10 @@ func normalizeIncomingGameChoice(msg string) (string, bool) {
 		return "trilow", true
 	case "trilow":
 		return "trilow", true
+	case "dt", "double", "doubletrouble":
+		return "dt", true
+	case "tt", "triple", "tripletrouble":
+		return "tt", true
 	case "h18", "highfive18", "hf18":
 		return "h18", true
 	default:
@@ -13972,6 +14157,10 @@ func normalizeLooseGameChoice(msg string) (string, bool) {
 		return "trilow", true
 	case "trilow":
 		return "trilow", true
+	case "dt", "double", "doubletrouble":
+		return "dt", true
+	case "tt", "triple", "tripletrouble":
+		return "tt", true
 	case "h18", "highfive18", "hf18":
 		return "h18", true
 	default:
@@ -14048,6 +14237,10 @@ func gameChoiceDisplay(choice string) string {
 		return "13"
 	case "tri":
 		return "Tri"
+	case "dt":
+		return "DT"
+	case "tt":
+		return "TT"
 	case "uo7":
 		return "UO7"
 	case "uo_over":
