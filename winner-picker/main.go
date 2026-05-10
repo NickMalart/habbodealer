@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -72,11 +71,9 @@ func (a *App) runExt() {
 	ext.Intercept(in.USERS, in.SPACENODEUSERS).With(a.handleUsersPacket)
 	
 	// Also intercept header 28 specifically as it's common in Origins
-	ext.Intercept(g.In.Id(28)).With(a.handleUsersPacket)
+	ext.Intercept(g.In.Id("28")).With(a.handleUsersPacket)
 
-	if err := ext.Run(); err != nil {
-		log.Printf("Extension failed: %v", err)
-	}
+	ext.Run()
 }
 
 func (a *App) handleUsersPacket(e *g.Intercept) {
@@ -98,7 +95,6 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 		userMap[u] = true
 	}
 	
-	newUsers := []string{}
 	for _, u := range users {
 		name := strings.TrimSpace(u.Username)
 		if name != "" {

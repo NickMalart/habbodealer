@@ -1,7 +1,5 @@
 <script setup>
 import {ref, onMounted} from 'vue'
-import * as Events from '../wailsjs/runtime'
-import {UpdateUsers, PickWinner, ShoutWinner, GetUsers} from '../wailsjs/go/main/App'
 
 const users = ref([])
 const blockedNames = ref([])
@@ -9,14 +7,24 @@ const newBlockName = ref('')
 const lastWinner = ref('')
 const isPicking = ref(false)
 
+// Helper to call Go methods
+const call = async (name, ...args) => {
+  if (window.go && window.go.main && window.go.main.App && window.go.main.App[name]) {
+    return await window.go.main.App[name](...args);
+  }
+};
+
 onMounted(async () => {
   // Load initial users
-  users.value = await GetUsers()
+  const u = await call('GetUsers')
+  if (u) users.value = u
   
   // Listen for updates from backend
-  Events.On('users_updated', (updatedUsers) => {
-    users.value = updatedUsers
-  })
+  if (window.runtime && window.runtime.EventsOn) {
+    window.runtime.EventsOn('users_updated', (updatedUsers) => {
+      users.value = updatedUsers
+    })
+  }
 
   // Load blocked names from localStorage
   const stored = localStorage.getItem('blocked_names')
@@ -26,7 +34,7 @@ onMounted(async () => {
 })
 
 const handleUpdateUsers = async () => {
-  await UpdateUsers()
+  await call('UpdateUsers')
 }
 
 const addBlock = () => {
@@ -48,16 +56,14 @@ const pickWinner = async () => {
   lastWinner.value = ''
   
   // Update users first as requested
-  await UpdateUsers()
+  await call('UpdateUsers')
   
   // Wait a bit for the packets to arrive and be processed
-  // In a real scenario, we might want to wait for the event, 
-  // but for simplicity, we'll wait a second.
   setTimeout(async () => {
-    const winner = await PickWinner(blockedNames.value)
+    const winner = await call('PickWinner', blockedNames.value)
     if (winner) {
       lastWinner.value = winner
-      await ShoutWinner(winner)
+      await call('ShoutWinner', winner)
     } else {
       alert('No eligible users found in the room!')
     }
@@ -76,7 +82,7 @@ const isBlocked = (name) => {
     
     <div class="controls">
       <button @click="handleUpdateUsers">Update User List</button>
-      <button @click="pickWinner" :disabled="isPicking || users.length === 0">
+      <button @click="pickWinner" :disabled="isPicking">
         {{ isPicking ? 'Updating & Picking...' : 'Pick Winner' }}
       </button>
     </div>
@@ -150,6 +156,7 @@ h1 {
     display: flex;
     align-items: center;
     gap: 5px;
+    color: white;
 }
 
 .remove-btn {
