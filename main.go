@@ -123,20 +123,20 @@ var (
 	uoVariantForRound string
 	// Pending variant selection when prompting for Over/Under (set by beginUO7ChoiceSequence)
 	pendingUoVariant            string
-	onlyUnderOver7Mode          bool // when true, dealer prompts only Under/Over-7
-	enabledGamePkr              bool = true
-	enabledGame21               bool = true
-	enabledGame13               bool = true
-	enabledGameTri              bool = true
-	enabledGameDT               bool = true
-	enabledGameUO7              bool = false
-	enabledGamePairUp           bool = true
-	enabledGameH18              bool = true
-	enabledGameBandit           bool = false
+	onlyUnderOver7Mode          bool    // when true, dealer prompts only Under/Over-7
+	enabledGamePkr              bool    = true
+	enabledGame21               bool    = true
+	enabledGame13               bool    = true
+	enabledGameTri              bool    = true
+	enabledGameDT               bool    = true
+	enabledGameUO7              bool    = false
+	enabledGamePairUp           bool    = true
+	enabledGameH18              bool    = true
+	enabledGameBandit           bool    = false
 	banditJackpotPayout         float64 = 20.0
 	banditTriplesPayout         float64 = 5.0
-	isBanditRolling             bool = false
-	banditRoundActive           bool = false
+	isBanditRolling             bool    = false
+	banditRoundActive           bool    = false
 	pokerSequencePlayerName     string
 	pokerSequencePlayerResult   PokerHandResult
 	pokerSequencePlayerHand     string
@@ -183,23 +183,23 @@ var (
 	// Whether a trade-limit warning was previously active (used to detect
 	// transitions from invalid -> valid and to shout a one-time "now valid"
 	// message).
-	tradeLimitWasActive    bool
-	lastTradeOpenData      string
-	lastTradeOpen          string
-	tradeOpen              bool
-	messageQueue           []string
-	isPokerRolling         bool
-	isTriRolling           bool
-	isBJRolling            bool
-	is13Rolling            bool
-	is13Hitting            bool
-	isPairUpRolling        bool
-	isH18Rolling           bool
-	isHitting              bool
-	isClosing                            bool
-	ChatIsDisabled                       bool
-	ChatMinimalMode                      bool = true
-	mutex                                sync.Mutex
+	tradeLimitWasActive bool
+	lastTradeOpenData   string
+	lastTradeOpen       string
+	tradeOpen           bool
+	messageQueue        []string
+	isPokerRolling      bool
+	isTriRolling        bool
+	isBJRolling         bool
+	is13Rolling         bool
+	is13Hitting         bool
+	isPairUpRolling     bool
+	isH18Rolling        bool
+	isHitting           bool
+	isClosing           bool
+	ChatIsDisabled      bool
+	ChatMinimalMode     bool = true
+	mutex               sync.Mutex
 
 	resultsWaitGroup       sync.WaitGroup
 	rollDelay              = 550 * time.Millisecond
@@ -654,8 +654,8 @@ type GameHistoryEntry struct {
 	PayoutItems    []TradeItem `json:"payoutItems"`
 	Notes          []string    `json:"notes"`
 	// New fields to capture player choice and raw shout, plus payout multiplier
-	Choice           string `json:"choice,omitempty"`
-	ChoiceShout      string `json:"choiceShout,omitempty"`
+	Choice           string  `json:"choice,omitempty"`
+	ChoiceShout      string  `json:"choiceShout,omitempty"`
 	PayoutMultiplier float64 `json:"payoutMultiplier,omitempty"`
 	RaffleSessionID  int64   `json:"raffleSessionId,omitempty"`
 	// Risk session fields
@@ -5387,6 +5387,14 @@ func (a *App) handleRiskBet(n int, sender string, userID int) {
 	}
 	// Player engaged with risk decision; cancel the initial Keep-or-Risk reminder monitor.
 	stopRiskDecisionTimeoutMonitor()
+
+	// Defensive: avoid processing a second risk while one is pending.
+	if riskPendingBet > 0 || awaitingGameChoice {
+		mutex.Unlock()
+		sendWhisper(userID, "Risk already pending; please choose a game.")
+		a.AddLogMsg(fmt.Sprintf("[RISK] rejected r%d from %s: already pending", n, sender))
+		return
+	}
 
 	// Defensive guards: reject if player's internal bank is empty or dealer reopened.
 	if playerRisk <= 0 {
@@ -13245,6 +13253,19 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			re := regexp.MustCompile(`(?i)^\s*(?:r|risk)\s*?(\d+)\s*$`)
 			if m := re.FindStringSubmatch(msg); len(m) == 2 {
 				amt, _ := strconv.Atoi(m[1])
+
+				// Prevent duplicate/parallel risk attempts — prefer the first.
+				mutex.Lock()
+				pending := awaitingGameChoice || riskPendingBet > 0
+				mutex.Unlock()
+				if pending {
+					sendWhisper(index, "Risk already placed; choose a game (or wait for the prompt).")
+					a.AddLogMsg(fmt.Sprintf("[RISK] ignored duplicate r%d from %s: already pending", amt, senderName))
+					e.Block()
+					stopRiskDecisionTimeoutMonitor()
+					return
+				}
+
 				e.Block()
 				stopRiskDecisionTimeoutMonitor()
 				go a.handleRiskBet(amt, senderName, index)
