@@ -16,12 +16,21 @@ import (
 // sendDiscordWebhookForGame posts a nicely formatted embed about a completed
 // game to the configured Discord webhook (read from DISCORD_WEBHOOK_URL).
 func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
-	// Hardcoded webhook URL (provided by user)
-	webhookURL := "https://discord.com/api/webhooks/1496681436592214016/QTGLb6qYMv0-61hVc3m9s7mBgvMc-E0LKpQTxd1bSow9N_GqOjQMyw9njq8KcsM8Jhi6"
-	a.AddLogMsg("[DISCORD] using hardcoded webhook URL")
+	// Prefer environment-configured webhook; fall back to hardcoded value for
+	// backwards compatibility. Set `DISCORD_WEBHOOK_URL` to override.
+	webhookURL := os.Getenv("DISCORD_WEBHOOK_URL")
+	if strings.TrimSpace(webhookURL) == "" {
+		webhookURL = "https://discord.com/api/webhooks/1496681436592214016/QTGLb6qYMv0-61hVc3m9s7mBgvMc-E0LKpQTxd1bSow9N_GqOjQMyw9njq8KcsM8Jhi6"
+		a.AddLogMsg("[DISCORD] using built-in webhook URL (env DISCORD_WEBHOOK_URL not set)")
+	} else {
+		a.AddLogMsg("[DISCORD] using webhook URL from DISCORD_WEBHOOK_URL")
+	}
 
-	// Optional secondary webhook for Issue-only posts (provided by user)
-	issueWebhookURL := "https://discord.com/api/webhooks/1502209413065343086/lV-mzQvSRCqc-HkjKZWXOrmX0McP1HU47_fBjthixU2IdO0Bh18j-FBkIjGCDDjgAbo4"
+	// Optional secondary webhook for Issue-only posts (env override: DISCORD_ISSUE_WEBHOOK_URL)
+	issueWebhookURL := os.Getenv("DISCORD_ISSUE_WEBHOOK_URL")
+	if strings.TrimSpace(issueWebhookURL) == "" {
+		issueWebhookURL = "https://discord.com/api/webhooks/1502209413065343086/lV-mzQvSRCqc-HkjKZWXOrmX0McP1HU47_fBjthixU2IdO0Bh18j-FBkIjGCDDjgAbo4"
+	}
 
 	// Validate webhook URL contains a numeric webhook ID (snowflake).
 	if u, perr := url.Parse(webhookURL); perr == nil {
@@ -270,10 +279,11 @@ func (a *App) sendDiscordRoundResult(winner string, playerResult string, dealerR
 // game-specific fields (choice/results) and instead surface the payout items,
 // payout decision (Keep/Risk), and any owed/itemized issue metadata.
 func (a *App) sendDiscordWebhookForPayout(entry GameHistoryEntry) {
-	// Payout webhook URL (configured for payout notifications)
-	payoutWebhookURL := "https://discord.com/api/webhooks/1502425167031173211/IZF_TGQnk_rXeR5kgzpFJLQzAU6a6NVe05MTQavYn3kt2QQOQNpw7d7QxeKkZuVJscZP"
-	// Issues channel webhook (only used for Issue posts)
-	issueWebhookURL := "https://discord.com/api/webhooks/1502209413065343086/lV-mzQvSRCqc-HkjKZWXOrmX0McP1HU47_fBjthixU2IdO0Bh18j-FBkIjGCDDjgAbo4"
+	// Payout webhook URL (env override: DISCORD_PAYOUT_WEBHOOK_URL)
+	payoutWebhookURL := os.Getenv("DISCORD_PAYOUT_WEBHOOK_URL")
+	if strings.TrimSpace(payoutWebhookURL) == "" {
+		payoutWebhookURL = "https://discord.com/api/webhooks/1502425167031173211/IZF_TGQnk_rXeR5kgzpFJLQzAU6a6NVe05MTQavYn3kt2QQOQNpw7d7QxeKkZuVJscZP"
+	}
 
 	// Decide destination: successful payouts go to payout channel, issues go to issues channel.
 	targetWebhookURL := payoutWebhookURL
