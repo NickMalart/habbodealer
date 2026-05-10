@@ -11929,6 +11929,7 @@ func resetDiceState() {
 	lastTradeBlockNotice = ""
 	tradeLimitWasActive = false
 	lastTradeLimitNotice = ""
+	lastTradeLimitShoutAt = time.Time{}
 	partnerTradeAccepted = false
 	partnerAcceptedSnapshot = nil
 }
