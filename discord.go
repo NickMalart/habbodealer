@@ -285,6 +285,12 @@ func (a *App) sendDiscordWebhookForPayout(entry GameHistoryEntry) {
 		payoutWebhookURL = "https://discord.com/api/webhooks/1502425167031173211/IZF_TGQnk_rXeR5kgzpFJLQzAU6a6NVe05MTQavYn3kt2QQOQNpw7d7QxeKkZuVJscZP"
 	}
 
+	// Ensure we have an issues webhook available in this scope (env override)
+	issueWebhookURL := os.Getenv("DISCORD_ISSUE_WEBHOOK_URL")
+	if strings.TrimSpace(issueWebhookURL) == "" {
+		issueWebhookURL = "https://discord.com/api/webhooks/1502209413065343086/lV-mzQvSRCqc-HkjKZWXOrmX0McP1HU47_fBjthixU2IdO0Bh18j-FBkIjGCDDjgAbo4"
+	}
+
 	// Decide destination: successful payouts go to payout channel, issues go to issues channel.
 	targetWebhookURL := payoutWebhookURL
 	if entry.Issue || strings.EqualFold(entry.Status, "Issue") {
