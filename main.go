@@ -13874,9 +13874,6 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	case "dt":
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected DT; starting round", index))
 		a.beginDoubleTroubleRound()
-	case "tt":
-		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected TT; starting round", index))
-		a.beginTripleTroubleRound()
 	case "tri":
 		// Two-step Tri selection: prompt player for High or Low
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected Tri; prompting for High/Low", index))
