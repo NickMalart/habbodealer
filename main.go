@@ -11563,7 +11563,7 @@ func (a *App) beginH18Round() {
 	resetBlackjackSequence()
 	reset13Sequence()
 	resetTriSequence()
-	resetDiceState() // Just in case
+	resetH18Sequence()
 
 	h18RoundActive = true
 	a.setCurrentGameHistoryGame("H18")
