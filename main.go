@@ -82,6 +82,17 @@ var (
 	pokerSequenceStage                   int
 	blackjackHitInFlight                 bool
 	blackjackNextHitIndex                int
+	// 6-game state
+	awaitingSixDecision            bool
+	awaitingSixDecisionPartnerID   int
+	awaitingSixDecisionPartnerName string
+	sixRoundActive                 bool
+	sixPlayerTurn                  bool
+	sixPlayerTotal                 int
+	sixDealerTotal                 int
+	sixPlayerName                  string
+	sixHitInFlight                 bool
+	sixNextHitIndex                int
 	// 13-game state
 	awaiting13Decision            bool
 	awaiting13DecisionPartnerID   int
@@ -127,6 +138,7 @@ var (
 	enabledGamePkr              bool    = true
 	enabledGame21               bool    = true
 	enabledGame13               bool    = true
+	enabledGame6                bool    = true
 	enabledGameTri              bool    = true
 	enabledGameDT               bool    = true
 	enabledGameUO7              bool    = false
@@ -4739,6 +4751,25 @@ func resetBlackjackSequence() {
 	blackjackNextHitIndex = 3
 }
 
+func stopSixDecisionTimeoutMonitor() {
+	sixDecisionTimeoutMonitorID++
+	sixDecisionTimeoutActive = false
+}
+
+func resetSixSequence() {
+	stopSixDecisionTimeoutMonitor()
+	awaitingSixDecision = false
+	awaitingSixDecisionPartnerID = 0
+	awaitingSixDecisionPartnerName = ""
+	sixRoundActive = false
+	sixPlayerTurn = false
+	sixPlayerTotal = 0
+	sixDealerTotal = 0
+	sixPlayerName = ""
+	sixHitInFlight = false
+	sixNextHitIndex = 1
+}
+
 func stopThirteenDecisionTimeoutMonitor() {
 	thirteenDecisionTimeoutMonitorID++
 	thirteenDecisionTimeoutActive = false
@@ -6417,6 +6448,43 @@ func (a *App) startBlackjackDecisionTimeoutMonitor(player string) {
 		mutex.Unlock()
 
 		a.startBlackjackDealerTurn("decision timeout auto-stay")
+	}(monitorID, player)
+}
+
+func (a *App) startSixDecisionTimeoutMonitor(player string) {
+	stopSixDecisionTimeoutMonitor()
+
+	sixDecisionTimeoutMonitorID++
+	monitorID := sixDecisionTimeoutMonitorID
+	sixDecisionTimeoutActive = true
+
+	go func(id int, p string) {
+		for attempt := 1; attempt <= 4; attempt++ {
+			time.Sleep(30 * time.Second)
+
+			if id != sixDecisionTimeoutMonitorID || !sixDecisionTimeoutActive || !awaitingSixDecision {
+				return
+			}
+
+			a.AddLogMsg(fmt.Sprintf("[6_TIMEOUT] repeating hit/stay prompt %d/4 for %s", attempt, p))
+			sendShout(fmt.Sprintf("%s: Hit or Stay? (6 active)", p))
+		}
+
+		if id != sixDecisionTimeoutMonitorID || !sixDecisionTimeoutActive || !awaitingSixDecision {
+			return
+		}
+
+		// Final timeout: auto-stay to unhang bot
+		a.AddLogMsg(fmt.Sprintf("[6_TIMEOUT] final timeout for %s; auto-staying", p))
+		a.markCurrentGameHistoryIssue(fmt.Sprintf("6 decision timed out for %s; forced auto-stay", p), false)
+		sendShout(fmt.Sprintf("No response from %q — auto-staying to continue.", p))
+
+		mutex.Lock()
+		awaitingSixDecision = false
+		sixDecisionTimeoutActive = false
+		mutex.Unlock()
+
+		a.startSixDealerTurn("decision timeout auto-stay")
 	}(monitorID, player)
 }
 
@@ -10039,6 +10107,7 @@ func setEnabledGamesFromSelection(codes []string) {
 	enabledGamePkr = false
 	enabledGame21 = false
 	enabledGame13 = false
+	enabledGame6 = false
 	enabledGameTri = false
 	enabledGameDT = false
 	enabledGameUO7 = false
@@ -10056,6 +10125,8 @@ func setEnabledGamesFromSelection(codes []string) {
 			enabledGame21 = true
 		case "13":
 			enabledGame13 = true
+		case "6":
+			enabledGame6 = true
 		case "tri", "trih", "tril", "trihigh", "trilow":
 			enabledGameTri = true
 		case "dt", "double", "doubletrouble":
@@ -10071,10 +10142,11 @@ func setEnabledGamesFromSelection(codes []string) {
 		}
 	}
 
-	if !enabledGamePkr && !enabledGame21 && !enabledGame13 && !enabledGameTri && !enabledGameUO7 && !enabledGamePairUp && !enabledGameH18 && !enabledGameBandit {
+	if !enabledGamePkr && !enabledGame21 && !enabledGame13 && !enabledGame6 && !enabledGameTri && !enabledGameUO7 && !enabledGamePairUp && !enabledGameH18 && !enabledGameBandit {
 		enabledGamePkr = true
 		enabledGame21 = true
 		enabledGame13 = true
+		enabledGame6 = true
 		enabledGameTri = true
 		enabledGamePairUp = true
 		enabledGameH18 = true
@@ -10091,6 +10163,9 @@ func enabledGameChoicePartsLocked() []string {
 	}
 	if enabledGame13 {
 		parts = append(parts, "13")
+	}
+	if enabledGame6 {
+		parts = append(parts, "6")
 	}
 	if enabledGameTri {
 		parts = append(parts, "tri")
@@ -10141,6 +10216,8 @@ func isGameChoiceEnabledLocked(choice string) bool {
 		return enabledGame21
 	case "13":
 		return enabledGame13
+	case "6":
+		return enabledGame6
 	case "tri", "trihigh", "trilow":
 		return enabledGameTri
 	case "dt":
@@ -10967,10 +11044,30 @@ func (a *App) onChatMessage(e *g.Intercept) {
 			go a.rollBjDice()
 		case strings.HasSuffix(command, "13"):
 			e.Block()
+			reset13Sequence()
+			thirteenRoundActive = true
+			thirteenPlayerTurn = true
+			thirteenPlayerName = strings.TrimSpace(lastTradePartnerName)
+			if thirteenPlayerName == "" {
+				thirteenPlayerName = "Player"
+			}
 			is13Rolling = true
 			logRollResult := fmt.Sprintf("13 Roll:\n")
 			a.AddLogMsg(logRollResult)
 			go a.roll13Dice()
+		case strings.HasSuffix(command, "6"):
+			e.Block()
+			resetSixSequence()
+			sixRoundActive = true
+			sixPlayerTurn = true
+			sixPlayerName = strings.TrimSpace(lastTradePartnerName)
+			if sixPlayerName == "" {
+				sixPlayerName = "Player"
+			}
+			isSixRolling = true
+			logRollResult := fmt.Sprintf("6 Roll:\n")
+			a.AddLogMsg(logRollResult)
+			go a.rollSixDice()
 		case strings.HasPrefix(command, "@"):
 			e.Block()
 			extra := strings.TrimSpace(strings.TrimPrefix(command, "@"))
@@ -11065,6 +11162,26 @@ func (a *App) beginBlackjackSequence() {
 		isBJRolling = true
 		a.AddLogMsg("21 Roll:\n")
 		go a.rollBjDice()
+	}()
+}
+
+func (a *App) beginSixSequence() {
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	resetPokerSequence()
+	resetSixSequence()
+	sixRoundActive = true
+	sixPlayerTurn = true
+	sixPlayerName = playerName
+
+	go func() {
+		time.Sleep(1400 * time.Millisecond)
+		isSixRolling = true
+		a.AddLogMsg("6 Roll:\n")
+		go a.rollSixDice()
 	}()
 }
 
@@ -11971,7 +12088,7 @@ func resetDiceState() {
 	tradeOpen = false
 	dealerResyncInProgress = false
 	fakeDiceTestingMode = false
-	isPokerRolling, isTriRolling, isBJRolling, is13Rolling, isHitting, is13Hitting, isPairUpRolling, isH18Rolling, isBanditRolling, isUORolling, isClosing = false, false, false, false, false, false, false, false, false, false, false
+	isPokerRolling, isTriRolling, isBJRolling, is13Rolling, isSixRolling, isHitting, is13Hitting, isSixHitting, isPairUpRolling, isH18Rolling, isBanditRolling, isUORolling, isClosing = false, false, false, false, false, false, false, false, false, false, false, false, false
 
 	// Ensure any pending game-choice timeout is stopped when resetting dice.
 	resetTradeAutoFlow()
@@ -12825,6 +12942,177 @@ func (a *App) waitForBlackjackDiceResults(slots []int, timeout time.Duration, re
 	}
 }
 
+// Roll dice for 6-style game (target sum is 6)
+func (a *App) rollSixDice() {
+	if fakeDiceTestingMode {
+		mutex.Lock()
+		if len(diceList) < 5 {
+			mutex.Unlock()
+			log.Println("Not enough dice to roll")
+			isSixRolling = false
+			return
+		}
+		sixNextHitIndex = 1
+		currentSum = 0
+		for _, index := range []int{0} {
+			diceList[index].Value = rand.Intn(6) + 1
+			diceList[index].IsClosed = false
+			currentSum += diceList[index].Value
+			logRollResult := fmt.Sprintf("Dice %d rolled: %d\n", diceList[index].ID, diceList[index].Value)
+			a.AddLogMsg(logRollResult)
+		}
+		mutex.Unlock()
+
+		a.evaluateSixHand()
+		isSixRolling = false
+		return
+	}
+
+	mutex.Lock()
+
+	if len(diceList) < 5 {
+		mutex.Unlock()
+		log.Println("Not enough dice to roll")
+		isSixRolling = false
+		return
+	}
+
+	sixNextHitIndex = 1
+	currentSum = 0 // Reset sum before starting
+	resultsWaitGroup.Add(1)
+	mutex.Unlock()
+
+	// Roll the first dice
+	for _, index := range []int{0} {
+		diceList[index].Roll()
+		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
+	}
+
+	time.Sleep(1000 * time.Millisecond)
+	a.waitForSixDiceResults([]int{0}, 5*time.Second, "initial-roll")
+
+	mutex.Lock()
+	for _, index := range []int{0} {
+		currentSum += diceList[index].Value
+	}
+	mutex.Unlock()
+
+	a.evaluateSixHand()
+	isSixRolling = false
+}
+
+func (a *App) hitSixDice() {
+	defer func() { sixHitInFlight = false }()
+	if fakeDiceTestingMode {
+		mutex.Lock()
+		if len(diceList) < 5 {
+			mutex.Unlock()
+			log.Println("Not enough dice to roll")
+			isSixRolling = false
+			isSixHitting = false
+			return
+		}
+
+		slot := sixNextHitIndex
+		if slot < 0 || slot >= len(diceList) {
+			slot = 0
+		}
+		sixNextHitIndex = (slot + 1) % len(diceList)
+
+		diceList[slot].Value = rand.Intn(6) + 1
+		diceList[slot].IsClosed = false
+		currentSum += diceList[slot].Value
+		logRollResult := fmt.Sprintf("Dice %d rolled: %d\n", diceList[slot].ID, diceList[slot].Value)
+		a.AddLogMsg(logRollResult)
+		mutex.Unlock()
+
+		a.evaluateSixHand()
+		isSixHitting = false
+		isSixRolling = false
+		return
+	}
+	mutex.Lock()
+
+	if len(diceList) < 5 {
+		mutex.Unlock()
+		log.Println("Not enough dice to roll")
+		isSixRolling = false
+		isSixHitting = false
+		return
+	}
+
+	slot := sixNextHitIndex
+	if slot < 0 || slot >= len(diceList) {
+		slot = 0
+	}
+	nextSlot := (slot + 1) % len(diceList)
+	sixNextHitIndex = nextSlot
+	mutex.Unlock()
+
+	resultsWaitGroup.Add(1)
+	diceList[slot].Roll()
+
+	time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
+	a.waitForSixDiceResults([]int{slot}, 5*time.Second, "hit-roll")
+	newValue := diceList[slot].Value
+
+	mutex.Lock()
+	currentSum = currentSum + newValue // Adjust current sum
+	mutex.Unlock()
+
+	// Re-evaluate the hand with the updated sum
+	a.evaluateSixHand()
+
+	isSixHitting = false
+	isSixRolling = false
+}
+
+func (a *App) waitForSixDiceResults(slots []int, timeout time.Duration, reason string) {
+	deadline := time.Now().Add(timeout)
+
+	for {
+		pending := make([]int, 0, len(slots))
+
+		mutex.Lock()
+		for _, slot := range slots {
+			if slot < 0 || slot >= len(diceList) {
+				continue
+			}
+			if diceList[slot].IsRolling {
+				pending = append(pending, slot)
+			}
+		}
+		mutex.Unlock()
+
+		if len(pending) == 0 {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			mutex.Lock()
+			for _, slot := range pending {
+				if slot < 0 || slot >= len(diceList) {
+					continue
+				}
+				if !diceList[slot].IsRolling {
+					continue
+				}
+				diceList[slot].IsRolling = false
+				func() {
+					defer func() {
+						recover()
+					}()
+					resultsWaitGroup.Done()
+				}()
+			}
+			mutex.Unlock()
+			return
+		}
+
+		time.Sleep(75 * time.Millisecond)
+	}
+}
+
 func (a *App) beginPairUpRound() {
 	playerName := strings.TrimSpace(lastTradePartnerName)
 	if playerName == "" {
@@ -13358,6 +13646,49 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		} else {
 			a.AddLogMsg("[13] player chose stay")
 			a.start13DealerTurn("player stayed")
+		}
+		return
+	}
+
+	if awaitingSixDecision {
+		decision, ok := normalizeBlackjackDecision(msg)
+		if !ok {
+			a.AddLogMsg(fmt.Sprintf("[6_DEBUG] awaiting decision from %q(index=%d), ignored non-decision message=%q", awaitingSixDecisionPartnerName, awaitingSixDecisionPartnerID, msg))
+			return
+		}
+
+		indexMatch := awaitingSixDecisionPartnerID > 0 && index == awaitingSixDecisionPartnerID
+		nameMatch := awaitingSixDecisionPartnerName != "" && strings.EqualFold(senderName, awaitingSixDecisionPartnerName)
+		if !indexMatch && !nameMatch && awaitingSixDecisionPartnerName != "" {
+			if expectedIdx, ok := lookupRoomEntityIndexByName(awaitingSixDecisionPartnerName); ok && expectedIdx > 0 && expectedIdx == index {
+				indexMatch = true
+			}
+		}
+		if !indexMatch && !nameMatch && awaitingSixDecisionPartnerName != "" {
+			if expectedIdx, ok := lookupUsers28RoomIndexByName(awaitingSixDecisionPartnerName); ok && expectedIdx > 0 && expectedIdx == index {
+				indexMatch = true
+			}
+		}
+
+		if !indexMatch && !nameMatch {
+			a.AddLogMsg(fmt.Sprintf("[6] ignoring decision %q from %q (index %d); waiting for %q (index %d)", decision, senderName, index, awaitingSixDecisionPartnerName, awaitingSixDecisionPartnerID))
+			return
+		}
+
+		e.Block()
+		awaitingSixDecision = false
+		stopSixDecisionTimeoutMonitor()
+		a.AddLogMsg(fmt.Sprintf("[6_DEBUG] accepted decision=%q from sender=%q index=%d (expectedName=%q expectedIndex=%d)", decision, senderName, index, awaitingSixDecisionPartnerName, awaitingSixDecisionPartnerID))
+
+		if decision == "hit" {
+			a.AddLogMsg("[6] player chose hit")
+			isSixHitting = true
+			isSixRolling = true
+			sixHitInFlight = true
+			go a.hitSixDice()
+		} else {
+			a.AddLogMsg("[6] player chose stay")
+			a.startSixDealerTurn("player stayed")
 		}
 		return
 	}
@@ -13918,7 +14249,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	}
 
 	e.Block()
-	if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isHitting || is13Hitting || isClosing {
+	if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isSixRolling || isHitting || is13Hitting || isSixHitting || isClosing {
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %s selected but dice are busy", choice))
 		return
 	}
@@ -13975,6 +14306,10 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		// Start the 13-game sequence (similar flow to 21)
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected 13; starting 13 sequence", index))
 		a.begin13Sequence()
+	case "6":
+		// Start the 6-game sequence
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected 6; starting 6 sequence", index))
+		a.beginSixSequence()
 	case "pairup":
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected PU; starting round", index))
 		a.beginPairUpRound()

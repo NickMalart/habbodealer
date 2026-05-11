@@ -591,6 +591,151 @@ func (a *App) evaluate13Hand() {
 	is13Hitting = false
 }
 
+func (a *App) evaluateSixHand() {
+	defer func() {
+		if r := recover(); r != nil {
+			a.AddLogMsg(fmt.Sprintf("[6_CRASH_GUARD] recovered panic in evaluateSixHand: %v", r))
+			log.Printf("[6_CRASH_GUARD] recovered panic in evaluateSixHand: %v", r)
+			resetSixSequence()
+			isSixRolling = false
+			isSixHitting = false
+		}
+	}()
+
+	mutex.Lock()
+	mutex.Unlock()
+	if !sixRoundActive {
+		isSixRolling = false
+		isSixHitting = false
+		return
+	}
+
+	a.AddLogMsg(fmt.Sprintf("[6] evaluating sum=%d playerTurn=%t", currentSum, sixPlayerTurn))
+	log.Printf("[6] evaluating sum=%d playerTurn=%t", currentSum, sixPlayerTurn)
+
+	if sixPlayerTurn {
+		playerLabel := strings.TrimSpace(sixPlayerName)
+		if playerLabel == "" {
+			playerLabel = strings.TrimSpace(lastTradePartnerName)
+		}
+		if playerLabel == "" {
+			playerLabel = "Player"
+		}
+
+		sixPlayerTotal = currentSum
+		a.AddLogMsg(fmt.Sprintf("[6] player total now %d", sixPlayerTotal))
+
+		if sixPlayerTotal > 6 {
+			a.finalizeSixRound(false, "player bust")
+			isSixRolling = false
+			isSixHitting = false
+			return
+		}
+
+		if sixPlayerTotal == 6 {
+			// Announce player result and indicate dealer roll in one message
+			msg := fmt.Sprintf("%s got 6 | Rolling...", playerLabel)
+			a.AddLogMsg(fmt.Sprintf("[6] announcing: %q", msg))
+			if !ChatIsDisabled {
+				waitForUnmute(90 * time.Second)
+				time.Sleep(800 * time.Millisecond)
+				sendMessageWithDelay(msg)
+			}
+
+			a.startSixDealerTurn("player reached 6")
+			isSixRolling = false
+			isSixHitting = false
+			return
+		}
+
+		// Only prompt once
+		if awaitingSixDecision {
+			isSixRolling = false
+			isSixHitting = false
+			return
+		}
+
+		awaitingSixDecision = true
+		awaitingSixDecisionPartnerName = strings.TrimSpace(sixPlayerName)
+		if awaitingSixDecisionPartnerName == "" {
+			awaitingSixDecisionPartnerName = strings.TrimSpace(lastTradePartnerName)
+		}
+		if awaitingSixDecisionPartnerName == "" {
+			awaitingSixDecisionPartnerName = "Player"
+		}
+		if chatIdx, ok := lookupRoomEntityIndexByName(awaitingSixDecisionPartnerName); ok && chatIdx > 0 {
+			awaitingSixDecisionPartnerID = chatIdx
+		} else if chatIdx, ok := lookupUsers28RoomIndexByName(awaitingSixDecisionPartnerName); ok && chatIdx > 0 {
+			awaitingSixDecisionPartnerID = chatIdx
+		} else {
+			awaitingSixDecisionPartnerID = lastTradePartnerID
+		}
+
+		prompt := fmt.Sprintf("%s total %d. Hit or stay?", playerLabel, sixPlayerTotal)
+		a.AddLogMsg(fmt.Sprintf("[6] prompting decision: %q", prompt))
+		if !ChatIsDisabled && !isMuted {
+			sendMessageWithDelay(prompt)
+			a.startSixDecisionTimeoutMonitor(awaitingSixDecisionPartnerName)
+		} else {
+			a.AddLogMsg("[6] prompt not sent (chat disabled or muted); auto-staying")
+			awaitingSixDecision = false
+			a.startSixDealerTurn("prompt unavailable auto-stay")
+			isSixRolling = false
+			isSixHitting = false
+			return
+		}
+
+		isSixRolling = false
+		isSixHitting = false
+		return
+	}
+
+	sixDealerTotal = currentSum
+	a.AddLogMsg(fmt.Sprintf("[6] dealer total now %d (player=%d)", sixDealerTotal, sixPlayerTotal))
+
+	if sixDealerTotal > 6 {
+		a.finalizeSixRound(true, "dealer bust")
+		isSixRolling = false
+		isSixHitting = false
+		return
+	}
+
+	if sixDealerTotal < sixPlayerTotal {
+		a.AddLogMsg(fmt.Sprintf("[6] dealer total %d < player %d; dealer hits", sixDealerTotal, sixPlayerTotal))
+		if sixHitInFlight {
+			go func() {
+				time.Sleep(150 * time.Millisecond)
+				a.evaluateSixHand()
+			}()
+			return
+		}
+		sixHitInFlight = true
+		isSixHitting = true
+		go a.hitSixDice()
+		return
+	}
+
+	if sixDealerTotal == sixPlayerTotal {
+		a.AddLogMsg("[6_RULES] tie detected; replaying 6 round")
+		if !ChatIsDisabled {
+			waitForUnmute(90 * time.Second)
+			time.Sleep(800 * time.Millisecond)
+			sendMessageWithDelay("Tie — replaying 6 round")
+		}
+		go func() {
+			time.Sleep(700 * time.Millisecond)
+			a.beginSixSequence()
+		}()
+		isSixRolling = false
+		isSixHitting = false
+		return
+	}
+	a.finalizeSixRound(false, "dealer beat-or-tie")
+	isSixRolling = false
+	isSixHitting = false
+}
+
+
 // Wait for all dice results and evaluate the tri hand
 func (a *App) evaluateTriRound() {
 	defer func() {

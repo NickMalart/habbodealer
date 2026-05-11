@@ -172,6 +172,8 @@ func normalizeGameName(game string) string {
 		return "21"
 	case "13", "thirteen":
 		return "13"
+	case "6", "six":
+		return "6"
 	case "pu", "pu3", "pairup":
 		return "PU"
 	case "h18":
@@ -279,6 +281,7 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 			"Poker": {Game: "Poker"},
 			"21":    {Game: "21"},
 			"13":    {Game: "13"},
+			"6":     {Game: "6"},
 			"Tri":   {Game: "Tri"},
 			"PU":    {Game: "PU"},
 			"H18":    {Game: "H18"},
