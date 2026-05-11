@@ -39,6 +39,7 @@ type CasinoStats struct {
 	DealerWinRate   float64             `json:"dealerWinRate"`
 	ByGame          map[string]GameStat `json:"byGame"`
 	Items           []ItemStat          `json:"items"`
+	Players         []PlayerStat        `json:"players"`
 }
 
 type GameStat struct {
@@ -58,6 +59,14 @@ type ItemStat struct {
 	Games   int    `json:"games"`
 }
 
+type PlayerStat struct {
+	PlayerName  string  `json:"playerName"`
+	TotalRounds int     `json:"totalRounds"`
+	PlayerWins  int     `json:"playerWins"`
+	DealerWins  int     `json:"dealerWins"`
+	WinRate     float64 `json:"winRate"`
+	NetItems    int     `json:"netItems"` // Dealer Profit (Bets - Payouts)
+}
 
 type App struct {
 	ctx      context.Context
@@ -226,6 +235,35 @@ func (a *App) GetStats() (CasinoStats, error) {
 			if err := itemRows.Scan(&i.Name, &i.WonQty, &i.LostQty, &i.Games); err == nil {
 				i.NetQty = i.WonQty - i.LostQty
 				stats.Items = append(stats.Items, i)
+			}
+		}
+	}
+
+	// Fetch player stats
+	playerRows, err := a.db.Query(a.ctx, `
+		SELECT
+			e.player_name,
+			COUNT(DISTINCT e.id) AS total_rounds,
+			SUM(CASE WHEN LOWER(TRIM(e.winner)) = LOWER(TRIM(e.player_name)) THEN 1 ELSE 0 END) AS player_wins,
+			SUM(CASE WHEN LOWER(TRIM(e.winner)) = 'dealer' THEN 1 ELSE 0 END) AS dealer_wins,
+			COALESCE(SUM(CASE WHEN i.item_type = 'bet' THEN i.quantity ELSE 0 END), 0) -
+			COALESCE(SUM(CASE WHEN i.item_type = 'payout' THEN i.quantity ELSE 0 END), 0) AS net_for_dealer
+		FROM game_history_entries e
+		LEFT JOIN game_history_items i ON i.entry_id = e.id AND i.owner_key = e.owner_key
+		WHERE e.owner_key = $1 AND e.status = 'Completed' AND e.issue = false
+		GROUP BY e.player_name
+		ORDER BY total_rounds DESC
+		LIMIT 100
+	`, a.ownerKey)
+	if err == nil {
+		defer playerRows.Close()
+		for playerRows.Next() {
+			var p PlayerStat
+			if err := playerRows.Scan(&p.PlayerName, &p.TotalRounds, &p.PlayerWins, &p.DealerWins, &p.NetItems); err == nil {
+				if p.TotalRounds > 0 {
+					p.WinRate = float64(p.PlayerWins) / float64(p.TotalRounds) * 100
+				}
+				stats.Players = append(stats.Players, p)
 			}
 		}
 	}

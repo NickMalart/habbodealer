@@ -8,7 +8,8 @@ const stats = ref({
   playerWinRate: 0,
   dealerWinRate: 0,
   byGame: {},
-  items: []
+  items: [],
+  players: []
 });
 
 const loading = ref(true);
@@ -48,6 +49,11 @@ const sortedItems = computed(() => {
   if (!stats.value.items) return [];
   return [...stats.value.items].sort((a, b) => b.netQty - a.netQty);
 });
+
+const sortedPlayers = computed(() => {
+  if (!stats.value.players) return [];
+  return [...stats.value.players].sort((a, b) => b.totalRounds - a.totalRounds);
+});
 </script>
 
 <template>
@@ -67,6 +73,7 @@ const sortedItems = computed(() => {
     <div class="tabs card">
       <button @click="activeTab = 'main'" :class="{ active: activeTab === 'main' }">📈 Games</button>
       <button @click="activeTab = 'items'" :class="{ active: activeTab === 'items' }">📦 Items</button>
+      <button @click="activeTab = 'players'" :class="{ active: activeTab === 'players' }">👥 Players</button>
     </div>
 
     <div v-if="activeTab === 'main'">
@@ -150,6 +157,39 @@ const sortedItems = computed(() => {
         </table>
         <div v-else class="muted">
           No item history found.
+        </div>
+      </div>
+    </div>
+
+    <div v-if="activeTab === 'players'">
+      <div class="card">
+        <h2>👥 Player Performance</h2>
+        <table v-if="sortedPlayers.length > 0">
+          <thead>
+            <tr>
+              <th>Player Name</th>
+              <th>Rounds</th>
+              <th>Player Wins</th>
+              <th>Dealer Wins</th>
+              <th>Win Rate</th>
+              <th>Dealer Profit (Net Items)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="player in sortedPlayers" :key="player.playerName">
+              <td><strong>{{ player.playerName }}</strong></td>
+              <td>{{ player.totalRounds }}</td>
+              <td class="player-win-text">{{ player.playerWins }}</td>
+              <td class="dealer-win-text">{{ player.dealerWins }}</td>
+              <td class="player-win-text">{{ player.winRate.toFixed(1) }}%</td>
+              <td :class="player.netItems >= 0 ? 'dealer-win-text' : 'player-win-text'">
+                {{ player.netItems >= 0 ? '+' : '' }}{{ player.netItems }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="muted">
+          No player history found.
         </div>
       </div>
     </div>
