@@ -121,19 +121,6 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 	winnerName := strings.TrimSpace(entry.Winner)
 	playerName := strings.TrimSpace(entry.PlayerName)
 
-	// Calculate final bank balance including the win if applicable.
-	// This handles both the 'round result' snap (where win isn't added yet)
-	// and the 'payout' snap (where win is already added and RiskPending is 0).
-	finalBank := entry.RiskBank
-	if strings.EqualFold(winnerName, playerName) && entry.RiskPending > 0 {
-		mult := entry.PayoutMultiplier
-		if mult <= 0 {
-			mult = 2.0 // Assume standard risk multiplier if unset
-		}
-		finalBank += int(float64(entry.RiskPending) * mult)
-	}
-	bankWonStr := strconv.Itoa(finalBank)
-
 	// Determine embed color and title prefix. Issue takes precedence.
 	embedColor := 3447003
 	titlePrefix := ""
@@ -157,8 +144,7 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 		{"name": "Payout Multiplier", "value": fmt.Sprintf("%.2fx", entry.PayoutMultiplier), "inline": true},
 		{"name": "Risk Round", "value": formatField(riskRound), "inline": true},
 		{"name": "Risked", "value": formatField(riskedStr), "inline": true},
-		{"name": "Risked Bank", "value": formatField(bankStr), "inline": true},
-		{"name": "Bank Won", "value": formatField(bankWonStr), "inline": true},
+		{"name": "Bank After", "value": formatField(bankStr), "inline": true},
 		{"name": "Risk Decision", "value": formatField(entry.RiskDecision), "inline": true},
 		{"name": "Player Shout", "value": formatField(entry.ChoiceShout), "inline": false},
 		{"name": "Bet Items", "value": formatItems(entry.BetItems), "inline": false},
