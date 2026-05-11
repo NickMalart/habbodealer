@@ -3288,6 +3288,7 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 	go func() {
 		users, err := a.runUsers28PythonParser(data)
 		if err != nil {
+			a.logDebug("handleUsersPacket: parser error: %v", err)
 			return
 		}
 		a.mu.Lock()
@@ -3300,6 +3301,7 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 				a.chatIdToName[u.ChatID] = u.Username
 			}
 		}
+		a.logDebug("handleUsersPacket: updated %d users (total map size: %d)", len(users), len(a.chatIdToName))
 	}()
 }
 
@@ -3309,14 +3311,33 @@ type ParsedUsers28User struct {
 }
 
 func (a *App) runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, error) {
-	scriptPath := filepath.Join("..", "scripts", "parse_users28.py")
-	if _, err := os.Stat(scriptPath); err != nil {
-		scriptPath = filepath.Join("scripts", "parse_users28.py")
+	// Try multiple locations for the script
+	scriptCandidates := []string{
+		filepath.Join("..", "scripts", "parse_users28.py"),
+		filepath.Join("scripts", "parse_users28.py"),
 	}
-	if _, err := os.Stat(scriptPath); err != nil {
-		exePath, _ := os.Executable()
-		scriptPath = filepath.Join(filepath.Dir(exePath), "scripts", "parse_users28.py")
+
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		scriptCandidates = append(scriptCandidates, 
+			filepath.Join(exeDir, "scripts", "parse_users28.py"),
+			filepath.Join(exeDir, "..", "scripts", "parse_users28.py"),
+			filepath.Join(exeDir, "..", "..", "scripts", "parse_users28.py"),
+		)
 	}
+
+	var scriptPath string
+	for _, cand := range scriptCandidates {
+		if _, err := os.Stat(cand); err == nil {
+			scriptPath = cand
+			break
+		}
+	}
+
+	if scriptPath == "" {
+		return nil, fmt.Errorf("could not find parse_users28.py in any expected location")
+	}
+
 	tmpFile, err := os.CreateTemp("", "users28_*.bin")
 	if err != nil {
 		return nil, err
@@ -3336,13 +3357,15 @@ func (a *App) runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, er
 	}
 	cmd := exec.Command(py, scriptPath, "--input", tmpPath, "--json")
 	var stdout bytes.Buffer
+	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("python error: %v (stderr: %q)", err, stderr.String())
 	}
 	var users []ParsedUsers28User
 	if err := json.Unmarshal(stdout.Bytes(), &users); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("json error: %v", err)
 	}
 	return users, nil
 }
