@@ -154,6 +154,7 @@ type App struct {
 	lastNotifyRaw         string
 	lastQueryRows         int
 	lastShout             string
+	lastRoomUsersRequestAt time.Time
 
 	raffleName               string
 	rafflePrizeName          string
@@ -3210,6 +3211,7 @@ func setupExt(a *App) {
 		a.connected = true
 		a.mu.Unlock()
 		a.emitUpdate()
+		go a.requestRoomUsers()
 	})
 
 	ext.Disconnected(func() {
@@ -3227,6 +3229,7 @@ func setupExt(a *App) {
 		a.chatIdToName = make(map[int]string)
 		a.mu.Unlock()
 		a.emitUpdate()
+		go a.requestRoomUsers()
 	})
 
 	// Set inRoom from USERS packets too — fires even if already in a room when the ext opens
@@ -3251,6 +3254,27 @@ func setupExt(a *App) {
 			a.handleUsersPacket(e)
 		}
 	})
+}
+
+func (a *App) requestRoomUsers() {
+	a.mu.Lock()
+	if !a.connected || time.Since(a.lastRoomUsersRequestAt) < 5*time.Second {
+		a.mu.Unlock()
+		return
+	}
+	a.lastRoomUsersRequestAt = time.Now()
+	a.mu.Unlock()
+
+	// Use a defer recover to prevent panics during binding generation or connection issues
+	defer func() {
+		if r := recover(); r != nil {
+			a.logDebug("RECOVERED in requestRoomUsers: %v", r)
+		}
+	}()
+
+	a.logDebug("requesting current room users via G_USRS + GETSPACENODEUSERS")
+	ext.Send(out.G_USRS)
+	ext.Send(out.GETSPACENODEUSERS)
 }
 
 func (a *App) checkMyTicketsAnnouncement() {
@@ -3392,7 +3416,8 @@ func (a *App) handleChatPacket(e *g.Intercept) {
 		if ok {
 			a.respondWithTickets(name)
 		} else {
-			a.logDebug("User not found in chatIdToName map for ID %d", id)
+			a.logDebug("User not found in chatIdToName map for ID %d, requesting users...", id)
+			go a.requestRoomUsers()
 		}
 	}
 }
@@ -3407,15 +3432,43 @@ func (a *App) respondWithTickets(username string) {
 	a.userLastMyTickets[username] = time.Now()
 
 	var tickets int
+	foundInMemory := false
+	var sessionDBID int64
+	var bonusEvery int
+
 	if a.currentSession != nil {
+		sessionDBID = a.currentSession.DBID
+		bonusEvery = a.currentSession.BonusEvery
 		for _, p := range a.currentSession.Participants {
 			if strings.EqualFold(p.Username, username) {
 				tickets = p.Tickets
+				foundInMemory = true
 				break
 			}
 		}
 	}
+	db := a.db
+	owner := a.ownerKey
 	a.mu.Unlock()
+
+	// If not in memory or to be double-sure, check the DB directly
+	if !foundInMemory && db != nil && sessionDBID > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		var betCount int
+		var manualDelta int
+		err := db.QueryRow(ctx, `
+			SELECT bet_count, manual_ticket_delta 
+			FROM raffle_participants 
+			WHERE session_id = $1 AND owner_key = $2 AND lower(username) = lower($3)
+		`, sessionDBID, owner, username).Scan(&betCount, &manualDelta)
+
+		if err == nil {
+			tickets = effectiveTicketsForParticipant(betCount, bonusEvery, manualDelta)
+			// Optional: Update memory cache? processNewBets will do it anyway.
+		}
+	}
 
 	var reply string
 	if tickets == 0 {
