@@ -5286,6 +5286,7 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 		entry.RiskSession = rs
 		entry.RiskBank = rb
 		entry.RiskPending = rp
+		entry.PayoutMultiplier = float64(mult)
 		entry.Notes = append(entry.Notes, fmt.Sprintf("Risk session started: bank=%d", rb))
 	})
 	a.gameHistoryMu.Unlock()
@@ -5575,11 +5576,13 @@ func (a *App) beginRiskRoundHistory(choice string, rawShout string, gameLabel st
 
 	mutex.Lock()
 	pending := riskPendingBet
+	mult := riskSessionPayoutMultiplier
 	mutex.Unlock()
 
 	riskBetItems := buildRiskBetItems(cloneTradeItems(gameBetItems), pending)
 	a.beginGameHistory(partnerName, riskBetItems)
 	a.setCurrentGameHistoryChoice(choice, rawShout)
+	a.setCurrentGameHistoryPayoutMultiplier(float64(mult))
 	if strings.TrimSpace(gameLabel) != "" {
 		a.setCurrentGameHistoryGame(gameLabel)
 	}

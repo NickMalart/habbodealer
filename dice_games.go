@@ -96,6 +96,7 @@ func (a *App) evaluateDoubleTroubleRound() {
 
 	if playerWins && payoutTargetID > 0 {
 		a.setCurrentGameHistoryResults(resultText, "", playerName, "Payout Pending", false)
+		a.setCurrentGameHistoryPayoutMultiplier(2.0)
 		a.noteCurrentGameHistory(winnerMsg)
 		resetPayoutRetryState()
 		if isRiskEnabled {
@@ -223,6 +224,7 @@ func (a *App) evaluateBanditRound() {
 
 		if payoutTargetID > 0 {
 			a.setCurrentGameHistoryResults(resultText, "", playerName, "Payout Pending", false)
+			a.setCurrentGameHistoryPayoutMultiplier(mult)
 			a.noteCurrentGameHistory(winnerMsg)
 			resetPayoutRetryState()
 
