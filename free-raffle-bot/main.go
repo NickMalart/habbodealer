@@ -3244,6 +3244,13 @@ func setupExt(a *App) {
 	})
 
 	ext.Intercept(in.CHAT, in.CHAT_2, in.CHAT_3).With(a.handleChatPacket)
+
+	// Use InterceptAll to catch header 28 manually since it's the most reliable for Origins room users
+	ext.InterceptAll(func(e *g.Intercept) {
+		if e.Packet.Header.Dir == g.In && e.Packet.Header.Value == 28 {
+			a.handleUsersPacket(e)
+		}
+	})
 }
 
 func (a *App) checkMyTicketsAnnouncement() {
@@ -3275,6 +3282,7 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 	if e == nil || e.Packet == nil || len(e.Packet.Data) == 0 {
 		return
 	}
+	// Copy data to avoid race conditions with the packet thread and allow async processing
 	data := make([]byte, len(e.Packet.Data))
 	copy(data, e.Packet.Data)
 	go func() {
@@ -3284,8 +3292,11 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 		}
 		a.mu.Lock()
 		defer a.mu.Unlock()
+		if a.chatIdToName == nil {
+			a.chatIdToName = make(map[int]string)
+		}
 		for _, u := range users {
-			if u.Username != "" {
+			if u.Username != "" && u.ChatID > 0 {
 				a.chatIdToName[u.ChatID] = u.Username
 			}
 		}
@@ -3310,17 +3321,20 @@ func (a *App) runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, er
 	if err != nil {
 		return nil, err
 	}
-	defer os.Remove(tmpFile.Name())
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
 	if _, err := tmpFile.Write(packetData); err != nil {
 		tmpFile.Close()
 		return nil, err
 	}
 	tmpFile.Close()
+
 	py := "python"
 	if _, err := exec.LookPath("python3"); err == nil {
 		py = "python3"
 	}
-	cmd := exec.Command(py, scriptPath, "--input", tmpFile.Name(), "--json")
+	cmd := exec.Command(py, scriptPath, "--input", tmpPath, "--json")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {
@@ -3334,20 +3348,16 @@ func (a *App) runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, er
 }
 
 func (a *App) handleChatPacket(e *g.Intercept) {
+	// Use a defer recover to prevent any crashes from bubbling up
+	defer func() {
+		if r := recover(); r != nil {
+			a.logDebug("RECOVERED in handleChatPacket: %v", r)
+		}
+	}()
+
+	// Read only what we need from the packet
 	id := e.Packet.ReadInt()
 	msg := e.Packet.ReadString()
-
-	// Heuristic: Some chat packets include the username after the message
-	// For CHAT_2 and CHAT_3, the format is often [int id, string msg, int gesture, string name]
-	if e.Is(in.CHAT_2) || e.Is(in.CHAT_3) {
-		_ = e.Packet.ReadInt() // gesture/color
-		name := e.Packet.ReadString()
-		if name != "" {
-			a.mu.Lock()
-			a.chatIdToName[id] = name
-			a.mu.Unlock()
-		}
-	}
 
 	a.logDebug("chat intercepted: ID=%d, MSG=%q", id, msg)
 
