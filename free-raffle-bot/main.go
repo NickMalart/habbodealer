@@ -3337,12 +3337,17 @@ func (a *App) handleChatPacket(e *g.Intercept) {
 	id := e.Packet.ReadInt()
 	msg := e.Packet.ReadString()
 
+	a.logDebug("chat intercepted: ID=%d, MSG=%q", id, msg)
+
 	if strings.EqualFold(strings.TrimSpace(msg), "My Tickets") {
 		a.mu.Lock()
 		name, ok := a.chatIdToName[id]
 		a.mu.Unlock()
+		a.logDebug("My Tickets command detected: name=%q, found=%t", name, ok)
 		if ok {
 			a.respondWithTickets(name)
+		} else {
+			a.logDebug("User not found in chatIdToName map for ID %d", id)
 		}
 	}
 }
