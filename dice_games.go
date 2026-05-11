@@ -99,17 +99,17 @@ func (a *App) evaluateDoubleTroubleRound() {
 		a.setCurrentGameHistoryPayoutMultiplier(2.0)
 		a.noteCurrentGameHistory(winnerMsg)
 		resetPayoutRetryState()
+
+		// Post the round outcome immediately so Discord shows the win.
+		a.sendDiscordRoundResult(playerName, resultText, "", winnerMsg)
+
 		if isRiskEnabled {
 			if riskSessionActive {
-				// Post the round outcome immediately so external integrations see it.
-				a.sendDiscordRoundResult(playerName, resultText, "", winnerMsg)
 				go a.applyRiskOutcome(true)
 				return
 			}
 			params := map[string]interface{}{}
 			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "DT", params)
-			// Post round outcome so external integrations show the win while risk prompt is pending.
-			a.sendDiscordRoundResult(playerName, resultText, "", winnerMsg)
 			return
 		}
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT] dt player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
@@ -227,6 +227,9 @@ func (a *App) evaluateBanditRound() {
 			a.setCurrentGameHistoryPayoutMultiplier(mult)
 			a.noteCurrentGameHistory(winnerMsg)
 			resetPayoutRetryState()
+
+			// Post the round outcome immediately so Discord shows the win.
+			a.sendDiscordRoundResult(playerName, resultText, "", winnerMsg)
 
 			mutex.Lock()
 			payoutMultiplierForRound = mult

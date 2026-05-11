@@ -11598,11 +11598,13 @@ func (a *App) evaluateUnderOverRound() {
 		a.setCurrentGameHistoryResults(strconv.Itoa(total), "", playerName, "Payout Pending", false)
 		a.noteCurrentGameHistory(winnerMsg)
 		resetPayoutRetryState()
+
+		// Post the round outcome immediately so Discord shows the win.
+		a.sendDiscordRoundResult(playerName, strconv.Itoa(total), "", winnerMsg)
+
 		// Never route Under/Over-7 rounds into Risk (UO7 is auto-payout only).
 		if isRiskEnabled && uoVariantForRound != "uo7" {
 			if riskSessionActive {
-				// Post the round outcome immediately so Discord shows who won this roll.
-				a.sendDiscordRoundResult(playerName, strconv.Itoa(total), "", winnerMsg)
 				go a.applyRiskOutcome(true)
 				return
 			}
@@ -11612,8 +11614,6 @@ func (a *App) evaluateUnderOverRound() {
 				riskGame = "UO7"
 			}
 			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, riskGame, params)
-			// Post round outcome so Discord shows the win even while risk prompt is pending.
-			a.sendDiscordRoundResult(playerName, strconv.Itoa(total), "", winnerMsg)
 			return
 		}
 		startPayout(a, payoutTargetID, payoutTargetName)
@@ -11684,16 +11684,16 @@ func (a *App) finalize13Round(playerWins bool, reason string) {
 		a.noteCurrentGameHistory(winnerMsg)
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT] 13 player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
 		resetPayoutRetryState()
+
+		// Post the round outcome immediately so Discord shows who won this roll.
+		a.sendDiscordRoundResult(playerName, playerHand, dealerHand, winnerMsg)
+
 		if isRiskEnabled {
 			if riskSessionActive {
-				// Post the round outcome immediately so Discord shows who won this roll.
-				a.sendDiscordRoundResult(playerName, playerHand, dealerHand, winnerMsg)
 				go a.applyRiskOutcome(true)
 				return
 			}
 			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "13", nil)
-			// Post round outcome so Discord shows the win even while risk prompt is pending.
-			a.sendDiscordRoundResult(playerName, playerHand, dealerHand, winnerMsg)
 			return
 		}
 		startPayout(a, payoutTargetID, payoutTargetName)
@@ -11779,17 +11779,17 @@ func (a *App) finalizeTriRound() {
 		a.noteCurrentGameHistory(winnerMsg)
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT] tri player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
 		resetPayoutRetryState()
+
+		// Post the round outcome immediately so Discord shows who won this roll.
+		a.sendDiscordRoundResult(playerName, playerHand, dealerHand, winnerMsg)
+
 		if isRiskEnabled {
 			if riskSessionActive {
-				// Post the round outcome immediately so Discord shows who won this roll.
-				a.sendDiscordRoundResult(playerName, playerHand, dealerHand, winnerMsg)
 				go a.applyRiskOutcome(true)
 				return
 			}
 			params := map[string]interface{}{"mode": triMode}
 			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "Tri", params)
-			// Post round outcome so Discord shows the win even while risk prompt is pending.
-			a.sendDiscordRoundResult(playerName, playerHand, dealerHand, winnerMsg)
 			return
 		}
 		startPayout(a, payoutTargetID, payoutTargetName)
@@ -11915,15 +11915,15 @@ func (a *App) evaluateH18Round() {
 		a.noteCurrentGameHistory(msg)
 		resetPayoutRetryState()
 
+		// Post round result to Discord for visibility
+		a.sendDiscordRoundResult(playerName, strconv.Itoa(total), "", msg)
+
 		if isRiskEnabled {
 			if riskSessionActive {
-				// Post round result to Discord for visibility
-				a.sendDiscordRoundResult(playerName, strconv.Itoa(total), "", msg)
 				go a.applyRiskOutcome(true)
 				return
 			}
 			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "H18", nil)
-			a.sendDiscordRoundResult(playerName, strconv.Itoa(total), "", msg)
 			return
 		}
 
