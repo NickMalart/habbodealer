@@ -3337,6 +3337,8 @@ type ParsedUsers28User struct {
 func (a *App) runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, error) {
 	// Try multiple locations for the script
 	scriptCandidates := []string{
+		filepath.Join("..", "..", "..", "scripts", "parse_users28.py"),
+		filepath.Join("..", "..", "scripts", "parse_users28.py"),
 		filepath.Join("..", "scripts", "parse_users28.py"),
 		filepath.Join("scripts", "parse_users28.py"),
 	}
@@ -3347,6 +3349,7 @@ func (a *App) runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, er
 			filepath.Join(exeDir, "scripts", "parse_users28.py"),
 			filepath.Join(exeDir, "..", "scripts", "parse_users28.py"),
 			filepath.Join(exeDir, "..", "..", "scripts", "parse_users28.py"),
+			filepath.Join(exeDir, "..", "..", "..", "scripts", "parse_users28.py"),
 		)
 	}
 
@@ -3359,7 +3362,7 @@ func (a *App) runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, er
 	}
 
 	if scriptPath == "" {
-		return nil, fmt.Errorf("could not find parse_users28.py in any expected location")
+		return nil, fmt.Errorf("could not find parse_users28.py. Searched: %v", scriptCandidates)
 	}
 
 	tmpFile, err := os.CreateTemp("", "users28_*.bin")
