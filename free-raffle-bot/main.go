@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -123,6 +124,9 @@ type RaffleState struct {
 	SponsorEnabled  bool   `json:"sponsorEnabled"`
 	SponsorName     string `json:"sponsorName"`
 	SponsorRoomName string `json:"sponsorRoomName"`
+
+	MyTicketsAnnouncementEnabled bool `json:"myTicketsAnnouncementEnabled"`
+	MyTicketsTimer               int  `json:"myTicketsTimer"`
 }
 
 type App struct {
@@ -166,12 +170,27 @@ type App struct {
 	sponsorName     string
 	sponsorRoomName string
 
+	myTicketsAnnouncementEnabled bool
+	myTicketsTimer               int
+	lastMyTicketsAnnouncementAt  time.Time
+	userLastMyTickets           map[string]time.Time
+	chatIdToName                 map[int]string
+
 	pendingProofBytes    []byte
 	pendingProofFileName string
 }
 
 func NewApp() *App {
-	return &App{bonusEvery: 5, raffleAutoUpdate: true, raffleName: "Flame Raffle", rafflePrizeName: "Purple Dragon Lamp", rafflePrizeQty: 1}
+	return &App{
+		bonusEvery:                   5,
+		raffleAutoUpdate:             true,
+		raffleName:                   "Flame Raffle",
+		rafflePrizeName:              "Purple Dragon Lamp",
+		rafflePrizeQty:               1,
+		myTicketsTimer:               300,
+		userLastMyTickets:           make(map[string]time.Time),
+		chatIdToName:                 make(map[int]string),
+	}
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -371,6 +390,8 @@ func (a *App) GetState() RaffleState {
 		SponsorEnabled:        a.sponsorEnabled,
 		SponsorName:           a.sponsorName,
 		SponsorRoomName:       a.sponsorRoomName,
+		MyTicketsAnnouncementEnabled: a.myTicketsAnnouncementEnabled,
+		MyTicketsTimer:               a.myTicketsTimer,
 		Sessions:              make([]RaffleSessionSummary, len(a.sessions)),
 	}
 	for i, s := range a.sessions {
@@ -461,6 +482,25 @@ func (a *App) SetBonusEvery(v int) RaffleState {
 	}
 	a.mu.Lock()
 	a.bonusEvery = v
+	a.mu.Unlock()
+	a.emitUpdate()
+	return a.GetState()
+}
+
+func (a *App) SetMyTicketsAnnouncementEnabled(v bool) RaffleState {
+	a.mu.Lock()
+	a.myTicketsAnnouncementEnabled = v
+	a.mu.Unlock()
+	a.emitUpdate()
+	return a.GetState()
+}
+
+func (a *App) SetMyTicketsTimer(v int) RaffleState {
+	if v < 10 {
+		v = 10
+	}
+	a.mu.Lock()
+	a.myTicketsTimer = v
 	a.mu.Unlock()
 	a.emitUpdate()
 	return a.GetState()
@@ -2042,6 +2082,7 @@ func (a *App) startPoller() {
 		defer ticker.Stop()
 		for {
 			a.processNewBets()
+			a.checkMyTicketsAnnouncement()
 			select {
 			case <-ctx.Done():
 				return
@@ -3175,6 +3216,7 @@ func setupExt(a *App) {
 		a.mu.Lock()
 		a.connected = false
 		a.inRoom = false
+		a.chatIdToName = make(map[int]string)
 		a.mu.Unlock()
 		a.emitUpdate()
 	})
@@ -3182,6 +3224,7 @@ func setupExt(a *App) {
 	ext.Intercept(in.ROOM_READY).With(func(e *g.Intercept) {
 		a.mu.Lock()
 		a.inRoom = true
+		a.chatIdToName = make(map[int]string)
 		a.mu.Unlock()
 		a.emitUpdate()
 	})
@@ -3197,7 +3240,146 @@ func setupExt(a *App) {
 		} else {
 			a.mu.Unlock()
 		}
+		a.handleUsersPacket(e)
 	})
+
+	ext.Intercept(in.CHAT, in.SHOUT).With(a.handleChatPacket)
+}
+
+func (a *App) checkMyTicketsAnnouncement() {
+	a.mu.Lock()
+	enabled := a.myTicketsAnnouncementEnabled
+	timer := a.myTicketsTimer
+	lastAnnounce := a.lastMyTicketsAnnouncementAt
+	a.mu.Unlock()
+
+	if !enabled {
+		return
+	}
+
+	if time.Since(lastAnnounce) >= time.Duration(timer)*time.Second {
+		msg := "If you want to see your tickets for current raffle say: My Tickets"
+		ext.Send(out.SHOUT, msg)
+
+		a.mu.Lock()
+		a.lastMyTicketsAnnouncementAt = time.Now()
+		a.mu.Unlock()
+
+		a.debugMu.Lock()
+		a.lastShout = msg
+		a.debugMu.Unlock()
+	}
+}
+
+func (a *App) handleUsersPacket(e *g.Intercept) {
+	if e == nil || e.Packet == nil || len(e.Packet.Data) == 0 {
+		return
+	}
+	data := make([]byte, len(e.Packet.Data))
+	copy(data, e.Packet.Data)
+	go func() {
+		users, err := a.runUsers28PythonParser(data)
+		if err != nil {
+			return
+		}
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		for _, u := range users {
+			if u.Username != "" {
+				a.chatIdToName[u.ChatID] = u.Username
+			}
+		}
+	}()
+}
+
+type ParsedUsers28User struct {
+	Username string `json:"username"`
+	ChatID   int    `json:"chat_id"`
+}
+
+func (a *App) runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, error) {
+	scriptPath := filepath.Join("..", "scripts", "parse_users28.py")
+	if _, err := os.Stat(scriptPath); err != nil {
+		scriptPath = filepath.Join("scripts", "parse_users28.py")
+	}
+	if _, err := os.Stat(scriptPath); err != nil {
+		exePath, _ := os.Executable()
+		scriptPath = filepath.Join(filepath.Dir(exePath), "scripts", "parse_users28.py")
+	}
+	tmpFile, err := os.CreateTemp("", "users28_*.bin")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, err := tmpFile.Write(packetData); err != nil {
+		tmpFile.Close()
+		return nil, err
+	}
+	tmpFile.Close()
+	py := "python"
+	if _, err := exec.LookPath("python3"); err == nil {
+		py = "python3"
+	}
+	cmd := exec.Command(py, scriptPath, "--input", tmpFile.Name(), "--json")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return nil, err
+	}
+	var users []ParsedUsers28User
+	if err := json.Unmarshal(stdout.Bytes(), &users); err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+func (a *App) handleChatPacket(e *g.Intercept) {
+	id := e.Packet.ReadInt()
+	msg := e.Packet.ReadString()
+
+	if strings.EqualFold(strings.TrimSpace(msg), "My Tickets") {
+		a.mu.Lock()
+		name, ok := a.chatIdToName[id]
+		a.mu.Unlock()
+		if ok {
+			a.respondWithTickets(name)
+		}
+	}
+}
+
+func (a *App) respondWithTickets(username string) {
+	a.mu.Lock()
+	lastAt, ok := a.userLastMyTickets[username]
+	if ok && time.Since(lastAt) < 3*time.Minute {
+		a.mu.Unlock()
+		return
+	}
+	a.userLastMyTickets[username] = time.Now()
+
+	var tickets int
+	if a.currentSession != nil {
+		for _, p := range a.currentSession.Participants {
+			if strings.EqualFold(p.Username, username) {
+				tickets = p.Tickets
+				break
+			}
+		}
+	}
+	a.mu.Unlock()
+
+	var reply string
+	if tickets == 0 {
+		reply = fmt.Sprintf("%s, you don't have any tickets for the current raffle yet. Keep betting! 🎟️", username)
+	} else if tickets == 1 {
+		reply = fmt.Sprintf("%s, you have 1 ticket for the current raffle! 🎟️", username)
+	} else {
+		reply = fmt.Sprintf("%s, you have %d tickets for the current raffle! 🎟️", username, tickets)
+	}
+
+	ext.Send(out.SHOUT, reply)
+	a.debugMu.Lock()
+	a.lastShout = reply
+	a.debugMu.Unlock()
 }
 
 func main() {

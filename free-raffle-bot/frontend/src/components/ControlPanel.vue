@@ -9,6 +9,7 @@ const props = defineProps({
 const emit = defineEmits(['refresh']);
 
 const bonusEvery = ref(5);
+const myTicketsTimer = ref(300);
 const showNewRaffleModal = ref(false);
 
 const updateBonus = () => {
@@ -17,10 +18,18 @@ const updateBonus = () => {
   }
 };
 
+const updateMyTicketsTimer = () => {
+  if (props.state.myTicketsTimer) {
+    myTicketsTimer.value = props.state.myTicketsTimer;
+  }
+};
+
 watch(() => props.state.bonusEvery, updateBonus);
+watch(() => props.state.myTicketsTimer, updateMyTicketsTimer);
 
 onMounted(() => {
   updateBonus();
+  updateMyTicketsTimer();
 });
 
 const call = async (name, ...args) => {
@@ -39,12 +48,22 @@ const saveBonusRule = async () => {
   emit('refresh');
 };
 
+const saveMyTicketsTimer = async () => {
+  await call('SetMyTicketsTimer', myTicketsTimer.value >= 10 ? myTicketsTimer.value : 10);
+  emit('refresh');
+};
+
 const toggleTicketAnnounce = async (e) => {
   await call('SetTicketAnnounceEnabled', e.target.checked);
 };
 
 const toggleTicketProgress = async (e) => {
   await call('SetTicketProgressEnabled', e.target.checked);
+};
+
+const toggleMyTicketsAnnounce = async (e) => {
+  await call('SetMyTicketsAnnouncementEnabled', e.target.checked);
+  emit('refresh');
 };
 
 const toggleSession = async () => {
@@ -94,6 +113,14 @@ const refresh = () => emit('refresh');
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
           <input type="checkbox" :checked="state.ticketProgressEnabled" @change="toggleTicketProgress"> Shout ticket progress
         </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" :checked="state.myTicketsAnnouncementEnabled" @change="toggleMyTicketsAnnounce"> Announce "My Tickets"
+        </label>
+      </div>
+      <div class="row" v-if="state.myTicketsAnnouncementEnabled" style="margin-top: 12px;">
+        <label for="myTicketsTimer">Announce every (s)</label>
+        <input id="myTicketsTimer" type="number" min="10" v-model="myTicketsTimer">
+        <button class="alt" @click="saveMyTicketsTimer">Save Timer</button>
       </div>
     </div>
     <NewRaffleModal 
