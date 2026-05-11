@@ -3337,6 +3337,18 @@ func (a *App) handleChatPacket(e *g.Intercept) {
 	id := e.Packet.ReadInt()
 	msg := e.Packet.ReadString()
 
+	// Heuristic: Some chat packets include the username after the message
+	// For CHAT_2 and CHAT_3, the format is often [int id, string msg, int gesture, string name]
+	if e.Is(in.CHAT_2) || e.Is(in.CHAT_3) {
+		_ = e.Packet.ReadInt() // gesture/color
+		name := e.Packet.ReadString()
+		if name != "" {
+			a.mu.Lock()
+			a.chatIdToName[id] = name
+			a.mu.Unlock()
+		}
+	}
+
 	a.logDebug("chat intercepted: ID=%d, MSG=%q", id, msg)
 
 	if strings.EqualFold(strings.TrimSpace(msg), "My Tickets") {
