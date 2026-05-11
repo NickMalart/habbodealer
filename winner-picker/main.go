@@ -31,7 +31,7 @@ var assets embed.FS
 var ext = g.NewExt(g.ExtInfo{
 	Title:       "Winner Picker",
 	Description: "Picks a random winner from users in the room",
-	Version:     "1.0.0",
+	Version:     "1.0.1",
 	Author:      "Dubbo",
 })
 
@@ -49,11 +49,17 @@ type ParsedUsers28User struct {
 	RawNameBlock string `json:"raw_name_block,omitempty"`
 }
 
+type AppState struct {
+	Connected bool     `json:"connected"`
+	Users     []string `json:"users"`
+}
+
 type App struct {
 	ctx context.Context
 	mu  sync.Mutex
 
-	users []string
+	connected bool
+	users     []string
 }
 
 func NewApp() *App {
@@ -68,10 +74,35 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) runExt() {
+	ext.Activated(func() {
+		if a.ctx != nil {
+			runtime.WindowShow(a.ctx)
+		}
+	})
+
+	ext.Connected(func(g.ConnectArgs) {
+		a.mu.Lock()
+		a.connected = true
+		a.mu.Unlock()
+		a.emitUpdate()
+	})
+
+	ext.Disconnected(func() {
+		a.mu.Lock()
+		a.connected = false
+		a.mu.Unlock()
+		a.emitUpdate()
+	})
+
+	// Use InterceptAll to catch header 28 manually since it's the most reliable for Origins room users
+	ext.InterceptAll(func(e *g.Intercept) {
+		if e.Packet.Header.Dir == g.In && e.Packet.Header.Value == 28 {
+			a.handleUsersPacket(e)
+		}
+	})
+
+	// Also standard USERS/SPACENODEUSERS
 	ext.Intercept(in.USERS, in.SPACENODEUSERS).With(a.handleUsersPacket)
-	
-	// Also intercept header 28 specifically as it's common in Origins
-	ext.Intercept(g.In.Id("28")).With(a.handleUsersPacket)
 
 	ext.Run()
 }
@@ -81,47 +112,69 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 		return
 	}
 
-	// We use the Python parser to handle the complex USERS28 format
-	users, err := a.runUsers28PythonParser(e.Packet.Data)
-	if err != nil {
-		log.Printf("Parser failed: %v", err)
+	// COPY data to avoid race conditions with the packet thread and allow async processing
+	data := make([]byte, len(e.Packet.Data))
+	copy(data, e.Packet.Data)
+
+	go func() {
+		// We use the Python parser to handle the complex USERS28 format
+		users, err := a.runUsers28PythonParser(data)
+		if err != nil {
+			log.Printf("Parser failed: %v", err)
+			return
+		}
+
+		a.mu.Lock()
+		userMap := make(map[string]bool)
+		// Maintain existing if they are still there
+		for _, u := range a.users {
+			userMap[u] = true
+		}
+		
+		for _, u := range users {
+			name := strings.TrimSpace(u.Username)
+			if name != "" {
+				userMap[name] = true
+			}
+		}
+		
+		finalUsers := []string{}
+		for name := range userMap {
+			finalUsers = append(finalUsers, name)
+		}
+		sort.Strings(finalUsers)
+		a.users = finalUsers
+		a.mu.Unlock()
+
+		a.emitUpdate()
+	}()
+}
+
+func (a *App) emitUpdate() {
+	if a.ctx == nil {
 		return
 	}
+	runtime.EventsEmit(a.ctx, "state_updated", a.GetState())
+}
 
+func (a *App) GetState() AppState {
 	a.mu.Lock()
-	userMap := make(map[string]bool)
-	// Add existing users to map to avoid duplicates if multiple packets arrive
-	for _, u := range a.users {
-		userMap[u] = true
+	defer a.mu.Unlock()
+	return AppState{
+		Connected: a.connected,
+		Users:     a.users,
 	}
-	
-	for _, u := range users {
-		name := strings.TrimSpace(u.Username)
-		if name != "" {
-			userMap[name] = true
-		}
-	}
-	
-	finalUsers := []string{}
-	for name := range userMap {
-		finalUsers = append(finalUsers, name)
-	}
-	sort.Strings(finalUsers)
-	a.users = finalUsers
-	a.mu.Unlock()
-
-	runtime.EventsEmit(a.ctx, "users_updated", a.users)
 }
 
 func (a *App) UpdateUsers() {
 	ext.Send(out.G_USRS)
 	ext.Send(out.GETSPACENODEUSERS)
 	
-	// Clear local list when requesting fresh
+	// Clear local list when requesting fresh to see who is actually there
 	a.mu.Lock()
 	a.users = []string{}
 	a.mu.Unlock()
-	runtime.EventsEmit(a.ctx, "users_updated", a.users)
+	a.emitUpdate()
 }
 
 func (a *App) PickWinner(blockedNames []string) string {
@@ -157,12 +210,6 @@ func (a *App) ShoutWinner(name string) {
 	ext.Send(out.SHOUT, msg)
 }
 
-func (a *App) GetUsers() []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.users
-}
-
 func (a *App) runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, error) {
 	// Try to find the script in common locations
 	scriptPath := filepath.Join("..", "scripts", "parse_users28.py")
@@ -171,7 +218,6 @@ func (a *App) runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, er
 	}
 	
 	if _, err := os.Stat(scriptPath); err != nil {
-		// Try absolute path from executable if relative fails
 		exePath, _ := os.Executable()
 		exeDir := filepath.Dir(exePath)
 		scriptPath = filepath.Join(exeDir, "..", "..", "..", "scripts", "parse_users28.py")
@@ -218,8 +264,8 @@ func main() {
 
 	err := wails.Run(&options.App{
 		Title:  "Winner Picker",
-		Width:  400,
-		Height: 600,
+		Width:  420,
+		Height: 620,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
@@ -227,6 +273,7 @@ func main() {
 		Bind: []interface{}{
 			app,
 		},
+		BackgroundColour: &options.RGBA{R: 18, G: 22, B: 28, A: 1},
 	})
 
 	if err != nil {

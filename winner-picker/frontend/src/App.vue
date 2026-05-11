@@ -1,11 +1,18 @@
 <script setup>
-import {ref, onMounted} from 'vue'
+import {ref, onMounted, computed} from 'vue'
 
-const users = ref([])
+const state = ref({
+  connected: false,
+  users: []
+})
 const blockedNames = ref([])
 const newBlockName = ref('')
 const lastWinner = ref('')
 const isPicking = ref(false)
+
+const eligibleUsers = computed(() => {
+  return state.value.users.filter(user => !isBlocked(user))
+})
 
 // Helper to call Go methods
 const call = async (name, ...args) => {
@@ -14,15 +21,19 @@ const call = async (name, ...args) => {
   }
 };
 
+const refresh = async () => {
+  const s = await call('GetState')
+  if (s) state.value = s
+}
+
 onMounted(async () => {
-  // Load initial users
-  const u = await call('GetUsers')
-  if (u) users.value = u
+  // Load initial state
+  await refresh()
   
   // Listen for updates from backend
   if (window.runtime && window.runtime.EventsOn) {
-    window.runtime.EventsOn('users_updated', (updatedUsers) => {
-      users.value = updatedUsers
+    window.runtime.EventsOn('state_updated', (updatedState) => {
+      state.value = updatedState
     })
   }
 
@@ -31,6 +42,9 @@ onMounted(async () => {
   if (stored) {
     blockedNames.value = JSON.parse(stored)
   }
+
+  // Periodic fallback refresh
+  setInterval(refresh, 5000)
 })
 
 const handleUpdateUsers = async () => {
@@ -47,8 +61,17 @@ const addBlock = () => {
 }
 
 const removeBlock = (name) => {
-  blockedNames.value = blockedNames.value.filter(n => n !== name)
+  blockedNames.value = blockedNames.value.filter(n => n.toLowerCase() !== name.toLowerCase())
   localStorage.setItem('blocked_names', JSON.stringify(blockedNames.value))
+}
+
+const toggleBlock = (name) => {
+  if (isBlocked(name)) {
+    removeBlock(name)
+  } else {
+    blockedNames.value.push(name)
+    localStorage.setItem('blocked_names', JSON.stringify(blockedNames.value))
+  }
 }
 
 const pickWinner = async () => {
@@ -68,7 +91,7 @@ const pickWinner = async () => {
       alert('No eligible users found in the room!')
     }
     isPicking.value = false
-  }, 1000)
+  }, 1200)
 }
 
 const isBlocked = (name) => {
@@ -78,11 +101,16 @@ const isBlocked = (name) => {
 
 <template>
   <div class="container">
-    <h1>Winner Picker</h1>
+    <div class="header">
+      <h1>Winner Picker</h1>
+      <div class="status-badge" :class="{ connected: state.connected }">
+        {{ state.connected ? 'Connected' : 'Disconnected' }}
+      </div>
+    </div>
     
     <div class="controls">
-      <button @click="handleUpdateUsers">Update User List</button>
-      <button @click="pickWinner" :disabled="isPicking">
+      <button @click="handleUpdateUsers" class="alt">Update User List</button>
+      <button @click="pickWinner" :disabled="isPicking || !state.connected">
         {{ isPicking ? 'Updating & Picking...' : 'Pick Winner' }}
       </button>
     </div>
@@ -105,14 +133,13 @@ const isBlocked = (name) => {
     </div>
 
     <div class="user-section">
-      <h3>Users in Room ({{ users.length }})</h3>
+      <h3>Users in Room ({{ eligibleUsers.length }})</h3>
       <div class="user-list">
-        <div v-for="user in users" :key="user" class="user-item">
-          <span :class="{ blocked: isBlocked(user) }">{{ user }}</span>
-          <span v-if="isBlocked(user)" style="font-size: 10px; color: #e74c3c;">(BLOCKED)</span>
+        <div v-for="user in eligibleUsers" :key="user" class="user-item" @click="toggleBlock(user)" title="Click to Block">
+          <span>{{ user }}</span>
         </div>
-        <div v-if="users.length === 0" style="text-align: center; opacity: 0.5; padding: 20px;">
-          No users detected. Click Update or wait for room movement.
+        <div v-if="eligibleUsers.length === 0" style="text-align: center; opacity: 0.5; padding: 20px;">
+          No eligible users detected. Click Update or check your blocklist.
         </div>
       </div>
     </div>
@@ -120,10 +147,60 @@ const isBlocked = (name) => {
 </template>
 
 <style scoped>
+.user-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.user-item:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+.user-item:last-child {
+  border-bottom: none;
+}
+
+.blocked {
+  color: #ff6b6b;
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  padding-bottom: 10px;
+}
+
 h1 {
-  margin-top: 0;
-  text-align: center;
-  color: #3498db;
+  margin: 0;
+  font-size: 22px;
+  color: #ffc857;
+}
+
+.status-badge {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  background: #ff6b6b;
+  color: white;
+}
+
+.status-badge.connected {
+  background: #62c370;
 }
 
 .controls {
@@ -136,9 +213,10 @@ h1 {
 }
 
 .block-section h3, .user-section h3 {
+  margin-top: 0;
   margin-bottom: 10px;
-  border-bottom: 1px solid #333;
-  padding-bottom: 5px;
+  font-size: 16px;
+  color: #b4c8ce;
 }
 
 .blocked-list {
@@ -149,19 +227,25 @@ h1 {
 }
 
 .blocked-tag {
-    background-color: #c0392b;
-    padding: 2px 8px;
+    background: #355a68;
+    padding: 2px 10px;
     border-radius: 12px;
     font-size: 12px;
     display: flex;
     align-items: center;
     gap: 5px;
     color: white;
+    border: 1px solid rgba(255,255,255,0.1);
 }
 
 .remove-btn {
     cursor: pointer;
     font-weight: bold;
+    opacity: 0.7;
+}
+
+.remove-btn:hover {
+    opacity: 1;
 }
 
 .user-section {
@@ -169,5 +253,22 @@ h1 {
     display: flex;
     flex-direction: column;
     min-height: 0;
+}
+
+.winner-announce {
+    padding: 12px;
+    background: rgba(98,195,112,0.15);
+    border: 1px solid #62c370;
+    color: #c9f5ce;
+    border-radius: 8px;
+    text-align: center;
+    font-size: 18px;
+    font-weight: bold;
+    animation: fadeIn 0.3s;
+}
+
+@keyframes fadeIn {
+    from { transform: translateY(-5px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
 }
 </style>
