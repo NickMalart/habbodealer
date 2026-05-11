@@ -18,6 +18,10 @@ const loading = ref(true);
 const error = ref(null);
 const activeTab = ref('main');
 
+const selectedPlayer = ref(null);
+const showModal = ref(false);
+const loadingPlayer = ref(false);
+
 const fetchStats = async () => {
   loading.value = true;
   error.value = null;
@@ -39,6 +43,27 @@ const fetchStats = async () => {
   } finally {
     loading.value = false;
   }
+};
+
+const openPlayerDetails = async (playerName) => {
+  loadingPlayer.value = true;
+  showModal.value = true;
+  selectedPlayer.value = null;
+  try {
+    if (window.go && window.go.main && window.go.main.App && window.go.main.App.GetPlayerDetails) {
+      const details = await window.go.main.App.GetPlayerDetails(playerName);
+      selectedPlayer.value = details;
+    }
+  } catch (e) {
+    console.error("Failed to fetch player details:", e);
+  } finally {
+    loadingPlayer.value = false;
+  }
+};
+
+const closeModal = () => {
+  showModal.value = false;
+  selectedPlayer.value = null;
 };
 
 const blockPlayer = async (name) => {
@@ -196,26 +221,20 @@ const sortedPlayers = computed(() => {
           <thead>
             <tr>
               <th>Player Name</th>
-              <th>Rounds</th>
-              <th>Player Wins</th>
-              <th>Dealer Wins</th>
-              <th>Win Rate</th>
-              <th>Dealer Profit (Net Items)</th>
+              <th>Games Played</th>
+              <th>Wins</th>
+              <th>Losses</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="player in sortedPlayers" :key="player.playerName">
+            <tr v-for="player in sortedPlayers" :key="player.playerName" @click="openPlayerDetails(player.playerName)" class="clickable-row">
               <td><strong>{{ player.playerName }}</strong></td>
               <td>{{ player.totalRounds }}</td>
               <td class="player-win-text">{{ player.playerWins }}</td>
               <td class="dealer-win-text">{{ player.dealerWins }}</td>
-              <td class="player-win-text">{{ player.winRate.toFixed(1) }}%</td>
-              <td :class="player.netItems >= 0 ? 'dealer-win-text' : 'player-win-text'">
-                {{ player.netItems >= 0 ? '+' : '' }}{{ player.netItems }}
-              </td>
               <td>
-                <button @click="blockPlayer(player.playerName)" class="block-btn">Block</button>
+                <button @click.stop="blockPlayer(player.playerName)" class="block-btn">Block</button>
               </td>
             </tr>
           </tbody>
@@ -226,36 +245,94 @@ const sortedPlayers = computed(() => {
       </div>
     </div>
 
-    <div v-if="activeTab === 'blocklist'">
-      <div class="card">
-        <h2>🚫 Blocked Players</h2>
-        <p class="muted" style="text-align: left; padding: 0 0 16px;">
-          Blocked players are excluded from all statistics (Games, Items, and Players).
-        </p>
-        
-        <div class="add-block">
-          <input v-model="newBlockedPlayer" placeholder="Enter player name..." @keyup.enter="blockPlayer()" />
-          <button @click="blockPlayer()" :disabled="!newBlockedPlayer">Block Player</button>
+    <!-- Player Modal -->
+    <div v-if="showModal" class="modal-overlay" @click.self="closeModal">
+      <div class="modal-content card">
+        <div class="modal-header">
+          <h2>📊 {{ selectedPlayer ? selectedPlayer.playerName : 'Loading...' }} Statistics</h2>
+          <button @click="closeModal" class="close-btn">&times;</button>
         </div>
 
-        <table v-if="blockedPlayers.length > 0" style="margin-top: 24px;">
-          <thead>
-            <tr>
-              <th>Player Name</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="name in blockedPlayers" :key="name">
-              <td><strong>{{ name }}</strong></td>
-              <td>
-                <button @click="unblockPlayer(name)" class="refresh-btn" style="background: var(--player); color: white;">Unblock</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <div v-else class="muted">
-          No players are currently blocked.
+        <div v-if="loadingPlayer" class="modal-loading">
+          <div class="spinner"></div>
+          <p>Fetching detailed player data...</p>
+        </div>
+
+        <div v-else-if="selectedPlayer" class="modal-body">
+          <!-- Summary Cards -->
+          <div class="overview grid">
+            <div class="card stat-card">
+              <div class="stat-label">Total Rounds</div>
+              <div class="stat-value">{{ selectedPlayer.totalRounds }}</div>
+            </div>
+            <div class="card stat-card player-win">
+              <div class="stat-label">Player Win Rate</div>
+              <div class="stat-value">{{ selectedPlayer.winRate.toFixed(1) }}%</div>
+              <div class="stat-rate">{{ selectedPlayer.playerWins }} wins</div>
+            </div>
+            <div class="card stat-card dealer-win">
+              <div class="stat-label">Dealer Win Rate</div>
+              <div class="stat-value">{{ selectedPlayer.lossRate.toFixed(1) }}%</div>
+              <div class="stat-rate">{{ selectedPlayer.dealerWins }} losses</div>
+            </div>
+            <div class="card stat-card" :class="selectedPlayer.netProfit >= 0 ? 'player-win' : 'dealer-win'">
+              <div class="stat-label">Net Profit (Player)</div>
+              <div class="stat-value" :class="selectedPlayer.netProfit >= 0 ? 'player-win-text' : 'dealer-win-text'">
+                {{ selectedPlayer.netProfit >= 0 ? '+' : '' }}{{ selectedPlayer.netProfit }}
+              </div>
+              <div class="stat-rate">items</div>
+            </div>
+          </div>
+
+          <!-- Items Breakdown -->
+          <div class="breakdown-section">
+            <h3>📦 Item Breakdown (Bars In / Bars Out)</h3>
+            <table class="compact-table">
+              <thead>
+                <tr>
+                  <th>Item Name</th>
+                  <th>Total Bet (In)</th>
+                  <th>Total Payout (Out)</th>
+                  <th>Net (Player Profit)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in selectedPlayer.byItem" :key="item.itemName">
+                  <td><strong>{{ item.itemName }}</strong></td>
+                  <td class="dealer-win-text">{{ item.betIn }}</td>
+                  <td class="player-win-text">{{ item.payoutOut }}</td>
+                  <td :class="item.net >= 0 ? 'player-win-text' : 'dealer-win-text'">
+                    {{ item.net >= 0 ? '+' : '' }}{{ item.net }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Game Breakdown -->
+          <div class="breakdown-section">
+            <h3>🎮 Game Breakdown</h3>
+            <table class="compact-table">
+              <thead>
+                <tr>
+                  <th>Game</th>
+                  <th>Rounds</th>
+                  <th>Wins</th>
+                  <th>Losses</th>
+                  <th>Win Rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="game in selectedPlayer.byGame" :key="game.game">
+                  <td><strong>{{ game.game }}</strong></td>
+                  <td>{{ game.totalRounds }}</td>
+                  <td class="player-win-text">{{ game.wins }}</td>
+                  <td class="dealer-win-text">{{ game.losses }}</td>
+                  <td>{{ game.winRate.toFixed(1) }}%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
@@ -282,7 +359,7 @@ body {
 }
 
 .container {
-  max-width: 1000px;
+  max-width: 1400px;
   margin: 0 auto;
   padding: 24px;
   display: flex;
@@ -366,6 +443,15 @@ body {
 
 .block-btn:hover { opacity: 0.8; }
 
+.clickable-row {
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.clickable-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
 .add-block {
   display: flex;
   gap: 12px;
@@ -437,6 +523,11 @@ td {
   border-bottom: 1px solid var(--border);
 }
 
+.compact-table th, .compact-table td {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
 .muted {
   text-align: center;
   padding: 40px;
@@ -447,5 +538,81 @@ td {
   background: rgba(248, 113, 113, 0.1);
   border-color: var(--player);
   color: var(--player);
+}
+
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(4px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  width: 90%;
+  max-width: 800px;
+  max-height: 90vh;
+  overflow-y: auto;
+  position: relative;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 16px;
+}
+
+.modal-header h2 {
+  margin: 0;
+}
+
+.close-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 28px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.close-btn:hover { color: white; }
+
+.modal-loading {
+  text-align: center;
+  padding: 40px;
+}
+
+.breakdown-section {
+  margin-top: 32px;
+}
+
+.breakdown-section h3 {
+  font-size: 18px;
+  margin-bottom: 16px;
+  color: var(--accent);
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid rgba(255, 255, 255, 0.1);
+  border-left-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 16px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 </style>

@@ -61,12 +61,43 @@ type ItemStat struct {
 }
 
 type PlayerStat struct {
-	PlayerName  string  `json:"playerName"`
+	PlayerName     string  `json:"playerName"`
+	TotalRounds    int     `json:"totalRounds"`
+	PlayerWins     int     `json:"playerWins"`
+	DealerWins     int     `json:"dealerWins"`
+	WinRate        float64 `json:"winRate"`
+	NetItems       int     `json:"netItems"` // Dealer Profit (Bets - Payouts)
+	BetItemsIn     int     `json:"betItemsIn"`
+	PayoutItemsOut int     `json:"payoutItemsOut"`
+}
+
+type PlayerDetails struct {
+	PlayerName     string           `json:"playerName"`
+	TotalRounds    int              `json:"totalRounds"`
+	PlayerWins     int              `json:"playerWins"`
+	DealerWins     int              `json:"dealerWins"`
+	WinRate        float64          `json:"winRate"`
+	LossRate       float64          `json:"lossRate"`
+	BetItemsIn     int              `json:"betItemsIn"`
+	PayoutItemsOut int              `json:"payoutItemsOut"`
+	NetProfit      int              `json:"netProfit"` // Payouts - Bets
+	ByGame         []PlayerGameStat `json:"byGame"`
+	ByItem         []PlayerItemStat `json:"byItem"`
+}
+
+type PlayerGameStat struct {
+	Game        string  `json:"game"`
 	TotalRounds int     `json:"totalRounds"`
-	PlayerWins  int     `json:"playerWins"`
-	DealerWins  int     `json:"dealerWins"`
+	Wins        int     `json:"wins"`
+	Losses      int     `json:"losses"`
 	WinRate     float64 `json:"winRate"`
-	NetItems    int     `json:"netItems"` // Dealer Profit (Bets - Payouts)
+}
+
+type PlayerItemStat struct {
+	ItemName  string `json:"itemName"`
+	BetIn     int    `json:"betIn"`
+	PayoutOut int    `json:"payoutOut"`
+	Net       int    `json:"net"`
 }
 
 type App struct {
@@ -273,35 +304,152 @@ func (a *App) GetStats() (CasinoStats, error) {
 
 	// Fetch player stats (excluding blocked players)
 	playerRows, err := a.db.Query(a.ctx, `
+		WITH player_item_totals AS (
+			SELECT 
+				entry_id,
+				SUM(CASE WHEN item_type = 'bet' THEN quantity ELSE 0 END) as bets,
+				SUM(CASE WHEN item_type = 'payout' THEN quantity ELSE 0 END) as payouts
+			FROM game_history_items
+			WHERE owner_key = $1
+			GROUP BY entry_id
+		)
 		SELECT
 			e.player_name,
-			COUNT(DISTINCT e.id) AS total_rounds,
-			SUM(CASE WHEN LOWER(TRIM(e.winner)) = LOWER(TRIM(e.player_name)) THEN 1 ELSE 0 END) AS player_wins,
-			SUM(CASE WHEN LOWER(TRIM(e.winner)) = 'dealer' THEN 1 ELSE 0 END) AS dealer_wins,
-			COALESCE(SUM(CASE WHEN i.item_type = 'bet' THEN i.quantity ELSE 0 END), 0) -
-			COALESCE(SUM(CASE WHEN i.item_type = 'payout' THEN i.quantity ELSE 0 END), 0) AS net_for_dealer
+			COUNT(e.id) FILTER (WHERE e.status = 'Completed' AND e.issue = false) AS completed_rounds,
+			SUM(CASE WHEN e.status = 'Completed' AND e.issue = false AND LOWER(TRIM(e.winner)) = LOWER(TRIM(e.player_name)) THEN 1 ELSE 0 END) AS player_wins,
+			SUM(CASE WHEN e.status = 'Completed' AND e.issue = false AND LOWER(TRIM(e.winner)) = 'dealer' THEN 1 ELSE 0 END) AS dealer_wins,
+			COALESCE(SUM(pit.bets), 0) AS total_bet_in,
+			COALESCE(SUM(pit.payouts), 0) AS total_payout_out,
+			COUNT(e.id) AS total_rounds
 		FROM game_history_entries e
-		LEFT JOIN game_history_items i ON i.entry_id = e.id AND i.owner_key = e.owner_key
-		WHERE e.owner_key = $1 AND e.status = 'Completed' AND e.issue = false
+		LEFT JOIN player_item_totals pit ON pit.entry_id = e.id
+		WHERE e.owner_key = $1
 		  AND LOWER(TRIM(e.player_name)) NOT IN (SELECT LOWER(TRIM(player_name)) FROM blocked_players WHERE owner_key = $1)
 		GROUP BY e.player_name
-		ORDER BY total_rounds DESC
+		ORDER BY completed_rounds DESC
 		LIMIT 100
 	`, a.ownerKey)
 	if err == nil {
 		defer playerRows.Close()
 		for playerRows.Next() {
 			var p PlayerStat
-			if err := playerRows.Scan(&p.PlayerName, &p.TotalRounds, &p.PlayerWins, &p.DealerWins, &p.NetItems); err == nil {
-				if p.TotalRounds > 0 {
-					p.WinRate = float64(p.PlayerWins) / float64(p.TotalRounds) * 100
+			var completedRounds int
+			if err := playerRows.Scan(&p.PlayerName, &completedRounds, &p.PlayerWins, &p.DealerWins, &p.BetItemsIn, &p.PayoutItemsOut, &p.TotalRounds); err == nil {
+				if completedRounds > 0 {
+					p.WinRate = float64(p.PlayerWins) / float64(completedRounds) * 100
 				}
+				p.NetItems = p.BetItemsIn - p.PayoutItemsOut // Dealer Profit
 				stats.Players = append(stats.Players, p)
 			}
 		}
 	}
 
 	return stats, nil
+}
+
+func (a *App) GetPlayerDetails(playerName string) (PlayerDetails, error) {
+	if a.db == nil {
+		return PlayerDetails{}, fmt.Errorf("database not connected")
+	}
+
+	details := PlayerDetails{
+		PlayerName: playerName,
+		ByGame:     []PlayerGameStat{},
+		ByItem:     []PlayerItemStat{},
+	}
+
+	// Basic stats
+	err := a.db.QueryRow(a.ctx, `
+		WITH player_item_totals AS (
+			SELECT 
+				entry_id,
+				SUM(CASE WHEN item_type = 'bet' THEN quantity ELSE 0 END) as bets,
+				SUM(CASE WHEN item_type = 'payout' THEN quantity ELSE 0 END) as payouts
+			FROM game_history_items
+			WHERE owner_key = $1
+			GROUP BY entry_id
+		)
+		SELECT
+			COUNT(e.id) AS total_rounds,
+			SUM(CASE WHEN e.status = 'Completed' AND e.issue = false AND LOWER(TRIM(e.winner)) = LOWER(TRIM(e.player_name)) THEN 1 ELSE 0 END) AS player_wins,
+			SUM(CASE WHEN e.status = 'Completed' AND e.issue = false AND LOWER(TRIM(e.winner)) = 'dealer' THEN 1 ELSE 0 END) AS dealer_wins,
+			COALESCE(SUM(pit.bets), 0) AS total_bet_in,
+			COALESCE(SUM(pit.payouts), 0) AS total_payout_out
+		FROM game_history_entries e
+		LEFT JOIN player_item_totals pit ON pit.entry_id = e.id
+		WHERE e.owner_key = $1 AND LOWER(TRIM(e.player_name)) = LOWER(TRIM($2))
+	`, a.ownerKey, playerName).Scan(&details.TotalRounds, &details.PlayerWins, &details.DealerWins, &details.BetItemsIn, &details.PayoutItemsOut)
+
+	if err != nil {
+		return details, err
+	}
+
+	if details.TotalRounds > 0 {
+		// Use completed rounds for win rate calculation if possible
+		var completedCount int
+		a.db.QueryRow(a.ctx, "SELECT COUNT(*) FROM game_history_entries WHERE owner_key = $1 AND LOWER(TRIM(player_name)) = LOWER(TRIM($2)) AND status = 'Completed' AND issue = false", a.ownerKey, playerName).Scan(&completedCount)
+		
+		if completedCount > 0 {
+			details.WinRate = float64(details.PlayerWins) / float64(completedCount) * 100
+			details.LossRate = float64(details.DealerWins) / float64(completedCount) * 100
+		}
+	}
+	details.NetProfit = details.PayoutItemsOut - details.BetItemsIn
+
+	// By Game breakdown
+	gameRows, err := a.db.Query(a.ctx, `
+		SELECT
+			game,
+			COUNT(id) AS total_rounds,
+			SUM(CASE WHEN e.status = 'Completed' AND e.issue = false AND LOWER(TRIM(winner)) = LOWER(TRIM(player_name)) THEN 1 ELSE 0 END) AS wins,
+			SUM(CASE WHEN e.status = 'Completed' AND e.issue = false AND LOWER(TRIM(winner)) = 'dealer' THEN 1 ELSE 0 END) AS losses
+		FROM game_history_entries e
+		WHERE owner_key = $1 AND LOWER(TRIM(player_name)) = LOWER(TRIM($2))
+		GROUP BY game
+		ORDER BY total_rounds DESC
+	`, a.ownerKey, playerName)
+	if err == nil {
+		defer gameRows.Close()
+		for gameRows.Next() {
+			var g PlayerGameStat
+			var rawGame string
+			if err := gameRows.Scan(&rawGame, &g.TotalRounds, &g.Wins, &g.Losses); err == nil {
+				g.Game = normalizeGameName(rawGame)
+				if g.Game == "" {
+					g.Game = "Other (" + rawGame + ")"
+				}
+				if g.TotalRounds > 0 {
+					g.WinRate = float64(g.Wins) / float64(g.TotalRounds) * 100
+				}
+				details.ByGame = append(details.ByGame, g)
+			}
+		}
+	}
+
+	// By Item breakdown (include all status/issues to match physical reality)
+	itemRows, err := a.db.Query(a.ctx, `
+		SELECT
+			i.item_name,
+			SUM(CASE WHEN i.item_type = 'bet' THEN i.quantity ELSE 0 END) AS bet_in,
+			SUM(CASE WHEN i.item_type = 'payout' THEN i.quantity ELSE 0 END) AS payout_out
+		FROM game_history_items i
+		JOIN game_history_entries e ON e.id = i.entry_id AND e.owner_key = i.owner_key
+		WHERE e.owner_key = $1 AND LOWER(TRIM(e.player_name)) = LOWER(TRIM($2))
+		GROUP BY i.item_name
+		ORDER BY SUM(i.quantity) DESC
+	`, a.ownerKey, playerName)
+	if err == nil {
+		defer itemRows.Close()
+		for itemRows.Next() {
+			var i PlayerItemStat
+			if err := itemRows.Scan(&i.ItemName, &i.BetIn, &i.PayoutOut); err == nil {
+				i.Net = i.PayoutOut - i.BetIn
+				details.ByItem = append(details.ByItem, i)
+			}
+		}
+	}
+
+	return details, nil
 }
 
 func (a *App) GetBlockedPlayers() ([]string, error) {
@@ -379,8 +527,10 @@ func main() {
 
 	err := wails.Run(&options.App{
 		Title:  "Casino Statistics",
-		Width:  800,
-		Height: 600,
+		Width:  1200,
+		Height: 800,
+		MinWidth: 1024,
+		MinHeight: 768,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

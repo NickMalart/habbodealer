@@ -6,6 +6,8 @@ export function BlockPlayer(arg1:string):Promise<void>;
 
 export function GetBlockedPlayers():Promise<Array<string>>;
 
+export function GetPlayerDetails(arg1:string):Promise<main.PlayerDetails>;
+
 export function GetStats():Promise<main.CasinoStats>;
 
 export function UnblockPlayer(arg1:string):Promise<void>;

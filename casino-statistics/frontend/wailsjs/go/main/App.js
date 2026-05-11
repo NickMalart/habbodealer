@@ -10,6 +10,10 @@ export function GetBlockedPlayers() {
   return window['go']['main']['App']['GetBlockedPlayers']();
 }
 
+export function GetPlayerDetails(arg1) {
+  return window['go']['main']['App']['GetPlayerDetails'](arg1);
+}
+
 export function GetStats() {
   return window['go']['main']['App']['GetStats']();
 }
