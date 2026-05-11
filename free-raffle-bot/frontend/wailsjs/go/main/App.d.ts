@@ -34,6 +34,10 @@ export function SetBonusEvery(arg1:number):Promise<main.RaffleState>;
 
 export function SetEnabled(arg1:boolean):Promise<main.RaffleState>;
 
+export function SetMyTicketsAnnouncementEnabled(arg1:boolean):Promise<main.RaffleState>;
+
+export function SetMyTicketsTimer(arg1:number):Promise<main.RaffleState>;
+
 export function SetRaffleDiscordConfig(arg1:string,arg2:string,arg3:number,arg4:string,arg5:string,arg6:boolean):Promise<main.RaffleState>;
 
 export function SetRaffleSponsorConfig(arg1:boolean,arg2:string,arg3:string):Promise<main.RaffleState>;

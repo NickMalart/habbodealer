@@ -66,6 +66,14 @@ export function SetEnabled(arg1) {
   return window['go']['main']['App']['SetEnabled'](arg1);
 }
 
+export function SetMyTicketsAnnouncementEnabled(arg1) {
+  return window['go']['main']['App']['SetMyTicketsAnnouncementEnabled'](arg1);
+}
+
+export function SetMyTicketsTimer(arg1) {
+  return window['go']['main']['App']['SetMyTicketsTimer'](arg1);
+}
+
 export function SetRaffleDiscordConfig(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['SetRaffleDiscordConfig'](arg1, arg2, arg3, arg4, arg5, arg6);
 }

@@ -134,6 +134,8 @@ export namespace main {
 	    sponsorEnabled: boolean;
 	    sponsorName: string;
 	    sponsorRoomName: string;
+	    myTicketsAnnouncementEnabled: boolean;
+	    myTicketsTimer: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new RaffleState(source);
@@ -158,6 +160,8 @@ export namespace main {
 	        this.sponsorEnabled = source["sponsorEnabled"];
 	        this.sponsorName = source["sponsorName"];
 	        this.sponsorRoomName = source["sponsorRoomName"];
+	        this.myTicketsAnnouncementEnabled = source["myTicketsAnnouncementEnabled"];
+	        this.myTicketsTimer = source["myTicketsTimer"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

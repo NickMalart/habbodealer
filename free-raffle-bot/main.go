@@ -3243,7 +3243,7 @@ func setupExt(a *App) {
 		a.handleUsersPacket(e)
 	})
 
-	ext.Intercept(in.CHAT, in.SHOUT).With(a.handleChatPacket)
+	ext.Intercept(in.CHAT, in.CHAT_2, in.CHAT_3).With(a.handleChatPacket)
 }
 
 func (a *App) checkMyTicketsAnnouncement() {
