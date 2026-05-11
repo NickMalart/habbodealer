@@ -1,11 +1,12 @@
 package main
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"embed"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -368,6 +369,11 @@ func (a *App) LaunchApp(appID string, port string) string {
 
 	cmd := exec.Command(item.Path, args...)
 	cmd.Dir = filepath.Dir(item.Path)
+	hideWindow(cmd)
+
+	stdout, _ := cmd.StdoutPipe()
+	stderr, _ := cmd.StderrPipe()
+
 	if err := cmd.Start(); err != nil {
 		return fmt.Sprintf("failed to launch: %v", err)
 	}
@@ -376,12 +382,17 @@ func (a *App) LaunchApp(appID string, port string) string {
 	a.processes[instanceKey] = cmd.Process
 	a.mu.Unlock()
 
-	go func(key string, c *exec.Cmd) {
+	prefix := fmt.Sprintf("[%s] ", item.Name)
+	go a.streamToLog(stdout, prefix, "info")
+	go a.streamToLog(stderr, prefix, "error")
+
+	go func(key string, c *exec.Cmd, name string) {
 		_ = c.Wait()
 		a.mu.Lock()
 		delete(a.processes, key)
 		a.mu.Unlock()
-	}(instanceKey, cmd)
+		a.emitLog(fmt.Sprintf("[%s] Process exited", name), "info")
+	}(instanceKey, cmd, item.Name)
 
 	a.RefreshApps()
 	return "ok"
@@ -398,6 +409,7 @@ func (a *App) LaunchGEarth() string {
 		dirEscaped := strings.ReplaceAll(filepath.Dir(exePath), "'", "''")
 		psCmd := fmt.Sprintf("Start-Process -FilePath '%s' -WorkingDirectory '%s' -Verb RunAs", exeEscaped, dirEscaped)
 		cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
+		hideWindow(cmd)
 		if err := cmd.Run(); err != nil {
 			return fmt.Sprintf("failed to launch G-Earth as admin: %v", err)
 		}
@@ -406,6 +418,7 @@ func (a *App) LaunchGEarth() string {
 
 	cmd := exec.Command(exePath)
 	cmd.Dir = filepath.Dir(exePath)
+	hideWindow(cmd)
 	if err := cmd.Start(); err != nil {
 		return fmt.Sprintf("failed to launch G-Earth: %v", err)
 	}
@@ -448,28 +461,36 @@ func findTool(name string) string {
 	return name
 }
 
-func (a *App) runCmd(dir string, args ...string) error {
-	cmd := exec.Command(args[0], args[1:]...)
-	cmd.Dir = dir
-
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-
-	err := cmd.Run()
-	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
-		line = strings.TrimRight(line, "\r")
-		if line == "" {
-			continue
-		}
-		kind := "info"
+func (a *App) streamToLog(r io.ReadCloser, prefix, defaultKind string) {
+	defer r.Close()
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Text()
+		kind := defaultKind
 		low := strings.ToLower(line)
 		if strings.Contains(low, "error") || strings.Contains(low, "failed") || strings.Contains(low, "cannot") {
 			kind = "error"
 		}
-		a.emitLog("    "+line, kind)
+		a.emitLog(prefix+line, kind)
 	}
-	return err
+}
+
+func (a *App) runCmd(dir string, args ...string) error {
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Dir = dir
+	hideWindow(cmd)
+
+	stdout, _ := cmd.StdoutPipe()
+	stderr, _ := cmd.StderrPipe()
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	go a.streamToLog(stdout, "    ", "info")
+	go a.streamToLog(stderr, "    ", "error")
+
+	return cmd.Wait()
 }
 
 func (a *App) killTrackedProcessesForApp(appID string) int {
@@ -513,6 +534,7 @@ func (a *App) stopProcessByExePath(exePath string) {
 	escaped := strings.ReplaceAll(exePath, "'", "''")
 	ps := fmt.Sprintf("Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '%s' } | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }", escaped)
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", ps)
+	hideWindow(cmd)
 	_ = cmd.Run()
 }
 
@@ -526,6 +548,7 @@ func (a *App) stopProcessByExeName(exePath string) {
 		return
 	}
 	cmd := exec.Command("taskkill", "/F", "/IM", name)
+	hideWindow(cmd)
 	_ = cmd.Run()
 }
 
@@ -762,7 +785,9 @@ func (a *App) shutdown(ctx context.Context) {
 
 	// Final fallback on Windows: taskkill known names
 	if runtime.GOOS == "windows" {
-		_ = exec.Command("taskkill", "/F", "/IM", "G-Earth.exe").Run()
+		tk1 := exec.Command("taskkill", "/F", "/IM", "G-Earth.exe")
+		hideWindow(tk1)
+		_ = tk1.Run()
 		for _, t := range targets {
 			for _, rel := range append([]string{t.OutExe}, t.CleanPaths...) {
 				if strings.TrimSpace(rel) == "" {
@@ -772,7 +797,9 @@ func (a *App) shutdown(ctx context.Context) {
 				if name == "" {
 					continue
 				}
-				_ = exec.Command("taskkill", "/F", "/IM", name).Run()
+				tk2 := exec.Command("taskkill", "/F", "/IM", name)
+				hideWindow(tk2)
+				_ = tk2.Run()
 			}
 		}
 	}
@@ -826,7 +853,9 @@ func (a *App) KillAllTasks() string {
 
 	// Final fallback on Windows: taskkill known names
 	if runtime.GOOS == "windows" {
-		_ = exec.Command("taskkill", "/F", "/IM", "G-Earth.exe").Run()
+		tk1 := exec.Command("taskkill", "/F", "/IM", "G-Earth.exe")
+		hideWindow(tk1)
+		_ = tk1.Run()
 		for _, t := range targets {
 			for _, rel := range append([]string{t.OutExe}, t.CleanPaths...) {
 				if strings.TrimSpace(rel) == "" {
@@ -836,7 +865,9 @@ func (a *App) KillAllTasks() string {
 				if name == "" {
 					continue
 				}
-				_ = exec.Command("taskkill", "/F", "/IM", name).Run()
+				tk2 := exec.Command("taskkill", "/F", "/IM", name)
+				hideWindow(tk2)
+				_ = tk2.Run()
 			}
 		}
 	}
