@@ -7,11 +7,13 @@ const stats = ref({
   dealerWins: 0,
   playerWinRate: 0,
   dealerWinRate: 0,
-  byGame: {}
+  byGame: {},
+  items: []
 });
 
 const loading = ref(true);
 const error = ref(null);
+const activeTab = ref('main');
 
 const fetchStats = async () => {
   loading.value = true;
@@ -41,6 +43,11 @@ onMounted(() => {
 const sortedGames = computed(() => {
   return Object.values(stats.value.byGame).sort((a, b) => b.totalRounds - a.totalRounds);
 });
+
+const sortedItems = computed(() => {
+  if (!stats.value.items) return [];
+  return [...stats.value.items].sort((a, b) => b.netQty - a.netQty);
+});
 </script>
 
 <template>
@@ -56,55 +63,94 @@ const sortedGames = computed(() => {
       {{ error }}
     </div>
 
-    <!-- Overall Stats -->
-    <div class="overview grid">
-      <div class="card stat-card">
-        <div class="stat-label">Total Rounds</div>
-        <div class="stat-value">{{ stats.totalRounds }}</div>
+    <!-- Tabs -->
+    <div class="tabs card">
+      <button @click="activeTab = 'main'" :class="{ active: activeTab === 'main' }">📈 Games</button>
+      <button @click="activeTab = 'items'" :class="{ active: activeTab === 'items' }">📦 Items</button>
+    </div>
+
+    <div v-if="activeTab === 'main'">
+      <!-- Overall Stats -->
+      <div class="overview grid">
+        <div class="card stat-card">
+          <div class="stat-label">Total Rounds</div>
+          <div class="stat-value">{{ stats.totalRounds }}</div>
+        </div>
+        <div class="card stat-card player-win">
+          <div class="stat-label">Player Wins</div>
+          <div class="stat-value">{{ stats.playerWins }}</div>
+          <div class="stat-rate">{{ stats.playerWinRate.toFixed(1) }}%</div>
+        </div>
+        <div class="card stat-card dealer-win">
+          <div class="stat-label">Dealer Wins</div>
+          <div class="stat-value">{{ stats.dealerWins }}</div>
+          <div class="stat-rate">{{ stats.dealerWinRate.toFixed(1) }}%</div>
+        </div>
       </div>
-      <div class="card stat-card player-win">
-        <div class="stat-label">Player Wins</div>
-        <div class="stat-value">{{ stats.playerWins }}</div>
-        <div class="stat-rate">{{ stats.playerWinRate.toFixed(1) }}%</div>
-      </div>
-      <div class="card stat-card dealer-win">
-        <div class="stat-label">Dealer Wins</div>
-        <div class="stat-value">{{ stats.dealerWins }}</div>
-        <div class="stat-rate">{{ stats.dealerWinRate.toFixed(1) }}%</div>
+
+      <!-- Per Game Breakdown -->
+      <div class="card">
+        <h2>🎮 Game Breakdown</h2>
+        <table v-if="sortedGames.length > 0">
+          <thead>
+            <tr>
+              <th>Game</th>
+              <th>Rounds</th>
+              <th>Player Wins</th>
+              <th>Dealer Wins</th>
+              <th>Player Rate</th>
+              <th>Dealer Rate</th>
+              <th>Casino Edge</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="game in sortedGames" :key="game.game">
+              <td><strong>{{ game.game }}</strong></td>
+              <td>{{ game.totalRounds }}</td>
+              <td class="player-win-text">{{ game.playerWins }}</td>
+              <td class="dealer-win-text">{{ game.dealerWins }}</td>
+              <td class="player-win-text">{{ game.playerWinRate.toFixed(1) }}%</td>
+              <td class="dealer-win-text">{{ game.dealerWinRate.toFixed(1) }}%</td>
+              <td :class="game.dealerWinRate - game.playerWinRate > 0 ? 'dealer-win-text' : 'player-win-text'">
+                {{ (game.dealerWinRate - game.playerWinRate).toFixed(1) }}%
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="muted">
+          No game history found.
+        </div>
       </div>
     </div>
 
-    <!-- Per Game Breakdown -->
-    <div class="card">
-      <h2>🎮 Game Breakdown</h2>
-      <table v-if="sortedGames.length > 0">
-        <thead>
-          <tr>
-            <th>Game</th>
-            <th>Rounds</th>
-            <th>Player Wins</th>
-            <th>Dealer Wins</th>
-            <th>Player Rate</th>
-            <th>Dealer Rate</th>
-            <th>Casino Edge</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="game in sortedGames" :key="game.game">
-            <td><strong>{{ game.game }}</strong></td>
-            <td>{{ game.totalRounds }}</td>
-            <td class="player-win-text">{{ game.playerWins }}</td>
-            <td class="dealer-win-text">{{ game.dealerWins }}</td>
-            <td class="player-win-text">{{ game.playerWinRate.toFixed(1) }}%</td>
-            <td class="dealer-win-text">{{ game.dealerWinRate.toFixed(1) }}%</td>
-            <td :class="game.dealerWinRate - game.playerWinRate > 0 ? 'dealer-win-text' : 'player-win-text'">
-              {{ (game.dealerWinRate - game.playerWinRate).toFixed(1) }}%
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-else class="muted">
-        No game history found.
+    <div v-if="activeTab === 'items'">
+      <div class="card">
+        <h2>📦 Item Profit / Loss</h2>
+        <table v-if="sortedItems.length > 0">
+          <thead>
+            <tr>
+              <th>Item Name</th>
+              <th>Won (In)</th>
+              <th>Lost (Out)</th>
+              <th>Net Profit</th>
+              <th>Games</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in sortedItems" :key="item.name">
+              <td><strong>{{ item.name }}</strong></td>
+              <td class="dealer-win-text">+{{ item.wonQty }}</td>
+              <td class="player-win-text">-{{ item.lostQty }}</td>
+              <td :class="item.netQty >= 0 ? 'dealer-win-text' : 'player-win-text'">
+                {{ item.netQty >= 0 ? '+' : '' }}{{ item.netQty }}
+              </td>
+              <td>{{ item.games }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="muted">
+          No item history found.
+        </div>
       </div>
     </div>
   </div>
@@ -155,6 +201,30 @@ body {
 .header h1 {
   margin: 0;
   font-size: 24px;
+}
+
+.tabs {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  margin-bottom: -12px;
+}
+
+.tabs button {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tabs button.active {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
 }
 
 .refresh-btn {

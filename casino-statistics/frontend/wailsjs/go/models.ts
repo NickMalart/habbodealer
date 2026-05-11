@@ -1,5 +1,25 @@
 export namespace main {
 	
+	export class ItemStat {
+	    name: string;
+	    wonQty: number;
+	    lostQty: number;
+	    netQty: number;
+	    games: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ItemStat(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.wonQty = source["wonQty"];
+	        this.lostQty = source["lostQty"];
+	        this.netQty = source["netQty"];
+	        this.games = source["games"];
+	    }
+	}
 	export class GameStat {
 	    game: string;
 	    totalRounds: number;
@@ -29,6 +49,7 @@ export namespace main {
 	    playerWinRate: number;
 	    dealerWinRate: number;
 	    byGame: Record<string, GameStat>;
+	    items: ItemStat[];
 	
 	    static createFrom(source: any = {}) {
 	        return new CasinoStats(source);
@@ -42,6 +63,7 @@ export namespace main {
 	        this.playerWinRate = source["playerWinRate"];
 	        this.dealerWinRate = source["dealerWinRate"];
 	        this.byGame = this.convertValues(source["byGame"], GameStat, true);
+	        this.items = this.convertValues(source["items"], ItemStat);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -62,6 +84,7 @@ export namespace main {
 		    return a;
 		}
 	}
+	
 
 }
 

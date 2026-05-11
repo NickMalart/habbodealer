@@ -38,6 +38,7 @@ type CasinoStats struct {
 	PlayerWinRate   float64             `json:"playerWinRate"`
 	DealerWinRate   float64             `json:"dealerWinRate"`
 	ByGame          map[string]GameStat `json:"byGame"`
+	Items           []ItemStat          `json:"items"`
 }
 
 type GameStat struct {
@@ -48,6 +49,15 @@ type GameStat struct {
 	PlayerWinRate float64 `json:"playerWinRate"`
 	DealerWinRate float64 `json:"dealerWinRate"`
 }
+
+type ItemStat struct {
+	Name    string `json:"name"`
+	WonQty  int    `json:"wonQty"`
+	LostQty int    `json:"lostQty"`
+	NetQty  int    `json:"netQty"`
+	Games   int    `json:"games"`
+}
+
 
 type App struct {
 	ctx      context.Context
@@ -193,6 +203,31 @@ func (a *App) GetStats() (CasinoStats, error) {
 			gs.DealerWinRate = float64(gs.DealerWins) / float64(gs.TotalRounds) * 100
 		}
 		stats.ByGame[k] = gs
+	}
+
+	// Fetch item stats
+	itemRows, err := a.db.Query(a.ctx, `
+		SELECT
+			i.item_name,
+			SUM(CASE WHEN i.item_type = 'bet'    THEN i.quantity ELSE 0 END) AS won_qty,
+			SUM(CASE WHEN i.item_type = 'payout' THEN i.quantity ELSE 0 END) AS lost_qty,
+			COUNT(DISTINCT e.id) AS games
+		FROM game_history_entries e
+		JOIN game_history_items i ON i.entry_id = e.id AND i.owner_key = e.owner_key
+		WHERE e.owner_key = $1 AND e.status = 'Completed' AND e.issue = false
+		GROUP BY i.item_name
+		ORDER BY (SUM(CASE WHEN i.item_type = 'bet' THEN i.quantity ELSE 0 END) -
+		          SUM(CASE WHEN i.item_type = 'payout' THEN i.quantity ELSE 0 END)) DESC
+	`, a.ownerKey)
+	if err == nil {
+		defer itemRows.Close()
+		for itemRows.Next() {
+			var i ItemStat
+			if err := itemRows.Scan(&i.Name, &i.WonQty, &i.LostQty, &i.Games); err == nil {
+				i.NetQty = i.WonQty - i.LostQty
+				stats.Items = append(stats.Items, i)
+			}
+		}
 	}
 
 	return stats, nil
