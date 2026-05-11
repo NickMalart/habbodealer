@@ -12,6 +12,8 @@ const stats = ref({
   players: []
 });
 
+const blockedPlayers = ref([]);
+const newBlockedPlayer = ref('');
 const loading = ref(true);
 const error = ref(null);
 const activeTab = ref('main');
@@ -25,6 +27,10 @@ const fetchStats = async () => {
       if (s) {
         stats.value = s;
       }
+      const b = await window.go.main.App.GetBlockedPlayers();
+      if (b) {
+        blockedPlayers.value = b;
+      }
     } else {
       error.value = "Wails runtime not found. Are you running in Wails?";
     }
@@ -32,6 +38,27 @@ const fetchStats = async () => {
     error.value = "Failed to fetch stats: " + e;
   } finally {
     loading.value = false;
+  }
+};
+
+const blockPlayer = async (name) => {
+  if (!name) name = newBlockedPlayer.value;
+  if (!name) return;
+  try {
+    await window.go.main.App.BlockPlayer(name);
+    newBlockedPlayer.value = '';
+    fetchStats();
+  } catch (e) {
+    alert("Failed to block player: " + e);
+  }
+};
+
+const unblockPlayer = async (name) => {
+  try {
+    await window.go.main.App.UnblockPlayer(name);
+    fetchStats();
+  } catch (e) {
+    alert("Failed to unblock player: " + e);
   }
 };
 
@@ -74,6 +101,7 @@ const sortedPlayers = computed(() => {
       <button @click="activeTab = 'main'" :class="{ active: activeTab === 'main' }">📈 Games</button>
       <button @click="activeTab = 'items'" :class="{ active: activeTab === 'items' }">📦 Items</button>
       <button @click="activeTab = 'players'" :class="{ active: activeTab === 'players' }">👥 Players</button>
+      <button @click="activeTab = 'blocklist'" :class="{ active: activeTab === 'blocklist' }">🚫 Blocklist</button>
     </div>
 
     <div v-if="activeTab === 'main'">
@@ -173,6 +201,7 @@ const sortedPlayers = computed(() => {
               <th>Dealer Wins</th>
               <th>Win Rate</th>
               <th>Dealer Profit (Net Items)</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -185,11 +214,48 @@ const sortedPlayers = computed(() => {
               <td :class="player.netItems >= 0 ? 'dealer-win-text' : 'player-win-text'">
                 {{ player.netItems >= 0 ? '+' : '' }}{{ player.netItems }}
               </td>
+              <td>
+                <button @click="blockPlayer(player.playerName)" class="block-btn">Block</button>
+              </td>
             </tr>
           </tbody>
         </table>
         <div v-else class="muted">
           No player history found.
+        </div>
+      </div>
+    </div>
+
+    <div v-if="activeTab === 'blocklist'">
+      <div class="card">
+        <h2>🚫 Blocked Players</h2>
+        <p class="muted" style="text-align: left; padding: 0 0 16px;">
+          Blocked players are excluded from all statistics (Games, Items, and Players).
+        </p>
+        
+        <div class="add-block">
+          <input v-model="newBlockedPlayer" placeholder="Enter player name..." @keyup.enter="blockPlayer()" />
+          <button @click="blockPlayer()" :disabled="!newBlockedPlayer">Block Player</button>
+        </div>
+
+        <table v-if="blockedPlayers.length > 0" style="margin-top: 24px;">
+          <thead>
+            <tr>
+              <th>Player Name</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="name in blockedPlayers" :key="name">
+              <td><strong>{{ name }}</strong></td>
+              <td>
+                <button @click="unblockPlayer(name)" class="refresh-btn" style="background: var(--player); color: white;">Unblock</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="muted">
+          No players are currently blocked.
         </div>
       </div>
     </div>
@@ -248,6 +314,7 @@ body {
   gap: 12px;
   padding: 12px;
   margin-bottom: -12px;
+  flex-wrap: wrap;
 }
 
 .tabs button {
@@ -285,6 +352,32 @@ body {
 .refresh-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.block-btn {
+  background: var(--player);
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.block-btn:hover { opacity: 0.8; }
+
+.add-block {
+  display: flex;
+  gap: 12px;
+}
+
+.add-block input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  color: white;
 }
 
 .grid {
@@ -352,7 +445,7 @@ td {
 
 .error {
   background: rgba(248, 113, 113, 0.1);
-  border-color: var(--dealer);
-  color: var(--dealer);
+  border-color: var(--player);
+  color: var(--player);
 }
 </style>

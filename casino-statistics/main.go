@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -113,12 +114,30 @@ func (a *App) initDatabase() {
 		return
 	}
 
+	// Use simple protocol to avoid "prepared statement name is already in use" errors 
+	// which commonly happen with PostgreSQL proxies like Neon or PgBouncer.
+	config.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+
 	pool, err := pgxpool.NewWithConfig(context.Background(), config)
 	if err != nil {
 		log.Printf("Unable to connect to database: %v", err)
 		return
 	}
 	a.db = pool
+
+	// Create blocked_players table if it doesn't exist
+	_, err = a.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS blocked_players (
+			id SERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL,
+			player_name TEXT NOT NULL,
+			created_at TIMESTAMP DEFAULT NOW(),
+			UNIQUE(owner_key, player_name)
+		)
+	`)
+	if err != nil {
+		log.Printf("Failed to ensure blocked_players table: %v", err)
+	}
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -132,8 +151,15 @@ func (a *App) GetStats() (CasinoStats, error) {
 		return CasinoStats{}, fmt.Errorf("database not connected")
 	}
 
+	// Fetch blocklist first for exclusion in memory for the main loop
+	blocklist, _ := a.GetBlockedPlayers()
+	blockedMap := make(map[string]bool)
+	for _, p := range blocklist {
+		blockedMap[strings.ToLower(strings.TrimSpace(p))] = true
+	}
+
 	rows, err := a.db.Query(a.ctx, 
-		`SELECT game, winner, status, issue, choice FROM game_history_entries WHERE owner_key = $1`, 
+		`SELECT game, winner, status, issue, choice, player_name FROM game_history_entries WHERE owner_key = $1`, 
 		a.ownerKey)
 	if err != nil {
 		return CasinoStats{}, err
@@ -145,9 +171,14 @@ func (a *App) GetStats() (CasinoStats, error) {
 	}
 
 	for rows.Next() {
-		var game, winner, status, choice string
+		var game, winner, status, choice, playerName string
 		var issue bool
-		if err := rows.Scan(&game, &winner, &status, &issue, &choice); err != nil {
+		if err := rows.Scan(&game, &winner, &status, &issue, &choice, &playerName); err != nil {
+			continue
+		}
+
+		// Skip blocked players
+		if blockedMap[strings.ToLower(strings.TrimSpace(playerName))] {
 			continue
 		}
 
@@ -214,7 +245,7 @@ func (a *App) GetStats() (CasinoStats, error) {
 		stats.ByGame[k] = gs
 	}
 
-	// Fetch item stats
+	// Fetch item stats (excluding blocked players)
 	itemRows, err := a.db.Query(a.ctx, `
 		SELECT
 			i.item_name,
@@ -224,6 +255,7 @@ func (a *App) GetStats() (CasinoStats, error) {
 		FROM game_history_entries e
 		JOIN game_history_items i ON i.entry_id = e.id AND i.owner_key = e.owner_key
 		WHERE e.owner_key = $1 AND e.status = 'Completed' AND e.issue = false
+		  AND LOWER(TRIM(e.player_name)) NOT IN (SELECT LOWER(TRIM(player_name)) FROM blocked_players WHERE owner_key = $1)
 		GROUP BY i.item_name
 		ORDER BY (SUM(CASE WHEN i.item_type = 'bet' THEN i.quantity ELSE 0 END) -
 		          SUM(CASE WHEN i.item_type = 'payout' THEN i.quantity ELSE 0 END)) DESC
@@ -239,7 +271,7 @@ func (a *App) GetStats() (CasinoStats, error) {
 		}
 	}
 
-	// Fetch player stats
+	// Fetch player stats (excluding blocked players)
 	playerRows, err := a.db.Query(a.ctx, `
 		SELECT
 			e.player_name,
@@ -251,6 +283,7 @@ func (a *App) GetStats() (CasinoStats, error) {
 		FROM game_history_entries e
 		LEFT JOIN game_history_items i ON i.entry_id = e.id AND i.owner_key = e.owner_key
 		WHERE e.owner_key = $1 AND e.status = 'Completed' AND e.issue = false
+		  AND LOWER(TRIM(e.player_name)) NOT IN (SELECT LOWER(TRIM(player_name)) FROM blocked_players WHERE owner_key = $1)
 		GROUP BY e.player_name
 		ORDER BY total_rounds DESC
 		LIMIT 100
@@ -269,6 +302,46 @@ func (a *App) GetStats() (CasinoStats, error) {
 	}
 
 	return stats, nil
+}
+
+func (a *App) GetBlockedPlayers() ([]string, error) {
+	if a.db == nil {
+		return nil, fmt.Errorf("database not connected")
+	}
+	rows, err := a.db.Query(a.ctx, `SELECT player_name FROM blocked_players WHERE owner_key = $1 ORDER BY player_name ASC`, a.ownerKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var players []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err == nil {
+			players = append(players, p)
+		}
+	}
+	return players, nil
+}
+
+func (a *App) BlockPlayer(name string) error {
+	if a.db == nil {
+		return fmt.Errorf("database not connected")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("name cannot be empty")
+	}
+	_, err := a.db.Exec(a.ctx, `INSERT INTO blocked_players (owner_key, player_name) VALUES ($1, $2) ON CONFLICT DO NOTHING`, a.ownerKey, name)
+	return err
+}
+
+func (a *App) UnblockPlayer(name string) error {
+	if a.db == nil {
+		return fmt.Errorf("database not connected")
+	}
+	_, err := a.db.Exec(a.ctx, `DELETE FROM blocked_players WHERE owner_key = $1 AND LOWER(TRIM(player_name)) = LOWER(TRIM($2))`, a.ownerKey, name)
+	return err
 }
 
 func normalizeGameName(game string) string {
