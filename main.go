@@ -4970,6 +4970,33 @@ func startPayout(a *App, targetID int, targetName string) {
 		if strings.TrimSpace(entry.RiskDecision) == "" {
 			entry.RiskDecision = "Keep"
 		}
+		// If payout items are empty (e.g. trade hasn't opened yet to auto-add),
+		// pre-populate them for Discord/Issue visibility in case trade never opens.
+		if len(entry.PayoutItems) == 0 {
+			mutex.Lock()
+			isRisk := riskPayoutActive
+			riskReq := riskPayoutRequired
+			mutex.Unlock()
+
+			if isRisk && len(riskReq) > 0 {
+				for name, qty := range riskReq {
+					entry.PayoutItems = append(entry.PayoutItems, TradeItem{Name: name, Quantity: qty})
+				}
+				sort.Slice(entry.PayoutItems, func(i, j int) bool { return entry.PayoutItems[i].Name < entry.PayoutItems[j].Name })
+			} else if len(entry.BetItems) > 0 {
+				mult := entry.PayoutMultiplier
+				if mult <= 0 {
+					mult = 2.0 // fallback
+				}
+				for _, it := range entry.BetItems {
+					entry.PayoutItems = append(entry.PayoutItems, TradeItem{
+						Name:     it.Name,
+						Quantity: int(float64(it.Quantity) * mult),
+						RawData:  it.RawData,
+					})
+				}
+			}
+		}
 	})
 	a.gameHistoryMu.Unlock()
 	a.noteCurrentGameHistory(fmt.Sprintf("Payout started for %s", targetName))
