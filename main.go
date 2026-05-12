@@ -3396,7 +3396,7 @@ func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note strin
 		a.gameHistoryMu.Unlock()
 		return
 	}
-	if complete && !isPayout {
+	if complete {
 		a.currentGameHistoryID = ""
 	}
 	a.AddLogMsg("[GAME_HISTORY] captureCurrentGameHistoryPayoutItems mutation complete")
@@ -11160,6 +11160,7 @@ func (a *App) beginBlackjackSequence() {
 	blackjackRoundActive = true
 	blackjackPlayerTurn = true
 	blackjackPlayerName = playerName
+	a.setCurrentGameHistoryGame("21")
 
 	go func() {
 		// Combined ack already announced; delay then start player's BJ roll
@@ -11181,6 +11182,7 @@ func (a *App) beginSixSequence() {
 	sixRoundActive = true
 	sixPlayerTurn = true
 	sixPlayerName = playerName
+	a.setCurrentGameHistoryGame("6")
 
 	go func() {
 		time.Sleep(1400 * time.Millisecond)
@@ -11202,6 +11204,7 @@ func (a *App) begin13Sequence() {
 	thirteenRoundActive = true
 	thirteenPlayerTurn = true
 	thirteenPlayerName = playerName
+	a.setCurrentGameHistoryGame("13")
 
 	go func() {
 		// Combined ack already announced; delay then start player's 13 roll
