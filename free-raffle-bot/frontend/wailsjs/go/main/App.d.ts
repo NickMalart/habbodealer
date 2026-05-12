@@ -26,6 +26,8 @@ export function PostOrUpdateRaffleWebhook():Promise<string>;
 
 export function PostWinnerProofForCurrentSession(arg1:string,arg2:string):Promise<string>;
 
+export function PostWinnerProofForSession(arg1:number,arg2:string,arg3:string):Promise<string>;
+
 export function RemoveParticipantFromCurrentSession(arg1:string):Promise<main.RaffleState>;
 
 export function RepostRaffleWebhook():Promise<string>;

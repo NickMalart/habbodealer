@@ -50,6 +50,10 @@ export function PostWinnerProofForCurrentSession(arg1, arg2) {
   return window['go']['main']['App']['PostWinnerProofForCurrentSession'](arg1, arg2);
 }
 
+export function PostWinnerProofForSession(arg1, arg2, arg3) {
+  return window['go']['main']['App']['PostWinnerProofForSession'](arg1, arg2, arg3);
+}
+
 export function RemoveParticipantFromCurrentSession(arg1) {
   return window['go']['main']['App']['RemoveParticipantFromCurrentSession'](arg1);
 }

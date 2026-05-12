@@ -1011,55 +1011,88 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	a.mu.Lock()
 	webhookURL := strings.TrimSpace(hardcodedRaffleWebhookURL)
 	autoUpdate := a.raffleAutoUpdate
-	raffleName := strings.TrimSpace(a.raffleName)
-	prizeName := strings.TrimSpace(a.rafflePrizeName)
-	prizeQty := a.rafflePrizeQty
-	heroDataURL := strings.TrimSpace(a.raffleHeroDataURL)
-	heroFileName := strings.TrimSpace(a.raffleHeroFileName)
-	heroImageURL := strings.TrimSpace(a.raffleHeroImageURL)
-	heroAttachmentID := strings.TrimSpace(a.raffleHeroAttachmentID)
-	heroAttachmentFile := strings.TrimSpace(a.raffleHeroAttachmentFile)
-	messageID := strings.TrimSpace(a.raffleMessageID)
-	sponsorEnabled := a.sponsorEnabled
-	sponsorName := strings.TrimSpace(a.sponsorName)
-	sponsorRoomName := strings.TrimSpace(a.sponsorRoomName)
+	
+	// Default fallbacks (internal constants or state-defaults)
+	raffleName := "Flame Raffle"
+	prizeName := "Purple Dragon Lamp"
+	prizeQty := 1
+	heroDataURL := ""
+	heroFileName := ""
+	heroImageURL := ""
+	heroAttachmentID := ""
+	heroAttachmentFile := ""
+	messageID := ""
+	sponsorEnabled := false
+	sponsorName := ""
+	sponsorRoomName := ""
 
+	// Determine which session we are working with
 	var session *RaffleSession
 	if sessionOverride != nil {
 		session = copySession(sessionOverride)
 	} else if a.currentSession != nil {
 		session = copySession(a.currentSession)
 	}
-	if session != nil && strings.TrimSpace(session.WebhookMessageID) != "" {
-		messageID = strings.TrimSpace(session.WebhookMessageID)
-	}
+
 	if session != nil {
+		// Strictly use session's own metadata
 		if n := strings.TrimSpace(session.RaffleName); n != "" {
 			raffleName = n
+		} else if sessionOverride == nil {
+			// Fallback to bot-global ONLY if we are processing the current session
+			if gName := strings.TrimSpace(a.raffleName); gName != "" {
+				raffleName = gName
+			}
 		}
+
 		if n := strings.TrimSpace(session.PrizeName); n != "" {
 			prizeName = n
+		} else if sessionOverride == nil {
+			if gPrize := strings.TrimSpace(a.rafflePrizeName); gPrize != "" {
+				prizeName = gPrize
+			}
 		}
+
 		if session.PrizeQty > 0 {
 			prizeQty = session.PrizeQty
-		}
-		if n := strings.TrimSpace(session.HeroImageURL); n != "" {
-			heroImageURL = n
-		}
-		if n := strings.TrimSpace(session.HeroAttachmentID); n != "" {
-			heroAttachmentID = n
-		}
-		if n := strings.TrimSpace(session.HeroAttachmentFile); n != "" {
-			heroAttachmentFile = n
-		}
-		if session.SponsorEnabled {
-			sponsorEnabled = true
-			if n := strings.TrimSpace(session.SponsorName); n != "" {
-				sponsorName = n
+		} else if sessionOverride == nil {
+			if a.rafflePrizeQty > 0 {
+				prizeQty = a.rafflePrizeQty
 			}
-			if n := strings.TrimSpace(session.SponsorRoomName); n != "" {
-				sponsorRoomName = n
+		}
+
+		heroImageURL = strings.TrimSpace(session.HeroImageURL)
+		heroAttachmentID = strings.TrimSpace(session.HeroAttachmentID)
+		heroAttachmentFile = strings.TrimSpace(session.HeroAttachmentFile)
+		
+		// If this is the current session, we might have unsaved/pending hero data in the bot state
+		if sessionOverride == nil || (a.currentSession != nil && session.DBID == a.currentSession.DBID) {
+			heroDataURL = strings.TrimSpace(a.raffleHeroDataURL)
+			heroFileName = strings.TrimSpace(a.raffleHeroFileName)
+			if heroImageURL == "" {
+				heroImageURL = strings.TrimSpace(a.raffleHeroImageURL)
 			}
+			if heroAttachmentID == "" {
+				heroAttachmentID = strings.TrimSpace(a.raffleHeroAttachmentID)
+			}
+			if heroAttachmentFile == "" {
+				heroAttachmentFile = strings.TrimSpace(a.raffleHeroAttachmentFile)
+			}
+		}
+
+		messageID = strings.TrimSpace(session.WebhookMessageID)
+		if messageID == "" && sessionOverride == nil {
+			messageID = strings.TrimSpace(a.raffleMessageID)
+		}
+
+		sponsorEnabled = session.SponsorEnabled
+		sponsorName = strings.TrimSpace(session.SponsorName)
+		sponsorRoomName = strings.TrimSpace(session.SponsorRoomName)
+		
+		if !sponsorEnabled && sessionOverride == nil {
+			sponsorEnabled = a.sponsorEnabled
+			sponsorName = strings.TrimSpace(a.sponsorName)
+			sponsorRoomName = strings.TrimSpace(a.sponsorRoomName)
 		}
 	}
 	a.mu.Unlock()
@@ -2512,39 +2545,50 @@ func (a *App) saveSessionMeta(sessionDBID int64) error {
 	sponsorName := ""
 	sponsorRoomName := ""
 
-	// If this is for the current session, use its frozen metadata instead of globals.
+	// Find the session to save metadata for
+	var session *RaffleSession
 	if a.currentSession != nil && a.currentSession.DBID == sessionDBID {
-		if n := strings.TrimSpace(a.currentSession.RaffleName); n != "" {
+		session = a.currentSession
+	} else {
+		for i := range a.sessions {
+			if a.sessions[i].DBID == sessionDBID {
+				session = &a.sessions[i]
+				break
+			}
+		}
+	}
+
+	if session != nil {
+		if n := strings.TrimSpace(session.RaffleName); n != "" {
 			raffleName = n
 		}
-		if n := strings.TrimSpace(a.currentSession.PrizeName); n != "" {
+		if n := strings.TrimSpace(session.PrizeName); n != "" {
 			prizeName = n
 		}
-		if a.currentSession.PrizeQty > 0 {
-			prizeQty = a.currentSession.PrizeQty
+		if session.PrizeQty > 0 {
+			prizeQty = session.PrizeQty
 		}
-		// Hero image fields should always be synced from the session if it exists.
-		heroImageURL = strings.TrimSpace(a.currentSession.HeroImageURL)
-		heroAttachmentID = strings.TrimSpace(a.currentSession.HeroAttachmentID)
-		heroAttachmentFile = strings.TrimSpace(a.currentSession.HeroAttachmentFile)
+		heroImageURL = strings.TrimSpace(session.HeroImageURL)
+		heroAttachmentID = strings.TrimSpace(session.HeroAttachmentID)
+		heroAttachmentFile = strings.TrimSpace(session.HeroAttachmentFile)
 
-		winnerName = strings.TrimSpace(a.currentSession.WinnerName)
-		winnerTickets = a.currentSession.WinnerTickets
-		winnerOdds = strings.TrimSpace(a.currentSession.WinnerOdds)
-		if a.currentSession.WinnerDrawnAt != "" {
-			if t, err := time.Parse(time.RFC3339, a.currentSession.WinnerDrawnAt); err == nil {
+		winnerName = strings.TrimSpace(session.WinnerName)
+		winnerTickets = session.WinnerTickets
+		winnerOdds = strings.TrimSpace(session.WinnerOdds)
+		if session.WinnerDrawnAt != "" {
+			if t, err := time.Parse(time.RFC3339, session.WinnerDrawnAt); err == nil {
 				ut := t.UTC()
 				winnerDrawnAt = &ut
 			}
 		}
-		winnerMethod = strings.TrimSpace(a.currentSession.WinnerMethod)
-		winnerSummary = strings.TrimSpace(a.currentSession.WinnerSummary)
-		winnerProofURL = strings.TrimSpace(a.currentSession.WinnerProofURL)
-		winnerProofID = strings.TrimSpace(a.currentSession.WinnerProofID)
-		winnerProofFile = strings.TrimSpace(a.currentSession.WinnerProofFile)
-		sponsorEnabled = a.currentSession.SponsorEnabled
-		sponsorName = strings.TrimSpace(a.currentSession.SponsorName)
-		sponsorRoomName = strings.TrimSpace(a.currentSession.SponsorRoomName)
+		winnerMethod = strings.TrimSpace(session.WinnerMethod)
+		winnerSummary = strings.TrimSpace(session.WinnerSummary)
+		winnerProofURL = strings.TrimSpace(session.WinnerProofURL)
+		winnerProofID = strings.TrimSpace(session.WinnerProofID)
+		winnerProofFile = strings.TrimSpace(session.WinnerProofFile)
+		sponsorEnabled = session.SponsorEnabled
+		sponsorName = strings.TrimSpace(session.SponsorName)
+		sponsorRoomName = strings.TrimSpace(session.SponsorRoomName)
 	}
 	a.mu.Unlock()
 
