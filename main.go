@@ -477,10 +477,12 @@ type LiveDealerStatusPayload struct {
 type tradeLimitViolation struct {
 	TooManyUniqueItems bool
 	TooMuchQuantity    bool
+	HasUnknownItems    bool
 	UniqueCount        int
 	MaxUnique          int
 	MaxPerItem         int
 	OverLimitItems     []TradeItem
+	UnknownItems       []TradeItem
 }
 
 // getTradeLimitViolation inspects the parsed list of trade items and returns
@@ -7906,9 +7908,17 @@ func (a *App) parseTradeItemsPacket(data []byte) []TradeItem {
 
 		itemName, qty, ok := a.extractTradeItemAndQuantity(fieldStr)
 		if !ok {
-			a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] skipped field=%q", fieldStr))
+			a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] unrecognized field, marking as unknown to count towards limits=%q", fieldStr))
 			// Preserve unknown raw field in logs for later inspection.
 			a.AddLogMsg(fmt.Sprintf("[TRADE_UNKNOWN_FIELD] raw=%q", fieldStr))
+
+			// Generate a unique unknown item key so each unrecognized field counts
+			// towards the unique item limit in getTradeLimitViolation.
+			unknownKey := fmt.Sprintf("unknown_item_%d", len(counts)+1)
+			counts[unknownKey] = 1
+			if _, exists := rawByName[unknownKey]; !exists {
+				rawByName[unknownKey] = fieldStr
+			}
 			continue
 		}
 		if qty <= 0 {
