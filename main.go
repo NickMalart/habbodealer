@@ -14743,6 +14743,8 @@ func gameChoiceDisplay(choice string) string {
 		return "21"
 	case "13":
 		return "13"
+	case "6":
+		return "6"
 	case "tri":
 		return "Tri"
 	case "dt":
