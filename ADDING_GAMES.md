@@ -42,6 +42,19 @@ func resetMyGameSequence() {
 }
 ```
 
+### D. Global Game Activity (`dealerGameActive`)
+Add your new "round active", "rolling", and "hitting" flags to the `dealerGameActive()` function. This function is used to suppress background shouts (Auto-Shouts and "Dealer Open" announcements) so they don't clutter the screen while a player is playing.
+
+```go
+func dealerGameActive() bool {
+    return ... || 
+        myGameRoundActive || 
+        isMyGameRolling || 
+        isMyGameHitting ||
+        ...
+}
+```
+
 ## 2. Backend: Rolling and Waiting (`main.go`)
 
 ### A. Rolling Functions
