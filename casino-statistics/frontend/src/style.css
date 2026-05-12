@@ -134,10 +134,31 @@ th {
   font-weight: bold;
 }
 
+.refresh-btn {
+  background: #3282b8;
+  border: none;
+  color: white;
+  padding: 0.4rem 0.8rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: background 0.2s;
+}
+
+.refresh-btn:hover:not(:disabled) {
+  background: #bbe1fa;
+  color: #1b262c;
+}
+
+.refresh-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .player-win {
-  color: #2ecc71;
+  color: #e74c3c;
 }
 
 .dealer-win {
-  color: #e74c3c;
+  color: #2ecc71;
 }

@@ -6,8 +6,14 @@ export function GetBlockedPlayers():Promise<Array<string>>;
 
 export function GetDbStatus():Promise<string>;
 
+export function GetPlayerStats():Promise<Array<main.PlayerStats>>;
+
 export function GetPlayers():Promise<Array<string>>;
 
+export function GetSettings(arg1:string):Promise<string>;
+
 export function GetStats():Promise<main.CasinoStats>;
+
+export function SaveSettings(arg1:string,arg2:string):Promise<void>;
 
 export function ToggleBlockPlayer(arg1:string):Promise<void>;

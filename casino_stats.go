@@ -157,13 +157,17 @@ func tradeItemsToCountMap(items []TradeItem) map[string]int {
 
 func normalizeGameName(game string) string {
 	g := strings.TrimSpace(strings.ToLower(game))
-	// Prefer explicit Double Trouble mapping before broad 'tri' checks
 	if strings.Contains(g, "double") || g == "dt" || strings.Contains(g, "doubletrouble") {
 		return "DT"
 	}
-	// Tri variants: treat all tri variants as a single "Tri" bucket for stats
 	if strings.Contains(g, "tri") {
 		return "Tri"
+	}
+	if strings.Contains(g, "pair") || strings.Contains(g, "pu") {
+		return "PU"
+	}
+	if strings.Contains(g, "uo") || strings.Contains(g, "under") || strings.Contains(g, "over") {
+		return "UO7"
 	}
 	switch g {
 	case "poker", "pkr":
@@ -174,12 +178,8 @@ func normalizeGameName(game string) string {
 		return "13"
 	case "6", "six":
 		return "6"
-	case "pu", "pu3", "pairup":
-		return "PU"
 	case "h18":
 		return "H18"
-	case "uo7":
-		return "UO7"
 	case "bandit", "onearmbandit", "oab":
 		return "Bandit"
 	default:
@@ -278,16 +278,10 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 		Range:       StatsRange{Key: rangeKey},
 		Overall:     CasinoStatsSummary{},
 		ByGame: map[string]GameStats{
-			"Poker": {Game: "Poker"},
-			"21":    {Game: "21"},
-			"13":    {Game: "13"},
-			"6":     {Game: "6"},
-			"Tri":   {Game: "Tri"},
-			"PU":    {Game: "PU"},
-			"H18":    {Game: "H18"},
-			"UO7":    {Game: "UO7"},
-			"DT":     {Game: "DT"},
-			"Bandit": {Game: "Bandit"},
+			"PU": {Game: "PU"},
+			"O7": {Game: "O7"},
+			"U7": {Game: "U7"},
+			"7":  {Game: "7"},
 		},
 	}
 
@@ -316,11 +310,31 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 		// Determine normalized game key; group unknown/uncategorized games
 		// into an "Other" bucket so BY-GAME totals match the overall totals.
 		g := normalizeGameName(entry.Game)
+		if g == "UO7" {
+			choice := strings.ToLower(entry.Choice)
+			if strings.Contains(choice, "over") {
+				g = "O7"
+			} else if strings.Contains(choice, "under") {
+				g = "U7"
+			} else if choice == "7" {
+				g = "7"
+			} else {
+				// Fallback if choice is empty or unexpected but it's a UO game
+				g = "U7" // Default to U7 if choice is missing (common for old entries)
+			}
+		}
+
 		if g == "" {
 			g = "Other"
-			if _, ok := stats.ByGame[g]; !ok {
-				stats.ByGame[g] = GameStats{Game: "Other"}
-			}
+		}
+		
+		if g == "UO7" {
+			// Safety: should never happen with the logic above, but force it to U7/O7/7
+			g = "U7"
+		}
+
+		if _, ok := stats.ByGame[g]; !ok {
+			stats.ByGame[g] = GameStats{Game: g}
 		}
 
 		// Update overall counters

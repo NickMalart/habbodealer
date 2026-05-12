@@ -54,6 +54,31 @@ export namespace main {
 		    return a;
 		}
 	}
+	
+	export class PlayerStats {
+	    name: string;
+	    totalRounds: number;
+	    playerWins: number;
+	    dealerWins: number;
+	    playerWinRate: number;
+	    dealerWinRate: number;
+	    dealerEdge: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PlayerStats(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.totalRounds = source["totalRounds"];
+	        this.playerWins = source["playerWins"];
+	        this.dealerWins = source["dealerWins"];
+	        this.playerWinRate = source["playerWinRate"];
+	        this.dealerWinRate = source["dealerWinRate"];
+	        this.dealerEdge = source["dealerEdge"];
+	    }
+	}
 
 }
 

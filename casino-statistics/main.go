@@ -177,13 +177,51 @@ func (a *App) initDB() {
 	`)
 	if err != nil {
 		log.Printf("[DB_INIT] Failed to create blocked_players table: %v", err)
-	} else {
-		log.Printf("[DB_INIT] Database ready and blocked_players table ensured")
+	}
+
+	// Create ui_settings table if not exists
+	_, err = a.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS ui_settings (
+			key TEXT PRIMARY KEY,
+			value JSONB NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)
+	`)
+	if err != nil {
+		log.Printf("[DB_INIT] Failed to create ui_settings table: %v", err)
 	}
 
 	a.mu.Lock()
 	a.dbStatus = "Connected"
 	a.mu.Unlock()
+}
+
+func (a *App) GetSettings(key string) string {
+	a.initWg.Wait()
+	if a.db == nil {
+		return "{}"
+	}
+	var val string
+	err := a.db.QueryRow(context.Background(), "SELECT value FROM ui_settings WHERE key = $1", key).Scan(&val)
+	if err != nil {
+		return "{}"
+	}
+	return val
+}
+
+func (a *App) SaveSettings(key string, valueJSON string) {
+	a.initWg.Wait()
+	if a.db == nil {
+		return
+	}
+	_, err := a.db.Exec(context.Background(), `
+		INSERT INTO ui_settings (key, value, updated_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
+	`, key, valueJSON)
+	if err != nil {
+		log.Printf("[SETTINGS] Failed to save %s: %v", key, err)
+	}
 }
 
 func (a *App) GetBlockedPlayers() []string {
@@ -232,6 +270,74 @@ func (a *App) ToggleBlockPlayer(name string) {
 	}
 }
 
+type PlayerStats struct {
+	Name          string  `json:"name"`
+	TotalRounds   int     `json:"totalRounds"`
+	PlayerWins    int     `json:"playerWins"`
+	DealerWins    int     `json:"dealerWins"`
+	PlayerWinRate float64 `json:"playerWinRate"`
+	DealerWinRate float64 `json:"dealerWinRate"`
+	DealerEdge    float64 `json:"dealerEdge"`
+}
+
+func (a *App) GetPlayerStats() []PlayerStats {
+	a.initWg.Wait()
+	if a.db == nil {
+		return []PlayerStats{}
+	}
+
+	rows, err := a.db.Query(context.Background(), `
+		SELECT player_name, winner
+		FROM game_history_entries
+		WHERE owner_key = $1 AND LOWER(status) = 'completed' AND issue = false
+	`, a.ownerKey)
+	if err != nil {
+		return []PlayerStats{}
+	}
+	defer rows.Close()
+
+	playerMap := make(map[string]*PlayerStats)
+	for rows.Next() {
+		var name, winner string
+		if err := rows.Scan(&name, &winner); err != nil {
+			continue
+		}
+
+		ps, ok := playerMap[name]
+		if !ok {
+			ps = &PlayerStats{Name: name}
+			playerMap[name] = ps
+		}
+
+		winner = strings.TrimSpace(strings.ToLower(winner))
+		isPlayerWin := winner == strings.ToLower(name)
+		isDealerWin := winner == "dealer"
+
+		if !isPlayerWin && !isDealerWin {
+			continue
+		}
+
+		ps.TotalRounds++
+		if isPlayerWin {
+			ps.PlayerWins++
+		} else {
+			ps.DealerWins++
+		}
+	}
+
+	var result []PlayerStats
+	for _, ps := range playerMap {
+		if ps.TotalRounds > 0 {
+			ps.PlayerWinRate = float64(ps.PlayerWins) / float64(ps.TotalRounds) * 100
+			ps.DealerWinRate = float64(ps.DealerWins) / float64(ps.TotalRounds) * 100
+			ps.DealerEdge = ps.DealerWinRate - ps.PlayerWinRate
+		}
+		result = append(result, *ps)
+	}
+
+	return result
+}
+
 func (a *App) GetPlayers() []string {
 	a.initWg.Wait()
 
@@ -256,18 +362,32 @@ func (a *App) GetPlayers() []string {
 
 func normalizeGameName(game string, choice string) string {
 	g := strings.TrimSpace(strings.ToLower(game))
-	if g == "uo7" {
+	
+	// Broadly catch Under/Over games
+	if strings.Contains(g, "uo") || strings.Contains(g, "under") || strings.Contains(g, "over") {
 		c := strings.TrimSpace(strings.ToLower(choice))
-		if strings.Contains(c, "under") || c == "u" {
-			return "u7"
+		
+		// Check for specific words first to avoid 'uo_over' matching 'u'
+		if strings.Contains(c, "over") {
+			return "O7"
 		}
-		if strings.Contains(c, "over") || c == "o" {
-			return "o7"
+		if strings.Contains(c, "under") {
+			return "U7"
 		}
-		if c == "7" {
+		
+		// Then check for single letters
+		if c == "o" {
+			return "O7"
+		}
+		if c == "u" {
+			return "U7"
+		}
+		
+		if c == "7" || strings.Contains(c, "7") {
 			return "7"
 		}
-		return "uo7"
+		// Fallback to U7 if choice is unclear
+		return "U7"
 	}
 	
 	if strings.Contains(g, "double") || g == "dt" || strings.Contains(g, "doubletrouble") {
@@ -276,6 +396,10 @@ func normalizeGameName(game string, choice string) string {
 	if strings.Contains(g, "tri") {
 		return "Tri"
 	}
+	if strings.Contains(g, "pair") || strings.Contains(g, "pu") {
+		return "PU"
+	}
+
 	switch g {
 	case "poker", "pkr":
 		return "Poker"
@@ -285,8 +409,6 @@ func normalizeGameName(game string, choice string) string {
 		return "13"
 	case "6", "six":
 		return "6"
-	case "pu", "pu3", "pairup":
-		return "PU"
 	case "h18":
 		return "H18"
 	case "bandit", "onearmbandit", "oab":
