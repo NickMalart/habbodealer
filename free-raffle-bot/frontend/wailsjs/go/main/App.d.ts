@@ -8,6 +8,8 @@ export function ClearSessions():Promise<main.RaffleState>;
 
 export function CreateRaffle(arg1:string,arg2:string,arg3:number,arg4:string,arg5:string,arg6:string,arg7:string):Promise<main.RaffleState>;
 
+export function DeleteSession(arg1:number):Promise<main.RaffleState>;
+
 export function DrawWinnerForCurrentSession():Promise<string>;
 
 export function GetDebugSnapshot():Promise<string>;

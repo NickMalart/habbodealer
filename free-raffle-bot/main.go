@@ -1839,11 +1839,11 @@ func (a *App) StopRaffle() RaffleState {
 
 func (a *App) ResumeSession(dbID int64) (RaffleState, error) {
 	a.mu.Lock()
-	if a.currentSession != nil {
-		a.mu.Unlock()
-		return a.GetState(), fmt.Errorf("a session is already active; stop it first")
-	}
-	// Find the session in the closed list
+        if a.currentSession != nil {
+                a.mu.Unlock()
+                a.StopRaffle()
+                a.mu.Lock()
+        }
 	idx := -1
 	for i := range a.sessions {
 		if a.sessions[i].DBID == dbID {
@@ -2644,6 +2644,121 @@ func (a *App) persistParticipants(sessionDBID int64, participants []RafflePartic
 	}
 
 	return tx.Commit(ctx)
+}
+
+
+func (a *App) DeleteSession(dbID int64) (RaffleState, error) {
+        a.mu.Lock()
+        db := a.db
+        owner := a.ownerKey
+        if a.currentSession != nil && a.currentSession.DBID == dbID {
+                a.currentSession = nil
+                a.raffleMessageID = ""
+        }
+        idx := -1
+        for i, s := range a.sessions {
+                if s.DBID == dbID {
+                        idx = i
+                        break
+                }
+        }
+        if idx != -1 {
+                a.sessions = append(a.sessions[:idx], a.sessions[idx+1:]...)
+        }
+        a.mu.Unlock()
+
+        if db != nil && dbID > 0 {
+                ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+                defer cancel()
+                _, err := db.Exec(ctx, `DELETE FROM raffle_sessions WHERE id = $1 AND owner_key = $2`, dbID, owner)
+                if err != nil {
+                        return a.GetState(), err
+                }
+        }
+        a.emitUpdate()
+        return a.GetState(), nil
+}
+
+
+func (a *App) PostWinnerProofForSession(dbID int64, imageDataURL string, imageFileName string) (string, error) {
+	dataURL := strings.TrimSpace(imageDataURL)
+	if dataURL == "" {
+		return "", fmt.Errorf("winner proof image is required")
+	}
+
+	a.mu.Lock()
+	var session *RaffleSession
+	if a.currentSession != nil && a.currentSession.DBID == dbID {
+		session = a.currentSession
+	} else {
+		for i := range a.sessions {
+			if a.sessions[i].DBID == dbID {
+				session = &a.sessions[i]
+				break
+			}
+		}
+	}
+	if session == nil {
+		a.mu.Unlock()
+		return "", fmt.Errorf("session %d not found", dbID)
+	}
+	if session.WinnerName == "" {
+		a.mu.Unlock()
+		return "", fmt.Errorf("draw a winner first")
+	}
+	a.mu.Unlock()
+
+	raw, mimeType, err := decodeImageDataURL(dataURL)
+	if err != nil {
+		return "", fmt.Errorf("proof image decode error: %w", err)
+	}
+
+	fileName := strings.TrimSpace(imageFileName)
+	if fileName == "" {
+		switch mimeType {
+		case "image/jpeg":
+			fileName = "winner-proof.jpg"
+		case "image/gif":
+			fileName = "winner-proof.gif"
+		case "image/webp":
+			fileName = "winner-proof.webp"
+		default:
+			fileName = "winner-proof.png"
+		}
+	}
+
+	a.mu.Lock()
+	a.pendingProofBytes = raw
+	a.pendingProofFileName = fileName
+	a.mu.Unlock()
+
+	if err := a.postOrUpdateRaffleWebhook(session, true, "winner-proof"); err != nil {
+		a.mu.Lock()
+		a.pendingProofBytes = nil
+		a.pendingProofFileName = ""
+		a.mu.Unlock()
+		return "", err
+	}
+
+	// Update DB with proof info if possible
+	a.mu.Lock()
+	proofURL := session.WinnerProofURL
+	proofID := session.WinnerProofID
+	proofFile := session.WinnerProofFile
+	db := a.db
+	owner := a.ownerKey
+	a.mu.Unlock()
+
+	if db != nil && dbID > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		_, _ = db.Exec(ctx,
+			`UPDATE raffle_sessions SET winner_proof_url = $1, winner_proof_id = $2, winner_proof_file = $3 WHERE id = $4 AND owner_key = $5`,
+			proofURL, proofID, proofFile, dbID, owner,
+		)
+	}
+
+	return "ok", nil
 }
 
 func loadDBConfig() (*DBConfig, error) {

@@ -6,6 +6,7 @@ import DiscordConfig from './components/DiscordConfig.vue';
 import ActiveSession from './components/ActiveSession.vue';
 import SessionHistory from './components/SessionHistory.vue';
 import DebugPanel from './components/DebugPanel.vue';
+import CompletedSessions from './components/CompletedSessions.vue';
 
 const state = ref({
   connected: false,
@@ -86,6 +87,11 @@ onUnmounted(() => {
           class="tab-btn" 
           :class="{ active: activeTab === 'debug' }"
         >Debug</button>
+        <button
+          @click="activeTab = 'completed'"
+          class="tab-btn"
+          :class="{ active: activeTab === 'completed' }"
+        >Completed</button>
       </div>
     </div>
 
@@ -95,6 +101,10 @@ onUnmounted(() => {
       <DiscordConfig :state="state" @refresh="refresh" />
       <ActiveSession :state="state" @refresh="refresh" />
       <SessionHistory :state="state" @refresh="refresh" />
+    </div>
+
+    <div v-show="activeTab === 'completed'">
+      <CompletedSessions :state="state" @refresh="refresh" />
     </div>
 
     <div v-show="activeTab === 'debug'">

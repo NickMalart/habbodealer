@@ -14,6 +14,10 @@ export function CreateRaffle(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
   return window['go']['main']['App']['CreateRaffle'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
 }
 
+export function DeleteSession(arg1) {
+  return window['go']['main']['App']['DeleteSession'](arg1);
+}
+
 export function DrawWinnerForCurrentSession() {
   return window['go']['main']['App']['DrawWinnerForCurrentSession']();
 }

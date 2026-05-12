@@ -42,6 +42,16 @@ async function resumeSession(dbID) {
     alert(`Could not resume session: ${err}`);
   }
 }
+
+async function deleteSession(dbID) {
+  if (!confirm('Are you sure you want to delete this raffle and all its participants?')) return;
+  try {
+    await call('DeleteSession', dbID);
+    emit('refresh');
+  } catch (err) {
+    alert(`Could not delete session: ${err}`);
+  }
+}
 </script>
 
 <template>
@@ -64,8 +74,9 @@ async function resumeSession(dbID) {
           <td>{{ s.endedAt }}</td>
           <td>{{ s.winnerName || 'N/A' }}</td>
           <td style="display:flex;gap:4px;">
-            <button v-if="!state.currentSession" class="alt" @click="resumeSession(s.dbId)">Resume</button>
+            <button class="alt" @click="resumeSession(s.dbId)">Resume</button>
             <button class="alt" @click="loadTally(s.dbId)">Tally</button>
+            <button class="stop" @click="deleteSession(s.dbId)">Delete</button>
           </td>
         </tr>
       </tbody>
