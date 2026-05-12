@@ -245,6 +245,10 @@
                 13
               </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
+                <input type="checkbox" v-model="enableGame6" :disabled="underOver7Mode || enableGameBandit" />
+                6
+              </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
                 <input type="checkbox" v-model="enableGameTri" :disabled="underOver7Mode || enableGameBandit" />
                 Tri
               </label>
@@ -957,6 +961,15 @@ export default {
           dealerFlow: 'The dealer starts the 13 routine, calculates who won, and manages the rest of the round automatically.',
         },
         {
+          key: '6',
+          title: '6',
+          summary: 'Blackjack-style game aiming for 6 with hit/stay options.',
+          description: '6 is a tactical dice game where you roll once and choose to hit or stay to reach 6 without busting.',
+          howItWorks: 'The app rolls one dice for the player. The player then chooses to hit or stay. If the player busts (>6), the dealer wins. If the player stays, the dealer rolls to beat the player.',
+          playerFlow: 'Trade the bet, say 6 when prompted, then say hit or stay after each roll.',
+          dealerFlow: 'The dealer rolls for the player, waits for decisions, then plays their turn to beat the player total.',
+        },
+        {
           key: 'tri',
           title: 'Tri',
           summary: 'Three-dice formation roll available through command flow.',
@@ -1073,6 +1086,7 @@ export default {
       enableGamePkr: false,
       enableGame21: false,
       enableGame13: false,
+      enableGame6: false,
       enableGameTri: false,
       enableGameUO7: false,
       enableGamePairUp: false,
@@ -1372,6 +1386,7 @@ export default {
           if (this.enableGamePkr) selectedGames.push('pkr');
           if (this.enableGame21) selectedGames.push('21');
           if (this.enableGame13) selectedGames.push('13');
+          if (this.enableGame6) selectedGames.push('6');
           if (this.enableGameTri) selectedGames.push('tri');
           if (this.enableGameUO7) selectedGames.push('uo7');
           if (this.enableGamePairUp) selectedGames.push('pairup');
@@ -1381,7 +1396,7 @@ export default {
 
           const standaloneMode = this.underOver7Mode || this.enableGameBandit;
           if (!standaloneMode && selectedGames.length === 0) {
-            this.addLogMsg('[UI] Start cancelled: select at least one enabled game (pkr, 21, 13, tri, uo7, pairup, h18, dt, bandit)');
+            this.addLogMsg('[UI] Start cancelled: select at least one enabled game (pkr, 21, 13, 6, tri, uo7, pairup, h18, dt, bandit)');
             return;
           }
 

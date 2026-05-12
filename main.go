@@ -202,10 +202,12 @@ var (
 	messageQueue        []string
 	isPokerRolling      bool
 	isTriRolling        bool
-	isBJRolling         bool
-	is13Rolling         bool
-	is13Hitting         bool
-	isPairUpRolling     bool
+	isBJRolling      bool
+	is13Rolling      bool
+	is13Hitting      bool
+	isSixRolling     bool
+	isSixHitting     bool
+	isPairUpRolling  bool
 	isH18Rolling        bool
 	isHitting           bool
 	isClosing           bool
@@ -289,6 +291,9 @@ var (
 
 	blackjackDecisionTimeoutMonitorID int
 	blackjackDecisionTimeoutActive    bool
+
+	sixDecisionTimeoutMonitorID int
+	sixDecisionTimeoutActive    bool
 
 	thirteenDecisionTimeoutMonitorID int
 	thirteenDecisionTimeoutActive    bool
@@ -11811,6 +11816,77 @@ func (a *App) finalize13Round(playerWins bool, reason string) {
 				return
 			}
 			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "13", nil)
+			return
+		}
+		startPayout(a, payoutTargetID, payoutTargetName)
+		return
+	}
+
+	a.setCurrentGameHistoryResults(playerHand, dealerHand, a.getCurrentDealerName(), "Completed", true)
+	a.noteCurrentGameHistory(winnerMsg)
+	if isRiskEnabled && riskSessionActive {
+		go a.applyRiskOutcome(false)
+		return
+	}
+	go a.openDealerAfterRound()
+}
+
+func (a *App) startSixDealerTurn(reason string) {
+	awaitingSixDecision = false
+	sixPlayerTurn = false
+	a.AddLogMsg(fmt.Sprintf("[6_DEBUG] dealer turn starting reason=%s playerTotal=%d dealerTotal=%d", reason, sixPlayerTotal, sixDealerTotal))
+	a.AddLogMsg("[GAME_SELECT] starting dealer roll")
+	go func() {
+		time.Sleep(700 * time.Millisecond)
+		isSixRolling = true
+		a.rollSixDice()
+	}()
+}
+
+func (a *App) finalizeSixRound(playerWins bool, reason string) {
+	playerName := strings.TrimSpace(sixPlayerName)
+	if playerName == "" {
+		playerName = strings.TrimSpace(lastTradePartnerName)
+	}
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	playerHand := strconv.Itoa(sixPlayerTotal)
+	dealerHand := strconv.Itoa(sixDealerTotal)
+	winnerName := "Dealer"
+	if playerWins {
+		winnerName = playerName
+	}
+	winnerMsg := fmt.Sprintf("%s Wins - %s: %s | Dealer: %s", winnerName, playerName, playerHand, dealerHand)
+
+	a.AddLogMsg(fmt.Sprintf("[6_RULES] winner=%s reason=%s player=%d dealer=%d", winnerName, reason, sixPlayerTotal, sixDealerTotal))
+	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", winnerMsg))
+	if !ChatIsDisabled {
+		waitForUnmute(90 * time.Second)
+		time.Sleep(800 * time.Millisecond)
+		sendMessageWithDelay(winnerMsg)
+	}
+
+	payoutTargetID := lastTradePartnerID
+	payoutTargetName := playerName
+	resetSixSequence()
+
+	if playerWins && payoutTargetID > 0 {
+		a.setCurrentGameHistoryResults(playerHand, dealerHand, playerName, "Payout Pending", false)
+		a.noteCurrentGameHistory(winnerMsg)
+		a.AddLogMsg(fmt.Sprintf("[PAYOUT] 6 player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
+		resetPayoutRetryState()
+
+		// Post the round outcome immediately so Discord shows who won this roll.
+		a.sendDiscordRoundResult(playerName, playerHand, dealerHand, winnerMsg)
+
+		if isRiskEnabled {
+			if riskSessionActive {
+				go a.applyRiskOutcome(true)
+				return
+			}
+			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "6", nil)
 			return
 		}
 		startPayout(a, payoutTargetID, payoutTargetName)
