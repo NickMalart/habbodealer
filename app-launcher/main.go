@@ -96,6 +96,17 @@ func knownBuildTargets() []buildTarget {
 			},
 			OutExe: filepath.Join("winner-picker", "build", "bin", "winner-picker.exe"),
 		},
+		{
+			ID:        "casino-statistics",
+			Name:      "Casino Statistics",
+			SrcDir:    "casino-statistics",
+			BuildType: "wails",
+			CleanPaths: []string{
+				filepath.Join("casino-statistics", "build", "bin", "casino-statistics.exe"),
+				filepath.Join("casino-statistics", "casino-statistics.exe"),
+			},
+			OutExe: filepath.Join("casino-statistics", "build", "bin", "casino-statistics.exe"),
+		},
 	}
 }
 
