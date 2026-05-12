@@ -12625,7 +12625,7 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 	for _, pair := range pairs {
 		for i, dice := range diceList {
 			if dice.ID == pair.diceID {
-				if dice.IsRolling && (isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling || isDTRolling || isPairUpRolling || isH18Rolling || isBanditRolling) {
+				if dice.IsRolling && (isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isSixRolling || is13Hitting || isSixHitting || isHitting || isUORolling || isDTRolling || isPairUpRolling || isH18Rolling || isBanditRolling) {
 					dice.IsRolling = false
 					func() {
 						defer func() {
@@ -12639,7 +12639,7 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 				diceList[i].Value = pair.adjValue
 				diceList[i].IsClosed = diceList[i].Value == 0
 
-				if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || is13Hitting || isHitting || isUORolling || isDTRolling || isPairUpRolling || isH18Rolling || isBanditRolling {
+				if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isSixRolling || is13Hitting || isSixHitting || isHitting || isUORolling || isDTRolling || isPairUpRolling || isH18Rolling || isBanditRolling {
 					log.Printf("Dice %d rolled: %d\n", pair.diceID, pair.adjValue)
 					logRollResult := fmt.Sprintf("Dice %d rolled: %d\n", pair.diceID, pair.adjValue)
 					a.AddLogMsg(logRollResult)
@@ -13020,12 +13020,18 @@ func (a *App) waitForBlackjackDiceResults(slots []int, timeout time.Duration, re
 
 // Roll dice for 6-style game (target sum is 6)
 func (a *App) rollSixDice() {
+	defer func() {
+		isSixRolling = false
+		if r := recover(); r != nil {
+			a.AddLogMsg(fmt.Sprintf("[6_CRASH_GUARD] recovered panic in rollSixDice: %v", r))
+		}
+	}()
+
 	if fakeDiceTestingMode {
 		mutex.Lock()
-		if len(diceList) < 5 {
+		if len(diceList) < 1 {
 			mutex.Unlock()
-			log.Println("Not enough dice to roll")
-			isSixRolling = false
+			a.AddLogMsg("[6] Not enough dice to roll")
 			return
 		}
 		sixNextHitIndex = 1
@@ -13040,16 +13046,14 @@ func (a *App) rollSixDice() {
 		mutex.Unlock()
 
 		a.evaluateSixHand()
-		isSixRolling = false
 		return
 	}
 
 	mutex.Lock()
 
-	if len(diceList) < 5 {
+	if len(diceList) < 1 {
 		mutex.Unlock()
-		log.Println("Not enough dice to roll")
-		isSixRolling = false
+		a.AddLogMsg("[6] Not enough dice to roll")
 		return
 	}
 
@@ -13074,18 +13078,23 @@ func (a *App) rollSixDice() {
 	mutex.Unlock()
 
 	a.evaluateSixHand()
-	isSixRolling = false
 }
 
 func (a *App) hitSixDice() {
-	defer func() { sixHitInFlight = false }()
+	defer func() {
+		sixHitInFlight = false
+		isSixHitting = false
+		isSixRolling = false
+		if r := recover(); r != nil {
+			a.AddLogMsg(fmt.Sprintf("[6_CRASH_GUARD] recovered panic in hitSixDice: %v", r))
+		}
+	}()
+
 	if fakeDiceTestingMode {
 		mutex.Lock()
-		if len(diceList) < 5 {
+		if len(diceList) < 1 {
 			mutex.Unlock()
-			log.Println("Not enough dice to roll")
-			isSixRolling = false
-			isSixHitting = false
+			a.AddLogMsg("[6] Not enough dice to roll")
 			return
 		}
 
@@ -13103,17 +13112,13 @@ func (a *App) hitSixDice() {
 		mutex.Unlock()
 
 		a.evaluateSixHand()
-		isSixHitting = false
-		isSixRolling = false
 		return
 	}
 	mutex.Lock()
 
-	if len(diceList) < 5 {
+	if len(diceList) < 1 {
 		mutex.Unlock()
-		log.Println("Not enough dice to roll")
-		isSixRolling = false
-		isSixHitting = false
+		a.AddLogMsg("[6] Not enough dice to roll")
 		return
 	}
 
@@ -13138,9 +13143,6 @@ func (a *App) hitSixDice() {
 
 	// Re-evaluate the hand with the updated sum
 	a.evaluateSixHand()
-
-	isSixHitting = false
-	isSixRolling = false
 }
 
 func (a *App) waitForSixDiceResults(slots []int, timeout time.Duration, reason string) {
@@ -14036,6 +14038,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	}
 
 	choice, ok := normalizeIncomingGameChoice(msg)
+	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT_DEBUG] processing message from %q: %q (normalized: %q ok: %t)", senderName, msg, choice, ok))
 	if !ok {
 		// Quick path: if UO7 mode active and player directly shouted "7"/"seven",
 		// accept it as an immediate Under/Over-7 selection and start the round.
@@ -14325,8 +14328,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	}
 
 	e.Block()
-	if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isSixRolling || isHitting || is13Hitting || isSixHitting || isClosing {
-		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %s selected but dice are busy", choice))
+	if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isSixRolling || isUORolling || isDTRolling || isHitting || is13Hitting || isSixHitting || isClosing {
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %s selected but dice are busy (pkr:%t tri:%t bj:%t 13:%t 6:%t uo:%t dt:%t hit:%t 13h:%t 6h:%t closing:%t)", choice, isPokerRolling, isTriRolling, isBJRolling, is13Rolling, isSixRolling, isUORolling, isDTRolling, isHitting, is13Hitting, isSixHitting, isClosing))
 		return
 	}
 
@@ -14347,6 +14350,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			ack = "PU! If you roll a double or triple you Win! Player Roll"
 		case "h18":
 			ack = "H18! 19+ Win / 17- Lose / 18 House! Player Roll"
+		case "6":
+			ack = "6! Starting, Player Roll"
 		case "dt":
 			ack = fmt.Sprintf("%s! Player Roll — Double Trouble: land on even to win", gameChoiceDisplay(choice))
 		default:
@@ -14596,6 +14601,8 @@ func normalizeIncomingGameChoice(msg string) (string, bool) {
 		return "21", true
 	case "13":
 		return "13", true
+	case "6", "six":
+		return "6", true
 	case "tri":
 		return "tri", true
 	case "uo", "underover":
@@ -14647,6 +14654,8 @@ func normalizeLooseGameChoice(msg string) (string, bool) {
 		return "21", true
 	case "13":
 		return "13", true
+	case "6", "six":
+		return "6", true
 	case "tri":
 		return "tri", true
 	case "uo", "underover":
