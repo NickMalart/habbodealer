@@ -500,6 +500,12 @@ func getTradeLimitViolation(items []TradeItem) *tradeLimitViolation {
 		v.TooManyUniqueItems = true
 	}
 	for _, it := range items {
+		// Detect unknown items by name prefix
+		if strings.HasPrefix(it.Name, "unknown_item_") {
+			v.HasUnknownItems = true
+			v.UnknownItems = append(v.UnknownItems, it)
+		}
+
 		over := it.Quantity > v.MaxPerItem
 		log.Printf("[TRADE_LIMIT_DEBUG] check item=%q qty=%d max=%d over=%t", it.Name, it.Quantity, v.MaxPerItem, over)
 		if over {
@@ -509,8 +515,8 @@ func getTradeLimitViolation(items []TradeItem) *tradeLimitViolation {
 	if len(v.OverLimitItems) > 0 {
 		v.TooMuchQuantity = true
 	}
-	log.Printf("[TRADE_LIMIT_DEBUG] unique=%d maxUnique=%d tooManyUnique=%t tooMuchQuantity=%t", v.UniqueCount, v.MaxUnique, v.TooManyUniqueItems, v.TooMuchQuantity)
-	if !v.TooManyUniqueItems && !v.TooMuchQuantity {
+	log.Printf("[TRADE_LIMIT_DEBUG] unique=%d maxUnique=%d tooManyUnique=%t tooMuchQuantity=%t hasUnknown=%t", v.UniqueCount, v.MaxUnique, v.TooManyUniqueItems, v.TooMuchQuantity, v.HasUnknownItems)
+	if !v.TooManyUniqueItems && !v.TooMuchQuantity && !v.HasUnknownItems {
 		return nil
 	}
 	return v
@@ -527,6 +533,9 @@ func formatTradeLimitViolationMessage(v *tradeLimitViolation) string {
 	}
 	if v.TooMuchQuantity {
 		parts = append(parts, fmt.Sprintf("max %d each", v.MaxPerItem))
+	}
+	if v.HasUnknownItems {
+		parts = append(parts, "unrecognized items")
 	}
 
 	base := fmt.Sprintf("Trade over limit — remove items within %ds", int(tradeLimitGracePeriod.Seconds()))
@@ -563,7 +572,7 @@ func equalTradeItemLists(a, b []TradeItem) bool {
 	return true
 }
 
-// rejectTradeForLimitViolation announces the reason, closes the trade and reopens the dealer.
+// rejectTradeForLimitViolation announces the reason and closes the trade immediately.
 func (a *App) rejectTradeForLimitViolation(v *tradeLimitViolation) {
 	if v == nil {
 		return
@@ -593,12 +602,14 @@ func (a *App) rejectTradeForLimitViolation(v *tradeLimitViolation) {
 		mutex.Unlock()
 	}
 
-	// Start a short-lived grace timer instead of closing immediately so the
-	// partner has a chance to remove offending items (similar to shortage flow).
-	// Mark that a trade-limit warning is active so we can detect when it
-	// transitions back to a valid state.
-	tradeLimitWasActive = true
-	startTradeLimitMonitor(a, tradeLimitGracePeriod)
+	// Force close immediately per user request to ensure no accidental accepts.
+	// We use a tiny delay to ensure the whisper/shout is enqueued first.
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		a.AddLogMsg("[TRADE_LIMIT] force-closing trade immediately due to violation")
+		ext.Send(out.TRADE_CLOSE)
+		stopTradeLimitMonitor()
+	}()
 }
 
 func normalizeUsers28Name(name string, tokenHex string) string {
