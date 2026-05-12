@@ -1852,6 +1852,7 @@ func dealerGameActive() bool {
 		triRoundActive ||
 		h18RoundActive ||
 		uoRoundActive ||
+		sixRoundActive ||
 		banditRoundActive ||
 		pokerSequenceStage > 0 ||
 		isPokerRolling ||
@@ -1864,7 +1865,11 @@ func dealerGameActive() bool {
 		isH18Rolling ||
 		isBanditRolling ||
 		isUORolling ||
-		isClosing
+		isSixRolling ||
+		isSixHitting ||
+		isDTRolling ||
+		isClosing ||
+		tradeOpen
 }
 
 func dealerReadyForNewTrade() bool {
@@ -1902,7 +1907,7 @@ func canAnnounceDealerOpen() bool {
 }
 
 func shouldAnnounceDealerOpen() bool {
-	return dealerAnnouncementsEnabled && canAnnounceDealerOpen()
+	return dealerAnnouncementsEnabled && canAnnounceDealerOpen() && !dealerGameActive()
 }
 
 func getConfigFilePath() string {
