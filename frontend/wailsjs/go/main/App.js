@@ -122,6 +122,10 @@ export function GetCatalogNameSet() {
   return window['go']['main']['App']['GetCatalogNameSet']();
 }
 
+export function GetChatMinimalMode() {
+  return window['go']['main']['App']['GetChatMinimalMode']();
+}
+
 export function GetCurrentTradeItems() {
   return window['go']['main']['App']['GetCurrentTradeItems']();
 }
@@ -332,4 +336,8 @@ export function ToggleBlockStatusEffects(arg1) {
 
 export function ToggleBlockUserBanned(arg1) {
   return window['go']['main']['App']['ToggleBlockUserBanned'](arg1);
+}
+
+export function ToggleChatMinimalMode(arg1) {
+  return window['go']['main']['App']['ToggleChatMinimalMode'](arg1);
 }

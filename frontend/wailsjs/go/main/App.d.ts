@@ -62,6 +62,8 @@ export function GetCatalogItemValue(arg1:string):Promise<number|boolean>;
 
 export function GetCatalogNameSet():Promise<Record<string, any>>;
 
+export function GetChatMinimalMode():Promise<boolean>;
+
 export function GetCurrentTradeItems():Promise<Array<main.TradeItem>>;
 
 export function GetCurrentVersion():Promise<string>;
@@ -167,3 +169,5 @@ export function ToggleBlockSlideObjectBundleOutgoing(arg1:boolean):Promise<main.
 export function ToggleBlockStatusEffects(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
 
 export function ToggleBlockUserBanned(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
+
+export function ToggleChatMinimalMode(arg1:boolean):Promise<boolean>;

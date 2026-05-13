@@ -501,7 +501,7 @@ func getTradeLimitViolation(items []TradeItem) *tradeLimitViolation {
 	}
 	for _, it := range items {
 		// Detect unknown items by name prefix
-		if strings.HasPrefix(it.Name, "unknown_item_") {
+		if strings.HasPrefix(it.Name, "unknown_item_") || strings.HasPrefix(it.Name, "unrecognized:") {
 			v.HasUnknownItems = true
 			v.UnknownItems = append(v.UnknownItems, it)
 		}
@@ -535,7 +535,7 @@ func formatTradeLimitViolationMessage(v *tradeLimitViolation) string {
 		parts = append(parts, fmt.Sprintf("max %d each", v.MaxPerItem))
 	}
 	if v.HasUnknownItems {
-		parts = append(parts, "unrecognized items")
+		parts = append(parts, "items we don't have")
 	}
 
 	base := fmt.Sprintf("Trade over limit — remove items within %ds", int(tradeLimitGracePeriod.Seconds()))
@@ -7939,17 +7939,45 @@ func (a *App) parseTradeItemsPacket(data []byte) []TradeItem {
 
 		itemName, qty, ok := a.extractTradeItemAndQuantity(fieldStr)
 		if !ok {
+			// Skip fields that are definitely not items (usernames, numeric IDs)
+			// to avoid false-positive unknown item violations on metadata.
+			lowField := strings.ToLower(fieldStr)
+			partner := strings.ToLower(strings.TrimSpace(lastTradePartnerName))
+			dealer := strings.ToLower(strings.TrimSpace(a.getCurrentDealerName()))
+			if lowField == partner || lowField == dealer {
+				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] skipping field matching trader name=%q", fieldStr))
+				continue
+			}
+			if _, err := strconv.Atoi(fieldStr); err == nil {
+				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] skipping numeric field (likely user id)=%q", fieldStr))
+				continue
+			}
+
+			// Only mark as unknown if it looks like it could actually be a Habbo item class.
+			// Items usually have an underscore (furni_class) or a star (variant*qty).
+			// If it doesn't match these patterns or our item regex, it's likely metadata.
+			if !(strings.Contains(lowField, "_") || strings.Contains(lowField, "*") || stripItemNameRe.MatchString(lowField)) {
+				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] skipping field that doesn't look like an item (likely metadata)=%q", fieldStr))
+				continue
+			}
+
 			// Double check it's not actually empty before marking as unknown
 			if fieldStr == "" {
 				continue
 			}
-			a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] unrecognized field, marking as unknown to count towards limits=%q", fieldStr))
+			// It looks like an item but we couldn't verify it.
+			// Try to extract a name even if unverified.
+			name := fieldStr
+			if match := stripItemNameRe.FindString(fieldStr); match != "" {
+				name = match
+			}
+			a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] unrecognized item, marking as unknown to count towards limits=%q", name))
 			// Preserve unknown raw field in logs for later inspection.
 			a.AddLogMsg(fmt.Sprintf("[TRADE_UNKNOWN_FIELD] raw=%q", fieldStr))
 
 			// Generate a unique unknown item key so each unrecognized field counts
 			// towards the unique item limit in getTradeLimitViolation.
-			unknownKey := fmt.Sprintf("unknown_item_%d", len(counts)+1)
+			unknownKey := fmt.Sprintf("unrecognized:%s", name)
 			counts[unknownKey] = 1
 			if _, exists := rawByName[unknownKey]; !exists {
 				rawByName[unknownKey] = fieldStr
@@ -9825,20 +9853,20 @@ func (a *App) notifyTradeQuantityCoverage() {
 	} else if len(shortages) == 1 {
 		s := shortages[0]
 		if s.HaveHand == 0 && s.Incoming == 0 {
-			msg = fmt.Sprintf("No %s available", formatTradeItemName(s.Name))
+			msg = fmt.Sprintf("We don't have %s", formatTradeItemName(s.Name))
 		} else {
-			msg = fmt.Sprintf("Short %s %d/%d", formatTradeItemName(s.Name), s.Have, s.Required)
+			msg = fmt.Sprintf("We need %s (%d/%d)", formatTradeItemName(s.Name), s.Have, s.Required)
 		}
 	} else {
 		parts := make([]string, 0, len(shortages))
 		for _, s := range shortages {
 			if s.HaveHand == 0 && s.Incoming == 0 {
-				parts = append(parts, fmt.Sprintf("no %s", formatTradeItemName(s.Name)))
+				parts = append(parts, fmt.Sprintf("we don't have %s", formatTradeItemName(s.Name)))
 			} else {
-				parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(s.Name), s.Have, s.Required))
+				parts = append(parts, fmt.Sprintf("%s (%d/%d)", formatTradeItemName(s.Name), s.Have, s.Required))
 			}
 		}
-		msg = fmt.Sprintf("Short: %s", strings.Join(parts, "; "))
+		msg = fmt.Sprintf("Shortages: %s", strings.Join(parts, "; "))
 	}
 
 	changed := msg != lastTradeCoverageNotice
@@ -10334,6 +10362,14 @@ func (a *App) SetBanditTriplesPayout(payout float64) {
 }
 
 func formatTradeItemName(name string) string {
+	if strings.HasPrefix(name, "unrecognized:") {
+		raw := name[13:]
+		// If it has a star variant suffix (*109), strip it for display.
+		if star := strings.LastIndex(raw, "*"); star > 0 {
+			raw = raw[:star]
+		}
+		return formatTradeItemName(raw)
+	}
 	parts := strings.Split(name, "_")
 	for i, part := range parts {
 		if part == "" {
