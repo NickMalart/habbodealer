@@ -182,6 +182,8 @@ func normalizeGameName(game string) string {
 		return "H18"
 	case "bandit", "onearmbandit", "oab":
 		return "Bandit"
+	case "midhouse", "mh":
+		return "MidHouse"
 	default:
 		return ""
 	}

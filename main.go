@@ -145,10 +145,17 @@ var (
 	enabledGamePairUp           bool    = true
 	enabledGameH18              bool    = true
 	enabledGameBandit           bool    = false
+	enabledGameMH               bool    = false
 	banditJackpotPayout         float64 = 20.0
 	banditTriplesPayout         float64 = 5.0
 	isBanditRolling             bool    = false
 	banditRoundActive           bool    = false
+	isMidHouseRolling           bool    = false
+	midHouseRoundActive         bool    = false
+	midHouseChoice              string  // "u10" or "o11"
+	awaitingMHChoice            bool
+	awaitingMHChoicePartnerID   int
+	awaitingMHChoicePartnerName string
 	pokerSequencePlayerName     string
 	pokerSequencePlayerResult   PokerHandResult
 	pokerSequencePlayerHand     string
@@ -1867,6 +1874,7 @@ func dealerGameActive() bool {
 		uoRoundActive ||
 		sixRoundActive ||
 		banditRoundActive ||
+		midHouseRoundActive ||
 		pokerSequenceStage > 0 ||
 		isPokerRolling ||
 		isTriRolling ||
@@ -1877,6 +1885,7 @@ func dealerGameActive() bool {
 		isPairUpRolling ||
 		isH18Rolling ||
 		isBanditRolling ||
+		isMidHouseRolling ||
 		isUORolling ||
 		isSixRolling ||
 		isSixHitting ||
@@ -10209,6 +10218,7 @@ func setEnabledGamesFromSelection(codes []string) {
 	enabledGamePairUp = true
 	enabledGameH18 = true
 	enabledGameBandit = false
+	enabledGameMH = false
 
 	if len(codes) == 0 {
 		return
@@ -10224,6 +10234,7 @@ func setEnabledGamesFromSelection(codes []string) {
 	enabledGamePairUp = false
 	enabledGameH18 = false
 	enabledGameBandit = false
+	enabledGameMH = false
 
 	for _, raw := range codes {
 		s := strings.ToLower(strings.TrimSpace(raw))
@@ -10249,10 +10260,12 @@ func setEnabledGamesFromSelection(codes []string) {
 			enabledGameH18 = true
 		case "bandit", "oab", "onearmbandit":
 			enabledGameBandit = true
+		case "mh", "midhouse", "1011":
+			enabledGameMH = true
 		}
 	}
 
-	if !enabledGamePkr && !enabledGame21 && !enabledGame13 && !enabledGame6 && !enabledGameTri && !enabledGameUO7 && !enabledGamePairUp && !enabledGameH18 && !enabledGameBandit {
+	if !enabledGamePkr && !enabledGame21 && !enabledGame13 && !enabledGame6 && !enabledGameTri && !enabledGameUO7 && !enabledGamePairUp && !enabledGameH18 && !enabledGameBandit && !enabledGameMH {
 		enabledGamePkr = true
 		enabledGame21 = true
 		enabledGame13 = true
@@ -10294,6 +10307,9 @@ func enabledGameChoicePartsLocked() []string {
 	}
 	if enabledGameBandit {
 		parts = append(parts, "bandit")
+	}
+	if enabledGameMH {
+		parts = append(parts, "u10", "o11")
 	}
 	if len(parts) == 0 {
 		parts = append(parts, "pkr", "21", "13", "tri", "pu", "h18")
@@ -10340,6 +10356,8 @@ func isGameChoiceEnabledLocked(choice string) bool {
 		return enabledGameH18
 	case "bandit":
 		return enabledGameBandit
+	case "mh", "mh_u10", "mh_o11":
+		return enabledGameMH
 	default:
 		return false
 	}
@@ -12290,6 +12308,7 @@ func resetDiceState() {
 	resetTriSequence()
 	resetH18Sequence()
 	resetBanditSequence()
+	resetMidHouseSequence()
 	lastTradePartnerID = 0
 	lastTradePartnerName = ""
 	lastTradePartnerToken = ""
@@ -12307,6 +12326,10 @@ func resetDiceState() {
 // the current dealer mode. Under/Over-7 mode requires only 2 dice; otherwise
 // the default is 5.
 func getExpectedDiceCount() int {
+	// Use 5 dice for Mid-House to support dice 1 and 5.
+	if enabledGameMH {
+		return 5
+	}
 	// Use 3 dice for One Arm Bandit mode.
 	if enabledGameBandit {
 		return 3
@@ -12741,7 +12764,7 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 	for _, pair := range pairs {
 		for i, dice := range diceList {
 			if dice.ID == pair.diceID {
-				if dice.IsRolling && (isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isSixRolling || is13Hitting || isSixHitting || isHitting || isUORolling || isDTRolling || isPairUpRolling || isH18Rolling || isBanditRolling) {
+				if dice.IsRolling && (isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isSixRolling || is13Hitting || isSixHitting || isHitting || isUORolling || isDTRolling || isPairUpRolling || isH18Rolling || isBanditRolling || isMidHouseRolling) {
 					dice.IsRolling = false
 					func() {
 						defer func() {
@@ -12755,7 +12778,7 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 				diceList[i].Value = pair.adjValue
 				diceList[i].IsClosed = diceList[i].Value == 0
 
-				if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isSixRolling || is13Hitting || isSixHitting || isHitting || isUORolling || isDTRolling || isPairUpRolling || isH18Rolling || isBanditRolling {
+				if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isSixRolling || is13Hitting || isSixHitting || isHitting || isUORolling || isDTRolling || isPairUpRolling || isH18Rolling || isBanditRolling || isMidHouseRolling {
 					log.Printf("Dice %d rolled: %d\n", pair.diceID, pair.adjValue)
 					logRollResult := fmt.Sprintf("Dice %d rolled: %d\n", pair.diceID, pair.adjValue)
 					a.AddLogMsg(logRollResult)
@@ -13887,6 +13910,49 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		return
 	}
 
+	if awaitingMHChoice {
+		cleaned := strings.ToLower(strings.TrimSpace(msg))
+		cleaned = gameChoiceCleanupRe.ReplaceAllString(cleaned, "")
+		if cleaned != "u10" && cleaned != "o11" && cleaned != "u" && cleaned != "o" {
+			a.AddLogMsg(fmt.Sprintf("[MH_DEBUG] awaiting MH choice from %q(index=%d), ignored non-choice message=%q", awaitingMHChoicePartnerName, awaitingMHChoicePartnerID, msg))
+		} else {
+			indexMatch := awaitingMHChoicePartnerID > 0 && index == awaitingMHChoicePartnerID
+			nameMatch := awaitingMHChoicePartnerName != "" && strings.EqualFold(senderName, awaitingMHChoicePartnerName)
+			if !indexMatch && !nameMatch && awaitingMHChoicePartnerName != "" {
+				if expectedIdx, ok := lookupRoomEntityIndexByName(awaitingMHChoicePartnerName); ok && expectedIdx > 0 && expectedIdx == index {
+					indexMatch = true
+				}
+			}
+			if !indexMatch && !nameMatch && awaitingMHChoicePartnerName != "" {
+				if expectedIdx, ok := lookupUsers28RoomIndexByName(awaitingMHChoicePartnerName); ok && expectedIdx > 0 && expectedIdx == index {
+					indexMatch = true
+				}
+			}
+
+			if !indexMatch && !nameMatch {
+				a.AddLogMsg(fmt.Sprintf("[MH] ignoring choice %q from %q (index %d); waiting for %q (index %d)", cleaned, senderName, index, awaitingMHChoicePartnerName, awaitingMHChoicePartnerID))
+			} else {
+				e.Block()
+				if cleaned == "u" {
+					cleaned = "u10"
+				} else if cleaned == "o" {
+					cleaned = "o11"
+				}
+				awaitingMHChoice = false
+				a.AddLogMsg(fmt.Sprintf("[MH_DEBUG] accepted choice=%q from sender=%q index=%d", cleaned, senderName, index))
+
+				if riskSessionActive {
+					a.beginRiskRoundHistory(cleaned, msg, "MidHouse")
+				} else {
+					a.setCurrentGameHistoryChoice(cleaned, msg)
+				}
+
+				a.beginMidHouseRound(cleaned)
+				return
+			}
+		}
+	}
+
 	if awaitingUOChoice {
 		cleaned := strings.ToLower(strings.TrimSpace(msg))
 		cleaned = gameChoiceCleanupRe.ReplaceAllString(cleaned, "")
@@ -14704,6 +14770,16 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		// Direct Tri Low selection
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected TriL; starting round", index))
 		a.beginTriRound("low")
+	case "mh":
+		// Two-step MidHouse selection: prompt player for u10 or o11
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected MidHouse; prompting for u10/o11", index))
+		a.beginMidHouseChoiceSequence()
+	case "mh_u10":
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected u10; starting MidHouse round", index))
+		a.beginMidHouseRound("u10")
+	case "mh_o11":
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %d selected o11; starting MidHouse round", index))
+		a.beginMidHouseRound("o11")
 	}
 }
 
@@ -14743,6 +14819,12 @@ func normalizeIncomingGameChoice(msg string) (string, bool) {
 		return "dt", true
 	case "h18", "highfive18", "hf18":
 		return "h18", true
+	case "mh", "midhouse", "1011":
+		return "mh", true
+	case "u10":
+		return "mh_u10", true
+	case "o11":
+		return "mh_o11", true
 	default:
 		return "", false
 	}
@@ -14796,6 +14878,12 @@ func normalizeLooseGameChoice(msg string) (string, bool) {
 		return "dt", true
 	case "h18", "highfive18", "hf18":
 		return "h18", true
+	case "mh", "midhouse", "1011":
+		return "mh", true
+	case "u10":
+		return "mh_u10", true
+	case "o11":
+		return "mh_o11", true
 	default:
 		return "", false
 	}
@@ -14894,6 +14982,8 @@ func gameChoiceDisplay(choice string) string {
 		return "TriL"
 	case "h18":
 		return "H18"
+	case "mh":
+		return "MidHouse"
 	default:
 		return choice
 	}
@@ -14972,4 +15062,116 @@ func lookupTokenByName(name string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func (a *App) beginMidHouseChoiceSequence() {
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	resetPokerSequence()
+	resetBlackjackSequence()
+	reset13Sequence()
+	resetTriSequence()
+	resetMidHouseSequence()
+
+	awaitingMHChoice = true
+	awaitingMHChoicePartnerName = playerName
+
+	if chatIdx, ok := lookupRoomEntityIndexByName(playerName); ok && chatIdx > 0 {
+		awaitingMHChoicePartnerID = chatIdx
+	} else if chatIdx, ok := waitForUsers28RoomIndexByName(playerName, 900*time.Millisecond); ok && chatIdx > 0 {
+		awaitingMHChoicePartnerID = chatIdx
+	} else if chatIdx, ok := lookupUsers28RoomIndexByName(playerName); ok && chatIdx > 0 {
+		awaitingMHChoicePartnerID = chatIdx
+	} else {
+		awaitingMHChoicePartnerID = lastTradePartnerID
+	}
+
+	msg := "u10 (Small) or o11 (Big)? gl"
+	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
+	sendShout(msg)
+}
+
+func (a *App) beginMidHouseRound(choice string) {
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	resetPokerSequence()
+	resetBlackjackSequence()
+	reset13Sequence()
+	resetTriSequence()
+	resetMidHouseSequence()
+
+	midHouseRoundActive = true
+	midHouseChoice = choice
+	a.setCurrentGameHistoryGame("MidHouse")
+
+	go func() {
+		time.Sleep(1400 * time.Millisecond)
+		isMidHouseRolling = true
+		a.rollMidHouseDice()
+	}()
+}
+
+func (a *App) rollMidHouseDice() {
+	if fakeDiceTestingMode {
+		mutex.Lock()
+		indices := []int{0, 1, 2}
+		if len(diceList) >= 5 {
+			indices = []int{0, 2, 4}
+		}
+		if len(diceList) < len(indices) {
+			mutex.Unlock()
+			log.Println("Not enough dice to roll")
+			isMidHouseRolling = false
+			return
+		}
+		for _, idx := range indices {
+			diceList[idx].Value = rand.Intn(6) + 1
+			diceList[idx].IsClosed = false
+			logRollResult := fmt.Sprintf("Dice %d rolled: %d\n", diceList[idx].ID, diceList[idx].Value)
+			a.AddLogMsg(logRollResult)
+		}
+		mutex.Unlock()
+		a.evaluateMidHouseRound()
+		isMidHouseRolling = false
+		return
+	}
+
+	mutex.Lock()
+	indices := []int{0, 1, 2}
+	if len(diceList) >= 5 {
+		indices = []int{0, 2, 4}
+	}
+	if len(diceList) < len(indices) {
+		mutex.Unlock()
+		log.Println("Not enough dice to roll")
+		isMidHouseRolling = false
+		return
+	}
+	resultsWaitGroup.Add(len(indices))
+	mutex.Unlock()
+
+	for _, index := range indices {
+		diceList[index].Roll()
+		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
+	}
+
+	time.Sleep(1000 * time.Millisecond)
+	resultsWaitGroup.Wait()
+
+	a.evaluateMidHouseRound()
+	isMidHouseRolling = false
+}
+
+func resetMidHouseSequence() {
+	isMidHouseRolling = false
+	midHouseRoundActive = false
+	awaitingMHChoice = false
+	awaitingMHChoicePartnerID = 0
+	awaitingMHChoicePartnerName = ""
 }

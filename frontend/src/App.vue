@@ -268,6 +268,10 @@
                 <input type="checkbox" v-model="enableGameDT" :disabled="underOver7Mode || enableGameBandit" />
                 Double Trouble (dt)
               </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:4px;">
+                <input type="checkbox" v-model="enableGameMH" :disabled="underOver7Mode || enableGameBandit" />
+                Mid-House (mh)
+              </label>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;border-top:1px solid #333;padding-top:6px;">
                 <input type="checkbox" v-model="riskModeEnabledInput" :disabled="underOver7Mode || enableGameBandit" />
                 Enable Risk Mode
@@ -1014,6 +1018,15 @@ export default {
               playerFlow: 'Trade 1 coin (or as configured) and the game starts automatically. Watch for pairs to get free re-rolls!',
               dealerFlow: 'The dealer accepts the trade and immediately starts the Bandit sequence. It handles re-rolls and payouts automatically.',
             },
+            {
+              key: 'midhouse',
+              title: 'Mid-House 10/11 (3 Dice)',
+              summary: 'Dealer wins on 10/11. Player picks u10 or o11.',
+              description: 'Mid-House 10/11 is a 3-dice game where the dealer has a "Dead Zone" at 10 and 11. Sums of 3-9 win for Under, 12-18 win for Over.',
+              howItWorks: 'The app rolls 3 dice. If the sum is 10 or 11, the dealer wins regardless of player choice. Otherwise, if player picked u10 and sum is 3-9, they win. If they picked o11 and sum is 12-18, they win.',
+              playerFlow: 'Trade the bet, shout mh when prompted, then shout u10 or o11 to start the roll.',
+              dealerFlow: 'The dealer prompts for choice, rolls 3 dice, and evaluates the sum against the choice and the 10/11 dead zone.',
+            },
           ],
       tradeItems: [],
       activeGameBetItems: [],
@@ -1092,6 +1105,7 @@ export default {
       enableGamePairUp: false,
       enableGameH18: false,
       enableGameDT: false,
+      enableGameMH: false,
       // Risk mode: when true, enable Risk banking mechanic
       riskModeEnabledInput: false,
       // Block recommended-rooms packet
@@ -1392,11 +1406,12 @@ export default {
           if (this.enableGamePairUp) selectedGames.push('pairup');
           if (this.enableGameH18) selectedGames.push('h18');
           if (this.enableGameDT) selectedGames.push('dt');
+          if (this.enableGameMH) selectedGames.push('mh');
           if (this.enableGameBandit) selectedGames.push('bandit');
 
           const standaloneMode = this.underOver7Mode || this.enableGameBandit;
           if (!standaloneMode && selectedGames.length === 0) {
-            this.addLogMsg('[UI] Start cancelled: select at least one enabled game (pkr, 21, 13, 6, tri, uo7, pairup, h18, dt, bandit)');
+            this.addLogMsg('[UI] Start cancelled: select at least one enabled game (pkr, 21, 13, 6, tri, uo7, pairup, h18, dt, mh, bandit)');
             return;
           }
 

@@ -267,3 +267,93 @@ func (a *App) evaluateBanditRound() {
 
 	go a.openDealerAfterRound()
 }
+
+// evaluateMidHouseRound evaluates the 3-dice Mid-House 10/11 game.
+func (a *App) evaluateMidHouseRound() {
+	mutex.Lock()
+	total := 0
+	indices := []int{0, 1, 2}
+	if len(diceList) >= 5 {
+		indices = []int{0, 2, 4}
+	}
+	if len(diceList) < len(indices) {
+		mutex.Unlock()
+		a.AddLogMsg("[MIDHOUSE_ERROR] Not enough dice to evaluate")
+		go a.openDealerAfterRound()
+		return
+	}
+	for _, idx := range indices {
+		total += diceList[idx].Value
+	}
+	midHouseRoundActive = false
+	choice := midHouseChoice
+	mutex.Unlock()
+
+	playerName := strings.TrimSpace(lastTradePartnerName)
+	if playerName == "" {
+		playerName = "Player"
+	}
+
+	playerWins := false
+	if total == 10 || total == 11 {
+		// Mid-House/Dead Zone: Dealer always wins
+		playerWins = false
+	} else if choice == "u10" {
+		playerWins = (total <= 9)
+	} else if choice == "o11" {
+		playerWins = (total >= 12)
+	}
+
+	winnerName := "Dealer"
+	if playerWins {
+		winnerName = playerName
+	}
+
+	resultMsg := fmt.Sprintf("%s rolled %d.", playerName, total)
+	status := "LOSE"
+	if playerWins {
+		status = "WIN"
+	} else if total == 10 || total == 11 {
+		status = "Mid-House Dealer WIN"
+	} else {
+		status = "Dealer WIN"
+	}
+
+	msg := fmt.Sprintf("%s - %s!", resultMsg, status)
+	a.AddLogMsg(fmt.Sprintf("[MIDHOUSE_RULES] player=%s total=%d choice=%s winner=%s", playerName, total, choice, winnerName))
+	sendShout(msg)
+
+	payoutTargetID := lastTradePartnerID
+	payoutTargetName := playerName
+
+	if playerWins && payoutTargetID > 0 {
+		payoutMultiplierForRound = 2.0
+		a.setCurrentGameHistoryPayoutMultiplier(2.0)
+		a.setCurrentGameHistoryResults(fmt.Sprintf("%d", total), "", playerName, "Payout Pending", false)
+		a.noteCurrentGameHistory(msg)
+		resetPayoutRetryState()
+
+		// Post round result to Discord
+		a.sendDiscordRoundResult(playerName, fmt.Sprintf("%d", total), "", msg)
+
+		if isRiskEnabled {
+			if riskSessionActive {
+				go a.applyRiskOutcome(true)
+				return
+			}
+			params := map[string]interface{}{"mhChoice": choice}
+			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "MidHouse", params)
+			return
+		}
+
+		go startPayout(a, payoutTargetID, payoutTargetName)
+	} else {
+		a.setCurrentGameHistoryResults(fmt.Sprintf("%d", total), "", "Dealer", "Completed", true)
+		a.noteCurrentGameHistory(msg)
+		if isRiskEnabled && riskSessionActive {
+			go a.applyRiskOutcome(false)
+			return
+		}
+		go a.openDealerAfterRound()
+	}
+}
