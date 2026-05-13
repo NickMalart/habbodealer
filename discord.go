@@ -20,7 +20,7 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 	// backwards compatibility. Set `DISCORD_WEBHOOK_URL` to override.
 	webhookURL := os.Getenv("DISCORD_WEBHOOK_URL")
 	if strings.TrimSpace(webhookURL) == "" {
-		webhookURL = "https://discord.com/api/webhooks/1496681436592214016/QTGLb6qYMv0-61hVc3m9s7mBgvMc-E0LKpQTxd1bSow9N_GqOjQMyw9njq8KcsM8Jhi6"
+		webhookURL = "https://discordapp.com/api/webhooks/1496681436592214016/QTGLb6qYMv0-61hVc3m9s7mBgvMc-E0LKpQTxd1bSow9N_GqOjQMyw9njq8KcsM8Jhi6"
 		a.AddLogMsg("[DISCORD] using built-in webhook URL (env DISCORD_WEBHOOK_URL not set)")
 	} else {
 		a.AddLogMsg("[DISCORD] using webhook URL from DISCORD_WEBHOOK_URL")
@@ -29,7 +29,7 @@ func (a *App) sendDiscordWebhookForGame(entry GameHistoryEntry) {
 	// Optional secondary webhook for Issue-only posts (env override: DISCORD_ISSUE_WEBHOOK_URL)
 	issueWebhookURL := os.Getenv("DISCORD_ISSUE_WEBHOOK_URL")
 	if strings.TrimSpace(issueWebhookURL) == "" {
-		issueWebhookURL = "https://discord.com/api/webhooks/1502209413065343086/lV-mzQvSRCqc-HkjKZWXOrmX0McP1HU47_fBjthixU2IdO0Bh18j-FBkIjGCDDjgAbo4"
+		issueWebhookURL = "https://discordapp.com/api/webhooks/1502209413065343086/lV-mzQvSRCqc-HkjKZWXOrmX0McP1HU47_fBjthixU2IdO0Bh18j-FBkIjGCDDjgAbo4"
 	}
 
 	// Optional dedicated Bandit webhook for game/payout/issue posts (env override: DISCORD_BANDIT_WEBHOOK_URL)
@@ -293,13 +293,13 @@ func (a *App) sendDiscordWebhookForPayout(entry GameHistoryEntry) {
 	// Payout webhook URL (env override: DISCORD_PAYOUT_WEBHOOK_URL)
 	payoutWebhookURL := os.Getenv("DISCORD_PAYOUT_WEBHOOK_URL")
 	if strings.TrimSpace(payoutWebhookURL) == "" {
-		payoutWebhookURL = "https://discord.com/api/webhooks/1502425167031173211/IZF_TGQnk_rXeR5kgzpFJLQzAU6a6NVe05MTQavYn3kt2QQOQNpw7d7QxeKkZuVJscZP"
+		payoutWebhookURL = "https://discordapp.com/api/webhooks/1502425167031173211/IZF_TGQnk_rXeR5kgzpFJLQzAU6a6NVe05MTQavYn3kt2QQOQNpw7d7QxeKkZuVJscZP"
 	}
 
 	// Ensure we have an issues webhook available in this scope (env override)
 	issueWebhookURL := os.Getenv("DISCORD_ISSUE_WEBHOOK_URL")
 	if strings.TrimSpace(issueWebhookURL) == "" {
-		issueWebhookURL = "https://discord.com/api/webhooks/1502209413065343086/lV-mzQvSRCqc-HkjKZWXOrmX0McP1HU47_fBjthixU2IdO0Bh18j-FBkIjGCDDjgAbo4"
+		issueWebhookURL = "https://discordapp.com/api/webhooks/1502209413065343086/lV-mzQvSRCqc-HkjKZWXOrmX0McP1HU47_fBjthixU2IdO0Bh18j-FBkIjGCDDjgAbo4"
 	}
 
 	// Bandit webhook for all bandit-related events
@@ -310,14 +310,17 @@ func (a *App) sendDiscordWebhookForPayout(entry GameHistoryEntry) {
 
 	// Decide destination: successful payouts go to payout channel, issues go to issues channel.
 	targetWebhookURL := payoutWebhookURL
+	channelName := "payout"
 	if strings.EqualFold(entry.Game, "Bandit") {
 		targetWebhookURL = banditWebhookURL
+		channelName = "bandit"
 		a.AddLogMsg("[DISCORD] sending bandit payout (success or issue) to dedicated bandit webhook")
-	} else if entry.Issue || strings.EqualFold(entry.Status, "Issue") {
+	} else if (entry.Issue || strings.EqualFold(entry.Status, "Issue")) && !strings.EqualFold(entry.Status, "Completed") {
 		targetWebhookURL = issueWebhookURL
+		channelName = "issue"
 		a.AddLogMsg("[DISCORD] sending payout Issue only to configured issues webhook")
 	} else {
-		a.AddLogMsg("[DISCORD] sending payout webhook to configured payout channel")
+		a.AddLogMsg(fmt.Sprintf("[DISCORD] sending payout webhook to configured payout channel (status=%s)", entry.Status))
 	}
 
 	formatItems := func(items []TradeItem) string {
@@ -444,12 +447,12 @@ func (a *App) sendDiscordWebhookForPayout(entry GameHistoryEntry) {
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if respBody == "" {
-			a.AddLogMsg("[DISCORD] payout webhook sent (no response body)")
+			a.AddLogMsg(fmt.Sprintf("[DISCORD] %s webhook sent (no response body)", channelName))
 		} else {
-			a.AddLogMsg(fmt.Sprintf("[DISCORD] payout webhook sent; body=%q", respBody))
+			a.AddLogMsg(fmt.Sprintf("[DISCORD] %s webhook sent; body=%q", channelName, respBody))
 		}
 	} else {
-		a.AddLogMsg(fmt.Sprintf("[DISCORD] payout webhook responded: %d body=%q", resp.StatusCode, respBody))
+		a.AddLogMsg(fmt.Sprintf("[DISCORD] %s webhook responded: %d body=%q", channelName, resp.StatusCode, respBody))
 	}
 
 	// When this is an Issue we already sent to the issues webhook above;
