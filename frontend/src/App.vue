@@ -948,7 +948,7 @@ export default {
           summary: 'Automatic dice roll aiming for a strong total without going too low.',
           description: '21 is a fast internal dice game where the app rolls and evaluates the result automatically. The side with the better valid 21 result wins the round.',
           howItWorks: 'After trade completion the player chooses 21, the app starts the 21 roll flow, compares totals, and announces the result through the normal game pipeline.',
-          playerFlow: 'Trade the bet, say 21 when prompted, and let the roll complete.',
+          playerFlow: 'Trade the bet, shout 21 when prompted, and let the roll complete.',
           dealerFlow: 'The dealer starts the 21 routine, tracks the totals, decides who won the round, and continues into payout handling if the player wins.',
         },
         {
@@ -957,7 +957,7 @@ export default {
           summary: 'Automatic dice roll flow tuned for the 13 game rules.',
           description: '13 runs as its own internal dice routine after the player picks it from chat. The better valid 13 result wins the round.',
           howItWorks: 'The app listens for the 13 selection, starts the dedicated 13 rolling logic, compares the outcome, then processes the winner the same way as other games.',
-          playerFlow: 'Trade the bet, say 13 when prompted, and wait for the roll and outcome.',
+          playerFlow: 'Trade the bet, shout 13 when prompted, and wait for the roll and outcome.',
           dealerFlow: 'The dealer starts the 13 routine, calculates who won, and manages the rest of the round automatically.',
         },
         {
@@ -966,7 +966,7 @@ export default {
           summary: 'Blackjack-style game aiming for 6 with hit/stay options.',
           description: '6 is a tactical dice game where you roll once and choose to hit or stay to reach 6 without busting.',
           howItWorks: 'The app rolls one dice for the player. The player then chooses to hit or stay. If the player busts (>6), the dealer wins. If the player stays, the dealer rolls to beat the player.',
-          playerFlow: 'Trade the bet, say 6 when prompted, then say hit or stay after each roll.',
+          playerFlow: 'Trade the bet, shout 6 when prompted, then shout hit or stay after each roll.',
           dealerFlow: 'The dealer rolls for the player, waits for decisions, then plays their turn to beat the player total.',
         },
         {
@@ -984,7 +984,7 @@ export default {
           summary: 'Fast binary game where matching dice wins.',
           description: 'PU is a simple game where the player rolls three dice. If any two dice match (a pair) or all three match (a triple), the player wins.',
           howItWorks: 'The app rolls three dice for the player. If there is a pair or triple, the player wins x2 payout. If all three dice are different, the dealer wins.',
-          playerFlow: 'Trade the bet, say pu when prompted, and watch the three dice.',
+          playerFlow: 'Trade the bet, shout pu when prompted, and watch the three dice.',
           dealerFlow: 'The dealer rolls three dice and automatically awards a win if a match is found.',
         },
         {
@@ -993,7 +993,7 @@ export default {
           summary: 'Sum-based game with a central house edge.',
           description: 'H18 is a 5-dice game focused on the total sum. Win on 19+, lose on 17-, and 18 is a house win.',
           howItWorks: 'The app rolls 5 dice for the player and calculates the sum. 19 or higher wins x2, 17 or lower loses, and exactly 18 is a dealer win.',
-          playerFlow: 'Trade the bet, say h18 when prompted, and watch the 5 dice.',
+          playerFlow: 'Trade the bet, shout h18 when prompted, and watch the 5 dice.',
           dealerFlow: 'The dealer rolls 5 dice, sums them up, and determines the outcome based on the 18-pivot rule.',
           },
           {
@@ -1002,7 +1002,7 @@ export default {
             summary: 'Even total wins, odd loses, but 7 is the house\'s.',
             description: 'Double Trouble is a 2-dice game. Even totals win, odd totals (except 7) lose. A total of 7 is a house win.',
             howItWorks: 'The app rolls 2 dice. If the sum is 7, the house wins. Otherwise, if the sum is even, the player wins. If it\'s odd, the player loses.',
-            playerFlow: 'Trade the bet, say dt when prompted, and watch the 2 dice.',
+            playerFlow: 'Trade the bet, shout dt when prompted, and watch the 2 dice.',
             dealerFlow: 'The dealer rolls 2 dice, and the outcome is determined by the sum.',
             },
             {

@@ -592,9 +592,9 @@ func (a *App) rejectTradeForLimitViolation(v *tradeLimitViolation) {
 
 		a.AddLogMsg("[TRADE_LIMIT] " + msg)
 
-		// Whisper the partner about the limit violation instead of shouting.
+		// Shout to the partner about the limit violation.
 		if lastTradePartnerID > 0 {
-			sendWhisper(lastTradePartnerID, msg)
+			sendShoutTargeted(lastTradePartnerID, msg)
 		} else {
 			sendShout(msg)
 		}
@@ -603,7 +603,7 @@ func (a *App) rejectTradeForLimitViolation(v *tradeLimitViolation) {
 	}
 
 	// Force close immediately per user request to ensure no accidental accepts.
-	// We use a tiny delay to ensure the whisper/shout is enqueued first.
+	// We use a tiny delay to ensure the shout is enqueued first.
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		a.AddLogMsg("[TRADE_LIMIT] force-closing trade immediately due to violation")
@@ -3434,7 +3434,7 @@ func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note strin
 func (a *App) setupExt() {
 	registerCustomTradeHeaders(a)
 
-	a.ext.Intercept(out.CHAT, out.SHOUT, out.WHISPER).With(a.onChatMessage)
+	a.ext.Intercept(out.SHOUT).With(a.onChatMessage)
 	a.ext.Intercept(out.GETSTRIP).With(a.handleOutgoingGetStrip)
 	a.ext.Intercept(out.THROW_DICE).With(a.handleThrowDice)
 	a.ext.Intercept(out.DICE_OFF).With(a.handleDiceOff)
@@ -3526,19 +3526,16 @@ var (
 	shoutThrottlerMu sync.Mutex
 )
 
-// sendWhisper sends a private message to a specific user index.
-func sendWhisper(targetID int, msg string) {
+// sendShoutTargeted sends a public shout message directed at a specific user.
+// NOTE: We now use SHOUT for all outgoing messages as requested.
+func sendShoutTargeted(targetID int, msg string) {
 	trimmed := strings.TrimSpace(msg)
 	if trimmed == "" {
 		return
 	}
-	// Use regular CHAT instead of SHOUT for "whispers" to reduce visual noise.
-	// We don't use real WHISPER packets because they require usernames and are often unreliable.
-	if isMuted {
-		return
-	}
-	ext.Send(out.CHAT, trimmed)
-	log.Printf("[WHISPER->CHAT] target=%d msg=%q", targetID, trimmed)
+	// Use SHOUT for all outgoing messages as requested.
+	sendShout(trimmed)
+	log.Printf("[SHOUT_TARGETED] target=%d msg=%q", targetID, trimmed)
 }
 
 // sendShoutThrottled sends a shout only if it hasn't been sent within the cooldown.
@@ -5493,7 +5490,7 @@ func (a *App) handleRiskBet(n int, sender string, userID int) {
 	// Defensive: avoid processing a second risk while one is pending.
 	if riskPendingBet > 0 || awaitingGameChoice {
 		mutex.Unlock()
-		sendWhisper(userID, "Risk already pending; please choose a game.")
+		sendShoutTargeted(userID, "Risk already pending; please choose a game.")
 		a.AddLogMsg(fmt.Sprintf("[RISK] rejected r%d from %s: already pending", n, sender))
 		return
 	}
@@ -5501,7 +5498,7 @@ func (a *App) handleRiskBet(n int, sender string, userID int) {
 	// Defensive guards: reject if player's internal bank is empty or dealer reopened.
 	if playerRisk <= 0 {
 		mutex.Unlock()
-		sendWhisper(userID, "No bank available to risk.")
+		sendShoutTargeted(userID, "No bank available to risk.")
 		a.AddLogMsg(fmt.Sprintf("[RISK] rejected r%d from %s: no player bank", n, sender))
 		// If there's no bank left, ensure dealer reopens cleanly.
 		go a.openDealerAfterRound()
@@ -5509,7 +5506,7 @@ func (a *App) handleRiskBet(n int, sender string, userID int) {
 	}
 	if dealerAcceptingTrades || awaitingTradeOpen {
 		mutex.Unlock()
-		sendWhisper(userID, "Risk unavailable while dealer is open.")
+		sendShoutTargeted(userID, "Risk unavailable while dealer is open.")
 		a.AddLogMsg(fmt.Sprintf("[RISK] rejected r%d from %s: dealer open", n, sender))
 		return
 	}
@@ -5523,7 +5520,7 @@ func (a *App) handleRiskBet(n int, sender string, userID int) {
 	}
 	if n <= 0 || n > max {
 		mutex.Unlock()
-		sendWhisper(userID, fmt.Sprintf("Invalid risk amount. Max: %d", max))
+		sendShoutTargeted(userID, fmt.Sprintf("Invalid risk amount. Max: %d", max))
 		return
 	}
 
@@ -6776,7 +6773,7 @@ func startShortageMonitor(a *App, timeout time.Duration) {
 				}
 				a.AddLogMsg(fmt.Sprintf("[TRADE_COVERAGE] shortage unresolved; force-closing trade with %s", partnerName))
 				if lastTradePartnerID > 0 {
-					sendWhisper(lastTradePartnerID, "Shortage unresolved; closing trade")
+					sendShoutTargeted(lastTradePartnerID, "Shortage unresolved; closing trade")
 				} else {
 					sendShout("Shortage unresolved; closing trade")
 				}
@@ -6838,7 +6835,7 @@ func startTradeLimitMonitor(a *App, timeout time.Duration) {
 				}
 				a.AddLogMsg(fmt.Sprintf("[TRADE_LIMIT] unresolved; force-closing trade with %s", partnerName))
 				if lastTradePartnerID > 0 {
-					sendWhisper(lastTradePartnerID, "Trade still over limit; closing now.")
+					sendShoutTargeted(lastTradePartnerID, "Trade still over limit; closing now.")
 				} else {
 					sendShout("Trade still over limit; closing now.")
 				}
@@ -13493,7 +13490,7 @@ func (a *App) ShowCommands() {
 			"Forgets dice list for when you\nchange booth.\n" +
 			"------------------------------------\n" +
 			":roll \n" +
-			"Rolls 5 dice and if chat is enabled \nsays the results in chat. \n" +
+			"Rolls 5 dice and if chat is enabled \nshouts the results in chat. \n" +
 			"------------------------------------\n" +
 			":close\n" +
 			"Closes any of your open dice. \n" +
@@ -13508,11 +13505,11 @@ func (a *App) ShowCommands() {
 			"------------------------------------\n" +
 			"------------------------------------\n" +
 			":tri (quick roll)\n" +
-			"Auto rolls 3 dice in Tri Formation \nif chat is enabled says the \nresults in chat. \n" +
+			"Auto rolls 3 dice in Tri Formation \nif chat is enabled shouts the \nresults in chat. \n" +
 			"Use TriH or TriL after a trade to pick Tri High or Tri Low in one shout.\n" +
 			"------------------------------------\n" +
 			":verify \n" +
-			"Will say the previous result in\nchat. Use if you were muted and\ndont know the results of 21/13.\n" +
+			"Will shout the previous result in\nchat. Use if you were muted and\ndont know the results of 21/13.\n" +
 			"------------------------------------\n" +
 			":chaton \n" +
 			"Enables chat announcement \nof game results. \n" +
@@ -13655,9 +13652,9 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	index := e.Packet.ReadInt()
 	msg := e.Packet.ReadString()
 
-	chatType := "CHAT"
+	chatType := "TALK"
 	if e.Is(in.CHAT_2) {
-		chatType = "WHISPER"
+		chatType = "PRIVATE"
 	} else if e.Is(in.CHAT_3) {
 		chatType = "SHOUT"
 	}
@@ -13711,7 +13708,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 				pending := awaitingGameChoice || riskPendingBet > 0
 				mutex.Unlock()
 				if pending {
-					sendWhisper(index, "Risk already placed; choose a game (or wait for the prompt).")
+					sendShoutTargeted(index, "Risk already placed; choose a game (or wait for the prompt).")
 					a.AddLogMsg(fmt.Sprintf("[RISK] ignored duplicate r%d from %s: already pending", amt, senderName))
 					e.Block()
 					stopRiskDecisionTimeoutMonitor()
@@ -14348,7 +14345,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 				gameChoiceUnreadableWarned = true
 				warn := fmt.Sprintf("%q Please shout, I can not hear you.", playerName)
 				a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] unreadable game choice from %s: %q", playerName, msg))
-				sendWhisper(index, warn)
+				sendShoutTargeted(index, warn)
 			}
 		}
 		return
@@ -14405,7 +14402,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		mutex.Unlock()
 		if !enabled {
 			a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] ignoring disabled choice %q; allowed prompt: %q", choice, prompt))
-			sendWhisper(index, "That game is disabled. "+prompt)
+			sendShoutTargeted(index, "That game is disabled. "+prompt)
 			return
 		}
 	}
@@ -14785,7 +14782,7 @@ func looksLikeUnreadableGameChoiceAttempt(msg string) bool {
 		return false
 	}
 
-	// Detect broken whisper-like fragments such as p..k..r or t..i
+	// Detect broken private-like fragments such as p..k..r or t..i
 	hasDots := strings.Contains(cleaned, ".")
 	hasGameHints :=
 		strings.Contains(cleaned, "p") ||
