@@ -3924,29 +3924,49 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			for i, it := range itemsCopy {
 				a.AddLogMsg(fmt.Sprintf("[TRADE_LIMIT_DEBUG] parsed[%d] name=%q qty=%d", i, it.Name, it.Quantity))
 			}
-			violation := getTradeLimitViolation(itemsCopy)
-			isValid := violation == nil
-			if violation != nil {
-				tradeLimitWasActive = true
-				a.rejectTradeForLimitViolation(violation)
-				return
-			}
 
-			if tradeLimitWasActive || tradeLimitMonitorActive {
-				stopTradeLimitMonitor()
-				lastTradeLimitNotice = ""
-				tradeLimitWasActive = false
-				a.AddLogMsg("[TRADE_LIMIT] violation resolved; trade is valid again")
-				sendShout("Trade is back within limits, accept again if needed")
-			}
-
-			if !wasValid && isValid {
-				a.AddLogMsg(fmt.Sprintf("[TRADE_LIMIT] transition invalid->valid detected prevPartnerAccepted=%t", partnerTradeAccepted))
-				if partnerTradeAccepted && !tradeAutoAccepted && !tradeAutoAcceptPending {
-					a.AddLogMsg("[TRADE_ACCEPT] re-arming auto-accept after invalid->valid transition")
-					scheduleAutoTradeAccept(a, "rearmed-after-limit-fix")
+			// Perform validation in a goroutine with a short delay if the trade is currently empty.
+			// This gives the player time to add their first item before we force-close.
+			go func(initialItems []TradeItem, wasValidPrev bool) {
+				items := initialItems
+				if len(items) == 0 {
+					// If empty, wait a bit for the first item to arrive.
+					time.Sleep(1200 * time.Millisecond)
+					// Re-check current items after the wait
+					tradeItemsMu.Lock()
+					items = make([]TradeItem, len(currentTradeItems))
+					copy(items, currentTradeItems)
+					tradeItemsMu.Unlock()
 				}
-			}
+
+				// If still empty after the wait, just stay open and wait for the next packet.
+				if len(items) == 0 {
+					return
+				}
+
+				violation := getTradeLimitViolation(items)
+				if violation != nil {
+					tradeLimitWasActive = true
+					a.rejectTradeForLimitViolation(violation)
+					return
+				}
+
+				if tradeLimitWasActive || tradeLimitMonitorActive {
+					stopTradeLimitMonitor()
+					lastTradeLimitNotice = ""
+					tradeLimitWasActive = false
+					a.AddLogMsg("[TRADE_LIMIT] violation resolved; trade is valid again")
+					sendShout("Trade is back within limits, accept again if needed")
+				}
+
+				if !wasValidPrev {
+					a.AddLogMsg(fmt.Sprintf("[TRADE_LIMIT] transition invalid->valid detected prevPartnerAccepted=%t", partnerTradeAccepted))
+					if partnerTradeAccepted && !tradeAutoAccepted && !tradeAutoAcceptPending {
+						a.AddLogMsg("[TRADE_ACCEPT] re-arming auto-accept after invalid->valid transition")
+						scheduleAutoTradeAccept(a, "rearmed-after-limit-fix")
+					}
+				}
+			}(itemsCopy, wasValid)
 
 			handItemsMu.Lock()
 			ready := tradeHandSnapshotReady
@@ -7914,11 +7934,18 @@ func (a *App) parseTradeItemsPacket(data []byte) []TradeItem {
 		}
 
 		fieldStr := strings.TrimSpace(string(field))
+		if fieldStr == "" {
+			continue
+		}
 		// Log the raw field to aid debugging of parsing failures.
 		a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] field=%q", fieldStr))
 
 		itemName, qty, ok := a.extractTradeItemAndQuantity(fieldStr)
 		if !ok {
+			// Double check it's not actually empty before marking as unknown
+			if fieldStr == "" {
+				continue
+			}
 			a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] unrecognized field, marking as unknown to count towards limits=%q", fieldStr))
 			// Preserve unknown raw field in logs for later inspection.
 			a.AddLogMsg(fmt.Sprintf("[TRADE_UNKNOWN_FIELD] raw=%q", fieldStr))
