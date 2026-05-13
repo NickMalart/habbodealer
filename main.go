@@ -209,12 +209,12 @@ var (
 	messageQueue        []string
 	isPokerRolling      bool
 	isTriRolling        bool
-	isBJRolling      bool
-	is13Rolling      bool
-	is13Hitting      bool
-	isSixRolling     bool
-	isSixHitting     bool
-	isPairUpRolling  bool
+	isBJRolling         bool
+	is13Rolling         bool
+	is13Hitting         bool
+	isSixRolling        bool
+	isSixHitting        bool
+	isPairUpRolling     bool
 	isH18Rolling        bool
 	isHitting           bool
 	isClosing           bool
@@ -14984,6 +14984,10 @@ func gameChoiceDisplay(choice string) string {
 		return "H18"
 	case "mh":
 		return "MidHouse"
+	case "mh_u10":
+		return "u10 roll between (3-9)"
+	case "mh_o11":
+		return "o11 roll between (12-18)"
 	default:
 		return choice
 	}
@@ -15089,7 +15093,7 @@ func (a *App) beginMidHouseChoiceSequence() {
 		awaitingMHChoicePartnerID = lastTradePartnerID
 	}
 
-	msg := "u10 (Small) or o11 (Big)? gl"
+	msg := "u10 (3-9) or o11 (12-18)? gl"
 	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", msg))
 	sendShout(msg)
 }
