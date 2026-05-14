@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import * as Events from './wailsjs/runtime/runtime'
-import { GetStats, GetPlayerStats, GetPlayers, GetBlockedPlayers, ToggleBlockPlayer, GetDbStatus, GetSettings, SaveSettings, GetOwnerKey } from './wailsjs/go/main/App'
+import { GetStats, GetPlayerStats, GetPlayerGameStats, GetPlayers, GetBlockedPlayers, ToggleBlockPlayer, GetDbStatus, GetSettings, SaveSettings, GetOwnerKey } from './wailsjs/go/main/App'
 
 const activeTab = ref('dashboard')
 const dbStatus = ref('Unknown')
@@ -15,6 +15,31 @@ const blockedPlayers = ref([])
 const searchQuery = ref('')
 const playerSubTab = ref('active')
 const isRefreshing = ref(false)
+
+// Modal State
+const showPlayerModal = ref(false)
+const selectedPlayer = ref(null)
+const selectedPlayerGameStats = ref([])
+const isLoadingPlayerDetails = ref(false)
+
+async function openPlayerDetails(player) {
+  selectedPlayer.value = player
+  showPlayerModal.value = true
+  isLoadingPlayerDetails.value = true
+  logMessage(`Opening details for player: ${player.name}`)
+  
+  try {
+    const s = startDate.value ? startDate.value + 'T00:00:00' : ''
+    const e = endDate.value ? endDate.value + 'T23:59:59' : ''
+    const stats = await GetPlayerGameStats(player.name, s, e)
+    selectedPlayerGameStats.value = stats.sort((a, b) => b.totalRounds - a.totalRounds)
+    logMessage(`Loaded ${stats.length} game stats for ${player.name}`)
+  } catch (err) {
+    logMessage(`ERROR loading player details: ${err.message || err}`)
+  } finally {
+    isLoadingPlayerDetails.value = false
+  }
+}
 const hiddenGames = ref([])
 const startDate = ref('')
 const endDate = ref('')
@@ -443,9 +468,13 @@ onMounted(async () => {
         </thead>
         <tbody>
           <tr v-for="player in filteredPlayerStats" :key="player.name" :style="{ background: isBlocked(player.name) ? 'rgba(231, 76, 60, 0.15)' : 'transparent' }">
-            <td :style="{ color: isBlocked(player.name) ? '#e74c3c' : 'white', fontWeight: isBlocked(player.name) ? 'bold' : 'normal' }">
+            <td 
+              @click="openPlayerDetails(player)"
+              :style="{ color: isBlocked(player.name) ? '#e74c3c' : 'white', fontWeight: isBlocked(player.name) ? 'bold' : 'normal', cursor: 'pointer' }"
+              title="Click for detailed game breakdown"
+            >
               <span v-if="isBlocked(player.name)" style="margin-right: 0.5rem;">🚫</span>
-              {{ player.name }}
+              <span style="text-decoration: underline; text-underline-offset: 3px;">{{ player.name }}</span>
               <div v-if="isBlocked(player.name)" style="font-size: 0.7rem; color: #e74c3c; margin-top: 0.2rem;">EXCLUDED FROM STATS</div>
             </td>
             <td>{{ player.totalRounds }}</td>
@@ -471,6 +500,76 @@ onMounted(async () => {
         <div style="font-size: 2rem; margin-bottom: 1rem;">{{ playerSubTab === 'active' ? '👤' : '🚫' }}</div>
         <p style="margin: 0; font-weight: bold;">No {{ playerSubTab }} players found</p>
         <p style="margin: 0.5rem 0 0; font-size: 0.8rem; opacity: 0.7;">Try clearing filters or checking your database connection.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Player Details Modal -->
+  <div v-if="showPlayerModal" class="modal-overlay" @click.self="showPlayerModal = false">
+    <div class="modal-container">
+      <div class="modal-header">
+        <h2>Player Details: {{ selectedPlayer?.name }}</h2>
+        <button class="close-btn" @click="showPlayerModal = false">×</button>
+      </div>
+      
+      <div class="modal-body">
+        <div v-if="isLoadingPlayerDetails" style="text-align: center; padding: 2rem;">
+          <div class="spinner"></div>
+          <p>Loading breakdown...</p>
+        </div>
+        <div v-else>
+          <div class="stats-grid" style="margin-bottom: 2rem;">
+            <div class="stat-card">
+              <h3>Total Rounds</h3>
+              <div class="stat-value">{{ selectedPlayer?.totalRounds }}</div>
+            </div>
+            <div class="stat-card">
+              <h3>Player Win %</h3>
+              <div class="stat-value player-win">{{ selectedPlayer?.playerWinRate.toFixed(1) }}%</div>
+            </div>
+            <div class="stat-card">
+              <h3>Dealer Win %</h3>
+              <div class="stat-value dealer-win">{{ selectedPlayer?.dealerWinRate.toFixed(1) }}%</div>
+            </div>
+          </div>
+
+          <h3>Game Breakdown</h3>
+          <table v-if="selectedPlayerGameStats.length > 0">
+            <thead>
+              <tr>
+                <th>Game</th>
+                <th>Rounds</th>
+                <th>Player Wins</th>
+                <th>Dealer Wins</th>
+                <th>Player %</th>
+                <th>Dealer %</th>
+                <th>Edge</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="gs in selectedPlayerGameStats" :key="gs.game">
+                <td>{{ gs.game }}</td>
+                <td>{{ gs.totalRounds }}</td>
+                <td class="player-win">{{ gs.playerWins }}</td>
+                <td class="dealer-win">{{ gs.dealerWins }}</td>
+                <td class="player-win">{{ gs.playerWinRate.toFixed(1) }}%</td>
+                <td class="dealer-win">{{ gs.dealerWinRate.toFixed(1) }}%</td>
+                <td :class="{ 'dealer-win': (gs.dealerWinRate - gs.playerWinRate) > 0, 'player-win': (gs.dealerWinRate - gs.playerWinRate) < 0 }" style="font-weight: bold;">
+                  {{ (gs.dealerWinRate - gs.playerWinRate) > 0 ? '+' : '' }}{{ (gs.dealerWinRate - gs.playerWinRate).toFixed(1) }}%
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else style="text-align: center; padding: 2rem; color: #666;">
+            No game data found for this period.
+          </div>
+        </div>
+      </div>
+      
+      <div class="modal-footer">
+        <button @click="handleToggleBlock(selectedPlayer.name); showPlayerModal = false" class="block-btn" style="width: 100%;">
+          {{ isBlocked(selectedPlayer.name) ? 'UNBLOCK PLAYER' : 'BLOCK PLAYER' }}
+        </button>
       </div>
     </div>
   </div>

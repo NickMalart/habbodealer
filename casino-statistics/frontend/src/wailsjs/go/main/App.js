@@ -14,6 +14,10 @@ export function GetOwnerKey() {
   return window['go']['main']['App']['GetOwnerKey']();
 }
 
+export function GetPlayerGameStats(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetPlayerGameStats'](arg1, arg2, arg3);
+}
+
 export function GetPlayerStats(arg1, arg2) {
   return window['go']['main']['App']['GetPlayerStats'](arg1, arg2);
 }

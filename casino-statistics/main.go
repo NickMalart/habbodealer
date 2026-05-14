@@ -379,6 +379,88 @@ func (a *App) GetPlayerStats(startDate, endDate string) []PlayerStats {
 	return result
 }
 
+func (a *App) GetPlayerGameStats(playerName, startDate, endDate string) []GameStats {
+	a.initWg.Wait()
+	if a.db == nil {
+		return []GameStats{}
+	}
+
+	query := `
+		SELECT game, winner, status, issue, completed_at
+		FROM game_history_entries
+		WHERE owner_key = $1 AND player_name = $2
+	`
+	args := []interface{}{a.ownerKey, playerName}
+	if startDate != "" {
+		query += fmt.Sprintf(" AND completed_at >= $%d", len(args)+1)
+		args = append(args, startDate)
+	}
+	if endDate != "" {
+		query += fmt.Sprintf(" AND completed_at <= $%d", len(args)+1)
+		args = append(args, endDate)
+	}
+
+	rows, err := a.db.Query(context.Background(), query, args...)
+	if err != nil {
+		log.Printf("[PLAYER_GAME_STATS] Query failed: %v", err)
+		return []GameStats{}
+	}
+	defer rows.Close()
+
+	gameMap := make(map[string]*GameStats)
+	for rows.Next() {
+		var game, winner, status, completedAt string
+		var issue bool
+		if err := rows.Scan(&game, &winner, &status, &issue, &completedAt); err != nil {
+			continue
+		}
+
+		if strings.ToLower(status) != "completed" || issue {
+			continue
+		}
+
+		normGame := normalizeGameName(game, "") // choice info missing in this query, but normalize should handle it
+		
+		winnerClean := strings.TrimSpace(strings.ToLower(winner))
+		playerClean := strings.TrimSpace(strings.ToLower(playerName))
+		
+		isPlayerWin := winnerClean == playerClean
+		isDealerWin := winnerClean == "dealer"
+
+		if !isPlayerWin && !isDealerWin {
+			if winnerClean == "player" {
+				isPlayerWin = true
+			} else {
+				continue
+			}
+		}
+
+		gs, ok := gameMap[normGame]
+		if !ok {
+			gs = &GameStats{Game: normGame}
+			gameMap[normGame] = gs
+		}
+
+		gs.TotalRounds++
+		if isPlayerWin {
+			gs.PlayerWins++
+		} else {
+			gs.DealerWins++
+		}
+	}
+
+	result := []GameStats{}
+	for _, gs := range gameMap {
+		if gs.TotalRounds > 0 {
+			gs.PlayerWinRate = float64(gs.PlayerWins) / float64(gs.TotalRounds) * 100
+			gs.DealerWinRate = float64(gs.DealerWins) / float64(gs.TotalRounds) * 100
+		}
+		result = append(result, *gs)
+	}
+
+	return result
+}
+
 func (a *App) GetPlayers() []string {
 	a.initWg.Wait()
 
