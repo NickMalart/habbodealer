@@ -162,3 +162,30 @@ th {
 .dealer-win {
   color: #2ecc71;
 }
+
+.sub-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.sub-tab {
+  padding: 0.3rem 0.8rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  border-radius: 4px;
+  background: #1b262c;
+  border: 1px solid #3282b8;
+  color: #bbe1fa;
+  transition: all 0.2s;
+}
+
+.sub-tab:hover {
+  border-color: #bbe1fa;
+}
+
+.sub-tab.active {
+  background: #3282b8;
+  color: white;
+  border-color: #bbe1fa;
+}

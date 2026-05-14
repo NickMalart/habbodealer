@@ -13,6 +13,7 @@ const stats = ref({
 const playerStats = ref([])
 const blockedPlayers = ref([])
 const searchQuery = ref('')
+const playerSubTab = ref('active')
 const isRefreshing = ref(false)
 const hiddenGames = ref([])
 const startDate = ref('')
@@ -138,6 +139,25 @@ const visibleStats = computed(() => {
 
 const filteredPlayerStats = computed(() => {
   let list = Array.isArray(playerStats.value) ? [...playerStats.value] : []
+  
+  if (playerSubTab.value === 'blocked') {
+    // Include all blocked players, even those without stats in the current range
+    blockedPlayers.value.forEach(name => {
+      if (!list.some(p => p.name.toLowerCase() === name.toLowerCase())) {
+        list.push({
+          name: name,
+          totalRounds: 0,
+          playerWinRate: 0,
+          dealerWinRate: 0,
+          dealerEdge: 0
+        })
+      }
+    })
+    list = list.filter(p => isBlocked(p.name))
+  } else {
+    list = list.filter(p => !isBlocked(p.name))
+  }
+
   if (searchQuery.value) {
     const q = searchQuery.value.toLowerCase()
     list = list.filter(p => p.name && p.name.toLowerCase().includes(q))
@@ -401,6 +421,11 @@ onMounted(async () => {
     </div>
 
     <div v-if="activeTab === 'players'">
+      <div class="sub-tabs">
+        <div class="sub-tab" :class="{ active: playerSubTab === 'active' }" @click="playerSubTab = 'active'">Active Players</div>
+        <div class="sub-tab" :class="{ active: playerSubTab === 'blocked' }" @click="playerSubTab = 'blocked'">Blocked Players</div>
+      </div>
+
       <div style="margin-bottom: 1rem;">
         <input v-model="searchQuery" placeholder="Search players..." style="width: 100%; padding: 0.5rem; border-radius: 4px; border: 1px solid #3282b8; background: #0f4c75; color: white;">
       </div>
@@ -443,8 +468,8 @@ onMounted(async () => {
         </tbody>
       </table>
       <div v-else style="text-align: center; padding: 3rem; color: #bbe1fa; background: #0f4c75; border-radius: 8px; border: 1px dashed #3282b8;">
-        <div style="font-size: 2rem; margin-bottom: 1rem;">👤</div>
-        <p style="margin: 0; font-weight: bold;">No players found</p>
+        <div style="font-size: 2rem; margin-bottom: 1rem;">{{ playerSubTab === 'active' ? '👤' : '🚫' }}</div>
+        <p style="margin: 0; font-weight: bold;">No {{ playerSubTab }} players found</p>
         <p style="margin: 0.5rem 0 0; font-size: 0.8rem; opacity: 0.7;">Try clearing filters or checking your database connection.</p>
       </div>
     </div>
