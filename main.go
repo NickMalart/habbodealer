@@ -7977,7 +7977,6 @@ func (a *App) parseTradeItemsPacket(data []byte) []TradeItem {
 		if fieldStr == "" {
 			continue
 		}
-		// Log the raw field to aid debugging of parsing failures.
 		a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] field=%q", fieldStr))
 
 		itemName, qty, ok := a.extractTradeItemAndQuantity(fieldStr)
@@ -7996,26 +7995,34 @@ func (a *App) parseTradeItemsPacket(data []byte) []TradeItem {
 				continue
 			}
 
-			// Only mark as unknown if it looks like it could actually be a Habbo item class.
-			// Items usually have an underscore (furni_class) or a star (variant*qty).
-			// If it doesn't match these patterns or our item regex, it's likely metadata.
-			if !(strings.Contains(lowField, "_") || strings.Contains(lowField, "*") || stripItemNameRe.MatchString(lowField)) {
+			// Use normalizeTradeItemName as a heuristic to see if this string
+			// even COULD be an item name. This filters out the binary junk/metadata
+			// (like "cizMIf|I~s") that is present in initial trade packets.
+			cleanName, looksLikeItem := normalizeTradeItemName(fieldStr)
+			if !looksLikeItem {
+				// If it doesn't look like an item name, it's almost certainly metadata.
 				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] skipping field that doesn't look like an item (likely metadata)=%q", fieldStr))
 				continue
 			}
 
-			// Double check it's not actually empty before marking as unknown
-			if fieldStr == "" {
+			// For fields that didn't verify against the catalog or hand, only
+			// treat them as unrecognized items if they have typical Habbo class
+			// formatting (underscore, star suffix, or cf_ prefix). This avoids
+			// false-positive unknown item detections on short alphanumeric metadata.
+			if !(strings.Contains(lowField, "_") || strings.Contains(lowField, "*") || strings.HasPrefix(lowField, "cf_") || stripItemNameRe.MatchString(lowField)) {
+				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] skipping field that lacks item-like structure=%q", fieldStr))
 				continue
 			}
-			// It looks like an item but we couldn't verify it.
+
+			// It's not a name or an ID, and it LOOKS like an item name, but we
+			// failed to identify it as a known item.
+
 			// Try to extract a name even if unverified.
-			name := fieldStr
+			name := cleanName
 			if match := stripItemNameRe.FindString(fieldStr); match != "" {
 				name = match
 			}
-			a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] unrecognized item, marking as unknown to count towards limits=%q", name))
-			// Preserve unknown raw field in logs for later inspection.
+			a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] unrecognized item candidate, marking as unknown: %q", name))
 			a.AddLogMsg(fmt.Sprintf("[TRADE_UNKNOWN_FIELD] raw=%q", fieldStr))
 
 			// Generate a unique unknown item key so each unrecognized field counts
@@ -8027,6 +8034,7 @@ func (a *App) parseTradeItemsPacket(data []byte) []TradeItem {
 			}
 			continue
 		}
+
 		if qty <= 0 {
 			qty = 1
 		}
@@ -8251,7 +8259,7 @@ func normalizeTradeItemName(raw string) (string, bool) {
 	}
 
 	for _, r := range name {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '*' {
 			continue
 		}
 		return "", false
