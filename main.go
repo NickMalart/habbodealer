@@ -494,10 +494,28 @@ type tradeLimitViolation struct {
 
 // getTradeLimitViolation inspects the parsed list of trade items and returns
 // a violation struct if limits are exceeded, or nil otherwise.
-func getTradeLimitViolation(items []TradeItem) *tradeLimitViolation {
+func (a *App) getTradeLimitViolation(items []TradeItem) *tradeLimitViolation {
 	if len(items) == 0 {
 		return nil
 	}
+
+	// Prepare lookup maps of known/valid items.
+	catalogSet := a.GetCatalogNameSet()
+
+	handItemsMu.Lock()
+	snapshot := tradeHandSnapshot
+	handItemsMu.Unlock()
+
+	knownNames := make(map[string]struct{}, len(snapshot))
+	for _, it := range snapshot {
+		name := strings.ToLower(strings.TrimSpace(it.Name))
+		knownNames[name] = struct{}{}
+		// Also strip the *n variant suffix for base-name matching
+		if star := strings.LastIndex(name, "*"); star > 0 {
+			knownNames[name[:star]] = struct{}{}
+		}
+	}
+
 	v := &tradeLimitViolation{
 		UniqueCount: len(items),
 		MaxUnique:   maxTradeUniqueItems,
@@ -507,10 +525,26 @@ func getTradeLimitViolation(items []TradeItem) *tradeLimitViolation {
 		v.TooManyUniqueItems = true
 	}
 	for _, it := range items {
-		// Detect unknown items by name prefix
-		if strings.HasPrefix(it.Name, "unknown_item_") || strings.HasPrefix(it.Name, "unrecognized:") {
+		name := strings.ToLower(strings.TrimSpace(it.Name))
+		baseName := name
+		if star := strings.LastIndex(name, "*"); star > 0 {
+			baseName = name[:star]
+		}
+
+		// Detect unknown items:
+		// 1. Parser explicitly failed (unrecognized: prefix)
+		// 2. Item name does not exist in our hand snapshot AND is not in the catalog
+		_, inCatalog := catalogSet[name]
+		_, baseInCatalog := catalogSet[baseName]
+		_, inHand := knownNames[name]
+		_, baseInHand := knownNames[baseName]
+
+		isValid := inCatalog || baseInCatalog || inHand || baseInHand
+
+		if strings.HasPrefix(it.Name, "unknown_item_") || strings.HasPrefix(it.Name, "unrecognized:") || !isValid {
 			v.HasUnknownItems = true
 			v.UnknownItems = append(v.UnknownItems, it)
+			log.Printf("[TRADE_LIMIT_DEBUG] unknown item detected: %q (not in hand snapshot or catalog)", it.Name)
 		}
 
 		over := it.Quantity > v.MaxPerItem
@@ -3919,7 +3953,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 			wasValid := true
 			if len(prevAllCopy) > 0 {
-				wasValid = getTradeLimitViolation(prevAllCopy) == nil
+				wasValid = a.getTradeLimitViolation(prevAllCopy) == nil
 			}
 
 			itemsCopy := make([]TradeItem, len(currentPartnerItems))
@@ -3950,7 +3984,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 					return
 				}
 
-				violation := getTradeLimitViolation(items)
+				violation := a.getTradeLimitViolation(items)
 				if violation != nil {
 					tradeLimitWasActive = true
 					a.rejectTradeForLimitViolation(violation)
@@ -6831,7 +6865,7 @@ func startTradeLimitMonitor(a *App, timeout time.Duration) {
 			itemsCopy := make([]TradeItem, len(currentTradeItems))
 			copy(itemsCopy, currentTradeItems)
 			tradeItemsMu.Unlock()
-			if getTradeLimitViolation(itemsCopy) == nil {
+			if a.getTradeLimitViolation(itemsCopy) == nil {
 				stopTradeLimitMonitor()
 				return
 			}
@@ -6975,7 +7009,7 @@ func scheduleAutoTradeAccept(a *App, payload string) {
 		itemsCopy := make([]TradeItem, len(currentTradeItems))
 		copy(itemsCopy, currentTradeItems)
 		tradeItemsMu.Unlock()
-		if v := getTradeLimitViolation(itemsCopy); v != nil {
+		if v := a.getTradeLimitViolation(itemsCopy); v != nil {
 			a.AddLogMsg("[TRADE_ACCEPT] skipped auto-accept due to active trade limit violation")
 			return
 		}
@@ -7027,7 +7061,7 @@ func scheduleAutoTradeAccept(a *App, payload string) {
 				itemsCopy := make([]TradeItem, len(currentTradeItems))
 				copy(itemsCopy, currentTradeItems)
 				tradeItemsMu.Unlock()
-				if v := getTradeLimitViolation(itemsCopy); v != nil {
+				if v := a.getTradeLimitViolation(itemsCopy); v != nil {
 					tradeAutoAcceptPending = false
 					a.AddLogMsg("[TRADE_ACCEPT] canceled auto-accept because trade became invalid during wait")
 					return
@@ -8171,24 +8205,32 @@ func isKnownTradeClassName(a *App, name string) bool {
 		return false
 	}
 
-	// Prefer explicit catalog membership to avoid false-positives from
-	// protocol/header tokens that happen to match the furni-name pattern.
+	// Determine the base name (without *n variant suffix) for fallback checks.
+	baseName := name
+	if star := strings.LastIndex(name, "*"); star > 0 {
+		baseName = name[:star]
+	}
+
+	// Prefer explicit catalog membership.
 	catalogSet := a.GetCatalogNameSet()
 	if _, ok := catalogSet[name]; ok {
 		return true
 	}
+	if baseName != name {
+		if _, ok := catalogSet[baseName]; ok {
+			return true
+		}
+	}
 
-	// Also accept items observed in the dealer's scanned hand (single-word
-	// items or uncatalogued classes). Prefer the frozen trade snapshot when
-	// available so parsing uses the same authoritative view we send to the
-	// live-dealer API. Fall back to the live hand when no snapshot.
+	// Also accept items observed in the dealer's scanned hand.
 	handItemsMu.Lock()
 	itemsToCheck := currentHandItems
 	if tradeHandSnapshotReady && len(tradeHandSnapshot) > 0 {
 		itemsToCheck = tradeHandSnapshot
 	}
 	for _, item := range itemsToCheck {
-		if strings.ToLower(strings.TrimSpace(item.Name)) == name {
+		itName := strings.ToLower(strings.TrimSpace(item.Name))
+		if itName == name || itName == baseName {
 			handItemsMu.Unlock()
 			return true
 		}
@@ -8200,6 +8242,10 @@ func isKnownTradeClassName(a *App, name string) bool {
 
 func normalizeTradeItemName(raw string) (string, bool) {
 	name := strings.TrimSpace(strings.ToLower(raw))
+	// Aggressively strip null bytes and other common non-printable characters
+	// that may be present in Habbo Shockwave/Origins server packets.
+	name = strings.Trim(name, "\x00\r\n\t")
+
 	if name == "" || isCoordinatePattern(name) {
 		return "", false
 	}
@@ -9960,37 +10006,50 @@ func (a *App) getTradeCoverageShortages() []tradeShortage {
 		return nil
 	}
 
-	// Build canonical maps using normalizeClassKeyWithVariant so
-	// variant suffixes (e.g. *4) are treated as part of the name.
+	// Build canonical maps aggregated by base name.
+	// This ensures that variant mismatches (e.g. gold_bar*1 vs gold_bar)
+	// do not cause false coverage shortages.
 	handMap := map[string]int{}
 	for _, it := range handSnapshot {
-		key := strings.ToLower(strings.TrimSpace(it.Name))
+		name := strings.ToLower(strings.TrimSpace(it.Name))
 		if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
-			key = k
+			name = k
 		}
-		handMap[key] += it.Quantity
+		base := name
+		if star := strings.LastIndex(name, "*"); star > 0 {
+			base = name[:star]
+		}
+		handMap[base] += it.Quantity
 	}
 
 	incomingMap := map[string]int{}
 	for _, it := range partnerItems {
-		key := strings.ToLower(strings.TrimSpace(it.Name))
+		name := strings.ToLower(strings.TrimSpace(it.Name))
 		if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
-			key = k
+			name = k
 		}
-		incomingMap[key] += it.Quantity
+		base := name
+		if star := strings.LastIndex(name, "*"); star > 0 {
+			base = name[:star]
+		}
+		incomingMap[base] += it.Quantity
 	}
 
-	// Recompute required payouts using canonical keys to match above maps.
+	// Recompute required payouts using base names.
 	requiredCanon := map[string]int{}
 	for _, it := range partnerItems {
-		key := strings.ToLower(strings.TrimSpace(it.Name))
+		name := strings.ToLower(strings.TrimSpace(it.Name))
 		if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
-			key = k
+			name = k
+		}
+		base := name
+		if star := strings.LastIndex(name, "*"); star > 0 {
+			base = name[:star]
 		}
 		if it.Quantity <= 0 {
 			continue
 		}
-		requiredCanon[key] += int(float64(it.Quantity) * mult)
+		requiredCanon[base] += int(float64(it.Quantity) * mult)
 	}
 
 	shortages := make([]tradeShortage, 0)
@@ -10065,7 +10124,7 @@ func (a *App) maybeAutoAcceptOnSnapshotReady(context string) {
 	itemsCopy := make([]TradeItem, len(currentTradeItems))
 	copy(itemsCopy, currentTradeItems)
 	tradeItemsMu.Unlock()
-	if v := getTradeLimitViolation(itemsCopy); v != nil {
+	if v := a.getTradeLimitViolation(itemsCopy); v != nil {
 		a.AddLogMsg("[TRADE_ACCEPT] not auto-accepting: trade limit violation on snapshot ready")
 		return
 	}
