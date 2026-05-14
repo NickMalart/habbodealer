@@ -1,10 +1,11 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import * as Events from './wailsjs/runtime/runtime'
-import { GetStats, GetPlayers, GetBlockedPlayers, ToggleBlockPlayer, GetDbStatus, GetSettings, SaveSettings } from './wailsjs/go/main/App'
+import { GetStats, GetPlayerStats, GetPlayers, GetBlockedPlayers, ToggleBlockPlayer, GetDbStatus, GetSettings, SaveSettings, GetOwnerKey } from './wailsjs/go/main/App'
 
 const activeTab = ref('dashboard')
 const dbStatus = ref('Unknown')
+const ownerKey = ref('Unknown')
 const stats = ref({
   overall: { totalRounds: 0, playerWins: 0, dealerWins: 0, playerWinRate: 0, dealerWinRate: 0 },
   byGame: {}
@@ -14,6 +15,17 @@ const blockedPlayers = ref([])
 const searchQuery = ref('')
 const isRefreshing = ref(false)
 const hiddenGames = ref([])
+const startDate = ref('')
+const endDate = ref('')
+const appLogs = ref([])
+
+function logMessage(msg) {
+  const time = new Date().toLocaleTimeString()
+  const logStr = `[${time}] ${msg}`
+  appLogs.value.unshift(logStr)
+  console.log(logStr)
+  if (appLogs.value.length > 100) appLogs.value.pop()
+}
 
 // Session (Clocking) State
 const sessionStats = ref({
@@ -23,7 +35,7 @@ const sessionStats = ref({
   history: []
 })
 const selectedSessionGame = ref('PU')
-const gameOptions = ['PU', 'O7', 'U7', '7', '13', '21', '6', 'H18', 'DT', 'Poker', 'Bandit']
+const gameOptions = ['PU', 'O7', 'U7', '7', '13', '21', '6', 'H18', 'DT', 'Poker', 'Bandit', 'U10', 'O11']
 
 const sessionWinRate = computed(() => {
   if (sessionStats.value.total === 0) return 0
@@ -125,41 +137,75 @@ const visibleStats = computed(() => {
 })
 
 const filteredPlayerStats = computed(() => {
-  let list = playerStats.value
+  let list = Array.isArray(playerStats.value) ? [...playerStats.value] : []
   if (searchQuery.value) {
     const q = searchQuery.value.toLowerCase()
-    list = list.filter(p => p.name.toLowerCase().includes(q))
+    list = list.filter(p => p.name && p.name.toLowerCase().includes(q))
   }
   return list.sort((a, b) => b.totalRounds - a.totalRounds)
 })
 
 async function refreshStats() {
+  if (isRefreshing.value) {
+    logMessage('Refresh already in progress, skipping...')
+    return
+  }
   isRefreshing.value = true
+  logMessage(`Refresh started (startDate="${startDate.value}", endDate="${endDate.value}")`)
   try {
-    stats.value = await GetStats()
-    playerStats.value = await GetPlayerStats()
+    const s = startDate.value ? startDate.value + 'T00:00:00' : ''
+    const e = endDate.value ? endDate.value + 'T23:59:59' : ''
+    
+    logMessage('Calling GetStats...')
+    const res = await GetStats(s, e)
+    logMessage(`GetStats returned ${Object.keys(res.byGame || {}).length} games. Total rounds: ${res.overall?.totalRounds || 0}`)
+    stats.value = res
+    
+    logMessage('Calling GetPlayerStats...')
+    const pRes = await GetPlayerStats(s, e)
+    logMessage(`GetPlayerStats returned ${pRes ? pRes.length : 0} players.`)
+    playerStats.value = pRes || []
+  } catch (err) {
+    logMessage(`ERROR in refreshStats: ${err.message || err}`)
+    console.error('refreshStats failed:', err)
   } finally {
     isRefreshing.value = false
   }
 }
 
 async function refreshPlayers() {
+  logMessage('Refreshing blocked players...')
   blockedPlayers.value = await GetBlockedPlayers()
+  logMessage(`Found ${blockedPlayers.value.length} blocked players.`)
 }
 
 async function handleToggleBlock(name) {
+  logMessage(`Toggling block for: ${name}`)
   await ToggleBlockPlayer(name)
   await refreshPlayers()
   await refreshStats()
 }
 
 function isBlocked(name) {
-  return blockedPlayers.value.includes(name)
+  if (!name) return false
+  const n = name.toLowerCase()
+  return blockedPlayers.value.some(p => p.toLowerCase() === n)
 }
 
 onMounted(async () => {
-  dbStatus.value = await GetDbStatus()
-  await loadSettings()
+  logMessage('App mounted. Initializing...')
+  
+  // Parallelize initial status/settings fetch
+  const [status, key, _] = await Promise.all([
+    GetDbStatus(),
+    GetOwnerKey(),
+    loadSettings()
+  ])
+  
+  dbStatus.value = status
+  ownerKey.value = key
+  logMessage(`DB Status: ${dbStatus.value}, Owner: ${ownerKey.value}`)
+  
   await refreshStats()
   await refreshPlayers()
 })
@@ -189,13 +235,34 @@ onMounted(async () => {
     <div class="tab" :class="{ active: activeTab === 'debug' }" @click="activeTab = 'debug'">Debug</div>
   </div>
 
+  <div v-if="activeTab === 'dashboard' || activeTab === 'players'" style="background: #0f4c75; padding: 0.8rem; border-radius: 4px; margin-bottom: 1rem; display: flex; align-items: center; gap: 1rem; border: 1px solid #3282b8;">
+    <div style="display: flex; align-items: center; gap: 0.5rem;">
+      <label style="font-size: 0.8rem; font-weight: bold; color: #bbe1fa;">From:</label>
+      <input type="date" v-model="startDate" @change="refreshStats" style="background: #1b262c; color: white; border: 1px solid #3282b8; padding: 0.3rem; border-radius: 4px; font-size: 0.8rem;">
+    </div>
+    <div style="display: flex; align-items: center; gap: 0.5rem;">
+      <label style="font-size: 0.8rem; font-weight: bold; color: #bbe1fa;">To:</label>
+      <input type="date" v-model="endDate" @change="refreshStats" style="background: #1b262c; color: white; border: 1px solid #3282b8; padding: 0.3rem; border-radius: 4px; font-size: 0.8rem;">
+    </div>
+    <button @click="startDate = ''; endDate = ''; refreshStats()" style="background: #3282b8; border: none; color: white; padding: 0.3rem 0.6rem; border-radius: 4px; cursor: pointer; font-size: 0.7rem;">Clear Filter</button>
+  </div>
+
   <div class="content">
     <div v-if="activeTab === 'debug'">
       <h2>Debug Info</h2>
       <div style="background: #1b262c; padding: 1rem; border-radius: 4px; border: 1px solid #3282b8; margin-bottom: 1rem;">
         <p><strong>DB Status:</strong> {{ dbStatus }}</p>
+        <p><strong>Owner Key:</strong> {{ ownerKey }}</p>
         <p><strong>Player Stats Count:</strong> {{ playerStats.length }}</p>
         <p><strong>Blocked Count:</strong> {{ blockedPlayers.length }}</p>
+      </div>
+
+      <h3>App Logs</h3>
+      <div style="background: #0f4c75; padding: 0.5rem; border-radius: 4px; border: 1px solid #3282b8; max-height: 400px; overflow-y: auto; font-family: monospace; font-size: 0.75rem;">
+        <div v-for="(log, i) in appLogs" :key="i" style="border-bottom: 1px solid rgba(50, 130, 184, 0.3); padding: 0.2rem 0;">
+          {{ log }}
+        </div>
+        <div v-if="appLogs.length === 0" style="color: #666; text-align: center; padding: 1rem;">No logs yet.</div>
       </div>
 
       <h3>Raw Player Stats (Last 5)</h3>
@@ -338,7 +405,7 @@ onMounted(async () => {
         <input v-model="searchQuery" placeholder="Search players..." style="width: 100%; padding: 0.5rem; border-radius: 4px; border: 1px solid #3282b8; background: #0f4c75; color: white;">
       </div>
       
-      <table>
+      <table v-if="filteredPlayerStats.length > 0">
         <thead>
           <tr>
             <th>Player Name</th>
@@ -350,10 +417,11 @@ onMounted(async () => {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="player in filteredPlayerStats" :key="player.name">
-            <td :style="{ color: isBlocked(player.name) ? '#e74c3c' : 'white' }">
+          <tr v-for="player in filteredPlayerStats" :key="player.name" :style="{ background: isBlocked(player.name) ? 'rgba(231, 76, 60, 0.15)' : 'transparent' }">
+            <td :style="{ color: isBlocked(player.name) ? '#e74c3c' : 'white', fontWeight: isBlocked(player.name) ? 'bold' : 'normal' }">
+              <span v-if="isBlocked(player.name)" style="margin-right: 0.5rem;">🚫</span>
               {{ player.name }}
-              <div v-if="isBlocked(player.name)" style="font-size: 0.7rem; color: #e74c3c;">BLOCKED</div>
+              <div v-if="isBlocked(player.name)" style="font-size: 0.7rem; color: #e74c3c; margin-top: 0.2rem;">EXCLUDED FROM STATS</div>
             </td>
             <td>{{ player.totalRounds }}</td>
             <td class="player-win">{{ player.playerWinRate.toFixed(1) }}%</td>
@@ -362,13 +430,23 @@ onMounted(async () => {
               {{ player.dealerEdge > 0 ? '+' : '' }}{{ player.dealerEdge.toFixed(1) }}%
             </td>
             <td>
-              <button @click="handleToggleBlock(player.name)" class="block-btn" :class="{ blocked: isBlocked(player.name) }" style="padding: 0.3rem 0.6rem; font-size: 0.7rem;">
-                {{ isBlocked(player.name) ? 'Unblock' : 'Block' }}
+              <button 
+                @click="handleToggleBlock(player.name)" 
+                class="block-btn" 
+                :class="{ blocked: isBlocked(player.name) }" 
+                :style="{ background: isBlocked(player.name) ? '#2ecc71' : '#e74c3c', width: '80px' }"
+              >
+                {{ isBlocked(player.name) ? 'UNBLOCK' : 'BLOCK' }}
               </button>
             </td>
           </tr>
         </tbody>
       </table>
+      <div v-else style="text-align: center; padding: 3rem; color: #bbe1fa; background: #0f4c75; border-radius: 8px; border: 1px dashed #3282b8;">
+        <div style="font-size: 2rem; margin-bottom: 1rem;">👤</div>
+        <p style="margin: 0; font-weight: bold;">No players found</p>
+        <p style="margin: 0.5rem 0 0; font-size: 0.8rem; opacity: 0.7;">Try clearing filters or checking your database connection.</p>
+      </div>
     </div>
   </div>
 </template>

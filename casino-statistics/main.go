@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -264,8 +265,10 @@ func (a *App) ToggleBlockPlayer(name string) {
 	}
 
 	if exists {
+		log.Printf("[BLOCK] Unblocking player: %s", name)
 		_, _ = a.db.Exec(context.Background(), "DELETE FROM blocked_players WHERE player_name = $1", name)
 	} else {
+		log.Printf("[BLOCK] Blocking player: %s", name)
 		_, _ = a.db.Exec(context.Background(), "INSERT INTO blocked_players (player_name) VALUES ($1)", name)
 	}
 }
@@ -280,41 +283,77 @@ type PlayerStats struct {
 	DealerEdge    float64 `json:"dealerEdge"`
 }
 
-func (a *App) GetPlayerStats() []PlayerStats {
+func (a *App) GetOwnerKey() string {
+	a.initWg.Wait()
+	return a.ownerKey
+}
+
+func (a *App) GetPlayerStats(startDate, endDate string) []PlayerStats {
 	a.initWg.Wait()
 	if a.db == nil {
+		log.Printf("[PLAYER_STATS] DB not connected")
 		return []PlayerStats{}
 	}
 
-	rows, err := a.db.Query(context.Background(), `
-		SELECT player_name, winner
+	query := `
+		SELECT player_name, winner, status, issue, completed_at
 		FROM game_history_entries
-		WHERE owner_key = $1 AND LOWER(status) = 'completed' AND issue = false
-	`, a.ownerKey)
+		WHERE owner_key = $1
+	`
+	args := []interface{}{a.ownerKey}
+	if startDate != "" {
+		query += fmt.Sprintf(" AND completed_at >= $%d", len(args)+1)
+		args = append(args, startDate)
+	}
+	if endDate != "" {
+		query += fmt.Sprintf(" AND completed_at <= $%d", len(args)+1)
+		args = append(args, endDate)
+	}
+
+	rows, err := a.db.Query(context.Background(), query, args...)
 	if err != nil {
+		log.Printf("[PLAYER_STATS] Query failed: %v", err)
 		return []PlayerStats{}
 	}
 	defer rows.Close()
 
 	playerMap := make(map[string]*PlayerStats)
+	rowCount := 0
+	skippedCount := 0
 	for rows.Next() {
-		var name, winner string
-		if err := rows.Scan(&name, &winner); err != nil {
+		rowCount++
+		var name, winner, status, completedAt string
+		var issue bool
+		if err := rows.Scan(&name, &winner, &status, &issue, &completedAt); err != nil {
+			log.Printf("[PLAYER_STATS] Scan error at row %d: %v", rowCount, err)
 			continue
+		}
+
+		statusClean := strings.ToLower(status)
+		if statusClean != "completed" || issue {
+			skippedCount++
+			continue
+		}
+
+		winnerClean := strings.TrimSpace(strings.ToLower(winner))
+		playerClean := strings.TrimSpace(strings.ToLower(name))
+		
+		isPlayerWin := winnerClean == playerClean
+		isDealerWin := winnerClean == "dealer"
+
+		if !isPlayerWin && !isDealerWin {
+			if winnerClean == "player" {
+				isPlayerWin = true
+			} else {
+				skippedCount++
+				continue
+			}
 		}
 
 		ps, ok := playerMap[name]
 		if !ok {
 			ps = &PlayerStats{Name: name}
 			playerMap[name] = ps
-		}
-
-		winner = strings.TrimSpace(strings.ToLower(winner))
-		isPlayerWin := winner == strings.ToLower(name)
-		isDealerWin := winner == "dealer"
-
-		if !isPlayerWin && !isDealerWin {
-			continue
 		}
 
 		ps.TotalRounds++
@@ -325,7 +364,9 @@ func (a *App) GetPlayerStats() []PlayerStats {
 		}
 	}
 
-	var result []PlayerStats
+	log.Printf("[PLAYER_STATS] Owner=%s, Range=%s to %s, Rows=%d, Skipped=%d, Players=%d", a.ownerKey, startDate, endDate, rowCount, skippedCount, len(playerMap))
+
+	result := []PlayerStats{}
 	for _, ps := range playerMap {
 		if ps.TotalRounds > 0 {
 			ps.PlayerWinRate = float64(ps.PlayerWins) / float64(ps.TotalRounds) * 100
@@ -363,6 +404,18 @@ func (a *App) GetPlayers() []string {
 func normalizeGameName(game string, choice string) string {
 	g := strings.TrimSpace(strings.ToLower(game))
 	
+	// MidHouse Split
+	if strings.Contains(g, "mid") || strings.Contains(g, "house") || g == "mh" {
+		c := strings.TrimSpace(strings.ToLower(choice))
+		if strings.Contains(c, "u10") {
+			return "U10"
+		}
+		if strings.Contains(c, "o11") {
+			return "O11"
+		}
+		return "MidHouse"
+	}
+
 	// Broadly catch Under/Over games
 	if strings.Contains(g, "uo") || strings.Contains(g, "under") || strings.Contains(g, "over") {
 		c := strings.TrimSpace(strings.ToLower(choice))
@@ -418,8 +471,11 @@ func normalizeGameName(game string, choice string) string {
 	}
 }
 
-func (a *App) GetStats() CasinoStats {
+var BuildTime = "2026-05-14T10:15:00"
+
+func (a *App) GetStats(startDate, endDate string) CasinoStats {
 	a.initWg.Wait()
+	log.Printf("[STATS] GetStats called (Version: %s)", BuildTime)
 
 	if a.db == nil {
 		log.Printf("[STATS] DB not connected, returning empty stats")
@@ -431,11 +487,23 @@ func (a *App) GetStats() CasinoStats {
 		blocked[strings.ToLower(p)] = true
 	}
 
-	rows, err := a.db.Query(context.Background(), `
-		SELECT player_name, game, winner, choice, completed_at
+	query := `
+		SELECT player_name, game, winner, choice, completed_at, status, issue
 		FROM game_history_entries
-		WHERE owner_key = $1 AND LOWER(status) = 'completed' AND issue = false
-	`, a.ownerKey)
+		WHERE owner_key = $1
+	`
+	args := []interface{}{a.ownerKey}
+	// Note: We'll filter status and issue in Go for now to see EVERYTHING in the logs
+	if startDate != "" {
+		query += fmt.Sprintf(" AND completed_at >= $%d", len(args)+1)
+		args = append(args, startDate)
+	}
+	if endDate != "" {
+		query += fmt.Sprintf(" AND completed_at <= $%d", len(args)+1)
+		args = append(args, endDate)
+	}
+
+	rows, err := a.db.Query(context.Background(), query, args...)
 	if err != nil {
 		log.Printf("[STATS] Query failed: %v", err)
 		return CasinoStats{}
@@ -447,10 +515,13 @@ func (a *App) GetStats() CasinoStats {
 	}
 
 	rowCount := 0
+	gameCount := make(map[string]int)
 	for rows.Next() {
 		rowCount++
-		var playerName, game, winner, choice, completedAt string
-		if err := rows.Scan(&playerName, &game, &winner, &choice, &completedAt); err != nil {
+		var playerName, game, winner, choice, completedAt, status string
+		var issue bool
+		if err := rows.Scan(&playerName, &game, &winner, &choice, &completedAt, &status, &issue); err != nil {
+			log.Printf("[STATS] Scan error at row %d: %v", rowCount, err)
 			continue
 		}
 
@@ -458,14 +529,27 @@ func (a *App) GetStats() CasinoStats {
 			continue
 		}
 
+		// Filter here in Go
+		if strings.ToLower(status) != "completed" || issue {
+			continue
+		}
+
 		normGame := normalizeGameName(game, choice)
+		gameCount[normGame]++
 		
-		winner = strings.TrimSpace(strings.ToLower(winner))
-		isPlayerWin := winner == strings.ToLower(playerName)
-		isDealerWin := winner == "dealer"
+		winnerClean := strings.TrimSpace(strings.ToLower(winner))
+		playerClean := strings.TrimSpace(strings.ToLower(playerName))
+		
+		isPlayerWin := winnerClean == playerClean
+		isDealerWin := winnerClean == "dealer"
 
 		if !isPlayerWin && !isDealerWin {
-			continue
+			// Some games might have winner as 'Player' or other strings, try to catch 'player' as well
+			if winnerClean == "player" {
+				isPlayerWin = true
+			} else {
+				continue
+			}
 		}
 
 		// Update Overall
@@ -488,7 +572,7 @@ func (a *App) GetStats() CasinoStats {
 		stats.ByGame[normGame] = gs
 	}
 
-	log.Printf("[STATS] Processed %d rows (Owner: %s)", rowCount, a.ownerKey)
+	log.Printf("[STATS] Processed %d rows (Owner: %s). Game counts: %v", rowCount, a.ownerKey, gameCount)
 
 	// Compute win rates
 	if stats.Overall.TotalRounds > 0 {

@@ -6,13 +6,15 @@ export function GetBlockedPlayers():Promise<Array<string>>;
 
 export function GetDbStatus():Promise<string>;
 
-export function GetPlayerStats():Promise<Array<main.PlayerStats>>;
+export function GetOwnerKey():Promise<string>;
+
+export function GetPlayerStats(arg1:string,arg2:string):Promise<Array<main.PlayerStats>>;
 
 export function GetPlayers():Promise<Array<string>>;
 
 export function GetSettings(arg1:string):Promise<string>;
 
-export function GetStats():Promise<main.CasinoStats>;
+export function GetStats(arg1:string,arg2:string):Promise<main.CasinoStats>;
 
 export function SaveSettings(arg1:string,arg2:string):Promise<void>;
 

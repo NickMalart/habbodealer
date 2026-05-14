@@ -10,8 +10,12 @@ export function GetDbStatus() {
   return window['go']['main']['App']['GetDbStatus']();
 }
 
-export function GetPlayerStats() {
-  return window['go']['main']['App']['GetPlayerStats']();
+export function GetOwnerKey() {
+  return window['go']['main']['App']['GetOwnerKey']();
+}
+
+export function GetPlayerStats(arg1, arg2) {
+  return window['go']['main']['App']['GetPlayerStats'](arg1, arg2);
 }
 
 export function GetPlayers() {
@@ -22,8 +26,8 @@ export function GetSettings(arg1) {
   return window['go']['main']['App']['GetSettings'](arg1);
 }
 
-export function GetStats() {
-  return window['go']['main']['App']['GetStats']();
+export function GetStats(arg1, arg2) {
+  return window['go']['main']['App']['GetStats'](arg1, arg2);
 }
 
 export function SaveSettings(arg1, arg2) {
