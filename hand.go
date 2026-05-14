@@ -42,27 +42,14 @@ func (a *App) evaluatePokerHand() {
 	a.AddLogMsg(logRollResult)
 
 	if !ChatIsDisabled {
-		if !isMuted {
-			if pokerSequenceStage == 1 {
-				// Send the player's result and immediately indicate dealer will roll
-				sendMessageWithDelay(fmt.Sprintf("%s | Rolling...", hand))
-			} else if pokerSequenceStage == 2 {
-				// Suppress separate dealer-hand announcement; final winner message will include dealer result
-			} else {
-				// Fallback: send the raw hand text
-				sendMessageWithDelay(hand)
-			}
+		if pokerSequenceStage == 1 {
+			// Send the player's result and immediately indicate dealer will roll
+			sendMessageWithDelay(fmt.Sprintf("%s | Rolling...", hand))
+		} else if pokerSequenceStage == 2 {
+			// Suppress separate dealer-hand announcement; final winner message will include dealer result
 		} else {
-			// If the user is muted, log/queue appropriately
-			if pokerSequenceStage == 1 {
-				log.Printf("User is muted. Queuing message: %s", fmt.Sprintf("%s | Rolling...", hand))
-				messageQueue = append(messageQueue, fmt.Sprintf("%s | Rolling...", hand))
-			} else if pokerSequenceStage == 2 {
-				log.Printf("User is muted. Suppressing dealer-hand announcement (winner will be posted)")
-			} else {
-				log.Printf("User is muted. Queuing message: %s", hand)
-				messageQueue = append(messageQueue, hand)
-			}
+			// Fallback: send the raw hand text
+			sendMessageWithDelay(hand)
 		}
 	}
 
@@ -764,20 +751,9 @@ func (a *App) evaluateTriRound() {
 	a.AddLogMsg(fmt.Sprintf("[TRI] evaluating total=%d playerTurn=%t mode=%s", total, triPlayerTurn, triMode))
 	log.Printf("[TRI] evaluating total=%d playerTurn=%t mode=%s", total, triPlayerTurn, triMode)
 
-	if !ChatIsDisabled {
-		if !isMuted {
-			if triPlayerTurn {
-				// Send player total and indicate dealer will roll
-				sendMessageWithDelay(fmt.Sprintf("%s | Rolling...", totalText))
-			} else {
-				// Suppress separate dealer total announcement; final winner message will include dealer result
-			}
-		} else {
-			if triPlayerTurn {
-				log.Printf("User is muted. Queuing message: %s", fmt.Sprintf("%s | Rolling...", totalText))
-				messageQueue = append(messageQueue, fmt.Sprintf("%s | Rolling...", totalText))
-			}
-		}
+	if !ChatIsDisabled && triPlayerTurn {
+		// Send player total and indicate dealer will roll
+		sendMessageWithDelay(fmt.Sprintf("%s | Rolling...", totalText))
 	}
 
 	if triPlayerTurn {
@@ -843,11 +819,7 @@ func (a *App) evaluatePairUpRound() {
 	winnerMsg := fmt.Sprintf("%s Wins - %s: %d-%d-%d", winnerName, playerName, v1, v2, v3)
 
 	if !ChatIsDisabled {
-		if !isMuted {
-			sendMessageWithDelay(winnerMsg)
-		} else {
-			messageQueue = append(messageQueue, winnerMsg)
-		}
+		sendMessageWithDelay(winnerMsg)
 	}
 
 	payoutTargetID := lastTradePartnerID

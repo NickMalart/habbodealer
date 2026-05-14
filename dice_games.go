@@ -80,16 +80,7 @@ func (a *App) evaluateDoubleTroubleRound() {
 	resultText := fmt.Sprintf("%d", total)
 	winnerMsg := fmt.Sprintf("%s Wins - Total: %s", winnerName, resultText)
 
-	if !ChatIsDisabled {
-		if !isMuted {
-			sendMessageWithDelay(winnerMsg)
-		} else {
-			messageQueue = append(messageQueue, winnerMsg)
-		}
-	} else {
-		// Chat is disabled; use a public shout so results are still visible.
-		sendShout(winnerMsg)
-	}
+	sendMessageWithDelay(winnerMsg)
 
 	payoutTargetID := lastTradePartnerID
 	payoutTargetName := playerName
@@ -140,15 +131,7 @@ func (a *App) beginBanditRound() {
 	}
 
 	msg := fmt.Sprintf("%s! Player Roll — One Arm Bandit: GOOD LUCK!", playerName)
-	if !ChatIsDisabled {
-		if !isMuted {
-			sendMessageWithDelay(msg)
-		} else {
-			messageQueue = append(messageQueue, msg)
-		}
-	} else {
-		sendShout(msg)
-	}
+	sendMessageWithDelay(msg)
 
 	go a.rollBanditDice()
 }

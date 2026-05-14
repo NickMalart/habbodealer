@@ -431,7 +431,7 @@ var (
 	// Centralized shout worker/queue to avoid flood-control mutes
 	shoutQueue         chan string
 	shoutWorkerOnce    sync.Once
-	shoutSpacing       = 3000 * time.Millisecond
+	shoutSpacing       = 2500 * time.Millisecond
 	shoutSpacingMu     sync.Mutex
 	shoutReplaySpacing = 3000 * time.Millisecond
 
@@ -3526,20 +3526,6 @@ func startShoutWorker() {
 					continue
 				}
 
-				// If queue has multiple items, consolidate short messages to reduce spam.
-				// This significantly reduces room flooding during busy games.
-				for len(shoutQueue) > 0 && len(s) < 80 {
-					select {
-					case next := <-shoutQueue:
-						s = s + " | " + strings.TrimSpace(next)
-					default:
-						break
-					}
-					if len(s) > 120 {
-						break
-					}
-				}
-
 				if isMuted {
 					// If muted, keep it in the muted queue for later replay.
 					messageQueue = append(messageQueue, s)
@@ -3547,14 +3533,13 @@ func startShoutWorker() {
 					continue
 				}
 
-				// Enforce dynamic spacing. If queue is backing up, slow down slightly
-				// more to be safe against server-side flood filters.
+				// Enforce strict spacing.
+				shoutSpacingMu.Lock()
 				currentSpacing := shoutSpacing
-				if len(shoutQueue) > 5 {
-					currentSpacing += 1000 * time.Millisecond
-				}
+				shoutSpacingMu.Unlock()
 
-				sleepDur := currentSpacing + time.Duration(rand.Intn(600))*time.Millisecond
+				// Use a small jitter (0-200ms) to appear slightly more natural while remaining strict.
+				sleepDur := currentSpacing + time.Duration(rand.Intn(200))*time.Millisecond
 				log.Printf("[SHOUT_WORKER] dequeued at %s, sleeping %s before send: %q", time.Now().Format(time.RFC3339Nano), sleepDur, s)
 				time.Sleep(sleepDur)
 				ext.Send(out.SHOUT, s)
@@ -13771,7 +13756,13 @@ func (a *App) handleTalk(e *g.Intercept) {
 	if msg == "#gsuite" {
 		runtime.WindowShow(a.ctx)
 		e.Block()
+		return
 	}
+
+	// Block all manual shouts/chat and route them through the strict queue.
+	// This ensures that even manual typing respects the flood-control delay.
+	e.Block()
+	sendShout(msg)
 }
 
 func (a *App) handleIncomingChat(e *g.Intercept) {
