@@ -195,6 +195,8 @@ type App struct {
 	joinShoutDelay   int
 	roomUsers        map[string]bool
 	roomUsersMu      sync.Mutex
+	lastRoomReady    time.Time
+	usersProcessingMu sync.Mutex
 
 	hypeShoutEnabled  bool
 	hypeShoutPhrase   string
@@ -214,6 +216,9 @@ type App struct {
 	sponsorName     string
 	sponsorRoomName string
 
+	shoutChan         chan string
+	shoutMu           sync.Mutex
+
 	pendingProofBytes    []byte
 	pendingProofFileName string
 }
@@ -230,6 +235,7 @@ func NewApp() *App {
 		roomUsers:        make(map[string]bool),
 		joinShoutPhrase:  "Hey {name}, Win [prize]! 1st bet = 1 Ticket + Every 5th = FREE Ticket! See Discord!",
 		joinShoutDelay:   2,
+		shoutChan:        make(chan string, 100),
 	}
 }
 
@@ -238,6 +244,7 @@ func (a *App) startup(ctx context.Context) {
 	a.initDatabase()
 	a.startPoller()
 	a.startRealtimeWatcher()
+	go a.runShoutLoop()
 	go a.runExt()
 }
 
@@ -264,6 +271,28 @@ func (a *App) shutdown(context.Context) {
 
 func (a *App) runExt() {
 	ext.Run()
+}
+
+func (a *App) runShoutLoop() {
+	for msg := range a.shoutChan {
+		ext.Send(out.SHOUT, msg)
+		a.debugMu.Lock()
+		a.lastShout = msg
+		a.debugMu.Unlock()
+		// Rate limit: max 1 shout per 1.5 seconds to prevent server disconnection
+		time.Sleep(1500 * time.Millisecond)
+	}
+}
+
+func (a *App) queueShout(msg string) {
+	if a.shoutChan == nil {
+		return
+	}
+	select {
+	case a.shoutChan <- msg:
+	default:
+		a.logDebug("[SHOUT_QUEUE] queue full, dropping: %s", msg)
+	}
 }
 
 func (a *App) logDebug(format string, args ...interface{}) {
@@ -2714,11 +2743,8 @@ func (a *App) shoutTicketProgress(name string, gamesAway int, prize string) {
 	} else {
 		msg = fmt.Sprintf("%s! Only %d more games for another %s ticket! 🎟️", trimmed, gamesAway, prize)
 	}
-	ext.Send(out.SHOUT, msg)
-	a.debugMu.Lock()
-	a.lastShout = msg
-	a.debugMu.Unlock()
-	a.logDebug("progress shout sent: %s", msg)
+	a.queueShout(msg)
+	a.logDebug("progress shout queued: %s", msg)
 }
 
 func (a *App) shoutEntrant(name string, entries int, prize string) {
@@ -2727,11 +2753,8 @@ func (a *App) shoutEntrant(name string, entries int, prize string) {
 		return
 	}
 	msg := fmt.Sprintf("Congrats %s! Entered raffle for %s! See Discord for the draw!", trimmed, prize)
-	ext.Send(out.SHOUT, msg)
-	a.debugMu.Lock()
-	a.lastShout = msg
-	a.debugMu.Unlock()
-	a.logDebug("shout sent: %s", msg)
+	a.queueShout(msg)
+	a.logDebug("shout queued: %s", msg)
 }
 
 func (a *App) shoutTicketCount(name string, entries int, prize string) {
@@ -2740,11 +2763,8 @@ func (a *App) shoutTicketCount(name string, entries int, prize string) {
 		return
 	}
 	msg := fmt.Sprintf("%s now has %d entries for %s! See Discord!", trimmed, entries, prize)
-	ext.Send(out.SHOUT, msg)
-	a.debugMu.Lock()
-	a.lastShout = msg
-	a.debugMu.Unlock()
-	a.logDebug("ticket shout sent: %s", msg)
+	a.queueShout(msg)
+	a.logDebug("ticket shout queued: %s", msg)
 }
 
 func (a *App) persistSessionCursor(sessionDBID int64, at time.Time, entryID string) error {
@@ -3680,10 +3700,13 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 	copy(data, e.Packet.Data)
 
 	go func() {
+		a.usersProcessingMu.Lock()
+		defer a.usersProcessingMu.Unlock()
+
 		// We use the Python parser to handle the complex USERS28 format
 		users, err := a.runUsers28PythonParser(data)
 		if err != nil {
-			a.logDebug("Parser failed: %v", err)
+			a.logDebug("[JOIN_SHOUT] Parser failed: %v", err)
 			return
 		}
 
@@ -3701,7 +3724,8 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 		a.mu.Unlock()
 
 		a.roomUsersMu.Lock()
-		isInitialLoad := len(a.roomUsers) == 0
+		// Initial load if map is empty OR we just entered the room (2s grace period)
+		isInitialLoad := len(a.roomUsers) == 0 || time.Since(a.lastRoomReady) < 2*time.Second
 
 		for _, u := range users {
 			name := strings.TrimSpace(u.Username)
@@ -3735,11 +3759,8 @@ func (a *App) shoutJoin(name string, prize string, phrase string) {
 	msg = strings.ReplaceAll(msg, "{prize}", prize)
 	msg = strings.ReplaceAll(msg, "[prize]", prize)
 
-	ext.Send(out.SHOUT, msg)
-	a.debugMu.Lock()
-	a.lastShout = msg
-	a.debugMu.Unlock()
-	a.logDebug("join shout sent for %s: %s", name, msg)
+	a.queueShout(msg)
+	a.logDebug("[JOIN_SHOUT] queued for %s", name)
 }
 
 func setupExt(a *App) {
@@ -3764,6 +3785,7 @@ func setupExt(a *App) {
 
 		a.roomUsersMu.Lock()
 		a.roomUsers = make(map[string]bool)
+		a.lastRoomReady = time.Time{}
 		a.roomUsersMu.Unlock()
 
 		a.emitUpdate()
@@ -3776,19 +3798,13 @@ func setupExt(a *App) {
 
 		a.roomUsersMu.Lock()
 		a.roomUsers = make(map[string]bool)
+		a.lastRoomReady = time.Now()
 		a.roomUsersMu.Unlock()
 
 		a.emitUpdate()
 	})
 
-	// Use InterceptAll to catch header 28 manually since it's the most reliable for Origins room users
-	ext.InterceptAll(func(e *g.Intercept) {
-		if e.Packet.Header.Dir == g.In && e.Packet.Header.Value == 28 {
-			a.handleUsersPacket(e)
-		}
-	})
-
-	// Also standard USERS/SPACENODEUSERS
+	// Origins USERS/SPACENODEUSERS
 	ext.Intercept(in.USERS, in.SPACENODEUSERS).With(a.handleUsersPacket)
 }
 

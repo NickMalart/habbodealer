@@ -172,12 +172,24 @@ func (a *App) initDB() {
 	// Create blocked_players table if not exists
 	_, err = a.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS blocked_players (
-			player_name TEXT PRIMARY KEY,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			id SERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL,
+			player_name TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (owner_key, player_name)
 		)
 	`)
 	if err != nil {
 		log.Printf("[DB_INIT] Failed to create blocked_players table: %v", err)
+	} else {
+		// Create lowercase index if it doesn't exist
+		_, _ = a.db.Exec(context.Background(), "CREATE UNIQUE INDEX IF NOT EXISTS idx_blocked_players_lower_name ON blocked_players (LOWER(player_name))")
+
+		// Normalize existing names to lowercase
+		_, err = a.db.Exec(context.Background(), "UPDATE blocked_players SET player_name = LOWER(player_name) WHERE player_name != LOWER(player_name)")
+		if err != nil {
+			log.Printf("[DB_INIT] Failed to normalize blocked_players: %v", err)
+		}
 	}
 
 	// Create ui_settings table if not exists
@@ -231,8 +243,10 @@ func (a *App) GetBlockedPlayers() []string {
 	if a.db == nil {
 		return []string{}
 	}
-	rows, err := a.db.Query(context.Background(), "SELECT player_name FROM blocked_players ORDER BY player_name")
+	// Filter by owner key to match the actual schema
+	rows, err := a.db.Query(context.Background(), "SELECT player_name FROM blocked_players WHERE owner_key = $1 ORDER BY player_name", a.ownerKey)
 	if err != nil {
+		log.Printf("[BLOCK] Failed to query blocked players: %v", err)
 		return []string{}
 	}
 	defer rows.Close()
@@ -260,20 +274,21 @@ func (a *App) ToggleBlockPlayer(name string) {
 		return
 	}
 
-	log.Printf("[BLOCK] Toggle request for: '%s'", name)
+	log.Printf("[BLOCK] Toggle request for: '%s' (owner: %s)", name, a.ownerKey)
 
 	var exists bool
-	err := a.db.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM blocked_players WHERE player_name = $1)", name).Scan(&exists)
+	// Check existence for THIS owner
+	err := a.db.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM blocked_players WHERE owner_key = $1 AND LOWER(player_name) = $2)", a.ownerKey, name).Scan(&exists)
 	if err != nil {
 		log.Printf("[BLOCK] Error checking existence for %s: %v", name, err)
 		return
 	}
 
-	log.Printf("[BLOCK] Player '%s' exists in blocked list: %v", name, exists)
+	log.Printf("[BLOCK] Player '%s' exists in blocked list for %s: %v", name, a.ownerKey, exists)
 
 	if exists {
 		log.Printf("[BLOCK] Unblocking player: %s", name)
-		tag, err := a.db.Exec(context.Background(), "DELETE FROM blocked_players WHERE player_name = $1", name)
+		tag, err := a.db.Exec(context.Background(), "DELETE FROM blocked_players WHERE owner_key = $1 AND LOWER(player_name) = $2", a.ownerKey, name)
 		if err != nil {
 			log.Printf("[BLOCK] Failed to unblock player %s: %v", name, err)
 		} else {
@@ -281,7 +296,8 @@ func (a *App) ToggleBlockPlayer(name string) {
 		}
 	} else {
 		log.Printf("[BLOCK] Blocking player: %s", name)
-		tag, err := a.db.Exec(context.Background(), "INSERT INTO blocked_players (player_name) VALUES ($1) ON CONFLICT (player_name) DO NOTHING", name)
+		// The actual table has a unique index on (owner_key, player_name)
+		tag, err := a.db.Exec(context.Background(), "INSERT INTO blocked_players (owner_key, player_name) VALUES ($1, $2) ON CONFLICT (owner_key, player_name) DO NOTHING", a.ownerKey, name)
 		if err != nil {
 			log.Printf("[BLOCK] Failed to block player %s: %v", name, err)
 		} else {
