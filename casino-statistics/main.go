@@ -169,7 +169,7 @@ func (a *App) initDB() {
 
 	a.db = pool
 
-	// Create blocked_players table if not exists with case-insensitive uniqueness
+	// Create blocked_players table if not exists
 	_, err = a.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS blocked_players (
 			player_name TEXT PRIMARY KEY,
@@ -179,8 +179,6 @@ func (a *App) initDB() {
 	if err != nil {
 		log.Printf("[DB_INIT] Failed to create blocked_players table: %v", err)
 	}
-	// Add a case-insensitive index/unique constraint if we can't easily change the PK
-	_, _ = a.db.Exec(context.Background(), "CREATE UNIQUE INDEX IF NOT EXISTS idx_blocked_players_lower_name ON blocked_players (LOWER(player_name))")
 
 	// Create ui_settings table if not exists
 	_, err = a.db.Exec(context.Background(), `
@@ -243,7 +241,7 @@ func (a *App) GetBlockedPlayers() []string {
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err == nil {
-			players = append(players, strings.TrimSpace(name))
+			players = append(players, strings.ToLower(strings.TrimSpace(name)))
 		}
 	}
 	return players
@@ -253,33 +251,41 @@ func (a *App) ToggleBlockPlayer(name string) {
 	a.initWg.Wait()
 
 	if a.db == nil {
+		log.Printf("[BLOCK] DB is nil, cannot toggle block for %s", name)
 		return
 	}
-	name = strings.TrimSpace(name)
+	name = strings.ToLower(strings.TrimSpace(name))
 	if name == "" {
+		log.Printf("[BLOCK] Attempted to toggle block for empty name")
 		return
 	}
 
+	log.Printf("[BLOCK] Toggle request for: '%s'", name)
+
 	var exists bool
-	err := a.db.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM blocked_players WHERE LOWER(player_name) = LOWER($1))", name).Scan(&exists)
+	err := a.db.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM blocked_players WHERE player_name = $1)", name).Scan(&exists)
 	if err != nil {
-		log.Printf("[BLOCK] Failed to check if player exists: %v", err)
+		log.Printf("[BLOCK] Error checking existence for %s: %v", name, err)
 		return
 	}
+
+	log.Printf("[BLOCK] Player '%s' exists in blocked list: %v", name, exists)
 
 	if exists {
 		log.Printf("[BLOCK] Unblocking player: %s", name)
-		// Delete using case-insensitive match
-		_, err = a.db.Exec(context.Background(), "DELETE FROM blocked_players WHERE LOWER(player_name) = LOWER($1)", name)
+		tag, err := a.db.Exec(context.Background(), "DELETE FROM blocked_players WHERE player_name = $1", name)
 		if err != nil {
-			log.Printf("[BLOCK] Failed to unblock player: %v", err)
+			log.Printf("[BLOCK] Failed to unblock player %s: %v", name, err)
+		} else {
+			log.Printf("[BLOCK] Unblock successful for %s. Rows affected: %d", name, tag.RowsAffected())
 		}
 	} else {
 		log.Printf("[BLOCK] Blocking player: %s", name)
-		// Insert the name as provided (trimmed)
-		_, err = a.db.Exec(context.Background(), "INSERT INTO blocked_players (player_name) VALUES ($1) ON CONFLICT (LOWER(player_name)) DO NOTHING", name)
+		tag, err := a.db.Exec(context.Background(), "INSERT INTO blocked_players (player_name) VALUES ($1) ON CONFLICT (player_name) DO NOTHING", name)
 		if err != nil {
-			log.Printf("[BLOCK] Failed to block player: %v", err)
+			log.Printf("[BLOCK] Failed to block player %s: %v", name, err)
+		} else {
+			log.Printf("[BLOCK] Block successful for %s. Rows affected: %d", name, tag.RowsAffected())
 		}
 	}
 }

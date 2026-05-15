@@ -8,12 +8,20 @@ const props = defineProps({
 const emit = defineEmits(['refresh']);
 
 const phrase = ref("Welcome {name}!, Win [prize]! 1st bet = 1 Ticket + Every 5th = FREE Ticket! See Discord!");
+const delay = ref(2);
 
 const syncFromState = () => {
   if (props.state.joinShoutPhrase) phrase.value = props.state.joinShoutPhrase;
+  if (props.state.joinShoutDelay !== undefined) delay.value = props.state.joinShoutDelay;
 };
 
-watch(() => props.state.joinShoutPhrase, syncFromState);
+watch(() => props.state.joinShoutPhrase, () => {
+  phrase.value = props.state.joinShoutPhrase;
+});
+
+watch(() => props.state.joinShoutDelay, () => {
+  delay.value = props.state.joinShoutDelay;
+});
 
 onMounted(() => {
   syncFromState();
@@ -27,6 +35,7 @@ const call = async (name, ...args) => {
 
 const saveConfig = async () => {
   await call('SetJoinShoutConfig', props.state.joinShoutEnabled, phrase.value);
+  await call('SetJoinShoutDelay', parseInt(delay.value) || 0);
   emit('refresh');
 };
 
@@ -49,12 +58,16 @@ const toggleJoin = async () => {
     </div>
     <p class="sub">Shouts when someone joins the room. Use <code>{name}</code> and <code>{prize}</code> placeholders.</p>
     
-    <div class="row" style="margin-top: 12px; align-items: flex-end;">
-      <div style="flex: 1; display:flex; flex-direction:column; gap:4px;">
+    <div class="row" style="margin-top: 12px; align-items: flex-end; gap: 8px;">
+      <div style="flex: 3; display:flex; flex-direction:column; gap:4px;">
         <label style="font-size:12px; color:var(--muted)">Shout Message</label>
         <input type="text" v-model="phrase" placeholder="e.g. Hey {name}, Congrats! Entered for {prize}!" style="width:100%">
       </div>
-      <button class="alt" @click="saveConfig">Save Phrase</button>
+      <div style="flex: 1; display:flex; flex-direction:column; gap:4px;">
+        <label style="font-size:12px; color:var(--muted)">Delay (sec)</label>
+        <input type="number" v-model="delay" min="0" max="60" style="width:100%">
+      </div>
+      <button class="alt" @click="saveConfig">Save Config</button>
     </div>
   </div>
 </template>

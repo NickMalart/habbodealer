@@ -136,6 +136,7 @@ type RaffleState struct {
 	RaffleMessageID       string                 `json:"raffleMessageId"`
 	JoinShoutEnabled      bool                   `json:"joinShoutEnabled"`
 	JoinShoutPhrase       string                 `json:"joinShoutPhrase"`
+	JoinShoutDelay        int                    `json:"joinShoutDelay"`
 	HypeShoutEnabled      bool                   `json:"hypeShoutEnabled"`
 	HypeShoutPhrase       string                 `json:"hypeShoutPhrase"`
 	HypeShoutMinutes      int                    `json:"hypeShoutMinutes"`
@@ -191,6 +192,7 @@ type App struct {
 
 	joinShoutEnabled bool
 	joinShoutPhrase  string
+	joinShoutDelay   int
 	roomUsers        map[string]bool
 	roomUsersMu      sync.Mutex
 
@@ -227,6 +229,7 @@ func NewApp() *App {
 		autoMsgMinutes:   10,
 		roomUsers:        make(map[string]bool),
 		joinShoutPhrase:  "Hey {name}, Win [prize]! 1st bet = 1 Ticket + Every 5th = FREE Ticket! See Discord!",
+		joinShoutDelay:   2,
 	}
 }
 
@@ -426,6 +429,7 @@ func (a *App) GetState() RaffleState {
 		RaffleMessageID:       a.raffleMessageID,
 		JoinShoutEnabled:      a.joinShoutEnabled,
 		JoinShoutPhrase:       a.joinShoutPhrase,
+		JoinShoutDelay:        a.joinShoutDelay,
 		HypeShoutEnabled:      a.hypeShoutEnabled,
 		HypeShoutPhrase:       a.hypeShoutPhrase,
 		HypeShoutMinutes:      a.hypeShoutMinutes,
@@ -3639,6 +3643,17 @@ func (a *App) SetJoinShoutConfig(enabled bool, phrase string) RaffleState {
 	return a.GetState()
 }
 
+func (a *App) SetJoinShoutDelay(delay int) RaffleState {
+	a.mu.Lock()
+	if delay < 0 {
+		delay = 0
+	}
+	a.joinShoutDelay = delay
+	a.mu.Unlock()
+	a.emitUpdate()
+	return a.GetState()
+}
+
 func (a *App) ToggleJoinShout(enabled bool) RaffleState {
 	a.mu.Lock()
 	a.joinShoutEnabled = enabled
@@ -3675,6 +3690,7 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 		a.mu.Lock()
 		joinEnabled := a.joinShoutEnabled
 		phrase := a.joinShoutPhrase
+		delay := a.joinShoutDelay
 		prizeName := a.rafflePrizeName
 		prizeQty := a.rafflePrizeQty
 		if a.currentSession != nil && strings.TrimSpace(a.currentSession.PrizeName) != "" {
@@ -3697,7 +3713,12 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 			if _, exists := a.roomUsers[key]; !exists {
 				a.roomUsers[key] = true
 				if joinEnabled && !isInitialLoad {
-					a.shoutJoin(name, prize, phrase)
+					go func(n, pr, ph string, d int) {
+						if d > 0 {
+							time.Sleep(time.Duration(d) * time.Second)
+						}
+						a.shoutJoin(n, pr, ph)
+					}(name, prize, phrase, delay)
 				}
 			}
 		}
