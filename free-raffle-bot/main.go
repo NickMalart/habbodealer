@@ -193,7 +193,7 @@ type App struct {
 	joinShoutEnabled bool
 	joinShoutPhrase  string
 	joinShoutDelay   int
-	roomUsers        map[string]bool
+	roomUsers        map[string]int
 	roomUsersMu      sync.Mutex
 	lastRoomReady    time.Time
 	usersProcessingMu sync.Mutex
@@ -232,7 +232,7 @@ func NewApp() *App {
 		rafflePrizeQty:   1,
 		hypeShoutMinutes: 10,
 		autoMsgMinutes:   10,
-		roomUsers:        make(map[string]bool),
+		roomUsers:        make(map[string]int),
 		joinShoutPhrase:  "Hey {name}, Win [prize]! 1st bet = 1 Ticket + Every 5th = FREE Ticket! See Discord!",
 		joinShoutDelay:   2,
 		shoutChan:        make(chan string, 100),
@@ -3657,6 +3657,7 @@ func (a *App) SetJoinShoutConfig(enabled bool, phrase string) RaffleState {
 	a.joinShoutEnabled = enabled
 	a.joinShoutPhrase = strings.TrimSpace(phrase)
 	a.mu.Unlock()
+	a.logDebug("[JOIN_SHOUT] Config updated: enabled=%t phrase=%q", enabled, phrase)
 	a.emitUpdate()
 	return a.GetState()
 }
@@ -3668,6 +3669,7 @@ func (a *App) SetJoinShoutDelay(delay int) RaffleState {
 	}
 	a.joinShoutDelay = delay
 	a.mu.Unlock()
+	a.logDebug("[JOIN_SHOUT] Delay updated: %d seconds", delay)
 	a.emitUpdate()
 	return a.GetState()
 }
@@ -3676,6 +3678,7 @@ func (a *App) ToggleJoinShout(enabled bool) RaffleState {
 	a.mu.Lock()
 	a.joinShoutEnabled = enabled
 	a.mu.Unlock()
+	a.logDebug("[JOIN_SHOUT] Toggled: %t", enabled)
 	a.emitUpdate()
 	return a.GetState()
 }
@@ -3712,6 +3715,10 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 			return
 		}
 
+		if len(users) > 0 {
+			a.logDebug("[JOIN_SHOUT] Parsed %d users from USERS packet", len(users))
+		}
+
 		a.mu.Lock()
 		joinEnabled := a.joinShoutEnabled
 		phrase := a.joinShoutPhrase
@@ -3736,15 +3743,25 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 			}
 
 			key := strings.ToLower(name)
-			if _, exists := a.roomUsers[key]; !exists {
-				a.roomUsers[key] = true
+			newChatID := u.ChatID
+			oldChatID, exists := a.roomUsers[key]
+
+			if !exists || oldChatID != newChatID {
+				a.roomUsers[key] = newChatID
 				if joinEnabled && !isInitialLoad {
+					if exists && oldChatID != newChatID {
+						a.logDebug("[JOIN_SHOUT] Re-join detected (new ID %d): %s (will shout in %ds)", newChatID, name, delay)
+					} else {
+						a.logDebug("[JOIN_SHOUT] New joiner detected: %s (will shout in %ds)", name, delay)
+					}
 					go func(n, pr, ph string, d int) {
 						if d > 0 {
 							time.Sleep(time.Duration(d) * time.Second)
 						}
 						a.shoutJoin(n, pr, ph)
 					}(name, prize, phrase, delay)
+				} else if joinEnabled && isInitialLoad {
+					a.logDebug("[JOIN_SHOUT] Skipping shout for existing user %s (initial load)", name)
 				}
 			}
 		}
@@ -3786,7 +3803,7 @@ func setupExt(a *App) {
 		a.mu.Unlock()
 
 		a.roomUsersMu.Lock()
-		a.roomUsers = make(map[string]bool)
+		a.roomUsers = make(map[string]int)
 		a.lastRoomReady = time.Time{}
 		a.roomUsersMu.Unlock()
 
@@ -3799,7 +3816,7 @@ func setupExt(a *App) {
 		a.mu.Unlock()
 
 		a.roomUsersMu.Lock()
-		a.roomUsers = make(map[string]bool)
+		a.roomUsers = make(map[string]int)
 		a.lastRoomReady = time.Now()
 		a.roomUsersMu.Unlock()
 
