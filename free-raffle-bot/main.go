@@ -121,6 +121,7 @@ type RaffleState struct {
 	HypeShoutEnabled      bool                   `json:"hypeShoutEnabled"`
 	HypeShoutPhrase       string                 `json:"hypeShoutPhrase"`
 	HypeShoutMinutes      int                    `json:"hypeShoutMinutes"`
+	NextHypeShoutAt       string                 `json:"nextHypeShoutAt,omitempty"`
 	CurrentSession        *RaffleSession         `json:"currentSession,omitempty"`
 	Sessions              []RaffleSessionSummary `json:"sessions"`
 
@@ -169,6 +170,7 @@ type App struct {
 	hypeShoutEnabled  bool
 	hypeShoutPhrase   string
 	hypeShoutMinutes  int
+	nextHypeShoutAt   time.Time
 	hypeShoutStopChan chan struct{}
 	hypeShoutMu       sync.Mutex
 
@@ -381,7 +383,15 @@ func (a *App) GetState() RaffleState {
 		HypeShoutEnabled:      a.hypeShoutEnabled,
 		HypeShoutPhrase:       a.hypeShoutPhrase,
 		HypeShoutMinutes:      a.hypeShoutMinutes,
-		SponsorEnabled:        a.sponsorEnabled,
+		NextHypeShoutAt: func() string {
+			a.hypeShoutMu.Lock()
+			defer a.hypeShoutMu.Unlock()
+			if a.nextHypeShoutAt.IsZero() {
+				return ""
+			}
+			return a.nextHypeShoutAt.Format(time.RFC3339)
+		}(),
+		SponsorEnabled: a.sponsorEnabled,
 		SponsorName:           a.sponsorName,
 		SponsorRoomName:       a.sponsorRoomName,
 		Sessions:              make([]RaffleSessionSummary, len(a.sessions)),
@@ -451,11 +461,20 @@ func (a *App) runHypeShoutLoop(stopChan chan struct{}, phrase string, minutes in
 		// ±20% jitter
 		jitter := time.Duration(rand.Int63n(int64(base/5)*2) - int64(base/5))
 		wait := base + jitter
-		nextAt := time.Now().Add(wait).Format("15:04:05")
+		
+		a.hypeShoutMu.Lock()
+		a.nextHypeShoutAt = time.Now().Add(wait)
+		a.hypeShoutMu.Unlock()
+		a.emitUpdate()
+
+		nextAt := a.nextHypeShoutAt.Format("15:04:05")
 		a.logDebug("[HYPE_SHOUT] next shout in %v (at %s)", wait.Truncate(time.Second), nextAt)
 
 		select {
 		case <-stopChan:
+			a.hypeShoutMu.Lock()
+			a.nextHypeShoutAt = time.Time{}
+			a.hypeShoutMu.Unlock()
 			a.logDebug("[HYPE_SHOUT] stopped")
 			return
 		case <-time.After(wait):
@@ -472,12 +491,15 @@ func (a *App) runHypeShoutLoop(stopChan chan struct{}, phrase string, minutes in
 
 		a.mu.Lock()
 		prize := a.rafflePrizeName
+		qty := a.rafflePrizeQty
 		if a.currentSession != nil && strings.TrimSpace(a.currentSession.PrizeName) != "" {
 			prize = a.currentSession.PrizeName
+			qty = a.currentSession.PrizeQty
 		}
 		a.mu.Unlock()
 
-		msg := strings.ReplaceAll(currentPhrase, "[prize]", prize)
+		prizeDisplay := fmt.Sprintf("%s x%d", prize, qty)
+		msg := strings.ReplaceAll(currentPhrase, "[prize]", prizeDisplay)
 		ext.Send(out.SHOUT, msg)
 		a.debugMu.Lock()
 		a.lastShout = msg
@@ -1251,7 +1273,7 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 
 	promoEmbedFields := []map[string]interface{}{
 		{"name": "🔥 How To Enter", "value": clampEmbedText("Find a live dealer at rollorigins.club and place a bet for your chance to win.", 1000), "inline": false},
-		{"name": "🎟️ Ticket Boost", "value": "Every 5th bet gives 1 extra ticket.", "inline": false},
+		{"name": "🎟️ Ticket Rules", "value": "1st bet = 1 Ticket + Every 5th = 1 FREE Ticket.", "inline": false},
 		{"name": "📣 Heads Up", "value": "Ticket board below updates automatically whenever someone earns tickets.", "inline": false},
 	}
 	if sponsorEnabled && sponsorName != "" {
@@ -2421,10 +2443,15 @@ func (a *App) processNewBets() {
 	progressEnabled := a.ticketProgressEnabled
 	resumedAt := a.currentSession.ResumedAt
 	bonusEvery := a.currentSession.BonusEvery
-	prize := strings.TrimSpace(a.currentSession.PrizeName)
-	if prize == "" {
-		prize = "Raffle"
+	prizeName := strings.TrimSpace(a.currentSession.PrizeName)
+	if prizeName == "" {
+		prizeName = "Raffle"
 	}
+	prizeQty := a.currentSession.PrizeQty
+	if prizeQty <= 0 {
+		prizeQty = 1
+	}
+	prize := fmt.Sprintf("%s x%d", prizeName, prizeQty)
 
 	for _, row := range batch {
 		name := normalizeUsername(row.Player)

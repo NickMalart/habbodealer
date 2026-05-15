@@ -132,6 +132,7 @@ export namespace main {
 	    hypeShoutEnabled: boolean;
 	    hypeShoutPhrase: string;
 	    hypeShoutMinutes: number;
+	    nextHypeShoutAt?: string;
 	    currentSession?: RaffleSession;
 	    sessions: RaffleSessionSummary[];
 	    sponsorEnabled: boolean;
@@ -159,6 +160,7 @@ export namespace main {
 	        this.hypeShoutEnabled = source["hypeShoutEnabled"];
 	        this.hypeShoutPhrase = source["hypeShoutPhrase"];
 	        this.hypeShoutMinutes = source["hypeShoutMinutes"];
+	        this.nextHypeShoutAt = source["nextHypeShoutAt"];
 	        this.currentSession = this.convertValues(source["currentSession"], RaffleSession);
 	        this.sessions = this.convertValues(source["sessions"], RaffleSessionSummary);
 	        this.sponsorEnabled = source["sponsorEnabled"];
