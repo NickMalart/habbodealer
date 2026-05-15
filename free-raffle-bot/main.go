@@ -3685,6 +3685,8 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 		a.mu.Unlock()
 
 		a.roomUsersMu.Lock()
+		isInitialLoad := len(a.roomUsers) == 0
+
 		for _, u := range users {
 			name := strings.TrimSpace(u.Username)
 			if name == "" {
@@ -3694,12 +3696,13 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 			key := strings.ToLower(name)
 			if _, exists := a.roomUsers[key]; !exists {
 				a.roomUsers[key] = true
-				if joinEnabled {
+				if joinEnabled && !isInitialLoad {
 					a.shoutJoin(name, prize, phrase)
 				}
 			}
 		}
 		a.roomUsersMu.Unlock()
+
 	}()
 }
 
