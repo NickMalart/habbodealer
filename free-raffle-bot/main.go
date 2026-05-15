@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"math/big"
 	"mime/multipart"
 	"net/http"
@@ -167,7 +168,7 @@ type App struct {
 
 	hypeShoutEnabled  bool
 	hypeShoutPhrase   string
-	hypeShoutMinutes  int = 10
+	hypeShoutMinutes  int
 	hypeShoutStopChan chan struct{}
 	hypeShoutMu       sync.Mutex
 
