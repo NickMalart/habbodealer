@@ -66,6 +66,10 @@ export function ResumeSession(arg1) {
   return window['go']['main']['App']['ResumeSession'](arg1);
 }
 
+export function SetAutoMsgConfig(arg1, arg2) {
+  return window['go']['main']['App']['SetAutoMsgConfig'](arg1, arg2);
+}
+
 export function SetBonusEvery(arg1) {
   return window['go']['main']['App']['SetBonusEvery'](arg1);
 }
@@ -104,6 +108,10 @@ export function StartRaffleWithWindow(arg1, arg2) {
 
 export function StopRaffle() {
   return window['go']['main']['App']['StopRaffle']();
+}
+
+export function ToggleAutoMsg(arg1) {
+  return window['go']['main']['App']['ToggleAutoMsg'](arg1);
 }
 
 export function ToggleHypeShout(arg1) {

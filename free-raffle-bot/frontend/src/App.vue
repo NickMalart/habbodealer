@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted } from 'vue';
 import StatusHeader from './components/StatusHeader.vue';
 import ControlPanel from './components/ControlPanel.vue';
 import HypeShout from './components/HypeShout.vue';
+import AutoMsg from './components/AutoMsg.vue';
 import DiscordConfig from './components/DiscordConfig.vue';
 import ActiveSession from './components/ActiveSession.vue';
 import SessionHistory from './components/SessionHistory.vue';
@@ -27,6 +28,11 @@ const state = ref({
   hypeShoutEnabled: false,
   hypeShoutPhrase: '',
   hypeShoutMinutes: 10,
+  nextHypeShoutAt: '',
+  autoMsgEnabled: false,
+  autoMsgPhrase: '',
+  autoMsgMinutes: 10,
+  nextAutoMsgAt: '',
   currentSession: null,
   sessions: []
 });
@@ -101,6 +107,7 @@ onUnmounted(() => {
 
     <div v-show="activeTab === 'main'">
       <HypeShout :state="state" @refresh="refresh" />
+      <AutoMsg :state="state" @refresh="refresh" />
       <StatusHeader :state="state" @refresh="refresh" />
       <ControlPanel :state="state" @refresh="refresh" />
       <DiscordConfig :state="state" @refresh="refresh" />

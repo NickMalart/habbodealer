@@ -34,6 +34,8 @@ export function RepostRaffleWebhook():Promise<string>;
 
 export function ResumeSession(arg1:number):Promise<main.RaffleState>;
 
+export function SetAutoMsgConfig(arg1:string,arg2:number):Promise<main.RaffleState>;
+
 export function SetBonusEvery(arg1:number):Promise<main.RaffleState>;
 
 export function SetEnabled(arg1:boolean):Promise<main.RaffleState>;
@@ -53,6 +55,8 @@ export function StartRaffle():Promise<main.RaffleState>;
 export function StartRaffleWithWindow(arg1:string,arg2:string):Promise<main.RaffleState>;
 
 export function StopRaffle():Promise<main.RaffleState>;
+
+export function ToggleAutoMsg(arg1:boolean):Promise<main.RaffleState>;
 
 export function ToggleHypeShout(arg1:boolean):Promise<main.RaffleState>;
 

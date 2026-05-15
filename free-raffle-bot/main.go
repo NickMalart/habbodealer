@@ -122,6 +122,10 @@ type RaffleState struct {
 	HypeShoutPhrase       string                 `json:"hypeShoutPhrase"`
 	HypeShoutMinutes      int                    `json:"hypeShoutMinutes"`
 	NextHypeShoutAt       string                 `json:"nextHypeShoutAt,omitempty"`
+	AutoMsgEnabled        bool                   `json:"autoMsgEnabled"`
+	AutoMsgPhrase         string                 `json:"autoMsgPhrase"`
+	AutoMsgMinutes        int                    `json:"autoMsgMinutes"`
+	NextAutoMsgAt         string                 `json:"nextAutoMsgAt,omitempty"`
 	CurrentSession        *RaffleSession         `json:"currentSession,omitempty"`
 	Sessions              []RaffleSessionSummary `json:"sessions"`
 
@@ -173,6 +177,13 @@ type App struct {
 	nextHypeShoutAt   time.Time
 	hypeShoutStopChan chan struct{}
 	hypeShoutMu       sync.Mutex
+
+	autoMsgEnabled  bool
+	autoMsgPhrase   string
+	autoMsgMinutes  int
+	nextAutoMsgAt   time.Time
+	autoMsgStopChan chan struct{}
+	autoMsgMu       sync.Mutex
 
 	sponsorEnabled  bool
 	sponsorName     string
@@ -391,6 +402,17 @@ func (a *App) GetState() RaffleState {
 			}
 			return a.nextHypeShoutAt.Format(time.RFC3339)
 		}(),
+		AutoMsgEnabled: a.autoMsgEnabled,
+		AutoMsgPhrase:  a.autoMsgPhrase,
+		AutoMsgMinutes: a.autoMsgMinutes,
+		NextAutoMsgAt: func() string {
+			a.autoMsgMu.Lock()
+			defer a.autoMsgMu.Unlock()
+			if a.nextAutoMsgAt.IsZero() {
+				return ""
+			}
+			return a.nextAutoMsgAt.Format(time.RFC3339)
+		}(),
 		SponsorEnabled: a.sponsorEnabled,
 		SponsorName:           a.sponsorName,
 		SponsorRoomName:       a.sponsorRoomName,
@@ -484,6 +506,100 @@ func (a *App) runHypeShoutLoop(stopChan chan struct{}, phrase string, minutes in
 		enabled := a.hypeShoutEnabled
 		currentPhrase := strings.TrimSpace(a.hypeShoutPhrase)
 		a.hypeShoutMu.Unlock()
+
+		if !enabled || currentPhrase == "" {
+			continue
+		}
+
+		a.mu.Lock()
+		prize := a.rafflePrizeName
+		qty := a.rafflePrizeQty
+		if a.currentSession != nil && strings.TrimSpace(a.currentSession.PrizeName) != "" {
+			prize = a.currentSession.PrizeName
+			qty = a.currentSession.PrizeQty
+		}
+		a.mu.Unlock()
+
+		prizeDisplay := fmt.Sprintf("%s x%d", prize, qty)
+		msg := strings.ReplaceAll(currentPhrase, "[prize]", prizeDisplay)
+		ext.Send(out.SHOUT, msg)
+		a.debugMu.Lock()
+		a.lastShout = msg
+		a.debugMu.Unlock()
+	}
+}
+
+func (a *App) SetAutoMsgConfig(phrase string, minutes int) RaffleState {
+	a.autoMsgMu.Lock()
+	a.autoMsgPhrase = strings.TrimSpace(phrase)
+	if minutes < 1 {
+		minutes = 1
+	}
+	a.autoMsgMinutes = minutes
+	wasEnabled := a.autoMsgEnabled
+	a.autoMsgMu.Unlock()
+
+	if wasEnabled {
+		a.ToggleAutoMsg(false)
+		return a.ToggleAutoMsg(true)
+	}
+
+	a.emitUpdate()
+	return a.GetState()
+}
+
+func (a *App) ToggleAutoMsg(enabled bool) RaffleState {
+	a.autoMsgMu.Lock()
+	a.autoMsgEnabled = enabled
+	if a.autoMsgStopChan != nil {
+		close(a.autoMsgStopChan)
+		a.autoMsgStopChan = nil
+	}
+
+	if enabled {
+		a.autoMsgStopChan = make(chan struct{})
+		stopChan := a.autoMsgStopChan
+		phrase := a.autoMsgPhrase
+		minutes := a.autoMsgMinutes
+		go a.runAutoMsgLoop(stopChan, phrase, minutes)
+	}
+	a.autoMsgMu.Unlock()
+
+	a.emitUpdate()
+	return a.GetState()
+}
+
+func (a *App) runAutoMsgLoop(stopChan chan struct{}, phrase string, minutes int) {
+	a.logDebug("[AUTO_MSG] started: ~every %d mins -> %q", minutes, phrase)
+	base := time.Duration(minutes) * time.Minute
+
+	for {
+		// ±20% jitter
+		jitter := time.Duration(rand.Int63n(int64(base/5)*2) - int64(base/5))
+		wait := base + jitter
+		
+		a.autoMsgMu.Lock()
+		a.nextAutoMsgAt = time.Now().Add(wait)
+		a.autoMsgMu.Unlock()
+		a.emitUpdate()
+
+		nextAt := a.nextAutoMsgAt.Format("15:04:05")
+		a.logDebug("[AUTO_MSG] next shout in %v (at %s)", wait.Truncate(time.Second), nextAt)
+
+		select {
+		case <-stopChan:
+			a.autoMsgMu.Lock()
+			a.nextAutoMsgAt = time.Time{}
+			a.autoMsgMu.Unlock()
+			a.logDebug("[AUTO_MSG] stopped")
+			return
+		case <-time.After(wait):
+		}
+
+		a.autoMsgMu.Lock()
+		enabled := a.autoMsgEnabled
+		currentPhrase := strings.TrimSpace(a.autoMsgPhrase)
+		a.autoMsgMu.Unlock()
 
 		if !enabled || currentPhrase == "" {
 			continue

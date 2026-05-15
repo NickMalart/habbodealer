@@ -133,6 +133,10 @@ export namespace main {
 	    hypeShoutPhrase: string;
 	    hypeShoutMinutes: number;
 	    nextHypeShoutAt?: string;
+	    autoMsgEnabled: boolean;
+	    autoMsgPhrase: string;
+	    autoMsgMinutes: number;
+	    nextAutoMsgAt?: string;
 	    currentSession?: RaffleSession;
 	    sessions: RaffleSessionSummary[];
 	    sponsorEnabled: boolean;
@@ -161,6 +165,10 @@ export namespace main {
 	        this.hypeShoutPhrase = source["hypeShoutPhrase"];
 	        this.hypeShoutMinutes = source["hypeShoutMinutes"];
 	        this.nextHypeShoutAt = source["nextHypeShoutAt"];
+	        this.autoMsgEnabled = source["autoMsgEnabled"];
+	        this.autoMsgPhrase = source["autoMsgPhrase"];
+	        this.autoMsgMinutes = source["autoMsgMinutes"];
+	        this.nextAutoMsgAt = source["nextAutoMsgAt"];
 	        this.currentSession = this.convertValues(source["currentSession"], RaffleSession);
 	        this.sessions = this.convertValues(source["sessions"], RaffleSessionSummary);
 	        this.sponsorEnabled = source["sponsorEnabled"];
