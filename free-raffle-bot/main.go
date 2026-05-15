@@ -117,6 +117,9 @@ type RaffleState struct {
 	RaffleHeroImageName   string                 `json:"raffleHeroImageName"`
 	RaffleAutoUpdate      bool                   `json:"raffleAutoUpdate"`
 	RaffleMessageID       string                 `json:"raffleMessageId"`
+	HypeShoutEnabled      bool                   `json:"hypeShoutEnabled"`
+	HypeShoutPhrase       string                 `json:"hypeShoutPhrase"`
+	HypeShoutMinutes      int                    `json:"hypeShoutMinutes"`
 	CurrentSession        *RaffleSession         `json:"currentSession,omitempty"`
 	Sessions              []RaffleSessionSummary `json:"sessions"`
 
@@ -161,6 +164,12 @@ type App struct {
 	raffleHeroAttachmentFile string
 	raffleAutoUpdate         bool
 	raffleMessageID          string
+
+	hypeShoutEnabled  bool
+	hypeShoutPhrase   string
+	hypeShoutMinutes  int = 10
+	hypeShoutStopChan chan struct{}
+	hypeShoutMu       sync.Mutex
 
 	sponsorEnabled  bool
 	sponsorName     string
@@ -368,6 +377,9 @@ func (a *App) GetState() RaffleState {
 		RaffleHeroImageName:   a.raffleHeroFileName,
 		RaffleAutoUpdate:      a.raffleAutoUpdate,
 		RaffleMessageID:       a.raffleMessageID,
+		HypeShoutEnabled:      a.hypeShoutEnabled,
+		HypeShoutPhrase:       a.hypeShoutPhrase,
+		HypeShoutMinutes:      a.hypeShoutMinutes,
 		SponsorEnabled:        a.sponsorEnabled,
 		SponsorName:           a.sponsorName,
 		SponsorRoomName:       a.sponsorRoomName,
@@ -388,6 +400,88 @@ func (a *App) GetState() RaffleState {
 	}
 	state.CurrentSession = copySession(a.currentSession)
 	return state
+}
+
+func (a *App) SetHypeShoutConfig(phrase string, minutes int) RaffleState {
+	a.hypeShoutMu.Lock()
+	a.hypeShoutPhrase = strings.TrimSpace(phrase)
+	if minutes < 1 {
+		minutes = 1
+	}
+	a.hypeShoutMinutes = minutes
+	wasEnabled := a.hypeShoutEnabled
+	a.hypeShoutMu.Unlock()
+
+	if wasEnabled {
+		a.ToggleHypeShout(false)
+		return a.ToggleHypeShout(true)
+	}
+
+	a.emitUpdate()
+	return a.GetState()
+}
+
+func (a *App) ToggleHypeShout(enabled bool) RaffleState {
+	a.hypeShoutMu.Lock()
+	a.hypeShoutEnabled = enabled
+	if a.hypeShoutStopChan != nil {
+		close(a.hypeShoutStopChan)
+		a.hypeShoutStopChan = nil
+	}
+
+	if enabled {
+		a.hypeShoutStopChan = make(chan struct{})
+		stopChan := a.hypeShoutStopChan
+		phrase := a.hypeShoutPhrase
+		minutes := a.hypeShoutMinutes
+		go a.runHypeShoutLoop(stopChan, phrase, minutes)
+	}
+	a.hypeShoutMu.Unlock()
+
+	a.emitUpdate()
+	return a.GetState()
+}
+
+func (a *App) runHypeShoutLoop(stopChan chan struct{}, phrase string, minutes int) {
+	a.logDebug("[HYPE_SHOUT] started: ~every %d mins -> %q", minutes, phrase)
+	base := time.Duration(minutes) * time.Minute
+
+	for {
+		// ±20% jitter
+		jitter := time.Duration(rand.Int63n(int64(base/5)*2) - int64(base/5))
+		wait := base + jitter
+		nextAt := time.Now().Add(wait).Format("15:04:05")
+		a.logDebug("[HYPE_SHOUT] next shout in %v (at %s)", wait.Truncate(time.Second), nextAt)
+
+		select {
+		case <-stopChan:
+			a.logDebug("[HYPE_SHOUT] stopped")
+			return
+		case <-time.After(wait):
+		}
+
+		a.hypeShoutMu.Lock()
+		enabled := a.hypeShoutEnabled
+		currentPhrase := strings.TrimSpace(a.hypeShoutPhrase)
+		a.hypeShoutMu.Unlock()
+
+		if !enabled || currentPhrase == "" {
+			continue
+		}
+
+		a.mu.Lock()
+		prize := a.rafflePrizeName
+		if a.currentSession != nil && strings.TrimSpace(a.currentSession.PrizeName) != "" {
+			prize = a.currentSession.PrizeName
+		}
+		a.mu.Unlock()
+
+		msg := strings.ReplaceAll(currentPhrase, "[prize]", prize)
+		ext.Send(out.SHOUT, msg)
+		a.debugMu.Lock()
+		a.lastShout = msg
+		a.debugMu.Unlock()
+	}
 }
 
 func (a *App) SetRaffleSponsorConfig(enabled bool, name string, roomName string) RaffleState {
@@ -2326,6 +2420,10 @@ func (a *App) processNewBets() {
 	progressEnabled := a.ticketProgressEnabled
 	resumedAt := a.currentSession.ResumedAt
 	bonusEvery := a.currentSession.BonusEvery
+	prize := strings.TrimSpace(a.currentSession.PrizeName)
+	if prize == "" {
+		prize = "Raffle"
+	}
 
 	for _, row := range batch {
 		name := normalizeUsername(row.Player)
@@ -2392,11 +2490,11 @@ func (a *App) processNewBets() {
 
 	for _, ta := range ticketAnnounces {
 		if ta.isNew {
-			a.shoutEntrant(ta.name, ta.tickets)
+			a.shoutEntrant(ta.name, ta.tickets, prize)
 		} else if ta.gamesAway > 0 {
-			a.shoutTicketProgress(ta.name, ta.gamesAway)
+			a.shoutTicketProgress(ta.name, ta.gamesAway, prize)
 		} else if announceEnabled {
-			a.shoutTicketCount(ta.name, ta.tickets)
+			a.shoutTicketCount(ta.name, ta.tickets, prize)
 		}
 	}
 
@@ -2422,16 +2520,16 @@ func (a *App) processNewBets() {
 	}
 }
 
-func (a *App) shoutTicketProgress(name string, gamesAway int) {
+func (a *App) shoutTicketProgress(name string, gamesAway int, prize string) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
 		return
 	}
 	var msg string
 	if gamesAway == 1 {
-		msg = fmt.Sprintf("%s is only 1 game away from another free raffle ticket! 🎟️", trimmed)
+		msg = fmt.Sprintf("%s! Only 1 more game for another %s ticket! 🎟️", trimmed, prize)
 	} else {
-		msg = fmt.Sprintf("%s is only %d games away from another free raffle ticket! 🎟️", trimmed, gamesAway)
+		msg = fmt.Sprintf("%s! Only %d more games for another %s ticket! 🎟️", trimmed, gamesAway, prize)
 	}
 	ext.Send(out.SHOUT, msg)
 	a.debugMu.Lock()
@@ -2440,17 +2538,12 @@ func (a *App) shoutTicketProgress(name string, gamesAway int) {
 	a.logDebug("progress shout sent: %s", msg)
 }
 
-func (a *App) shoutEntrant(name string, entries int) {
+func (a *App) shoutEntrant(name string, entries int, prize string) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
 		return
 	}
-	var msg string
-	if entries == 1 {
-		msg = fmt.Sprintf("Contradultions %s you have entered the raffle! You have 1 entry! See Disc for more info!", trimmed)
-	} else {
-		msg = fmt.Sprintf("Contradultions %s you have entered the raffle! You have %d entries! See Disc for more info!", trimmed, entries)
-	}
+	msg := fmt.Sprintf("Congrats %s! Entered raffle for %s! See Discord for the draw!", trimmed, prize)
 	ext.Send(out.SHOUT, msg)
 	a.debugMu.Lock()
 	a.lastShout = msg
@@ -2458,17 +2551,12 @@ func (a *App) shoutEntrant(name string, entries int) {
 	a.logDebug("shout sent: %s", msg)
 }
 
-func (a *App) shoutTicketCount(name string, entries int) {
+func (a *App) shoutTicketCount(name string, entries int, prize string) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
 		return
 	}
-	var msg string
-	if entries == 1 {
-		msg = fmt.Sprintf("%s now has 1 raffle entry!", trimmed)
-	} else {
-		msg = fmt.Sprintf("%s now has %d raffle entries!", trimmed, entries)
-	}
+	msg := fmt.Sprintf("%s now has %d entries for %s! See Discord!", trimmed, entries, prize)
 	ext.Send(out.SHOUT, msg)
 	a.debugMu.Lock()
 	a.lastShout = msg

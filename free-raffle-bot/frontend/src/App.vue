@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted } from 'vue';
 import StatusHeader from './components/StatusHeader.vue';
 import ControlPanel from './components/ControlPanel.vue';
+import HypeShout from './components/HypeShout.vue';
 import DiscordConfig from './components/DiscordConfig.vue';
 import ActiveSession from './components/ActiveSession.vue';
 import SessionHistory from './components/SessionHistory.vue';
@@ -23,6 +24,9 @@ const state = ref({
   sponsorName: '',
   sponsorRoomName: '',
   raffleHeroImageName: '',
+  hypeShoutEnabled: false,
+  hypeShoutPhrase: '',
+  hypeShoutMinutes: 10,
   currentSession: null,
   sessions: []
 });
@@ -98,6 +102,7 @@ onUnmounted(() => {
     <div v-show="activeTab === 'main'">
       <StatusHeader :state="state" @refresh="refresh" />
       <ControlPanel :state="state" @refresh="refresh" />
+      <HypeShout :state="state" @refresh="refresh" />
       <DiscordConfig :state="state" @refresh="refresh" />
       <ActiveSession :state="state" @refresh="refresh" />
       <SessionHistory :state="state" @refresh="refresh" />
