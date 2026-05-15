@@ -194,7 +194,7 @@ type App struct {
 }
 
 func NewApp() *App {
-	return &App{bonusEvery: 5, raffleAutoUpdate: true, raffleName: "Flame Raffle", rafflePrizeName: "Purple Dragon Lamp", rafflePrizeQty: 1}
+	return &App{bonusEvery: 5, raffleAutoUpdate: true, raffleName: "Flame Raffle", rafflePrizeName: "Purple Dragon Lamp", rafflePrizeQty: 1, hypeShoutMinutes: 10, autoMsgMinutes: 10}
 }
 
 func (a *App) startup(ctx context.Context) {
