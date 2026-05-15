@@ -14,10 +14,10 @@ frontend/node_modules/
 frontend@0.0.0/node_modules/
 frontend@0.0.0/dist/
 main.go.exe
-app-launcher/app-launcher.exe
-free-raffle-bot/free-raffle-bot.exe
-trade-tracker/trade-tracker.exe
-wave-timer-app/wave-timer-app.exe
+app-launcher/build/bin/app-launcher.exe
+free-raffle-bot/build/bin/free-raffle-bot.exe
+trade-tracker/build/bin/trade-tracker.exe
+wave-timer-app/build/bin/wave-timer-app.exe
 
 # Local app-launcher build artifacts
 app-launcher/build/bin/
