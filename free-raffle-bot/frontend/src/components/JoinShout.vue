@@ -9,10 +9,12 @@ const emit = defineEmits(['refresh']);
 
 const phrase = ref("Welcome {name}!, Win [prize]! 1st bet = 1 Ticket + Every 5th = FREE Ticket! See Discord!");
 const delay = ref(2);
+const cooldown = ref(5);
 
 const syncFromState = () => {
   if (props.state.joinShoutPhrase) phrase.value = props.state.joinShoutPhrase;
   if (props.state.joinShoutDelay !== undefined) delay.value = props.state.joinShoutDelay;
+  if (props.state.joinShoutCooldownMinutes !== undefined) cooldown.value = props.state.joinShoutCooldownMinutes;
 };
 
 watch(() => props.state.joinShoutPhrase, () => {
@@ -21,6 +23,10 @@ watch(() => props.state.joinShoutPhrase, () => {
 
 watch(() => props.state.joinShoutDelay, () => {
   delay.value = props.state.joinShoutDelay;
+});
+
+watch(() => props.state.joinShoutCooldownMinutes, () => {
+  cooldown.value = props.state.joinShoutCooldownMinutes;
 });
 
 onMounted(() => {
@@ -36,6 +42,7 @@ const call = async (name, ...args) => {
 const saveConfig = async () => {
   await call('SetJoinShoutConfig', props.state.joinShoutEnabled, phrase.value);
   await call('SetJoinShoutDelay', parseInt(delay.value) || 0);
+  await call('SetJoinShoutCooldown', parseInt(cooldown.value) || 0);
   emit('refresh');
 };
 
@@ -66,6 +73,10 @@ const toggleJoin = async () => {
       <div style="flex: 1; display:flex; flex-direction:column; gap:4px;">
         <label style="font-size:12px; color:var(--muted)">Delay (sec)</label>
         <input type="number" v-model="delay" min="0" max="60" style="width:100%">
+      </div>
+      <div style="flex: 1; display:flex; flex-direction:column; gap:4px;">
+        <label style="font-size:12px; color:var(--muted)">Cooldown (min)</label>
+        <input type="number" v-model="cooldown" min="0" max="1440" style="width:100%">
       </div>
       <button class="alt" @click="saveConfig">Save Config</button>
     </div>

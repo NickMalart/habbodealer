@@ -137,6 +137,7 @@ type RaffleState struct {
 	JoinShoutEnabled      bool                   `json:"joinShoutEnabled"`
 	JoinShoutPhrase       string                 `json:"joinShoutPhrase"`
 	JoinShoutDelay        int                    `json:"joinShoutDelay"`
+	JoinShoutCooldownMinutes int                 `json:"joinShoutCooldownMinutes"`
 	HypeShoutEnabled      bool                   `json:"hypeShoutEnabled"`
 	HypeShoutPhrase       string                 `json:"hypeShoutPhrase"`
 	HypeShoutMinutes      int                    `json:"hypeShoutMinutes"`
@@ -193,7 +194,9 @@ type App struct {
 	joinShoutEnabled bool
 	joinShoutPhrase  string
 	joinShoutDelay   int
+	joinShoutCooldownMinutes int
 	roomUsers        map[string]int
+	roomShoutLastAt  map[string]time.Time
 	roomUsersMu      sync.Mutex
 	lastRoomReady    time.Time
 	usersProcessingMu sync.Mutex
@@ -233,8 +236,10 @@ func NewApp() *App {
 		hypeShoutMinutes: 10,
 		autoMsgMinutes:   10,
 		roomUsers:        make(map[string]int),
+		roomShoutLastAt:  make(map[string]time.Time),
 		joinShoutPhrase:  "Hey {name}, Win [prize]! 1st bet = 1 Ticket + Every 5th = FREE Ticket! See Discord!",
 		joinShoutDelay:   2,
+		joinShoutCooldownMinutes: 5,
 		shoutChan:        make(chan string, 100),
 	}
 }
@@ -457,6 +462,7 @@ func (a *App) GetState() RaffleState {
 		JoinShoutEnabled:      a.joinShoutEnabled,
 		JoinShoutPhrase:       a.joinShoutPhrase,
 		JoinShoutDelay:        a.joinShoutDelay,
+		JoinShoutCooldownMinutes: a.joinShoutCooldownMinutes,
 		HypeShoutEnabled:      a.hypeShoutEnabled,
 		HypeShoutPhrase:       a.hypeShoutPhrase,
 		HypeShoutMinutes:      a.hypeShoutMinutes,
@@ -3683,6 +3689,18 @@ func (a *App) ToggleJoinShout(enabled bool) RaffleState {
 	return a.GetState()
 }
 
+func (a *App) SetJoinShoutCooldown(mins int) RaffleState {
+	a.mu.Lock()
+	if mins < 0 {
+		mins = 0
+	}
+	a.joinShoutCooldownMinutes = mins
+	a.mu.Unlock()
+	a.logDebug("[JOIN_SHOUT] Cooldown updated: %d minutes", mins)
+	a.emitUpdate()
+	return a.GetState()
+}
+
 func (a *App) handleUsersPacket(e *g.Intercept) {
 	if e == nil || e.Packet == nil || len(e.Packet.Data) == 0 {
 		return
@@ -3723,6 +3741,7 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 		joinEnabled := a.joinShoutEnabled
 		phrase := a.joinShoutPhrase
 		delay := a.joinShoutDelay
+		cooldownMins := a.joinShoutCooldownMinutes
 		prizeName := a.rafflePrizeName
 		prizeQty := a.rafflePrizeQty
 		if a.currentSession != nil && strings.TrimSpace(a.currentSession.PrizeName) != "" {
@@ -3749,6 +3768,15 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 			if !exists || oldChatID != newChatID {
 				a.roomUsers[key] = newChatID
 				if joinEnabled && !isInitialLoad {
+					// Check cooldown
+					lastShout, onCooldown := a.roomShoutLastAt[key]
+					if onCooldown && time.Since(lastShout) < time.Duration(cooldownMins)*time.Minute {
+						a.logDebug("[JOIN_SHOUT] Skipping shout for %s (on cooldown, last shout %v ago)", name, time.Since(lastShout).Truncate(time.Second))
+						continue
+					}
+
+					a.roomShoutLastAt[key] = time.Now()
+
 					if exists && oldChatID != newChatID {
 						a.logDebug("[JOIN_SHOUT] Re-join detected (new ID %d): %s (will shout in %ds)", newChatID, name, delay)
 					} else {
