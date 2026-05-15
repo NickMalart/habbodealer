@@ -129,6 +129,9 @@ export namespace main {
 	    raffleHeroImageName: string;
 	    raffleAutoUpdate: boolean;
 	    raffleMessageId: string;
+	    hypeShoutEnabled: boolean;
+	    hypeShoutPhrase: string;
+	    hypeShoutMinutes: number;
 	    currentSession?: RaffleSession;
 	    sessions: RaffleSessionSummary[];
 	    sponsorEnabled: boolean;
@@ -153,6 +156,9 @@ export namespace main {
 	        this.raffleHeroImageName = source["raffleHeroImageName"];
 	        this.raffleAutoUpdate = source["raffleAutoUpdate"];
 	        this.raffleMessageId = source["raffleMessageId"];
+	        this.hypeShoutEnabled = source["hypeShoutEnabled"];
+	        this.hypeShoutPhrase = source["hypeShoutPhrase"];
+	        this.hypeShoutMinutes = source["hypeShoutMinutes"];
 	        this.currentSession = this.convertValues(source["currentSession"], RaffleSession);
 	        this.sessions = this.convertValues(source["sessions"], RaffleSessionSummary);
 	        this.sponsorEnabled = source["sponsorEnabled"];

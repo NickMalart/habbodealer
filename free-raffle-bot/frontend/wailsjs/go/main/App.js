@@ -74,6 +74,10 @@ export function SetEnabled(arg1) {
   return window['go']['main']['App']['SetEnabled'](arg1);
 }
 
+export function SetHypeShoutConfig(arg1, arg2) {
+  return window['go']['main']['App']['SetHypeShoutConfig'](arg1, arg2);
+}
+
 export function SetRaffleDiscordConfig(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['SetRaffleDiscordConfig'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
@@ -100,6 +104,10 @@ export function StartRaffleWithWindow(arg1, arg2) {
 
 export function StopRaffle() {
   return window['go']['main']['App']['StopRaffle']();
+}
+
+export function ToggleHypeShout(arg1) {
+  return window['go']['main']['App']['ToggleHypeShout'](arg1);
 }
 
 export function UpsertManualParticipant(arg1, arg2, arg3) {

@@ -100,9 +100,9 @@ onUnmounted(() => {
     </div>
 
     <div v-show="activeTab === 'main'">
+      <HypeShout :state="state" @refresh="refresh" />
       <StatusHeader :state="state" @refresh="refresh" />
       <ControlPanel :state="state" @refresh="refresh" />
-      <HypeShout :state="state" @refresh="refresh" />
       <DiscordConfig :state="state" @refresh="refresh" />
       <ActiveSession :state="state" @refresh="refresh" />
       <SessionHistory :state="state" @refresh="refresh" />
