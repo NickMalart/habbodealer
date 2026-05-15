@@ -129,6 +129,8 @@ export namespace main {
 	    raffleHeroImageName: string;
 	    raffleAutoUpdate: boolean;
 	    raffleMessageId: string;
+	    joinShoutEnabled: boolean;
+	    joinShoutPhrase: string;
 	    hypeShoutEnabled: boolean;
 	    hypeShoutPhrase: string;
 	    hypeShoutMinutes: number;
@@ -161,6 +163,8 @@ export namespace main {
 	        this.raffleHeroImageName = source["raffleHeroImageName"];
 	        this.raffleAutoUpdate = source["raffleAutoUpdate"];
 	        this.raffleMessageId = source["raffleMessageId"];
+	        this.joinShoutEnabled = source["joinShoutEnabled"];
+	        this.joinShoutPhrase = source["joinShoutPhrase"];
 	        this.hypeShoutEnabled = source["hypeShoutEnabled"];
 	        this.hypeShoutPhrase = source["hypeShoutPhrase"];
 	        this.hypeShoutMinutes = source["hypeShoutMinutes"];

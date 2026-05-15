@@ -7,7 +7,7 @@ const props = defineProps({
 
 const emit = defineEmits(['refresh']);
 
-const phrase = ref("Hey {name}, Congrats {name}! Entered for {prize}! See Discord for the draw!");
+const phrase = ref("Hey {name}, Win [prize]! 1st bet = 1 Ticket + Every 5th = FREE Ticket! See Discord!");
 
 const syncFromState = () => {
   if (props.state.joinShoutPhrase) phrase.value = props.state.joinShoutPhrase;

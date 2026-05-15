@@ -226,7 +226,7 @@ func NewApp() *App {
 		hypeShoutMinutes: 10,
 		autoMsgMinutes:   10,
 		roomUsers:        make(map[string]bool),
-		joinShoutPhrase:  "Hey {name}, Congrats {name}! Entered for {prize}! See Discord for the draw!",
+		joinShoutPhrase:  "Hey {name}, Win [prize]! 1st bet = 1 Ticket + Every 5th = FREE Ticket! See Discord!",
 	}
 }
 
@@ -424,6 +424,8 @@ func (a *App) GetState() RaffleState {
 		RaffleHeroImageName:   a.raffleHeroFileName,
 		RaffleAutoUpdate:      a.raffleAutoUpdate,
 		RaffleMessageID:       a.raffleMessageID,
+		JoinShoutEnabled:      a.joinShoutEnabled,
+		JoinShoutPhrase:       a.joinShoutPhrase,
 		HypeShoutEnabled:      a.hypeShoutEnabled,
 		HypeShoutPhrase:       a.hypeShoutPhrase,
 		HypeShoutMinutes:      a.hypeShoutMinutes,
@@ -3705,10 +3707,11 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 
 func (a *App) shoutJoin(name string, prize string, phrase string) {
 	if phrase == "" {
-		phrase = "Hey {name}, Congrats {name}! Entered for {prize}! See Discord for the draw!"
+		phrase = "Hey {name}, Win [prize]! 1st bet = 1 Ticket + Every 5th = FREE Ticket! See Discord!"
 	}
 	msg := strings.ReplaceAll(phrase, "{name}", name)
 	msg = strings.ReplaceAll(msg, "{prize}", prize)
+	msg = strings.ReplaceAll(msg, "[prize]", prize)
 	
 	ext.Send(out.SHOUT, msg)
 	a.debugMu.Lock()
