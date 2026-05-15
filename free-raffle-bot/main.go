@@ -326,9 +326,7 @@ func (a *App) GetDebugSnapshot() string {
 	lines = append(lines, fmt.Sprintf("last_notify_payload: %s", strings.TrimSpace(a.lastNotifyRaw)))
 	lines = append(lines, fmt.Sprintf("last_query_rows: %d", a.lastQueryRows))
 	lines = append(lines, fmt.Sprintf("last_shout: %s", strings.TrimSpace(a.lastShout)))
-	a.mu.Lock()
 	lines = append(lines, fmt.Sprintf("connected: %t  inRoom: %t  ticketAnnounce: %t  ticketProgress: %t", a.connected, a.inRoom, a.ticketAnnounceEnabled, a.ticketProgressEnabled))
-	a.mu.Unlock()
 	lines = append(lines, "")
 	lines = append(lines, "--- Recent Logs ---")
 	lines = append(lines, a.debugLines...)
@@ -3688,12 +3686,16 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 	}
 
 	a.mu.Lock()
-	if !a.inRoom {
+	wasInRoom := a.inRoom
+	if !wasInRoom {
 		a.inRoom = true
+	}
+	a.mu.Unlock()
+
+	if !wasInRoom {
 		a.logDebug("inRoom set via USERS packet")
 		a.emitUpdate()
 	}
-	a.mu.Unlock()
 
 	// COPY data to avoid race conditions with the packet thread and allow async processing
 	data := make([]byte, len(e.Packet.Data))
