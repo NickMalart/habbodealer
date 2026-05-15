@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
 	"math/big"
+	"math/rand"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -448,10 +448,10 @@ func (a *App) GetState() RaffleState {
 			}
 			return a.nextAutoMsgAt.Format(time.RFC3339)
 		}(),
-		SponsorEnabled: a.sponsorEnabled,
-		SponsorName:           a.sponsorName,
-		SponsorRoomName:       a.sponsorRoomName,
-		Sessions:              make([]RaffleSessionSummary, len(a.sessions)),
+		SponsorEnabled:  a.sponsorEnabled,
+		SponsorName:     a.sponsorName,
+		SponsorRoomName: a.sponsorRoomName,
+		Sessions:        make([]RaffleSessionSummary, len(a.sessions)),
 	}
 	for i, s := range a.sessions {
 		state.Sessions[i] = RaffleSessionSummary{
@@ -518,7 +518,7 @@ func (a *App) runHypeShoutLoop(stopChan chan struct{}, phrase string, minutes in
 		// ±20% jitter
 		jitter := time.Duration(rand.Int63n(int64(base/5)*2) - int64(base/5))
 		wait := base + jitter
-		
+
 		a.hypeShoutMu.Lock()
 		a.nextHypeShoutAt = time.Now().Add(wait)
 		a.hypeShoutMu.Unlock()
@@ -612,7 +612,7 @@ func (a *App) runAutoMsgLoop(stopChan chan struct{}, phrase string, minutes int)
 		// ±20% jitter
 		jitter := time.Duration(rand.Int63n(int64(base/5)*2) - int64(base/5))
 		wait := base + jitter
-		
+
 		a.autoMsgMu.Lock()
 		a.nextAutoMsgAt = time.Now().Add(wait)
 		a.autoMsgMu.Unlock()
@@ -1279,7 +1279,7 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	a.mu.Lock()
 	webhookURL := strings.TrimSpace(hardcodedRaffleWebhookURL)
 	autoUpdate := a.raffleAutoUpdate
-	
+
 	// Default fallbacks (internal constants or state-defaults)
 	raffleName := "Flame Raffle"
 	prizeName := "Purple Dragon Lamp"
@@ -1332,7 +1332,7 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		heroImageURL = strings.TrimSpace(session.HeroImageURL)
 		heroAttachmentID = strings.TrimSpace(session.HeroAttachmentID)
 		heroAttachmentFile = strings.TrimSpace(session.HeroAttachmentFile)
-		
+
 		// If this is the current session, we might have unsaved/pending hero data in the bot state
 		if sessionOverride == nil || (a.currentSession != nil && session.DBID == a.currentSession.DBID) {
 			heroDataURL = strings.TrimSpace(a.raffleHeroDataURL)
@@ -1356,7 +1356,7 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		sponsorEnabled = session.SponsorEnabled
 		sponsorName = strings.TrimSpace(session.SponsorName)
 		sponsorRoomName = strings.TrimSpace(session.SponsorRoomName)
-		
+
 		if !sponsorEnabled && sessionOverride == nil {
 			sponsorEnabled = a.sponsorEnabled
 			sponsorName = strings.TrimSpace(a.sponsorName)
@@ -2140,11 +2140,11 @@ func (a *App) StopRaffle() RaffleState {
 
 func (a *App) ResumeSession(dbID int64) (RaffleState, error) {
 	a.mu.Lock()
-        if a.currentSession != nil {
-                a.mu.Unlock()
-                a.StopRaffle()
-                a.mu.Lock()
-        }
+	if a.currentSession != nil {
+		a.mu.Unlock()
+		a.StopRaffle()
+		a.mu.Lock()
+	}
 	idx := -1
 	for i := range a.sessions {
 		if a.sessions[i].DBID == dbID {
@@ -2957,39 +2957,37 @@ func (a *App) persistParticipants(sessionDBID int64, participants []RafflePartic
 	return tx.Commit(ctx)
 }
 
-
 func (a *App) DeleteSession(dbID int64) (RaffleState, error) {
-        a.mu.Lock()
-        db := a.db
-        owner := a.ownerKey
-        if a.currentSession != nil && a.currentSession.DBID == dbID {
-                a.currentSession = nil
-                a.raffleMessageID = ""
-        }
-        idx := -1
-        for i, s := range a.sessions {
-                if s.DBID == dbID {
-                        idx = i
-                        break
-                }
-        }
-        if idx != -1 {
-                a.sessions = append(a.sessions[:idx], a.sessions[idx+1:]...)
-        }
-        a.mu.Unlock()
+	a.mu.Lock()
+	db := a.db
+	owner := a.ownerKey
+	if a.currentSession != nil && a.currentSession.DBID == dbID {
+		a.currentSession = nil
+		a.raffleMessageID = ""
+	}
+	idx := -1
+	for i, s := range a.sessions {
+		if s.DBID == dbID {
+			idx = i
+			break
+		}
+	}
+	if idx != -1 {
+		a.sessions = append(a.sessions[:idx], a.sessions[idx+1:]...)
+	}
+	a.mu.Unlock()
 
-        if db != nil && dbID > 0 {
-                ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-                defer cancel()
-                _, err := db.Exec(ctx, `DELETE FROM raffle_sessions WHERE id = $1 AND owner_key = $2`, dbID, owner)
-                if err != nil {
-                        return a.GetState(), err
-                }
-        }
-        a.emitUpdate()
-        return a.GetState(), nil
+	if db != nil && dbID > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		_, err := db.Exec(ctx, `DELETE FROM raffle_sessions WHERE id = $1 AND owner_key = $2`, dbID, owner)
+		if err != nil {
+			return a.GetState(), err
+		}
+	}
+	a.emitUpdate()
+	return a.GetState(), nil
 }
-
 
 func (a *App) PostWinnerProofForSession(dbID int64, imageDataURL string, imageFileName string) (string, error) {
 	dataURL := strings.TrimSpace(imageDataURL)
@@ -3589,7 +3587,7 @@ func (a *App) runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, er
 	if _, err := os.Stat(scriptPath); err != nil {
 		scriptPath = filepath.Join("scripts", "parse_users28.py")
 	}
-	
+
 	if _, err := os.Stat(scriptPath); err != nil {
 		exePath, _ := os.Executable()
 		exeDir := filepath.Dir(exePath)
@@ -3692,7 +3690,7 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 			if name == "" {
 				continue
 			}
-			
+
 			key := strings.ToLower(name)
 			if _, exists := a.roomUsers[key]; !exists {
 				a.roomUsers[key] = true
@@ -3707,12 +3705,12 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 
 func (a *App) shoutJoin(name string, prize string, phrase string) {
 	if phrase == "" {
-		phrase = "Hey {name}, Win [prize]! 1st bet = 1 Ticket + Every 5th = FREE Ticket! See Discord!"
+		phrase = "Welcome {name}!, Win [prize]! 1st bet = 1 Ticket + Every 5th = FREE Ticket! See Discord!"
 	}
 	msg := strings.ReplaceAll(phrase, "{name}", name)
 	msg = strings.ReplaceAll(msg, "{prize}", prize)
 	msg = strings.ReplaceAll(msg, "[prize]", prize)
-	
+
 	ext.Send(out.SHOUT, msg)
 	a.debugMu.Lock()
 	a.lastShout = msg
@@ -3739,11 +3737,11 @@ func setupExt(a *App) {
 		a.connected = false
 		a.inRoom = false
 		a.mu.Unlock()
-		
+
 		a.roomUsersMu.Lock()
 		a.roomUsers = make(map[string]bool)
 		a.roomUsersMu.Unlock()
-		
+
 		a.emitUpdate()
 	})
 
@@ -3751,11 +3749,11 @@ func setupExt(a *App) {
 		a.mu.Lock()
 		a.inRoom = true
 		a.mu.Unlock()
-		
+
 		a.roomUsersMu.Lock()
 		a.roomUsers = make(map[string]bool)
 		a.roomUsersMu.Unlock()
-		
+
 		a.emitUpdate()
 	})
 

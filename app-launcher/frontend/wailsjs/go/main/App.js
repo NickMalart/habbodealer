@@ -34,6 +34,10 @@ export function KillAllTasks() {
   return window['go']['main']['App']['KillAllTasks']();
 }
 
+export function KillApp(arg1) {
+  return window['go']['main']['App']['KillApp'](arg1);
+}
+
 export function LaunchApp(arg1, arg2) {
   return window['go']['main']['App']['LaunchApp'](arg1, arg2);
 }

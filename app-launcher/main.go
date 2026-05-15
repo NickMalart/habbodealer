@@ -741,6 +741,33 @@ func (a *App) IsBuilding() bool {
 	return a.building
 }
 
+// KillApp forcibly stops all tracked instances for a specific app ID.
+func (a *App) KillApp(appID string) string {
+	a.emitLog(fmt.Sprintf("KillApp invoked for %s", appID), "info")
+
+	root := a.resolveWorkspaceRoot()
+	targets := knownBuildTargets()
+
+	var target *buildTarget
+	for i := range targets {
+		if targets[i].ID == appID {
+			target = &targets[i]
+			break
+		}
+	}
+
+	if target == nil {
+		// Even if not a known target, try to kill any tracked processes with this prefix
+		killed := a.killTrackedProcessesForApp(appID)
+		a.RefreshApps()
+		return fmt.Sprintf("killed %d untracked instance(s) for %s", killed, appID)
+	}
+
+	a.closeBuildTargetProcesses(*target, root)
+	a.RefreshApps()
+	return "ok"
+}
+
 // 笏笏 Main 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
 
 func (a *App) shutdown(ctx context.Context) {
