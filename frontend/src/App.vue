@@ -833,13 +833,14 @@
           <div class="game-guide-text">
             Player wins: {{ (activeStats && activeStats.overall && activeStats.overall.playerWins) || 0 }} ({{ formatNumber((activeStats && activeStats.overall && activeStats.overall.playerWinRate) || 0) }}%) —
             Dealer wins: {{ (activeStats && activeStats.overall && activeStats.overall.dealerWins) || 0 }} ({{ formatNumber((activeStats && activeStats.overall && activeStats.overall.dealerWinRate) || 0) }}%) —
+            Dealer edge: {{ formatNumber((activeStats && activeStats.overall && activeStats.overall.casinoEdgePercent) || 0) }}% —
             Completed rounds: {{ (activeStats && activeStats.overall && activeStats.overall.completedRounds) || 0 }}
-          </div>
-        </div>
-        <div class="game-guide-block">
-          <div class="game-guide-label">By Game</div>
-          <table class="catalog-table">
-            <thead><tr><th>Game</th><th>Player Wins</th><th>Dealer Wins</th><th>Player %</th><th>Dealer %</th><th>Rounds</th></tr></thead>
+            </div>
+            </div>
+            <div class="game-guide-block">
+            <div class="game-guide-label">By Game</div>
+            <table class="catalog-table">
+            <thead><tr><th>Game</th><th>Player Wins</th><th>Dealer Wins</th><th>Player %</th><th>Dealer %</th><th>Edge</th><th>Rounds</th></tr></thead>
             <tbody>
               <tr v-for="g in gameKeys" :key="g">
                 <td>{{ (g === 'TriH' || g === 'TriL' || g === 'Tri') ? 'Tri' : (g === 'Other' ? 'Other' : g) }}</td>
@@ -847,11 +848,11 @@
                 <td>{{ (activeStats && activeStats.byGame && activeStats.byGame[g] && activeStats.byGame[g].dealerWins) || 0 }}</td>
                 <td>{{ formatNumber((activeStats && activeStats.byGame && activeStats.byGame[g] && activeStats.byGame[g].playerWinRate) || 0) }}%</td>
                 <td>{{ formatNumber((activeStats && activeStats.byGame && activeStats.byGame[g] && activeStats.byGame[g].dealerWinRate) || 0) }}%</td>
+                <td>{{ formatNumber((activeStats && activeStats.byGame && activeStats.byGame[g] && activeStats.byGame[g].casinoEdgePercent) || 0) }}%</td>
                 <td>{{ (activeStats && activeStats.byGame && activeStats.byGame[g] && activeStats.byGame[g].completedRounds) || 0 }}</td>
               </tr>
             </tbody>
-          </table>
-        </div>
+            </table>        </div>
       </div>
     </div>
 

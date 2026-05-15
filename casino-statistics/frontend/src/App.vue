@@ -68,6 +68,13 @@ const sessionWinRate = computed(() => {
   return (sessionStats.value.dealerWins / sessionStats.value.total) * 100
 })
 
+const sessionDealerEdge = computed(() => {
+  if (sessionStats.value.total === 0) return 0
+  const dealerRate = (sessionStats.value.dealerWins / sessionStats.value.total) * 100
+  const playerRate = (sessionStats.value.playerWins / sessionStats.value.total) * 100
+  return dealerRate - playerRate
+})
+
 async function loadSettings() {
   try {
     const hidden = await GetSettings('hiddenGames')
@@ -339,6 +346,12 @@ onMounted(async () => {
           <h3>Session Win %</h3>
           <div class="stat-value dealer-win">{{ sessionWinRate.toFixed(1) }}%</div>
         </div>
+        <div class="stat-card">
+          <h3>Session Dealer Edge</h3>
+          <div class="stat-value" :class="{ 'dealer-win': sessionDealerEdge > 0, 'player-win': sessionDealerEdge < 0 }">
+            {{ sessionDealerEdge > 0 ? '+' : '' }}{{ sessionDealerEdge.toFixed(1) }}%
+          </div>
+        </div>
       </div>
 
       <div style="background: #0f4c75; padding: 1.5rem; border-radius: 8px; text-align: center; border: 2px solid #3282b8;">
@@ -530,6 +543,12 @@ onMounted(async () => {
             <div class="stat-card">
               <h3>Dealer Win %</h3>
               <div class="stat-value dealer-win">{{ selectedPlayer?.dealerWinRate.toFixed(1) }}%</div>
+            </div>
+            <div class="stat-card">
+              <h3>Dealer Edge</h3>
+              <div class="stat-value" :class="{ 'dealer-win': selectedPlayer?.dealerEdge > 0, 'player-win': selectedPlayer?.dealerEdge < 0 }">
+                {{ selectedPlayer?.dealerEdge > 0 ? '+' : '' }}{{ selectedPlayer?.dealerEdge.toFixed(1) }}%
+              </div>
             </div>
           </div>
 

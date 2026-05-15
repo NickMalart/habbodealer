@@ -371,12 +371,14 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 	if totalDecided > 0 {
 		stats.Overall.PlayerWinRate = float64(stats.Overall.PlayerWins) / float64(totalDecided) * 100.0
 		stats.Overall.DealerWinRate = float64(stats.Overall.DealerWins) / float64(totalDecided) * 100.0
+		stats.Overall.CasinoEdgePercent = stats.Overall.DealerWinRate - stats.Overall.PlayerWinRate
 	}
 	for k, gs := range stats.ByGame {
 		decided := gs.PlayerWins + gs.DealerWins
 		if decided > 0 {
 			gs.PlayerWinRate = float64(gs.PlayerWins) / float64(decided) * 100.0
 			gs.DealerWinRate = float64(gs.DealerWins) / float64(decided) * 100.0
+			gs.CasinoEdgePercent = gs.DealerWinRate - gs.PlayerWinRate
 		}
 		stats.ByGame[k] = gs
 	}
