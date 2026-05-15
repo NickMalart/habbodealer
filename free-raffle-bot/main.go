@@ -3757,7 +3757,36 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 
 		for _, u := range users {
 			name := strings.TrimSpace(u.Username)
-			if name == "" {
+			
+			// STRICT VALIDATION: Filter out gibberish or invalid entries
+			// 1. Name must be at least 2 chars
+			// 2. IDs must be valid (not nil/0). Genuine users always have these.
+			// 3. Name must not contain obviously invalid characters
+			// 4. Must have an EntityID (room index)
+			
+			// Helper to check if name is only alphanumeric + common habbo chars
+			isCleanName := true
+			if len(name) < 2 {
+				isCleanName = false
+			} else {
+				for _, r := range name {
+					if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '[' || r == ']' || r == '@' || r == '!') {
+						isCleanName = false
+						break
+					}
+				}
+			}
+
+			isValid := isCleanName && 
+			           u.ChatID > 0 && 
+			           u.TradeID > 0 && 
+			           strings.TrimSpace(u.EntityID) != ""
+
+			if !isValid {
+				// Only log if it's not totally empty (avoid noise)
+				if name != "" || u.ChatID != 0 {
+					a.logDebug("[JOIN_SHOUT] Filtered invalid user: %q (ChatID: %d, TradeID: %d, Entity: %q)", name, u.ChatID, u.TradeID, u.EntityID)
+				}
 				continue
 			}
 
