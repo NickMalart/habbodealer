@@ -233,15 +233,21 @@ async function refreshPlayers() {
 
 async function handleToggleBlock(name) {
   logMessage(`Toggling block for: ${name}`)
-  await ToggleBlockPlayer(name)
-  await refreshPlayers()
-  await refreshStats()
+  try {
+    await ToggleBlockPlayer(name)
+    // Small delay to ensure DB transaction is fully committed and visible
+    await new Promise(r => setTimeout(r, 200))
+    await refreshPlayers()
+    await refreshStats()
+  } catch (err) {
+    logMessage(`ERROR toggling block: ${err.message || err}`)
+  }
 }
 
 function isBlocked(name) {
   if (!name) return false
-  const n = name.toLowerCase()
-  return blockedPlayers.value.some(p => p.toLowerCase() === n)
+  const n = name.trim().toLowerCase()
+  return blockedPlayers.value.some(p => p.trim().toLowerCase() === n)
 }
 
 onMounted(async () => {

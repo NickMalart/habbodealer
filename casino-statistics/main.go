@@ -169,7 +169,7 @@ func (a *App) initDB() {
 
 	a.db = pool
 
-	// Create blocked_players table if not exists
+	// Create blocked_players table if not exists with case-insensitive uniqueness
 	_, err = a.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS blocked_players (
 			player_name TEXT PRIMARY KEY,
@@ -179,6 +179,8 @@ func (a *App) initDB() {
 	if err != nil {
 		log.Printf("[DB_INIT] Failed to create blocked_players table: %v", err)
 	}
+	// Add a case-insensitive index/unique constraint if we can't easily change the PK
+	_, _ = a.db.Exec(context.Background(), "CREATE UNIQUE INDEX IF NOT EXISTS idx_blocked_players_lower_name ON blocked_players (LOWER(player_name))")
 
 	// Create ui_settings table if not exists
 	_, err = a.db.Exec(context.Background(), `
@@ -241,7 +243,7 @@ func (a *App) GetBlockedPlayers() []string {
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err == nil {
-			players = append(players, name)
+			players = append(players, strings.TrimSpace(name))
 		}
 	}
 	return players
@@ -259,17 +261,26 @@ func (a *App) ToggleBlockPlayer(name string) {
 	}
 
 	var exists bool
-	err := a.db.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM blocked_players WHERE player_name = $1)", name).Scan(&exists)
+	err := a.db.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM blocked_players WHERE LOWER(player_name) = LOWER($1))", name).Scan(&exists)
 	if err != nil {
+		log.Printf("[BLOCK] Failed to check if player exists: %v", err)
 		return
 	}
 
 	if exists {
 		log.Printf("[BLOCK] Unblocking player: %s", name)
-		_, _ = a.db.Exec(context.Background(), "DELETE FROM blocked_players WHERE player_name = $1", name)
+		// Delete using case-insensitive match
+		_, err = a.db.Exec(context.Background(), "DELETE FROM blocked_players WHERE LOWER(player_name) = LOWER($1)", name)
+		if err != nil {
+			log.Printf("[BLOCK] Failed to unblock player: %v", err)
+		}
 	} else {
 		log.Printf("[BLOCK] Blocking player: %s", name)
-		_, _ = a.db.Exec(context.Background(), "INSERT INTO blocked_players (player_name) VALUES ($1)", name)
+		// Insert the name as provided (trimmed)
+		_, err = a.db.Exec(context.Background(), "INSERT INTO blocked_players (player_name) VALUES ($1) ON CONFLICT (LOWER(player_name)) DO NOTHING", name)
+		if err != nil {
+			log.Printf("[BLOCK] Failed to block player: %v", err)
+		}
 	}
 }
 
@@ -350,10 +361,11 @@ func (a *App) GetPlayerStats(startDate, endDate string) []PlayerStats {
 			}
 		}
 
-		ps, ok := playerMap[name]
+		trimmedName := strings.TrimSpace(name)
+		ps, ok := playerMap[trimmedName]
 		if !ok {
-			ps = &PlayerStats{Name: name}
-			playerMap[name] = ps
+			ps = &PlayerStats{Name: trimmedName}
+			playerMap[trimmedName] = ps
 		}
 
 		ps.TotalRounds++
@@ -388,9 +400,9 @@ func (a *App) GetPlayerGameStats(playerName, startDate, endDate string) []GameSt
 	query := `
 		SELECT game, winner, status, issue, completed_at
 		FROM game_history_entries
-		WHERE owner_key = $1 AND player_name = $2
+		WHERE owner_key = $1 AND TRIM(player_name) = $2
 	`
-	args := []interface{}{a.ownerKey, playerName}
+	args := []interface{}{a.ownerKey, strings.TrimSpace(playerName)}
 	if startDate != "" {
 		query += fmt.Sprintf(" AND completed_at >= $%d", len(args)+1)
 		args = append(args, startDate)
@@ -477,7 +489,7 @@ func (a *App) GetPlayers() []string {
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err == nil {
-			players = append(players, name)
+			players = append(players, strings.TrimSpace(name))
 		}
 	}
 	return players
@@ -607,7 +619,7 @@ func (a *App) GetStats(startDate, endDate string) CasinoStats {
 			continue
 		}
 
-		if blocked[strings.ToLower(playerName)] {
+		if blocked[strings.ToLower(strings.TrimSpace(playerName))] {
 			continue
 		}
 
