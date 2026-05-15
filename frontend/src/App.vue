@@ -4,7 +4,7 @@
     <!-- Tab bar -->
       <div class="tab-bar">
       <button
-        v-for="tab in ['Home', 'Trade', 'Game History', 'Stats', 'Logs', 'Utility']"
+        v-for="tab in ['Home', 'Logs', 'Utility']"
         :key="tab"
         :class="['tab-btn', { active: activeTab === tab }]"
         @click="activeTab = tab"
@@ -14,13 +14,6 @@
     <div v-if="activeTab === 'Home'">
       <h2 class="section-title">Home</h2>
       <p class="config-intro">Home Page!</p>
-      <div class="game-card-grid">
-        <button v-for="game in gameGuides" :key="game.key" class="game-card" @click="openGameGuide(game)">
-          <div class="game-card-title">{{ game.title }}</div>
-          <span class="game-card-summary">{{ game.summary }}</span>
-          <span class="game-card-action">Click for details</span>
-        </button>
-      </div>
 
       <div class="casino-panel">
         <div class="casino-panel-inner">
@@ -590,272 +583,6 @@
       </div>
     </div>
 
-    <!-- Trade tab -->
-    <div v-if="activeTab === 'Trade'">
-
-      <h2 class="section-title">Double Payout Check</h2>
-      <p class="trade-hint" v-if="activeBetSourceLabel">
-        Showing {{ activeBetSourceLabel }} data until the round is fully complete.
-      </p>
-      <div class="trade-empty" v-if="activeBetItems.length === 0">
-        No live or saved round bet data yet.
-      </div>
-      <table v-else class="catalog-table">
-        <thead><tr><th>Item</th><th>Bet</th><th>Need Stock</th><th>Payout</th><th>Have</th><th>Status</th></tr></thead>
-        <tbody>
-          <tr v-for="(row, index) in payoutRows" :key="`payout-${index}`">
-            <td><span class="catalog-label">{{ row.displayName }}</span></td>
-            <td><span class="catalog-label">{{ row.betQty }}</span></td>
-            <td><span class="catalog-label">{{ row.required }}</span></td>
-            <td><span class="catalog-label">{{ row.payoutTotal }}</span></td>
-            <td><span class="catalog-label">{{ row.have }}</span></td>
-            <td><span class="catalog-label" :class="{ 'unlisted-value': row.short > 0 }">{{ row.short > 0 ? `Short ${row.short}` : 'OK' }}</span></td>
-          </tr>
-        </tbody>
-      </table>
-      <p class="trade-hint" v-if="activeBetItems.length > 0 && !canCoverPayout">
-        You do not have enough stock to return double payout (bet + match).
-      </p>
-      <p class="trade-hint" v-if="activeBetItems.length > 0 && canCoverPayout">
-        Your hand can return double payout (bet + match).
-      </p>
-
-      <hr class="trade-divider" />
-
-      <!-- Your Hand -->
-      <h2 class="section-title">Your Hand</h2>
-      <div v-if="handItems.length === 0" class="trade-empty">
-        No hand data yet.
-        <span style="font-size:12px;color:#666;">Refreshes every 30s and when a trade opens.</span>
-      </div>
-      <table v-else class="catalog-table">
-        <thead><tr><th>Item</th><th>Qty</th></tr></thead>
-        <tbody>
-          <tr v-for="(item, index) in handItems" :key="`hand-${index}`">
-            <td><span class="catalog-label">{{ item.displayName }}</span></td>
-            <td><span class="catalog-label">{{ item.Quantity }}</span></td>
-          </tr>
-        </tbody>
-      </table>
-      <hr class="trade-divider" />
-
-      <!-- Player's Offer -->
-      <div v-if="casinoStatusKey !== 'stopped'" class="trade-hint">Trade limits: max {{ maxUniqueItemsInput }} unique items, max {{ maxQuantityPerItemInput }} per item</div>
-      <h2 class="section-title">Player Offer</h2>
-      <div v-if="tradeItems.length === 0" class="trade-empty">
-        No active trade items detected.<br />
-        <span style="font-size:12px;color:#666">Items appear here when the partner places furniture in the trade.</span>
-      </div>
-      <table v-else class="catalog-table">
-        <thead><tr><th>Item</th><th>Qty</th></tr></thead>
-        <tbody>
-          <tr v-for="(item, index) in tradeItems" :key="`trade-${index}`">
-            <td><span class="catalog-label">{{ item.displayName }}</span></td>
-            <td><span class="catalog-label">{{ item.Quantity }}</span></td>
-          </tr>
-        </tbody>
-      </table>
-
-      <hr class="trade-divider" />
-
-      <!-- Your Offer -->
-      <h2 class="section-title">Your Offer To Them</h2>
-      <div v-if="ownTradeItems.length === 0" class="trade-empty">
-        Nothing added by you yet.
-      </div>
-      <table v-else class="catalog-table">
-        <thead><tr><th>Item</th><th>Qty</th></tr></thead>
-        <tbody>
-          <tr v-for="(item, index) in ownTradeItems" :key="`own-trade-${index}`">
-            <td><span class="catalog-label">{{ item.displayName }}</span></td>
-            <td><span class="catalog-label">{{ item.Quantity }}</span></td>
-          </tr>
-        </tbody>
-      </table>
-
-    </div>
-
-    <div v-if="activeTab === 'Game History'">
-      <h2 class="section-title">Game History</h2>
-      <p class="config-intro">
-        Saved on disk and kept between sessions so you can review previous rounds, payout issues, and manual follow-up cases.
-      </p>
-
-      <div class="history-actions">
-        <button type="button" class="copy-btn history-danger-btn" @click="showClearHistoryConfirm = true">Clear History</button>
-        <button type="button" class="copy-btn" @click="seedFakeHistory">Seed Fake Data (1000)</button>
-      </div>
-
-      <div class="history-search-wrapper">
-        <input
-          v-model="historySearch"
-          type="text"
-          class="history-search"
-          placeholder="Search by player name"
-          @input="onHistorySearchInput"
-          @focus="showNameSuggestions = true"
-          @blur="hideNameSuggestionsWithDelay"
-          autocomplete="off"
-        />
-        <ul v-if="showNameSuggestions && playerNameSuggestions.length" class="history-suggestions" @mousedown.prevent>
-          <li v-for="(name, idx) in playerNameSuggestions" :key="`suggest-${idx}`" @mousedown.prevent="selectHistorySuggestion(name)">{{ name }}</li>
-        </ul>
-      </div>
-
-      <div class="history-filter-row">
-        <label class="history-filter-flagged">
-          <input type="checkbox" v-model="showFlaggedOnly" /> Show flagged only
-        </label>
-      </div>
-
-      <div v-if="filteredGameHistory.length === 0" class="trade-empty">
-        No game history matched your search.
-      </div>
-
-      <div v-else class="history-list">
-        <button
-          v-for="entry in filteredGameHistory"
-          :key="entry.id"
-          type="button"
-          class="history-card"
-          :class="{ 'history-card-issue': entry.issue }"
-          @click="openHistoryEntry(entry)"
-        >
-          <div class="history-card-top">
-            <span class="history-player">{{ entry.playerName || 'Unknown' }}</span>
-            <span class="history-status" :class="historyStatusClass(entry)">{{ entry.status || 'Unknown' }}</span>
-          </div>
-          <div class="history-meta-row">
-            <span>{{ entry.game || 'Unknown Game' }}</span>
-            <span>{{ formatDateTime(entry.startedAt) }}</span>
-          </div>
-          <div class="history-meta-row">
-            <span>Winner: {{ entry.winner || 'Not Recorded' }}</span>
-            <span v-if="entry.issue" class="history-issue-text">Flagged</span>
-          </div>
-          <div class="history-summary">
-            Bet: {{ summarizeTradeItems(entry.betItems) || 'No bet items recorded' }}
-          </div>
-          <div class="history-summary" v-if="entry.issueReason">
-            Issue: {{ entry.issueReason }}
-          </div>
-          <div class="game-card-action">Click for full details</div>
-        </button>
-      </div>
-
-      <div class="game-guide-modal-backdrop" v-if="selectedHistory" @click="closeHistoryEntry">
-        <div class="game-guide-modal history-modal" @click.stop>
-          <div class="game-guide-header">
-            <h3 class="section-title game-guide-title">{{ selectedHistory.playerName || 'Unknown' }}</h3>
-            <button type="button" class="copy-btn" @click="closeHistoryEntry">Close</button>
-          </div>
-
-          <div class="history-detail-grid">
-            <div class="history-detail-item">
-              <div class="game-guide-label">Game</div>
-              <div class="game-guide-text">{{ selectedHistory.game || 'Unknown' }}</div>
-            </div>
-            <div class="history-detail-item">
-              <div class="game-guide-label">Started</div>
-              <div class="game-guide-text">{{ formatDateTime(selectedHistory.startedAt) }}</div>
-            </div>
-            <div class="history-detail-item">
-              <div class="game-guide-label">Completed</div>
-              <div class="game-guide-text">{{ formatDateTime(selectedHistory.completedAt) || 'Still open / not recorded' }}</div>
-            </div>
-            <div class="history-detail-item">
-              <div class="game-guide-label">Winner</div>
-              <div class="game-guide-text">{{ selectedHistory.winner || 'Not Recorded' }}</div>
-            </div>
-            <div class="history-detail-item">
-              <div class="game-guide-label">Status</div>
-              <div class="game-guide-text">{{ selectedHistory.status || 'Unknown' }}</div>
-            </div>
-            <div class="history-detail-item">
-              <div class="game-guide-label">Issue</div>
-              <div class="game-guide-text">{{ selectedHistory.issue ? (selectedHistory.issueReason || 'Flagged for review') : 'No issue flagged' }}</div>
-            </div>
-            <div class="history-detail-item">
-              <div class="game-guide-label">Player Result</div>
-              <div class="game-guide-text">{{ selectedHistory.playerResult || 'Not recorded' }}</div>
-            </div>
-            <div class="history-detail-item">
-              <div class="game-guide-label">Dealer Result</div>
-              <div class="game-guide-text">{{ selectedHistory.dealerResult || 'Not recorded' }}</div>
-            </div>
-          </div>
-
-          <div class="game-guide-block">
-            <div class="game-guide-label">Bet Items</div>
-            <div class="game-guide-text">{{ summarizeTradeItems(selectedHistory.betItems) || 'No bet items recorded' }}</div>
-          </div>
-          <div class="game-guide-block">
-            <div class="game-guide-label">Payout Items</div>
-            <div class="game-guide-text">{{ summarizeTradeItems(selectedHistory.payoutItems) || 'No payout items recorded' }}</div>
-          </div>
-          <div class="game-guide-block">
-            <div class="game-guide-label">Round Notes</div>
-            <div v-if="(selectedHistory.notes || []).length === 0" class="game-guide-text">No additional notes recorded.</div>
-            <div v-else class="history-notes">
-              <div v-for="(note, index) in selectedHistory.notes" :key="`note-${index}`" class="game-guide-text">{{ note }}</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="game-guide-modal-backdrop" v-if="showClearHistoryConfirm" @click="closeClearHistoryConfirm">
-        <div class="game-guide-modal confirm-modal" @click.stop>
-          <div class="game-guide-header">
-            <h3 class="section-title game-guide-title">Clear Game History</h3>
-          </div>
-          <p class="game-guide-text">Are you sure? This will remove all saved game history from the app and delete the persisted history file.</p>
-          <div class="confirm-actions">
-            <button type="button" class="copy-btn" @click="closeClearHistoryConfirm">Cancel</button>
-            <button type="button" class="copy-btn history-danger-btn" @click="confirmClearHistory">Clear Everything</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-      <!-- Stats tab -->
-      <div v-if="activeTab === 'Stats'">
-      <h2 class="section-title">Casino Stats</h2>
-      <div style="display:flex;justify-content:center;gap:8px;margin-bottom:12px;">
-        <button :class="['copy-btn', { 'active': statsRangeKey === 'all_time' }]" @click="loadStats('all_time')">All time</button>
-        <button :class="['copy-btn', { 'active': statsRangeKey === 'today' }]" @click="loadStats('today')">Today</button>
-      </div>
-      <div v-if="!activeStats || Object.keys(activeStats || {}).length === 0" class="trade-empty">
-        No stats available.
-      </div>
-      <div v-else>
-        <div class="game-guide-block">
-          <div class="game-guide-label">Overall</div>
-          <div class="game-guide-text">
-            Player wins: {{ (activeStats && activeStats.overall && activeStats.overall.playerWins) || 0 }} ({{ formatNumber((activeStats && activeStats.overall && activeStats.overall.playerWinRate) || 0) }}%) —
-            Dealer wins: {{ (activeStats && activeStats.overall && activeStats.overall.dealerWins) || 0 }} ({{ formatNumber((activeStats && activeStats.overall && activeStats.overall.dealerWinRate) || 0) }}%) —
-            Dealer edge: {{ formatNumber((activeStats && activeStats.overall && activeStats.overall.casinoEdgePercent) || 0) }}% —
-            Completed rounds: {{ (activeStats && activeStats.overall && activeStats.overall.completedRounds) || 0 }}
-            </div>
-            </div>
-            <div class="game-guide-block">
-            <div class="game-guide-label">By Game</div>
-            <table class="catalog-table">
-            <thead><tr><th>Game</th><th>Player Wins</th><th>Dealer Wins</th><th>Player %</th><th>Dealer %</th><th>Edge</th><th>Rounds</th></tr></thead>
-            <tbody>
-              <tr v-for="g in gameKeys" :key="g">
-                <td>{{ (g === 'TriH' || g === 'TriL' || g === 'Tri') ? 'Tri' : (g === 'Other' ? 'Other' : g) }}</td>
-                <td>{{ (activeStats && activeStats.byGame && activeStats.byGame[g] && activeStats.byGame[g].playerWins) || 0 }}</td>
-                <td>{{ (activeStats && activeStats.byGame && activeStats.byGame[g] && activeStats.byGame[g].dealerWins) || 0 }}</td>
-                <td>{{ formatNumber((activeStats && activeStats.byGame && activeStats.byGame[g] && activeStats.byGame[g].playerWinRate) || 0) }}%</td>
-                <td>{{ formatNumber((activeStats && activeStats.byGame && activeStats.byGame[g] && activeStats.byGame[g].dealerWinRate) || 0) }}%</td>
-                <td>{{ formatNumber((activeStats && activeStats.byGame && activeStats.byGame[g] && activeStats.byGame[g].casinoEdgePercent) || 0) }}%</td>
-                <td>{{ (activeStats && activeStats.byGame && activeStats.byGame[g] && activeStats.byGame[g].completedRounds) || 0 }}</td>
-              </tr>
-            </tbody>
-            </table>        </div>
-      </div>
-    </div>
-
     <div v-if="activeTab === 'Logs'">
       <div class="log-grid">
         <div>
@@ -1056,16 +783,10 @@ export default {
       diceSetup: [],
       casinoStatus: 'Stopped',
       casinoStatusKey: 'stopped',
-      casinoStats: null,
-      casinoStatsToday: null,
-      casinoStatsMap: {},
-      statsRangeKey: 'all_time',
       roomIdentity: [],
       log: [],
       debugLog: [],
       chatLog: [],
-      showNameSuggestions: false,
-      showFlaggedOnly: false,
       // Auto shout UI state
       autoShoutPhrase: '',
       autoShoutSeconds: 30,
@@ -1153,112 +874,10 @@ export default {
     };
   },
   computed: {
-    tradeItemsWithDisplay() {
-      return this.tradeItems.map(item => {
-        return { ...item, displayName: this.formatItemName(item.Name) };
-      });
-    },
-    ownTradeItemsWithDisplay() {
-      return this.ownTradeItems.map(item => {
-        return { ...item, displayName: this.formatItemName(item.Name) };
-      });
-    },
-    handItemsWithDisplay() {
-      return this.handItems.map(item => {
-        return { ...item, displayName: this.formatItemName(item.Name) };
-      });
-    },
-    payoutRows() {
-      const handByName = this.handItems.reduce((acc, item) => {
-        acc[item.Name] = (acc[item.Name] || 0) + item.Quantity;
-        return acc;
-      }, {});
-
-      const liveIncomingByName = this.tradeItems.reduce((acc, item) => {
-        acc[item.Name] = (acc[item.Name] || 0) + item.Quantity;
-        return acc;
-      }, {});
-
-      return this.activeBetItemsWithDisplay.map(item => {
-        const required = item.Quantity;
-        const payoutTotal = item.Quantity * 2;
-        const includeLiveIncoming = this.tradeItems.length > 0 ? (liveIncomingByName[item.Name] || 0) : 0;
-        const have = (handByName[item.Name] || 0) + includeLiveIncoming;
-        const short = Math.max(required - have, 0);
-        return {
-          name: item.Name,
-          displayName: item.displayName,
-          betQty: item.Quantity,
-          required,
-          payoutTotal,
-          have,
-          short,
-        };
-      });
-    },
-    canCoverPayout() {
-      return this.payoutRows.every((row) => row.short === 0);
-    },
-    activeBetItems() {
-      return this.tradeItems.length > 0 ? this.tradeItems : this.activeGameBetItems;
-    },
-    activeBetItemsWithDisplay() {
-      return this.activeBetItems.map(item => {
-        return { ...item, displayName: this.formatItemName(item.Name) };
-      });
-    },
-    activeBetSourceLabel() {
-      if (this.tradeItems.length > 0) {
-        return 'live trade';
-      }
-      if (this.activeGameBetItems.length > 0) {
-        return 'current round';
-      }
-      return '';
-    },
-    filteredGameHistory() {
-      const q = this.historySearch.trim().toLowerCase();
-      let list = this.gameHistory || [];
-      if (this.showFlaggedOnly) {
-        list = list.filter((entry) => entry && entry.issue);
-      }
-      if (!q) {
-        return list;
-      }
-      return list.filter((entry) => String(entry.playerName || '').toLowerCase().includes(q));
-    },
-    playerNameSuggestions() {
-      const q = String(this.historySearch || '').trim().toLowerCase();
-      const namesSet = new Set();
-      let base = (this.gameHistory || []);
-      if (this.showFlaggedOnly) {
-        base = base.filter((entry) => entry && entry.issue);
-      }
-      base.forEach((entry) => {
-        if (entry && entry.playerName) {
-          namesSet.add(String(entry.playerName));
-        }
-      });
-      const names = Array.from(namesSet).sort((a, b) => a.localeCompare(b));
-      if (!q) {
-        return names.slice(0, 10);
-      }
-      return names.filter(n => n.toLowerCase().includes(q)).slice(0, 10);
-    },
     activeUsers() {
       return (this.roomIdentity || []).filter((u) => {
         return this.isUserTrading(u) || this.isUserInGame(u);
       });
-    },
-    activeStats() {
-      return this.casinoStatsMap[this.statsRangeKey] || {};
-    },
-    gameKeys() {
-      const keys = (this.activeStats && this.activeStats.byGame) ? Object.keys(this.activeStats.byGame) : [];
-      const preferred = ['Poker', '21', '13', 'Tri', 'PU', 'H18'];
-      const presentPreferred = preferred.filter(k => keys.includes(k));
-      const rest = keys.filter(k => !preferred.includes(k)).sort();
-      return presentPreferred.concat(rest);
     },
   },
   methods: {
@@ -1465,130 +1084,6 @@ export default {
           console.error(err);
         }
       },
-    openHistoryEntry(entry) {
-      this.selectedHistory = entry;
-    },
-    closeHistoryEntry() {
-      this.selectedHistory = null;
-    },
-    closeClearHistoryConfirm() {
-      this.showClearHistoryConfirm = false;
-    },
-    onHistorySearchInput() {
-      this.showNameSuggestions = true;
-    },
-    seedFakeHistory() {
-      const names = [
-        'Alex','Sam','Taylor','Jordan','Casey','Riley','Jamie','Morgan','Cameron','Avery',
-        'Hayden','Parker','Quinn','Rowan','Dakota','Skyler','Reese','Marley','Sasha','Eli',
-        'Jesse','Kris','Logan','Charlie','Blake','Devin','Drew','Finley','Emerson','Harper',
-        'Kai','Luca','Nico','Noel','Owen','Paige','Remy','Rory','Soren','Toby',
-        'Violet','Will','Zara','Yuri','Ira','Mina','Gabe','Ivy','Brad','Nate'
-      ];
-      const games = ['21','13','poker','tri','roll','PU'];
-      const now = Date.now();
-      const rows = [];
-      for (let i = 0; i < 1000; i++) {
-        const playerName = names[Math.floor(Math.random() * names.length)];
-        const game = games[Math.floor(Math.random() * games.length)];
-        const startedAt = new Date(now - Math.floor(Math.random() * 1000 * 60 * 60 * 24 * 365)).toISOString();
-        const completedAt = new Date(Date.parse(startedAt) + Math.floor(Math.random() * 1000 * 60 * 60 * 24)).toISOString();
-        const playerScore = Math.floor(Math.random() * 21) + 1;
-        const dealerScore = Math.floor(Math.random() * 21) + 1;
-        const winner = playerScore >= dealerScore ? playerName : 'Dealer';
-        const betItems = [];
-        const betCount = Math.floor(Math.random() * 3);
-        for (let j = 0; j < betCount; j++) {
-          betItems.push({ Name: 'coin', Quantity: Math.floor(Math.random() * 10) + 1 });
-        }
-        const entry = {
-          id: `fake-${i}-${now}`,
-          playerName,
-          game,
-          startedAt,
-          completedAt,
-          winner,
-          status: 'Completed',
-          betItems,
-          payoutItems: [],
-          notes: [],
-          issue: Math.random() < 0.02,
-          issueReason: Math.random() < 0.02 ? 'Flagged test' : undefined,
-          playerResult: String(playerScore),
-          dealerResult: String(dealerScore),
-        };
-        rows.push(entry);
-      }
-      // Ensure some flagged entries exist for testing
-      const flaggedCount = 25;
-      for (let k = 0; k < flaggedCount; k++) {
-        const idx = Math.floor(Math.random() * rows.length);
-        rows[idx].issue = true;
-        rows[idx].issueReason = rows[idx].issueReason || 'Flagged test';
-      }
-      this.gameHistory = rows;
-      this.addLogMsg(`[UI] Seeded ${rows.length} fake history rows`);
-    },
-      selectHistorySuggestion(name) {
-        this.historySearch = name;
-        this.showNameSuggestions = false;
-      },
-      hideNameSuggestionsWithDelay() {
-        setTimeout(() => {
-          this.showNameSuggestions = false;
-        }, 180);
-      },
-    async confirmClearHistory() {
-      try {
-        await window.go.main.App.ClearGameHistory();
-        this.selectedHistory = null;
-        this.historySearch = '';
-        this.showClearHistoryConfirm = false;
-        this.addLogMsg('[UI] Cleared game history');
-      } catch (error) {
-        this.addLogMsg('Error clearing game history');
-        console.error(error);
-      }
-    },
-    historyStatusClass(entry) {
-      if (entry.issue) {
-        return 'history-status-issue';
-      }
-      const status = String(entry.status || '').toLowerCase();
-      if (status.includes('completed')) {
-        return 'history-status-complete';
-      }
-      if (status.includes('pending') || status.includes('awaiting')) {
-        return 'history-status-pending';
-      }
-      if (status.includes('result')) {
-        return 'history-status-info';
-      }
-      return 'history-status-info';
-    },
-    summarizeTradeItems(items) {
-      return (items || []).map((item) => `${item.Quantity}x ${this.formatItemName(item.Name)}`).join(', ');
-    },
-    formatDateTime(value) {
-      if (!value) {
-        return '';
-      }
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) {
-        return value;
-      }
-      return date.toLocaleString();
-    },
-    async refreshGameHistory() {
-      try {
-        const jsonStr = await window.go.main.App.GetGameHistoryJSON();
-        this.gameHistory = JSON.parse(jsonStr || '[]') || [];
-      } catch (error) {
-        this.addLogMsg('Error loading game history');
-        console.error(error);
-      }
-    },
-    
     addLogMsg(msg) {
       this.log.push(msg);
       this.scrollBox('logbox');
@@ -2251,10 +1746,6 @@ export default {
     },
   },
   async mounted() {
-    await this.refreshGameHistory();
-      // Fetch minimal stats for ranges
-      await this.loadStats('all_time');
-      await this.loadStats('today');
       await this.loadEventDates();
     window.runtime.EventsOn("logUpdate", (message) => {
       this.log = message.split('\n');
