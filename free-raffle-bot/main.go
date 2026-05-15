@@ -16,11 +16,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -58,6 +60,20 @@ type RaffleParticipant struct {
 	LastBet     string `json:"lastBet"`
 	ManualDelta int    `json:"-"`
 	UsernameKey string `json:"-"`
+}
+
+type ParsedUsers28User struct {
+	Username     string `json:"username"`
+	TradeID      int    `json:"trade_id"`
+	TradeIDRaw   string `json:"trade_id_raw"`
+	ChatID       int    `json:"chat_id"`
+	ChatIDRaw    string `json:"chat_id_raw"`
+	EntityID     string `json:"entity_id,omitempty"`
+	Figure       string `json:"figure,omitempty"`
+	Sex          string `json:"sex,omitempty"`
+	Motto        string `json:"motto,omitempty"`
+	TokenHex     string `json:"token_hex,omitempty"`
+	RawNameBlock string `json:"raw_name_block,omitempty"`
 }
 
 type RaffleSession struct {
@@ -118,6 +134,8 @@ type RaffleState struct {
 	RaffleHeroImageName   string                 `json:"raffleHeroImageName"`
 	RaffleAutoUpdate      bool                   `json:"raffleAutoUpdate"`
 	RaffleMessageID       string                 `json:"raffleMessageId"`
+	JoinShoutEnabled      bool                   `json:"joinShoutEnabled"`
+	JoinShoutPhrase       string                 `json:"joinShoutPhrase"`
 	HypeShoutEnabled      bool                   `json:"hypeShoutEnabled"`
 	HypeShoutPhrase       string                 `json:"hypeShoutPhrase"`
 	HypeShoutMinutes      int                    `json:"hypeShoutMinutes"`
@@ -171,6 +189,11 @@ type App struct {
 	raffleAutoUpdate         bool
 	raffleMessageID          string
 
+	joinShoutEnabled bool
+	joinShoutPhrase  string
+	roomUsers        map[string]bool
+	roomUsersMu      sync.Mutex
+
 	hypeShoutEnabled  bool
 	hypeShoutPhrase   string
 	hypeShoutMinutes  int
@@ -194,7 +217,17 @@ type App struct {
 }
 
 func NewApp() *App {
-	return &App{bonusEvery: 5, raffleAutoUpdate: true, raffleName: "Flame Raffle", rafflePrizeName: "Purple Dragon Lamp", rafflePrizeQty: 1, hypeShoutMinutes: 10, autoMsgMinutes: 10}
+	return &App{
+		bonusEvery:       5,
+		raffleAutoUpdate: true,
+		raffleName:       "Flame Raffle",
+		rafflePrizeName:  "Purple Dragon Lamp",
+		rafflePrizeQty:   1,
+		hypeShoutMinutes: 10,
+		autoMsgMinutes:   10,
+		roomUsers:        make(map[string]bool),
+		joinShoutPhrase:  "Hey {name}, Congrats {name}! Entered for {prize}! See Discord for the draw!",
+	}
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -3548,6 +3581,142 @@ func (a *App) loadSessionsFromDB() error {
 	return nil
 }
 
+func (a *App) runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, error) {
+	// Try to find the script in common locations
+	scriptPath := filepath.Join("..", "scripts", "parse_users28.py")
+	if _, err := os.Stat(scriptPath); err != nil {
+		scriptPath = filepath.Join("scripts", "parse_users28.py")
+	}
+	
+	if _, err := os.Stat(scriptPath); err != nil {
+		exePath, _ := os.Executable()
+		exeDir := filepath.Dir(exePath)
+		scriptPath = filepath.Join(exeDir, "..", "..", "..", "scripts", "parse_users28.py")
+	}
+
+	tmpFile, err := os.CreateTemp("", "users28_*.bin")
+	if err != nil {
+		return nil, err
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmpFile.Write(packetData); err != nil {
+		tmpFile.Close()
+		return nil, err
+	}
+	tmpFile.Close()
+
+	py := "python"
+	if _, err := exec.LookPath("python3"); err == nil {
+		py = "python3"
+	}
+
+	cmd := exec.Command(py, scriptPath, "--input", tmpPath, "--json")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+
+	if err := cmd.Run(); err != nil {
+		return nil, err
+	}
+
+	var users []ParsedUsers28User
+	if err := json.Unmarshal(stdout.Bytes(), &users); err != nil {
+		return nil, err
+	}
+
+	return users, nil
+}
+
+func (a *App) SetJoinShoutConfig(enabled bool, phrase string) RaffleState {
+	a.mu.Lock()
+	a.joinShoutEnabled = enabled
+	a.joinShoutPhrase = strings.TrimSpace(phrase)
+	a.mu.Unlock()
+	a.emitUpdate()
+	return a.GetState()
+}
+
+func (a *App) ToggleJoinShout(enabled bool) RaffleState {
+	a.mu.Lock()
+	a.joinShoutEnabled = enabled
+	a.mu.Unlock()
+	a.emitUpdate()
+	return a.GetState()
+}
+
+func (a *App) handleUsersPacket(e *g.Intercept) {
+	if e == nil || e.Packet == nil || len(e.Packet.Data) == 0 {
+		return
+	}
+
+	a.mu.Lock()
+	if !a.inRoom {
+		a.inRoom = true
+		a.logDebug("inRoom set via USERS packet")
+		a.emitUpdate()
+	}
+	a.mu.Unlock()
+
+	// COPY data to avoid race conditions with the packet thread and allow async processing
+	data := make([]byte, len(e.Packet.Data))
+	copy(data, e.Packet.Data)
+
+	go func() {
+		// We use the Python parser to handle the complex USERS28 format
+		users, err := a.runUsers28PythonParser(data)
+		if err != nil {
+			a.logDebug("Parser failed: %v", err)
+			return
+		}
+
+		a.mu.Lock()
+		joinEnabled := a.joinShoutEnabled
+		phrase := a.joinShoutPhrase
+		prizeName := a.rafflePrizeName
+		prizeQty := a.rafflePrizeQty
+		if a.currentSession != nil && strings.TrimSpace(a.currentSession.PrizeName) != "" {
+			prizeName = a.currentSession.PrizeName
+			prizeQty = a.currentSession.PrizeQty
+		}
+		prize := fmt.Sprintf("%s x%d", prizeName, prizeQty)
+		a.mu.Unlock()
+
+		a.roomUsersMu.Lock()
+		for _, u := range users {
+			name := strings.TrimSpace(u.Username)
+			if name == "" {
+				continue
+			}
+			
+			key := strings.ToLower(name)
+			if _, exists := a.roomUsers[key]; !exists {
+				a.roomUsers[key] = true
+				if joinEnabled {
+					a.shoutJoin(name, prize, phrase)
+				}
+			}
+		}
+		a.roomUsersMu.Unlock()
+	}()
+}
+
+func (a *App) shoutJoin(name string, prize string, phrase string) {
+	if phrase == "" {
+		phrase = "Hey {name}, Congrats {name}! Entered for {prize}! See Discord for the draw!"
+	}
+	msg := strings.ReplaceAll(phrase, "{name}", name)
+	msg = strings.ReplaceAll(msg, "{prize}", prize)
+	
+	ext.Send(out.SHOUT, msg)
+	a.debugMu.Lock()
+	a.lastShout = msg
+	a.debugMu.Unlock()
+	a.logDebug("join shout sent for %s: %s", name, msg)
+}
+
 func setupExt(a *App) {
 	ext.Activated(func() {
 		if a.ctx != nil {
@@ -3567,6 +3736,11 @@ func setupExt(a *App) {
 		a.connected = false
 		a.inRoom = false
 		a.mu.Unlock()
+		
+		a.roomUsersMu.Lock()
+		a.roomUsers = make(map[string]bool)
+		a.roomUsersMu.Unlock()
+		
 		a.emitUpdate()
 	})
 
@@ -3574,21 +3748,23 @@ func setupExt(a *App) {
 		a.mu.Lock()
 		a.inRoom = true
 		a.mu.Unlock()
+		
+		a.roomUsersMu.Lock()
+		a.roomUsers = make(map[string]bool)
+		a.roomUsersMu.Unlock()
+		
 		a.emitUpdate()
 	})
 
-	// Set inRoom from USERS packets too — fires even if already in a room when the ext opens
-	ext.Intercept(in.USERS, in.SPACENODEUSERS).With(func(e *g.Intercept) {
-		a.mu.Lock()
-		if !a.inRoom {
-			a.inRoom = true
-			a.mu.Unlock()
-			a.logDebug("inRoom set via USERS packet")
-			a.emitUpdate()
-		} else {
-			a.mu.Unlock()
+	// Use InterceptAll to catch header 28 manually since it's the most reliable for Origins room users
+	ext.InterceptAll(func(e *g.Intercept) {
+		if e.Packet.Header.Dir == g.In && e.Packet.Header.Value == 28 {
+			a.handleUsersPacket(e)
 		}
 	})
+
+	// Also standard USERS/SPACENODEUSERS
+	ext.Intercept(in.USERS, in.SPACENODEUSERS).With(a.handleUsersPacket)
 }
 
 func main() {

@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted } from 'vue';
 import StatusHeader from './components/StatusHeader.vue';
 import ControlPanel from './components/ControlPanel.vue';
 import HypeShout from './components/HypeShout.vue';
+import JoinShout from './components/JoinShout.vue';
 import AutoMsg from './components/AutoMsg.vue';
 import DiscordConfig from './components/DiscordConfig.vue';
 import ActiveSession from './components/ActiveSession.vue';
@@ -25,6 +26,8 @@ const state = ref({
   sponsorName: '',
   sponsorRoomName: '',
   raffleHeroImageName: '',
+  joinShoutEnabled: false,
+  joinShoutPhrase: '',
   hypeShoutEnabled: false,
   hypeShoutPhrase: '',
   hypeShoutMinutes: 10,
@@ -107,6 +110,7 @@ onUnmounted(() => {
 
     <div v-show="activeTab === 'main'">
       <HypeShout :state="state" @refresh="refresh" />
+      <JoinShout :state="state" @refresh="refresh" />
       <AutoMsg :state="state" @refresh="refresh" />
       <StatusHeader :state="state" @refresh="refresh" />
       <ControlPanel :state="state" @refresh="refresh" />
