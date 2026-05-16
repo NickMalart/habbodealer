@@ -2477,6 +2477,16 @@ func (a *App) ensureGameHistoryTables() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_game_history_owner_started ON game_history_entries(owner_key, started_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_game_history_items_owner_entry ON game_history_items(owner_key, entry_id, item_type, item_index)`,
+		`CREATE TABLE IF NOT EXISTS trade_ledger (
+			id SERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL,
+			partner_name TEXT NOT NULL,
+			trade_type TEXT NOT NULL,
+			total_quantity INTEGER NOT NULL,
+			items JSONB NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_trade_ledger_owner_created ON trade_ledger(owner_key, created_at DESC)`,
 	}
 
 	for _, q := range queries {
@@ -2485,6 +2495,47 @@ func (a *App) ensureGameHistoryTables() error {
 		}
 	}
 	return nil
+}
+
+func (a *App) recordTradeToLedger(partnerName string, tradeType string, items []TradeItem) {
+	if !casinoReady {
+		return
+	}
+
+	db, owner := a.getHistoryDB()
+	if db == nil {
+		return
+	}
+
+	totalQty := 0
+	for _, it := range items {
+		if it.Quantity > 0 {
+			totalQty += it.Quantity
+		}
+	}
+	if totalQty <= 0 && len(items) > 0 {
+		totalQty = len(items)
+	}
+	if totalQty == 0 {
+		return
+	}
+
+	itemsJSON, _ := json.Marshal(items)
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		_, err := db.Exec(ctx, `
+			INSERT INTO trade_ledger (owner_key, partner_name, trade_type, total_quantity, items)
+			VALUES ($1, $2, $3, $4, $5)
+		`, owner, partnerName, tradeType, totalQty, itemsJSON)
+		if err != nil {
+			a.AddLogMsg(fmt.Sprintf("[LEDGER][DB] failed to record trade: %v", err))
+		} else {
+			a.AddLogMsg(fmt.Sprintf("[LEDGER] recorded %s trade with %s (%d items)", tradeType, partnerName, totalQty))
+		}
+	}()
 }
 
 func (a *App) loadGameHistoryFromDB() ([]GameHistoryEntry, error) {
@@ -4154,6 +4205,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 			a.AddLogMsg("[TRADE_COMPLETED #112] payout trade completed")
 			a.captureCurrentGameHistoryPayoutItems(payoutItems, "Payout trade completed successfully", true, true)
+			a.recordTradeToLedger(partnerName, "OUT", payoutItems)
 			appendPayoutTimeline(payoutSessionID, "TRADE_COMPLETED partner=%q items=%v", partnerName, payoutItems)
 
 			// Persist completed payout trade for audit
@@ -4165,33 +4217,47 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		} else {
 			a.AddLogMsg("[TRADE_COMPLETED #112] trade completed, sending trade summary")
 
+			partnerName := normalizeUsername(strings.TrimSpace(lastTradePartnerName))
+			if partnerName == "" || partnerName == "Unknown" {
+				if lastTradePartnerID > 0 {
+					if name, ok := waitForUsers28TradeIDName(lastTradePartnerID, 700*time.Millisecond); ok {
+						partnerName = normalizeUsername(strings.TrimSpace(name))
+					} else if user, ok := lookupUsers28UserByTradeID(lastTradePartnerID); ok {
+						partnerName = normalizeUsername(strings.TrimSpace(user.Username))
+					} else if name, ok := lookupRoomEntityNameByIndex(lastTradePartnerID); ok {
+						partnerName = normalizeUsername(strings.TrimSpace(name))
+					}
+				}
+			}
+			if partnerName == "" {
+				partnerName = "Unknown"
+			}
+
 			// Persist completed bet trade summary for audit
-			go LogEvent("trade_completed", map[string]interface{}{"mode": "bet", "partner": normalizeUsername(strings.TrimSpace(lastTradePartnerName)), "bet_items": gameBetItems}, "Trade completed (bet)", nil)
+			go LogEvent("trade_completed", map[string]interface{}{"mode": "bet", "partner": partnerName, "bet_items": gameBetItems}, "Trade completed (bet)", nil)
 
-			// Send the trade items summary to chat
-			a.sendTradeCompletionMessage()
+			// Record the bet items to the trade ledger
+			a.recordTradeToLedger(partnerName, "IN", gameBetItems)
 
-			// Record predicted payout items for history as 2x.
-			// Predict 2x at bet completion; the actual multiplier is set later
-			// when the game choice is evaluated so predictions don't inflate when
-			// UO7 mode is active but the player hasn't picked "7".
-			mult := 2
+			// Record predicted payout items for history using the current multiplier.
+			mutex.Lock()
+			mult := payoutMultiplierForRound
+			if enabledGameBandit {
+				mult = banditJackpotPayout // Use jackpot as conservative "max" prediction
+			}
+			mutex.Unlock()
+
 			payoutPred := make([]TradeItem, 0, len(gameBetItems))
 			for _, it := range gameBetItems {
 				if it.Quantity <= 0 {
 					continue
 				}
-				payoutPred = append(payoutPred, TradeItem{Name: it.Name, Quantity: it.Quantity * mult, RawData: it.RawData})
+				payoutPred = append(payoutPred, TradeItem{Name: it.Name, Quantity: int(float64(it.Quantity) * mult), RawData: it.RawData})
 			}
 			if len(payoutPred) > 0 {
-				// Keep the round open after the bet trade completes. At this point the
-				// player still has to choose a game and the app still needs to record the
-				// actual game, winner and results. We only persist a predicted payout so
-				// the history modal can show the expected return while the round is live.
-				a.captureCurrentGameHistoryPayoutItems(payoutPred, "Predicted payout (2x bet)", false, false)
+				a.setCurrentGameHistoryPayoutMultiplier(mult)
+				a.captureCurrentGameHistoryPayoutItems(payoutPred, fmt.Sprintf("Predicted payout (%.2fx bet)", mult), false, false)
 			} else {
-				// Do not complete the round here. A missing prediction should not clear
-				// currentGameHistoryID before the game result is recorded.
 				a.captureCurrentGameHistoryPayoutItems([]TradeItem{}, "No payout items recorded yet", false, false)
 			}
 			go func() {
@@ -5829,6 +5895,15 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 
 			a.AddLogMsg(fmt.Sprintf("[RISK] %s lost risk session; dealerRisk=%d playerRisk=%d", partner, dealerRisk, playerRisk))
 			sendShout(fmt.Sprintf("%s lost the risk streak.", partner))
+
+			// Clear payout items for this lost streak so history is accurate.
+			a.gameHistoryMu.Lock()
+			a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+				entry.PayoutItems = nil
+				entry.Notes = append(entry.Notes, "Risk streak lost; physical payout cleared.")
+			})
+			a.gameHistoryMu.Unlock()
+			a.syncCurrentGameEntry()
 
 			if playerRisk > 0 && dealerRisk <= 0 {
 				go a.finalizeRiskKeep()
@@ -14003,7 +14078,12 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 					a.beginRiskRoundHistory(cleaned, msg, "MidHouse")
 				} else {
 					a.setCurrentGameHistoryChoice(cleaned, msg)
+					a.setCurrentGameHistoryGame("MidHouse")
 				}
+
+				ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay("mh_"+cleaned))
+				a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", ack))
+				sendShout(ack)
 
 				a.beginMidHouseRound(cleaned)
 				return
