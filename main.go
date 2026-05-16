@@ -224,11 +224,11 @@ var (
 
 	resultsWaitGroup       sync.WaitGroup
 	rollDelay              = 550 * time.Millisecond
-	stripNextDelay         = 2250 * time.Millisecond
+	stripNextDelay         = 750 * time.Millisecond
 	stripGetNewPayload     = "new"
 	stripGetNextPayload    = "next"
 	tradeUserPattern       = regexp.MustCompile(`\[(\d+)\]`)
-	stripItemNameRe        = regexp.MustCompile(`(?:CF_\d+_[a-z][a-z_]*|[a-z][a-z0-9_]*_[a-z0-9_]+)(?:\*\d+)?`)
+	stripItemNameRe        = regexp.MustCompile(`(?:CF_\d+_[a-z][a-z0-9_.-]*|[a-z][a-z0-9_.-]*_[a-z0-9_.-]+)(?:\*\d+)?`)
 	gameChoiceCleanupRe    = regexp.MustCompile(`[^a-z0-9]+`)
 	roomEntities           = map[int]room.Entity{}
 	roomMu                 sync.Mutex
@@ -504,6 +504,12 @@ func (a *App) getTradeLimitViolation(items []TradeItem) *tradeLimitViolation {
 
 	handItemsMu.Lock()
 	snapshot := tradeHandSnapshot
+	// Fall back to current hand items if snapshot isn't ready yet (e.g. trade
+	// just opened and forced scan is still running). This prevents false
+	// "unknown item" rejections during the scan window.
+	if !tradeHandSnapshotReady || len(snapshot) == 0 {
+		snapshot = currentHandItems
+	}
 	handItemsMu.Unlock()
 
 	knownNames := make(map[string]struct{}, len(snapshot))
@@ -8319,7 +8325,7 @@ func normalizeTradeItemName(raw string) (string, bool) {
 	}
 
 	for _, r := range name {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '*' {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '*' || r == '-' || r == '.' {
 			continue
 		}
 		return "", false
@@ -9789,7 +9795,7 @@ func (a *App) forceRefreshHandSnapshot(reason string) bool {
 
 	scanID := a.requestPlayerStrip(true)
 	a.AddLogMsg(fmt.Sprintf("[STRIP_DEBUG] forced strip requested session=%d reason=%s", scanID, reason))
-	if ok := waitForStripScanCompletion(scanID, 20*time.Second); !ok {
+	if ok := waitForStripScanCompletion(scanID, 60*time.Second); !ok {
 		a.AddLogMsg(fmt.Sprintf("[TRADE_HAND_SNAPSHOT] forced hand sync timeout (session=%d reason=%s)", scanID, reason))
 		a.finalizeStripScan(scanID, "timeout fallback")
 
@@ -10117,7 +10123,7 @@ func (a *App) getTradeCoverageShortages() []tradeShortage {
 		if it.Quantity <= 0 {
 			continue
 		}
-		requiredCanon[base] += int(float64(it.Quantity) * mult)
+		requiredCanon[base] += int(math.Round(float64(it.Quantity) * mult))
 	}
 
 	shortages := make([]tradeShortage, 0)
