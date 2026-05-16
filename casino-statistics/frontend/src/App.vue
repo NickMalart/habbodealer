@@ -259,19 +259,37 @@ function isBlocked(name) {
 onMounted(async () => {
   logMessage('App mounted. Initializing...')
   
-  // Parallelize initial status/settings fetch
-  const [status, key, _] = await Promise.all([
-    GetDbStatus(),
-    GetOwnerKey(),
-    loadSettings()
-  ])
+  // Initial fetch
+  let status = await GetDbStatus()
+  ownerKey.value = await GetOwnerKey()
+  await loadSettings()
   
   dbStatus.value = status
-  ownerKey.value = key
   logMessage(`DB Status: ${dbStatus.value}, Owner: ${ownerKey.value}`)
-  
-  await refreshStats()
-  await refreshPlayers()
+
+  // If still initializing, poll for a few seconds until connected or failed
+  if (dbStatus.value === 'Initializing...') {
+    let attempts = 0
+    const maxAttempts = 10
+    const interval = setInterval(async () => {
+      attempts++
+      status = await GetDbStatus()
+      if (status !== 'Initializing...' || attempts >= maxAttempts) {
+        dbStatus.value = status
+        logMessage(`DB Status updated: ${dbStatus.value}`)
+        clearInterval(interval)
+        
+        // Refresh data once we know we are connected
+        if (dbStatus.value === 'Connected') {
+          await refreshStats()
+          await refreshPlayers()
+        }
+      }
+    }, 1000)
+  } else {
+    await refreshStats()
+    await refreshPlayers()
+  }
 })
 </script>
 
