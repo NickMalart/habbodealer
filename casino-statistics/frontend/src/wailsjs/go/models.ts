@@ -55,6 +55,24 @@ export namespace main {
 		}
 	}
 	
+	export class LedgerItemStats {
+	    name: string;
+	    totalIn: number;
+	    totalOut: number;
+	    net: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LedgerItemStats(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.totalIn = source["totalIn"];
+	        this.totalOut = source["totalOut"];
+	        this.net = source["net"];
+	    }
+	}
 	export class PlayerStats {
 	    name: string;
 	    totalRounds: number;

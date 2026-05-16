@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import * as Events from './wailsjs/runtime/runtime'
-import { GetStats, GetPlayerStats, GetPlayerGameStats, GetPlayers, GetBlockedPlayers, ToggleBlockPlayer, GetDbStatus, GetSettings, SaveSettings, GetOwnerKey } from './wailsjs/go/main/App'
+import { GetStats, GetPlayerStats, GetPlayerGameStats, GetPlayers, GetBlockedPlayers, ToggleBlockPlayer, GetDbStatus, GetSettings, SaveSettings, GetOwnerKey, GetLedgerStats } from './wailsjs/go/main/App'
 
 const activeTab = ref('dashboard')
 const dbStatus = ref('Unknown')
@@ -11,6 +11,7 @@ const stats = ref({
   byGame: {}
 })
 const playerStats = ref([])
+const ledgerStats = ref([])
 const blockedPlayers = ref([])
 const searchQuery = ref('')
 const playerSubTab = ref('active')
@@ -217,6 +218,11 @@ async function refreshStats() {
     const pRes = await GetPlayerStats(s, e)
     logMessage(`GetPlayerStats returned ${pRes ? pRes.length : 0} players.`)
     playerStats.value = pRes || []
+
+    logMessage('Calling GetLedgerStats...')
+    const lRes = await GetLedgerStats(s, e)
+    logMessage(`GetLedgerStats returned ${lRes ? lRes.length : 0} items.`)
+    ledgerStats.value = lRes || []
   } catch (err) {
     logMessage(`ERROR in refreshStats: ${err.message || err}`)
     console.error('refreshStats failed:', err)
@@ -288,12 +294,13 @@ onMounted(async () => {
 
   <div class="tabs">
     <div class="tab" :class="{ active: activeTab === 'dashboard' }" @click="activeTab = 'dashboard'">Dashboard</div>
+    <div class="tab" :class="{ active: activeTab === 'ledger' }" @click="activeTab = 'ledger'">Items Ledger</div>
     <div class="tab" :class="{ active: activeTab === 'session' }" @click="activeTab = 'session'">Live Session</div>
     <div class="tab" :class="{ active: activeTab === 'players' }" @click="activeTab = 'players'">Players</div>
     <div class="tab" :class="{ active: activeTab === 'debug' }" @click="activeTab = 'debug'">Debug</div>
   </div>
 
-  <div v-if="activeTab === 'dashboard' || activeTab === 'players'" style="background: #0f4c75; padding: 0.8rem; border-radius: 4px; margin-bottom: 1rem; display: flex; align-items: center; gap: 1rem; border: 1px solid #3282b8;">
+  <div v-if="activeTab === 'dashboard' || activeTab === 'players' || activeTab === 'ledger'" style="background: #0f4c75; padding: 0.8rem; border-radius: 4px; margin-bottom: 1rem; display: flex; align-items: center; gap: 1rem; border: 1px solid #3282b8;">
     <div style="display: flex; align-items: center; gap: 0.5rem;">
       <label style="font-size: 0.8rem; font-weight: bold; color: #bbe1fa;">From:</label>
       <input type="date" v-model="startDate" @change="refreshStats" style="background: #1b262c; color: white; border: 1px solid #3282b8; padding: 0.3rem; border-radius: 4px; font-size: 0.8rem;">
@@ -306,6 +313,35 @@ onMounted(async () => {
   </div>
 
   <div class="content">
+    <div v-if="activeTab === 'ledger'">
+      <h2>Items Ledger (Physical In/Out)</h2>
+      <p style="font-size: 0.9rem; color: #bbe1fa; margin-bottom: 1rem;">This table shows items that physically entered or left the dealer's hand while active.</p>
+      
+      <table v-if="ledgerStats.length > 0">
+        <thead>
+          <tr>
+            <th>Item Name</th>
+            <th>Total In (Bets)</th>
+            <th>Total Out (Payouts)</th>
+            <th>Net Profit/Loss</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="item in ledgerStats" :key="item.name">
+            <td style="font-weight: bold; color: #bbe1fa;">{{ item.name }}</td>
+            <td style="color: #2ecc71;">+{{ item.totalIn }}</td>
+            <td style="color: #e74c3c;">-{{ item.totalOut }}</td>
+            <td :class="item.net >= 0 ? 'dealer-win' : 'player-win'" style="font-weight: bold; font-size: 1.1rem;">
+              {{ item.net > 0 ? '+' : '' }}{{ item.net }}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else style="text-align: center; padding: 3rem; color: #bbe1fa; background: #0f4c75; border-radius: 8px; border: 1px dashed #3282b8;">
+        <p>No ledger data found for this period.</p>
+      </div>
+    </div>
+
     <div v-if="activeTab === 'debug'">
       <h2>Debug Info</h2>
       <div style="background: #1b262c; padding: 1rem; border-radius: 4px; border: 1px solid #3282b8; margin-bottom: 1rem;">
