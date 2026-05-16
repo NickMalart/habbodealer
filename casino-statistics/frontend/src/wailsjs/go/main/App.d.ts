@@ -6,6 +6,8 @@ export function GetBlockedPlayers():Promise<Array<string>>;
 
 export function GetDbStatus():Promise<string>;
 
+export function GetItemStats(arg1:string,arg2:string):Promise<Array<main.ItemStats>>;
+
 export function GetOwnerKey():Promise<string>;
 
 export function GetPlayerGameStats(arg1:string,arg2:string,arg3:string):Promise<Array<main.GameStats>>;

@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -314,6 +315,112 @@ type PlayerStats struct {
 	PlayerWinRate float64 `json:"playerWinRate"`
 	DealerWinRate float64 `json:"dealerWinRate"`
 	DealerEdge    float64 `json:"dealerEdge"`
+}
+
+type ItemStats struct {
+	Name    string `json:"name"`
+	In      int    `json:"in"`
+	Out     int    `json:"out"`
+	Net     int    `json:"net"`
+	Sources string `json:"sources,omitempty"` // "Dealer", "Tracker", or "Both"
+}
+
+func (a *App) GetItemStats(startDate, endDate string) []ItemStats {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[ITEM_STATS] PANIC RECOVERED: %v", r)
+		}
+	}()
+
+	a.initWg.Wait()
+	if a.db == nil {
+		log.Printf("[ITEM_STATS] DB not connected")
+		return []ItemStats{}
+	}
+
+	log.Printf("[ITEM_STATS] Fetching dealer item flow for owner: %s, Range: %s to %s", a.ownerKey, startDate, endDate)
+
+	itemsMap := make(map[string]*ItemStats)
+
+	// Query game_history_items for both BET (IN) and PAYOUT (OUT)
+	// This is the direct source of truth from the dealer app.
+	// We exclude players that are in the blocked_players table for this owner.
+	// CRITICAL: We only count 'payout' items if the winner was the player.
+	// This filters out 'Predicted Payouts' that the dealer app saves before a win is confirmed.
+	query := `
+		SELECT i.item_name, i.item_type, i.quantity
+		FROM game_history_items i
+		JOIN game_history_entries e ON i.entry_id = e.id AND i.owner_key = e.owner_key
+		LEFT JOIN blocked_players bp ON LOWER(e.player_name) = LOWER(bp.player_name) AND e.owner_key = bp.owner_key
+		WHERE i.owner_key = $1 
+		  AND LOWER(e.status) = 'completed' 
+		  AND e.issue = false
+		  AND bp.player_name IS NULL
+		  AND (
+		    (i.item_type = 'bet')
+		    OR (i.item_type = 'payout' AND LOWER(e.winner) = LOWER(e.player_name))
+		  )
+	`
+	args := []interface{}{a.ownerKey}
+	if startDate != "" {
+		query += fmt.Sprintf(" AND e.completed_at >= $%d", len(args)+1)
+		args = append(args, startDate)
+	}
+	if endDate != "" {
+		query += fmt.Sprintf(" AND e.completed_at <= $%d", len(args)+1)
+		args = append(args, endDate)
+	}
+
+	rows, err := a.db.Query(context.Background(), query, args...)
+	if err != nil {
+		log.Printf("[ITEM_STATS] Dealer query failed: %v", err)
+	} else {
+		defer rows.Close()
+		count := 0
+		for rows.Next() {
+			var name, itemType string
+			var qty int
+			if err := rows.Scan(&name, &itemType, &qty); err == nil {
+				name = strings.TrimSpace(name)
+				if name == "" {
+					continue
+				}
+				count++
+				is, ok := itemsMap[name]
+				if !ok {
+					is = &ItemStats{Name: name, Sources: "Dealer"}
+					itemsMap[name] = is
+				}
+				if itemType == "bet" {
+					is.In += qty
+				} else if itemType == "payout" {
+					is.Out += qty
+				}
+			}
+		}
+		log.Printf("[ITEM_STATS] Found %d item movement records from Dealer", count)
+	}
+
+	result := []ItemStats{}
+	for _, is := range itemsMap {
+		is.Net = is.In - is.Out
+		result = append(result, *is)
+	}
+
+	if len(result) == 0 {
+		log.Printf("[ITEM_STATS] No item movement found in dealer history.")
+		return []ItemStats{}
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Net != result[j].Net {
+			return result[i].Net > result[j].Net // Profitable items first
+		}
+		return result[i].Name < result[j].Name
+	})
+
+	log.Printf("[ITEM_STATS] Returning %d aggregated dealer items", len(result))
+	return result
 }
 
 func (a *App) GetOwnerKey() string {

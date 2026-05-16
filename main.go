@@ -3317,9 +3317,12 @@ func (a *App) setCurrentGameHistoryResults(playerResult string, dealerResult str
 				entry.Winner = entry.PlayerName
 			} else if strings.EqualFold(norm, "Dealer") || strings.EqualFold(norm, a.getCurrentDealerName()) {
 				entry.Winner = "Dealer"
+				// Clear any predicted payout items on a dealer win
+				entry.PayoutItems = nil
 			} else {
 				// Unknown non-player name — assume dealer and normalize.
 				entry.Winner = "Dealer"
+				entry.PayoutItems = nil
 			}
 		}
 		if strings.TrimSpace(status) != "" {

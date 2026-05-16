@@ -10,6 +10,10 @@ export function GetDbStatus() {
   return window['go']['main']['App']['GetDbStatus']();
 }
 
+export function GetItemStats(arg1, arg2) {
+  return window['go']['main']['App']['GetItemStats'](arg1, arg2);
+}
+
 export function GetOwnerKey() {
   return window['go']['main']['App']['GetOwnerKey']();
 }

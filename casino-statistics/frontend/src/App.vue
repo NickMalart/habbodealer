@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import * as Events from './wailsjs/runtime/runtime'
-import { GetStats, GetPlayerStats, GetPlayerGameStats, GetPlayers, GetBlockedPlayers, ToggleBlockPlayer, GetDbStatus, GetSettings, SaveSettings, GetOwnerKey } from './wailsjs/go/main/App'
+import { GetStats, GetPlayerStats, GetPlayerGameStats, GetPlayers, GetBlockedPlayers, ToggleBlockPlayer, GetDbStatus, GetSettings, SaveSettings, GetOwnerKey, GetItemStats } from './wailsjs/go/main/App'
 
 const activeTab = ref('dashboard')
 const dbStatus = ref('Unknown')
@@ -11,6 +11,7 @@ const stats = ref({
   byGame: {}
 })
 const playerStats = ref([])
+const itemStats = ref([])
 const blockedPlayers = ref([])
 const searchQuery = ref('')
 const playerSubTab = ref('active')
@@ -217,6 +218,11 @@ async function refreshStats() {
     const pRes = await GetPlayerStats(s, e)
     logMessage(`GetPlayerStats returned ${pRes ? pRes.length : 0} players.`)
     playerStats.value = pRes || []
+
+    logMessage('Calling GetItemStats...')
+    const iRes = await GetItemStats(s, e)
+    logMessage(`GetItemStats returned ${iRes ? iRes.length : 0} items.`)
+    itemStats.value = iRes || []
   } catch (err) {
     logMessage(`ERROR in refreshStats: ${err.message || err}`)
     console.error('refreshStats failed:', err)
@@ -224,6 +230,15 @@ async function refreshStats() {
     isRefreshing.value = false
   }
 }
+
+const filteredItemStats = computed(() => {
+  let list = Array.isArray(itemStats.value) ? [...itemStats.value] : []
+  if (searchQuery.value) {
+    const q = searchQuery.value.toLowerCase()
+    list = list.filter(i => i.name && i.name.toLowerCase().includes(q))
+  }
+  return list
+})
 
 async function refreshPlayers() {
   logMessage('Refreshing blocked players...')
@@ -290,10 +305,11 @@ onMounted(async () => {
     <div class="tab" :class="{ active: activeTab === 'dashboard' }" @click="activeTab = 'dashboard'">Dashboard</div>
     <div class="tab" :class="{ active: activeTab === 'session' }" @click="activeTab = 'session'">Live Session</div>
     <div class="tab" :class="{ active: activeTab === 'players' }" @click="activeTab = 'players'">Players</div>
+    <div class="tab" :class="{ active: activeTab === 'items' }" @click="activeTab = 'items'">Items</div>
     <div class="tab" :class="{ active: activeTab === 'debug' }" @click="activeTab = 'debug'">Debug</div>
   </div>
 
-  <div v-if="activeTab === 'dashboard' || activeTab === 'players'" style="background: #0f4c75; padding: 0.8rem; border-radius: 4px; margin-bottom: 1rem; display: flex; align-items: center; gap: 1rem; border: 1px solid #3282b8;">
+  <div v-if="activeTab === 'dashboard' || activeTab === 'players' || activeTab === 'items'" style="background: #0f4c75; padding: 0.8rem; border-radius: 4px; margin-bottom: 1rem; display: flex; align-items: center; gap: 1rem; border: 1px solid #3282b8;">
     <div style="display: flex; align-items: center; gap: 0.5rem;">
       <label style="font-size: 0.8rem; font-weight: bold; color: #bbe1fa;">From:</label>
       <input type="date" v-model="startDate" @change="refreshStats" style="background: #1b262c; color: white; border: 1px solid #3282b8; padding: 0.3rem; border-radius: 4px; font-size: 0.8rem;">
@@ -518,6 +534,41 @@ onMounted(async () => {
       <div v-else style="text-align: center; padding: 3rem; color: #bbe1fa; background: #0f4c75; border-radius: 8px; border: 1px dashed #3282b8;">
         <div style="font-size: 2rem; margin-bottom: 1rem;">{{ playerSubTab === 'active' ? '👤' : '🚫' }}</div>
         <p style="margin: 0; font-weight: bold;">No {{ playerSubTab }} players found</p>
+        <p style="margin: 0.5rem 0 0; font-size: 0.8rem; opacity: 0.7;">Try clearing filters or checking your database connection.</p>
+      </div>
+    </div>
+
+    <div v-if="activeTab === 'items'">
+      <h2>Item Flow</h2>
+      <div style="margin-bottom: 1rem;">
+        <input v-model="searchQuery" placeholder="Search items..." style="width: 100%; padding: 0.5rem; border-radius: 4px; border: 1px solid #3282b8; background: #0f4c75; color: white;">
+      </div>
+
+      <table v-if="filteredItemStats.length > 0">
+        <thead>
+          <tr>
+            <th>Item Name</th>
+            <th>In (Bets/Trades)</th>
+            <th>Out (Payouts)</th>
+            <th>Net Profit</th>
+            <th>Sources</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="item in filteredItemStats" :key="item.name">
+            <td style="font-weight: bold; color: #bbe1fa;">{{ item.name }}</td>
+            <td class="player-win" style="font-weight: bold;">+{{ item.in }}</td>
+            <td class="dealer-win" style="font-weight: bold;">-{{ item.out }}</td>
+            <td :class="{ 'player-win': item.net > 0, 'dealer-win': item.net < 0 }" style="font-weight: bold; font-size: 1.1rem;">
+              {{ item.net > 0 ? '+' : '' }}{{ item.net }}
+            </td>
+            <td style="font-size: 0.8rem; opacity: 0.8;">{{ item.sources }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else style="text-align: center; padding: 3rem; color: #bbe1fa; background: #0f4c75; border-radius: 8px; border: 1px dashed #3282b8;">
+        <div style="font-size: 2rem; margin-bottom: 1rem;">📦</div>
+        <p style="margin: 0; font-weight: bold;">No items found</p>
         <p style="margin: 0.5rem 0 0; font-size: 0.8rem; opacity: 0.7;">Try clearing filters or checking your database connection.</p>
       </div>
     </div>
