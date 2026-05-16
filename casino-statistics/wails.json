@@ -1,0 +1,25 @@
+{
+  "name": "casino-statistics",
+  "author": {
+    "name": "Dubbo",
+    "email": ""
+  },
+  "info": {
+    "productName": "Casino Statistics",
+    "productVersion": "1.0.0",
+    "copyright": "Copyright \u00a9 2024",
+    "comments": "Casino game history statistics dashboard"
+  },
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "http://localhost:5173",
+  "outputfilename": "casino-statistics.exe",
+  "wailsjsdir": "./frontend/src",
+  "assetdir": "./frontend/dist",
+  "rebuild:bin": "false",
+  "bridge": {
+    "filename": "wailsbridge.js"
+  },
+  "version": "2"
+}
