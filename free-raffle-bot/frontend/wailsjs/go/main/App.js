@@ -86,6 +86,14 @@ export function SetJoinShoutConfig(arg1, arg2) {
   return window['go']['main']['App']['SetJoinShoutConfig'](arg1, arg2);
 }
 
+export function SetJoinShoutCooldown(arg1) {
+  return window['go']['main']['App']['SetJoinShoutCooldown'](arg1);
+}
+
+export function SetJoinShoutDelay(arg1) {
+  return window['go']['main']['App']['SetJoinShoutDelay'](arg1);
+}
+
 export function SetRaffleDiscordConfig(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['SetRaffleDiscordConfig'](arg1, arg2, arg3, arg4, arg5, arg6);
 }

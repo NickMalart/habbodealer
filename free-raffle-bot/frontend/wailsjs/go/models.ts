@@ -131,6 +131,8 @@ export namespace main {
 	    raffleMessageId: string;
 	    joinShoutEnabled: boolean;
 	    joinShoutPhrase: string;
+	    joinShoutDelay: number;
+	    joinShoutCooldownMinutes: number;
 	    hypeShoutEnabled: boolean;
 	    hypeShoutPhrase: string;
 	    hypeShoutMinutes: number;
@@ -165,6 +167,8 @@ export namespace main {
 	        this.raffleMessageId = source["raffleMessageId"];
 	        this.joinShoutEnabled = source["joinShoutEnabled"];
 	        this.joinShoutPhrase = source["joinShoutPhrase"];
+	        this.joinShoutDelay = source["joinShoutDelay"];
+	        this.joinShoutCooldownMinutes = source["joinShoutCooldownMinutes"];
 	        this.hypeShoutEnabled = source["hypeShoutEnabled"];
 	        this.hypeShoutPhrase = source["hypeShoutPhrase"];
 	        this.hypeShoutMinutes = source["hypeShoutMinutes"];

@@ -44,6 +44,10 @@ export function SetHypeShoutConfig(arg1:string,arg2:number):Promise<main.RaffleS
 
 export function SetJoinShoutConfig(arg1:boolean,arg2:string):Promise<main.RaffleState>;
 
+export function SetJoinShoutCooldown(arg1:number):Promise<main.RaffleState>;
+
+export function SetJoinShoutDelay(arg1:number):Promise<main.RaffleState>;
+
 export function SetRaffleDiscordConfig(arg1:string,arg2:string,arg3:number,arg4:string,arg5:string,arg6:boolean):Promise<main.RaffleState>;
 
 export function SetRaffleSponsorConfig(arg1:boolean,arg2:string,arg3:string):Promise<main.RaffleState>;
