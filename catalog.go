@@ -20,7 +20,7 @@ var defaultCatalog = []CatalogItem{
 	{Name: "chair_plasty", DisplayName: "Chair Plasty", Value: 0},
 }
 
-func normalizeCatalogItems(items []CatalogItem) []CatalogItem {
+func (a *App) normalizeCatalogItems(items []CatalogItem) []CatalogItem {
 	cleaned := make([]CatalogItem, 0, len(items))
 	seen := make(map[string]struct{}, len(items))
 	for _, item := range items {
@@ -35,7 +35,7 @@ func normalizeCatalogItems(items []CatalogItem) []CatalogItem {
 
 		displayName := strings.TrimSpace(item.DisplayName)
 		if displayName == "" {
-			displayName = formatTradeItemName(name)
+			displayName = a.formatTradeItemName(name)
 		}
 
 		value := item.Value
@@ -83,7 +83,7 @@ func (a *App) LoadCatalog() []CatalogItem {
 		return nil
 	}
 
-	items = normalizeCatalogItems(items)
+	items = a.normalizeCatalogItems(items)
 
 	a.AddLogMsg("[CATALOG] loaded successfully")
 	return items
@@ -91,7 +91,7 @@ func (a *App) LoadCatalog() []CatalogItem {
 
 // SaveCatalog writes the catalog to disk.
 func (a *App) SaveCatalog(items []CatalogItem) {
-	items = normalizeCatalogItems(items)
+	items = a.normalizeCatalogItems(items)
 
 	// Keep list sorted by name for deterministic output
 	sort.Slice(items, func(i, j int) bool {

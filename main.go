@@ -454,6 +454,20 @@ type TradeItem struct {
 	RawData  string // Store raw field for debugging
 }
 
+type StockedItem struct {
+	ID            int    `json:"id"`
+	RawName       string `json:"rawName"`
+	CanonicalName string `json:"canonicalName"`
+	DisplayName   string `json:"displayName"`
+	IsActive      bool   `json:"isActive"`
+}
+
+var (
+	stockedItems      []StockedItem
+	stockedItemsCache = make(map[string]string) // raw_name -> canonical_name
+	stockedItemsMu    sync.RWMutex
+)
+
 // LiveGameSummary is an anonymized, frontend-friendly summary of a completed
 // game. It intentionally does not expose player names — `Winner` is mapped
 type LiveGameSummary struct {
@@ -500,29 +514,6 @@ func (a *App) getTradeLimitViolation(items []TradeItem) *tradeLimitViolation {
 		return nil
 	}
 
-	// Prepare lookup maps of known/valid items.
-	catalogSet := a.GetCatalogNameSet()
-
-	handItemsMu.Lock()
-	snapshot := tradeHandSnapshot
-	// Fall back to current hand items if snapshot isn't ready yet (e.g. trade
-	// just opened and forced scan is still running). This prevents false
-	// "unknown item" rejections during the scan window.
-	if !tradeHandSnapshotReady || len(snapshot) == 0 {
-		snapshot = currentHandItems
-	}
-	handItemsMu.Unlock()
-
-	knownNames := make(map[string]struct{}, len(snapshot))
-	for _, it := range snapshot {
-		name := strings.ToLower(strings.TrimSpace(it.Name))
-		knownNames[name] = struct{}{}
-		// Also strip the *n variant suffix for base-name matching
-		if star := strings.LastIndex(name, "*"); star > 0 {
-			knownNames[name[:star]] = struct{}{}
-		}
-	}
-
 	v := &tradeLimitViolation{
 		UniqueCount: len(items),
 		MaxUnique:   maxTradeUniqueItems,
@@ -532,21 +523,10 @@ func (a *App) getTradeLimitViolation(items []TradeItem) *tradeLimitViolation {
 		v.TooManyUniqueItems = true
 	}
 	for _, it := range items {
-		name := strings.ToLower(strings.TrimSpace(it.Name))
-		baseName := name
-		if star := strings.LastIndex(name, "*"); star > 0 {
-			baseName = name[:star]
-		}
-
 		// Detect unknown items:
 		// 1. Parser explicitly failed (unrecognized: prefix)
-		// 2. Item name does not exist in our hand snapshot AND is not in the catalog
-		_, inCatalog := catalogSet[name]
-		_, baseInCatalog := catalogSet[baseName]
-		_, inHand := knownNames[name]
-		_, baseInHand := knownNames[baseName]
-
-		isValid := inCatalog || baseInCatalog || inHand || baseInHand
+		// 2. Item name does not exist in our hand snapshot, stocked whitelist, or catalog
+		isValid := isKnownTradeClassName(a, it.Name)
 
 		if strings.HasPrefix(it.Name, "unknown_item_") || strings.HasPrefix(it.Name, "unrecognized:") || !isValid {
 			v.HasUnknownItems = true
@@ -2287,6 +2267,143 @@ func dbDiagLog(msg string) {
 	_, _ = fmt.Fprintf(f, "[%s] %s\n", time.Now().Format("15:04:05"), msg)
 }
 
+func (a *App) loadStockedItems() {
+	db, owner := a.getHistoryDB()
+	if db == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	rows, err := db.Query(ctx, `
+		SELECT id, raw_name, canonical_name, display_name, is_active
+		FROM stocked_items
+		WHERE owner_key = $1
+	`, owner)
+	if err != nil {
+		a.AddLogMsg(fmt.Sprintf("[STOCKED_ITEMS] failed to load: %v", err))
+		return
+	}
+	defer rows.Close()
+
+	newItems := make([]StockedItem, 0)
+	newCache := make(map[string]string)
+
+	for rows.Next() {
+		var it StockedItem
+		if err := rows.Scan(&it.ID, &it.RawName, &it.CanonicalName, &it.DisplayName, &it.IsActive); err != nil {
+			continue
+		}
+		newItems = append(newItems, it)
+		if it.IsActive {
+			newCache[strings.ToLower(strings.TrimSpace(it.RawName))] = strings.ToLower(strings.TrimSpace(it.CanonicalName))
+		}
+	}
+
+	stockedItemsMu.Lock()
+	stockedItems = newItems
+	stockedItemsCache = newCache
+	stockedItemsMu.Unlock()
+
+	a.AddLogMsg(fmt.Sprintf("[STOCKED_ITEMS] loaded %d items from database", len(newItems)))
+}
+
+func (a *App) GetStockedItems() []StockedItem {
+	stockedItemsMu.RLock()
+	defer stockedItemsMu.RUnlock()
+	cp := make([]StockedItem, len(stockedItems))
+	copy(cp, stockedItems)
+	return cp
+}
+
+func (a *App) AddStockedItem(rawName, canonicalName, displayName string) string {
+	db, owner := a.getHistoryDB()
+	if db == nil {
+		return "database not initialized"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := db.Exec(ctx, `
+		INSERT INTO stocked_items (owner_key, raw_name, canonical_name, display_name, is_active)
+		VALUES ($1, $2, $3, $4, TRUE)
+		ON CONFLICT (owner_key, raw_name) DO UPDATE SET
+			canonical_name = EXCLUDED.canonical_name,
+			display_name = EXCLUDED.display_name,
+			is_active = TRUE
+	`, owner, rawName, canonicalName, displayName)
+	if err != nil {
+		return err.Error()
+	}
+
+	a.loadStockedItems()
+	return "ok"
+}
+
+func (a *App) DeleteStockedItem(id int) string {
+	db, _ := a.getHistoryDB()
+	if db == nil {
+		return "database not initialized"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := db.Exec(ctx, `DELETE FROM stocked_items WHERE id = $1`, id)
+	if err != nil {
+		return err.Error()
+	}
+
+	a.loadStockedItems()
+	return "ok"
+}
+
+func (a *App) ToggleStockedItem(id int, active bool) string {
+	db, _ := a.getHistoryDB()
+	if db == nil {
+		return "database not initialized"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := db.Exec(ctx, `UPDATE stocked_items SET is_active = $1 WHERE id = $2`, active, id)
+	if err != nil {
+		return err.Error()
+	}
+
+	a.loadStockedItems()
+	return "ok"
+}
+
+func (a *App) getCanonicalName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	stockedItemsMu.RLock()
+	defer stockedItemsMu.RUnlock()
+
+	// Check if this specific name is mapped
+	if canon, ok := stockedItemsCache[name]; ok {
+		return canon
+	}
+
+	// Fallback: check if the base name (no *variant) is mapped
+	base := name
+	variant := ""
+	if star := strings.LastIndex(name, "*"); star > 0 {
+		base = name[:star]
+		variant = name[star:]
+	}
+
+	if canon, ok := stockedItemsCache[base]; ok {
+		// If base is mapped, return canon + variant
+		return canon + variant
+	}
+
+	return name
+}
+
 func (a *App) initHistoryDatabase() {
 	cwd, _ := os.Getwd()
 	exe, _ := os.Executable()
@@ -2349,6 +2466,7 @@ func (a *App) initHistoryDatabase() {
 
 	a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] connected (owner=%s)", owner))
 	dbDiagLog(fmt.Sprintf("READY owner=%s", owner))
+	a.loadStockedItems()
 }
 
 func (a *App) getHistoryDB() (*pgxpool.Pool, string) {
@@ -2494,6 +2612,16 @@ func (a *App) ensureGameHistoryTables() error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_trade_ledger_owner_created ON trade_ledger(owner_key, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS stocked_items (
+			id SERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL,
+			raw_name TEXT NOT NULL,
+			canonical_name TEXT NOT NULL,
+			display_name TEXT NOT NULL,
+			is_active BOOLEAN NOT NULL DEFAULT TRUE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE(owner_key, raw_name)
+		)`,
 	}
 
 	for _, q := range queries {
@@ -8280,6 +8408,20 @@ func isKnownTradeClassName(a *App, name string) bool {
 		return false
 	}
 
+	// Check if this item (or its base) is whitelisted in stocked_items
+	stockedItemsMu.RLock()
+	_, whitelisted := stockedItemsCache[name]
+	if !whitelisted {
+		if star := strings.LastIndex(name, "*"); star > 0 {
+			_, whitelisted = stockedItemsCache[name[:star]]
+		}
+	}
+	stockedItemsMu.RUnlock()
+
+	if whitelisted {
+		return true
+	}
+
 	// Determine the base name (without *n variant suffix) for fallback checks.
 	baseName := name
 	if star := strings.LastIndex(name, "*"); star > 0 {
@@ -9939,7 +10081,7 @@ func (a *App) notifyTradeQuantityCoverage() {
 					seen[key] = true
 					avail := handMap[key] + incomingMap[key]
 					coverable := avail / multUO7
-					parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
+					parts = append(parts, fmt.Sprintf("%s %d/%d", a.formatTradeItemName(key), coverable, incomingMap[key]))
 				}
 				msg := fmt.Sprintf("I can only cover Over or Under. I can cover: %s", strings.Join(parts, "; "))
 
@@ -9983,17 +10125,17 @@ func (a *App) notifyTradeQuantityCoverage() {
 	} else if len(shortages) == 1 {
 		s := shortages[0]
 		if s.HaveHand == 0 && s.Incoming == 0 {
-			msg = fmt.Sprintf("We don't have %s", formatTradeItemName(s.Name))
+			msg = fmt.Sprintf("We don't have %s", a.formatTradeItemName(s.Name))
 		} else {
-			msg = fmt.Sprintf("We need %s (%d/%d)", formatTradeItemName(s.Name), s.Have, s.Required)
+			msg = fmt.Sprintf("We need %s (%d/%d)", a.formatTradeItemName(s.Name), s.Have, s.Required)
 		}
 	} else {
 		parts := make([]string, 0, len(shortages))
 		for _, s := range shortages {
 			if s.HaveHand == 0 && s.Incoming == 0 {
-				parts = append(parts, fmt.Sprintf("we don't have %s", formatTradeItemName(s.Name)))
+				parts = append(parts, fmt.Sprintf("we don't have %s", a.formatTradeItemName(s.Name)))
 			} else {
-				parts = append(parts, fmt.Sprintf("%s (%d/%d)", formatTradeItemName(s.Name), s.Have, s.Required))
+				parts = append(parts, fmt.Sprintf("%s (%d/%d)", a.formatTradeItemName(s.Name), s.Have, s.Required))
 			}
 		}
 		msg = fmt.Sprintf("Shortages: %s", strings.Join(parts, "; "))
@@ -10086,10 +10228,7 @@ func (a *App) getTradeCoverageShortages() []tradeShortage {
 	// do not cause false coverage shortages.
 	handMap := map[string]int{}
 	for _, it := range handSnapshot {
-		name := strings.ToLower(strings.TrimSpace(it.Name))
-		if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
-			name = k
-		}
+		name := a.getCanonicalName(it.Name)
 		base := name
 		if star := strings.LastIndex(name, "*"); star > 0 {
 			base = name[:star]
@@ -10099,10 +10238,7 @@ func (a *App) getTradeCoverageShortages() []tradeShortage {
 
 	incomingMap := map[string]int{}
 	for _, it := range partnerItems {
-		name := strings.ToLower(strings.TrimSpace(it.Name))
-		if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
-			name = k
-		}
+		name := a.getCanonicalName(it.Name)
 		base := name
 		if star := strings.LastIndex(name, "*"); star > 0 {
 			base = name[:star]
@@ -10113,10 +10249,7 @@ func (a *App) getTradeCoverageShortages() []tradeShortage {
 	// Recompute required payouts using base names.
 	requiredCanon := map[string]int{}
 	for _, it := range partnerItems {
-		name := strings.ToLower(strings.TrimSpace(it.Name))
-		if k, ok := normalizeClassKeyWithVariant(it.Name); ok {
-			name = k
-		}
+		name := a.getCanonicalName(it.Name)
 		base := name
 		if star := strings.LastIndex(name, "*"); star > 0 {
 			base = name[:star]
@@ -10217,12 +10350,12 @@ func (a *App) maybeAutoAcceptOnSnapshotReady(context string) {
 	}
 }
 
-func formatTradeShortages(shortages []tradeShortage) string {
+func (a *App) formatTradeShortages(shortages []tradeShortage) string {
 	parts := make([]string, 0, len(shortages))
 	for _, shortage := range shortages {
 		parts = append(parts, fmt.Sprintf(
 			"%s hand %d traded %d",
-			formatTradeItemName(shortage.Name),
+			a.formatTradeItemName(shortage.Name),
 			shortage.HaveHand,
 			shortage.Required,
 		))
@@ -10513,14 +10646,26 @@ func (a *App) SetBanditTriplesPayout(payout float64) {
 	a.AddLogMsg(fmt.Sprintf("[CONFIG] Bandit Triples Payout set to x%.2f", payout))
 }
 
-func formatTradeItemName(name string) string {
+func (a *App) formatTradeItemName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+
+	// Check stocked items first for a friendly name
+	stockedItemsMu.RLock()
+	for _, it := range stockedItems {
+		if strings.ToLower(strings.TrimSpace(it.RawName)) == name || strings.ToLower(strings.TrimSpace(it.CanonicalName)) == name {
+			stockedItemsMu.RUnlock()
+			return it.DisplayName
+		}
+	}
+	stockedItemsMu.RUnlock()
+
 	if strings.HasPrefix(name, "unrecognized:") {
 		raw := name[13:]
 		// If it has a star variant suffix (*109), strip it for display.
 		if star := strings.LastIndex(raw, "*"); star > 0 {
 			raw = raw[:star]
 		}
-		return formatTradeItemName(raw)
+		return a.formatTradeItemName(raw)
 	}
 	parts := strings.Split(name, "_")
 	for i, part := range parts {
@@ -11731,7 +11876,7 @@ func (a *App) beginUnderOverRound(mode string) {
 					seen[key] = true
 					avail := handMap[key] + incomingMap[key]
 					coverable := avail / multUO7
-					parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
+					parts = append(parts, fmt.Sprintf("%s %d/%d", a.formatTradeItemName(key), coverable, incomingMap[key]))
 				}
 				msg := fmt.Sprintf("I can only cover Over or Under. I can cover: %s", strings.Join(parts, "; "))
 
@@ -14221,7 +14366,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 						seen[key] = true
 						avail := handMap[key] + incomingMap[key]
 						coverable := avail / multUO7
-						parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
+						parts = append(parts, fmt.Sprintf("%s %d/%d", a.formatTradeItemName(key), coverable, incomingMap[key]))
 					}
 					msg := fmt.Sprintf("I can only cover Over or Under. I can cover: %s", strings.Join(parts, "; "))
 					changed := msg != lastTradeCoverageNotice
@@ -14483,7 +14628,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 						seen[key] = true
 						avail := handMap[key] + incomingMap[key]
 						coverable := avail / multUO7
-						parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
+						parts = append(parts, fmt.Sprintf("%s %d/%d", a.formatTradeItemName(key), coverable, incomingMap[key]))
 					}
 
 					msg := fmt.Sprintf("I can only cover Over or Under. I can cover: %s", strings.Join(parts, "; "))
@@ -14823,7 +14968,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 					seen[key] = true
 					avail := handMap[key] + incomingMap[key]
 					coverable := avail / multUO7
-					parts = append(parts, fmt.Sprintf("%s %d/%d", formatTradeItemName(key), coverable, incomingMap[key]))
+					parts = append(parts, fmt.Sprintf("%s %d/%d", a.formatTradeItemName(key), coverable, incomingMap[key]))
 				}
 
 				msg := fmt.Sprintf("I can only cover Over or Under. I can cover: %s", strings.Join(parts, "; "))

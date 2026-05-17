@@ -18,6 +18,10 @@ export function AddLogMsg(arg1) {
   return window['go']['main']['App']['AddLogMsg'](arg1);
 }
 
+export function AddStockedItem(arg1, arg2, arg3) {
+  return window['go']['main']['App']['AddStockedItem'](arg1, arg2, arg3);
+}
+
 export function BuildCasinoStats(arg1) {
   return window['go']['main']['App']['BuildCasinoStats'](arg1);
 }
@@ -28,6 +32,10 @@ export function ClearGameHistory() {
 
 export function ClearTradeItems() {
   return window['go']['main']['App']['ClearTradeItems']();
+}
+
+export function DeleteStockedItem(arg1) {
+  return window['go']['main']['App']['DeleteStockedItem'](arg1);
 }
 
 export function ExportEventsForDate(arg1) {
@@ -152,6 +160,10 @@ export function GetRiskEnabled() {
 
 export function GetShoutSpacingMs() {
   return window['go']['main']['App']['GetShoutSpacingMs']();
+}
+
+export function GetStockedItems() {
+  return window['go']['main']['App']['GetStockedItems']();
 }
 
 export function GetTradeItemsJSON() {
@@ -340,4 +352,8 @@ export function ToggleBlockUserBanned(arg1) {
 
 export function ToggleChatMinimalMode(arg1) {
   return window['go']['main']['App']['ToggleChatMinimalMode'](arg1);
+}
+
+export function ToggleStockedItem(arg1, arg2) {
+  return window['go']['main']['App']['ToggleStockedItem'](arg1, arg2);
 }

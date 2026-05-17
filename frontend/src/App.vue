@@ -402,6 +402,60 @@
           </div>
           <div v-if="dealerOpenEnabled && dealerOpenNext > 0" style="text-align:center;margin-top:6px;font-size:12px;opacity:0.6;">Next dealer shout in {{ dealerOpenNext }}s</div>
         </div>
+
+        <div style="margin-top:18px;border-top:1px solid rgba(255,255,255,0.04);padding-top:12px;">
+          <h3 class="section-subtitle">Stocked Items Mapping</h3>
+          <p class="config-intro">Map raw item names (from trade) to canonical names (from inventory) and friendly display names.</p>
+          
+          <div class="stocked-items-add" style="background: rgba(255,255,255,0.02); padding: 10px; border-radius: 6px; margin-bottom: 12px; border: 1px solid rgba(255,255,255,0.05);">
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <div style="flex:1; min-width:120px;">
+                <label style="font-size:11px; color:#aaa; display:block; margin-bottom:2px;">Raw Name (e.g. cf_20_goldbar)</label>
+                <input type="text" v-model="newStockedRaw" placeholder="Raw Name" style="width:100%; padding:6px; background:#111; border:1px solid #333; color:#fff; border-radius:4px;" />
+              </div>
+              <div style="flex:1; min-width:120px;">
+                <label style="font-size:11px; color:#aaa; display:block; margin-bottom:2px;">Inventory Name (e.g. goldbar)</label>
+                <input type="text" v-model="newStockedCanon" placeholder="Inventory Name" style="width:100%; padding:6px; background:#111; border:1px solid #333; color:#fff; border-radius:4px;" />
+              </div>
+              <div style="flex:1; min-width:120px;">
+                <label style="font-size:11px; color:#aaa; display:block; margin-bottom:2px;">Display Name (e.g. Gold Bar)</label>
+                <input type="text" v-model="newStockedDisplay" placeholder="Display Name" style="width:100%; padding:6px; background:#111; border:1px solid #333; color:#fff; border-radius:4px;" />
+              </div>
+              <div style="display:flex; align-items:flex-end;">
+                <button class="copy-btn" @click="addStockedItem" style="height:31px; padding:0 15px;">Add</button>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="stockedItems.length === 0" class="trade-empty" style="padding:10px;">
+            No stocked items mapped yet.
+          </div>
+          <table v-else class="catalog-table">
+            <thead>
+              <tr>
+                <th>Raw Name</th>
+                <th>Inventory Name</th>
+                <th>Display Name</th>
+                <th style="width:60px;">Active</th>
+                <th style="width:40px;"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="it in stockedItems" :key="it.id">
+                <td><span class="catalog-label">{{ it.rawName }}</span></td>
+                <td><span class="catalog-label">{{ it.canonicalName }}</span></td>
+                <td><span class="catalog-label">{{ it.displayName }}</span></td>
+                <td style="text-align:center;">
+                  <input type="checkbox" :checked="it.isActive" @change="toggleStockedItem(it.id, $event.target.checked)" />
+                </td>
+                <td style="text-align:center;">
+                  <button class="copy-btn delete-preset" @click="deleteStockedItem(it.id)" style="padding:0 6px;">×</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
         <div class="form-group" style="margin-top:12px;">
           <fieldset style="border:1px solid rgba(255,255,255,0.08);padding:10px;border-radius:6px;">
             <legend style="font-weight:600;padding:0 6px;">Block Packets</legend>
@@ -871,6 +925,11 @@ export default {
       eventDates: [],
       selectedEventDate: '',
       eventsForDate: [],
+      // Stocked items management
+      stockedItems: [],
+      newStockedRaw: '',
+      newStockedCanon: '',
+      newStockedDisplay: '',
     };
   },
   computed: {
@@ -1744,9 +1803,61 @@ export default {
       this.tooltipVisible = false;
       this.tooltipHtml = '';
     },
+    // Stocked items management
+    async loadStockedItems() {
+      try {
+        this.stockedItems = await window.go.main.App.GetStockedItems() || [];
+      } catch (e) {
+        console.error('loadStockedItems', e);
+      }
+    },
+    async addStockedItem() {
+      try {
+        const raw = (this.newStockedRaw || '').trim();
+        const canon = (this.newStockedCanon || '').trim();
+        const display = (this.newStockedDisplay || '').trim();
+        if (!raw || !canon || !display) {
+          this.addLogMsg('[UI] Please fill all Stocked Item fields');
+          return;
+        }
+        const res = await window.go.main.App.AddStockedItem(raw, canon, display);
+        if (res === 'ok') {
+          this.addLogMsg('[UI] Stocked item added: ' + display);
+          this.newStockedRaw = '';
+          this.newStockedCanon = '';
+          this.newStockedDisplay = '';
+          await this.loadStockedItems();
+        } else {
+          this.addLogMsg('[UI] Add stocked item failed: ' + res);
+        }
+      } catch (e) {
+        console.error('addStockedItem', e);
+      }
+    },
+    async deleteStockedItem(id) {
+      try {
+        const res = await window.go.main.App.DeleteStockedItem(id);
+        if (res === 'ok') {
+          await this.loadStockedItems();
+        }
+      } catch (e) {
+        console.error('deleteStockedItem', e);
+      }
+    },
+    async toggleStockedItem(id, active) {
+      try {
+        const res = await window.go.main.App.ToggleStockedItem(id, active);
+        if (res === 'ok') {
+          await this.loadStockedItems();
+        }
+      } catch (e) {
+        console.error('toggleStockedItem', e);
+      }
+    },
   },
   async mounted() {
       await this.loadEventDates();
+      await this.loadStockedItems();
     window.runtime.EventsOn("logUpdate", (message) => {
       this.log = message.split('\n');
       this.scrollBox('logbox');

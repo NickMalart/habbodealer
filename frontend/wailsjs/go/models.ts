@@ -449,6 +449,26 @@ export namespace main {
 	    }
 	}
 	
+	export class StockedItem {
+	    id: number;
+	    rawName: string;
+	    canonicalName: string;
+	    displayName: string;
+	    isActive: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new StockedItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.rawName = source["rawName"];
+	        this.canonicalName = source["canonicalName"];
+	        this.displayName = source["displayName"];
+	        this.isActive = source["isActive"];
+	    }
+	}
 	export class TradeItem {
 	    Name: string;
 	    Quantity: number;

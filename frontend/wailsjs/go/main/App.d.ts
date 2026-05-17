@@ -10,11 +10,15 @@ export function AddErrorLog(arg1:string,arg2:Error):Promise<void>;
 
 export function AddLogMsg(arg1:string):Promise<void>;
 
+export function AddStockedItem(arg1:string,arg2:string,arg3:string):Promise<string>;
+
 export function BuildCasinoStats(arg1:string):Promise<main.CasinoStats>;
 
 export function ClearGameHistory():Promise<void>;
 
 export function ClearTradeItems():Promise<void>;
+
+export function DeleteStockedItem(arg1:number):Promise<string>;
 
 export function ExportEventsForDate(arg1:string):Promise<string>;
 
@@ -77,6 +81,8 @@ export function GetLastTradePartnerName():Promise<string>;
 export function GetRiskEnabled():Promise<boolean>;
 
 export function GetShoutSpacingMs():Promise<number>;
+
+export function GetStockedItems():Promise<Array<main.StockedItem>>;
 
 export function GetTradeItemsJSON():Promise<string>;
 
@@ -171,3 +177,5 @@ export function ToggleBlockStatusEffects(arg1:boolean):Promise<main.BlockSlideOb
 export function ToggleBlockUserBanned(arg1:boolean):Promise<main.BlockSlideObjectConfig>;
 
 export function ToggleChatMinimalMode(arg1:boolean):Promise<boolean>;
+
+export function ToggleStockedItem(arg1:number,arg2:boolean):Promise<string>;
