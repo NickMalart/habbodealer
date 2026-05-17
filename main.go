@@ -4413,9 +4413,9 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			a.AddLogMsg(fmt.Sprintf("[TRADE_COMPLETED] shouting: %q", completeMsg))
 			sendShout(completeMsg)
 
-			// Clean up payout state after successful completion
-			stopPayout()
-			stopPayoutResponseTimeoutMonitor()
+			// NOTE: do not call stopPayout() here; we must wait for the TRADE_CLOSE (110)
+			// to arrive so the payoutTradeActive flag is still visible to the close-handler
+			// which performs the required dealer reopen/resync.
 		} else {
 			a.AddLogMsg("[TRADE_COMPLETED #112] trade completed, sending trade summary")
 
@@ -6127,12 +6127,33 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 				entry.Notes = append(entry.Notes, "Risk streak lost; physical payout cleared.")
 			})
 			a.gameHistoryMu.Unlock()
-			a.syncCurrentGameEntry()
 
 			if playerRisk > 0 && dealerRisk <= 0 {
 				go a.finalizeRiskKeep()
 				return
 			}
+
+			// Mark history as completed (loss)
+			a.gameHistoryMu.Lock()
+			var completedEntry *GameHistoryEntry
+			if a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+				entry.Status = "Completed"
+				entry.CompletedAt = gameHistoryTimestamp()
+				entry.PayoutItems = nil
+				if strings.TrimSpace(entry.Notes[len(entry.Notes)-1]) != "Risk session lost" {
+					entry.Notes = append(entry.Notes, "Risk session lost")
+				}
+				e := *entry
+				completedEntry = &e
+			}) {
+				a.currentGameHistoryID = ""
+			}
+			a.gameHistoryMu.Unlock()
+			if completedEntry != nil {
+				go a.sendDiscordWebhookForGame(*completedEntry)
+				a.persistCurrentGameHistoryNow("game_completed")
+			}
+
 			go a.openDealerAfterRound()
 			return
 		}
@@ -6148,7 +6169,7 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 
 		a.AddLogMsg(fmt.Sprintf("[RISK] %s lost risk round; bank remains playerRisk=%d dealerRisk=%d", partner, playerRisk, dealerRisk))
 
-		go func(max int) {
+		go func(max int, p string) {
 			waitForUnmute(90 * time.Second)
 			mutex.Lock()
 			canPrompt := riskSessionActive && playerRisk > 0 && dealerRisk > 0
@@ -6196,7 +6217,8 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			msg := fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, curMax)
 			mutex.Unlock()
 			sendMessageWithDelay(msg)
-		}(displayMax)
+			a.startRiskDecisionTimeoutMonitor(p)
+		}(displayMax, partner)
 		return
 	}
 
@@ -6249,6 +6271,25 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			// Dealer cannot cover further risk; convert bank into physical payout.
 			go a.finalizeRiskKeep()
 		} else {
+			// Mark history as completed (loss)
+			a.gameHistoryMu.Lock()
+			var completedEntry *GameHistoryEntry
+			if a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+				entry.Status = "Completed"
+				entry.CompletedAt = gameHistoryTimestamp()
+				entry.PayoutItems = nil
+				entry.Notes = append(entry.Notes, "Risk session lost (out of cover)")
+				e := *entry
+				completedEntry = &e
+			}) {
+				a.currentGameHistoryID = ""
+			}
+			a.gameHistoryMu.Unlock()
+			if completedEntry != nil {
+				go a.sendDiscordWebhookForGame(*completedEntry)
+				a.persistCurrentGameHistoryNow("game_completed")
+			}
+
 			go a.openDealerAfterRound()
 		}
 		return
@@ -6260,7 +6301,7 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 	}
 	mutex.Unlock()
 
-	go func(max int) {
+	go func(max int, p string) {
 		waitForUnmute(90 * time.Second)
 		mutex.Lock()
 		canPrompt := riskSessionActive && playerRisk > 0 && dealerRisk > 0
@@ -6308,7 +6349,8 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		msg := fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, curMax)
 		mutex.Unlock()
 		sendMessageWithDelay(msg)
-	}(displayMax)
+		a.startRiskDecisionTimeoutMonitor(p)
+	}(displayMax, partner)
 }
 
 func buildRiskPromptLocked() (string, bool) {
