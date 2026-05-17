@@ -463,9 +463,11 @@ type StockedItem struct {
 }
 
 var (
-	stockedItems      []StockedItem
-	stockedItemsCache = make(map[string]string) // raw_name -> canonical_name
-	stockedItemsMu    sync.RWMutex
+	stockedItems          []StockedItem
+	stockedItemsCache     = make(map[string]string) // raw_name -> canonical_name
+	stockedCanonicalSet   = make(map[string]struct{})
+	stockedItemsRegistry  = make(map[string]StockedItem) // raw_name -> StockedItem
+	stockedItemsMu        sync.RWMutex
 )
 
 // LiveGameSummary is an anonymized, frontend-friendly summary of a completed
@@ -514,8 +516,15 @@ func (a *App) getTradeLimitViolation(items []TradeItem) *tradeLimitViolation {
 		return nil
 	}
 
+	// Use canonical names to count unique item types correctly.
+	// This ensures that goldbar and goldbar*1 are treated as the same type.
+	uniqueTypes := make(map[string]struct{})
+	for _, it := range items {
+		uniqueTypes[a.getCanonicalName(it.Name)] = struct{}{}
+	}
+
 	v := &tradeLimitViolation{
-		UniqueCount: len(items),
+		UniqueCount: len(uniqueTypes),
 		MaxUnique:   maxTradeUniqueItems,
 		MaxPerItem:  maxTradeQuantityPerItem,
 	}
@@ -2268,13 +2277,19 @@ func dbDiagLog(msg string) {
 }
 
 func (a *App) loadStockedItems() {
+	a.AddLogMsg("[STOCKED_ITEMS] loadStockedItems called")
 	db, owner := a.getHistoryDB()
 	if db == nil {
+		a.AddLogMsg("[STOCKED_ITEMS] load failed: database pool is nil")
+		dbDiagLog("[STOCKED_ITEMS] load failed: database nil")
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	a.AddLogMsg(fmt.Sprintf("[STOCKED_ITEMS] querying database for owner=%q", owner))
+	dbDiagLog(fmt.Sprintf("[STOCKED_ITEMS] loading for owner=%q", owner))
 
 	rows, err := db.Query(ctx, `
 		SELECT id, raw_name, canonical_name, display_name, is_active
@@ -2282,36 +2297,75 @@ func (a *App) loadStockedItems() {
 		WHERE owner_key = $1
 	`, owner)
 	if err != nil {
-		a.AddLogMsg(fmt.Sprintf("[STOCKED_ITEMS] failed to load: %v", err))
+		a.AddLogMsg(fmt.Sprintf("[STOCKED_ITEMS] query failed: %v", err))
+		dbDiagLog(fmt.Sprintf("[STOCKED_ITEMS] query error: %v", err))
 		return
 	}
 	defer rows.Close()
 
+	a.AddLogMsg("[STOCKED_ITEMS] query executed, scanning rows...")
+
 	newItems := make([]StockedItem, 0)
 	newCache := make(map[string]string)
+	newCanonSet := make(map[string]struct{})
+	newRegistry := make(map[string]StockedItem)
 
+	rowCount := 0
 	for rows.Next() {
+		rowCount++
 		var it StockedItem
 		if err := rows.Scan(&it.ID, &it.RawName, &it.CanonicalName, &it.DisplayName, &it.IsActive); err != nil {
+			a.AddLogMsg(fmt.Sprintf("[STOCKED_ITEMS] scan error: %v", err))
+			dbDiagLog(fmt.Sprintf("[STOCKED_ITEMS] scan error: %v", err))
 			continue
 		}
 		newItems = append(newItems, it)
+		raw := strings.ToLower(strings.TrimSpace(it.RawName))
+		newRegistry[raw] = it
+
 		if it.IsActive {
-			newCache[strings.ToLower(strings.TrimSpace(it.RawName))] = strings.ToLower(strings.TrimSpace(it.CanonicalName))
+			canon := strings.ToLower(strings.TrimSpace(it.CanonicalName))
+			newCache[raw] = canon
+			newCanonSet[canon] = struct{}{}
 		}
 	}
+	a.AddLogMsg(fmt.Sprintf("[STOCKED_ITEMS] scanned %d rows", rowCount))
 
 	stockedItemsMu.Lock()
 	stockedItems = newItems
 	stockedItemsCache = newCache
+	stockedCanonicalSet = newCanonSet
+	stockedItemsRegistry = newRegistry
 	stockedItemsMu.Unlock()
 
-	a.AddLogMsg(fmt.Sprintf("[STOCKED_ITEMS] loaded %d items from database", len(newItems)))
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "stockedItemsUpdate", newItems)
+	}
+
+	msg := fmt.Sprintf("[STOCKED_ITEMS] successfully loaded %d items from database (owner=%s)", len(newItems), owner)
+	a.AddLogMsg(msg)
+	dbDiagLog(msg)
 }
 
 func (a *App) GetStockedItems() []StockedItem {
+	// If database is not ready, wait up to 5 seconds for it to initialize.
+	// This helps avoid blank lists on app startup.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		db, _ := a.getHistoryDB()
+		if db != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			a.AddLogMsg("[STOCKED_ITEMS] GetStockedItems timeout waiting for database")
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
 	stockedItemsMu.RLock()
 	defer stockedItemsMu.RUnlock()
+	a.AddLogMsg(fmt.Sprintf("[STOCKED_ITEMS] GetStockedItems called, returning %d items", len(stockedItems)))
 	cp := make([]StockedItem, len(stockedItems))
 	copy(cp, stockedItems)
 	return cp
@@ -2383,22 +2437,29 @@ func (a *App) getCanonicalName(name string) string {
 	stockedItemsMu.RLock()
 	defer stockedItemsMu.RUnlock()
 
-	// Check if this specific name is mapped
+	// 1. Check if this specific name is a RAW name in our mapping
 	if canon, ok := stockedItemsCache[name]; ok {
 		return canon
 	}
 
-	// Fallback: check if the base name (no *variant) is mapped
+	// 2. Check if the base name (no *variant) is a RAW name in our mapping
 	base := name
 	variant := ""
 	if star := strings.LastIndex(name, "*"); star > 0 {
 		base = name[:star]
 		variant = name[star:]
 	}
-
 	if canon, ok := stockedItemsCache[base]; ok {
-		// If base is mapped, return canon + variant
 		return canon + variant
+	}
+
+	// 3. Robust inventory check: if this name (or its base) is already a CANONICAL name, return it.
+	// This handles the "noise" in the inventory (snapshot).
+	if _, ok := stockedCanonicalSet[name]; ok {
+		return name
+	}
+	if _, ok := stockedCanonicalSet[base]; ok {
+		return base + variant
 	}
 
 	return name
@@ -2465,6 +2526,7 @@ func (a *App) initHistoryDatabase() {
 	}
 
 	a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] connected (owner=%s)", owner))
+	a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] database URL length: %d", len(cfg.DatabaseURL)))
 	dbDiagLog(fmt.Sprintf("READY owner=%s", owner))
 	a.loadStockedItems()
 }
@@ -8190,21 +8252,30 @@ func (a *App) parseTradeItemsPacket(data []byte) []TradeItem {
 				continue
 			}
 
+			// Check whitelist early to allow managed items to bypass typical structure checks
+			stockedItemsMu.RLock()
+			_, whitelisted := stockedItemsCache[lowField]
+			if !whitelisted {
+				if star := strings.LastIndex(lowField, "*"); star > 0 {
+					_, whitelisted = stockedItemsCache[lowField[:star]]
+				}
+			}
+			stockedItemsMu.RUnlock()
+
 			// Use normalizeTradeItemName as a heuristic to see if this string
 			// even COULD be an item name. This filters out the binary junk/metadata
 			// (like "cizMIf|I~s") that is present in initial trade packets.
 			cleanName, looksLikeItem := normalizeTradeItemName(fieldStr)
-			if !looksLikeItem {
-				// If it doesn't look like an item name, it's almost certainly metadata.
+			if !looksLikeItem && !whitelisted {
+				// If it doesn't look like an item name and isn't whitelisted, it's almost certainly metadata.
 				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] skipping field that doesn't look like an item (likely metadata)=%q", fieldStr))
 				continue
 			}
 
 			// For fields that didn't verify against the catalog or hand, only
 			// treat them as unrecognized items if they have typical Habbo class
-			// formatting (underscore, star suffix, or cf_ prefix). This avoids
-			// false-positive unknown item detections on short alphanumeric metadata.
-			if !(strings.Contains(lowField, "_") || strings.Contains(lowField, "*") || strings.HasPrefix(lowField, "cf_") || stripItemNameRe.MatchString(lowField)) {
+			// formatting (underscore, star suffix, or cf_ prefix) OR are whitelisted.
+			if !(strings.Contains(lowField, "_") || strings.Contains(lowField, "*") || strings.HasPrefix(lowField, "cf_") || stripItemNameRe.MatchString(lowField) || whitelisted) {
 				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] skipping field that lacks item-like structure=%q", fieldStr))
 				continue
 			}
@@ -8266,100 +8337,71 @@ func (a *App) parseTradeItemsPacket(data []byte) []TradeItem {
 }
 
 func (a *App) extractTradeItemAndQuantity(field string) (string, int, bool) {
+	isWhitelisted := func(cand string) bool {
+		low := strings.ToLower(cand)
+		stockedItemsMu.RLock()
+		defer stockedItemsMu.RUnlock()
+		_, managed := stockedItemsRegistry[low]
+		if !managed {
+			if star := strings.LastIndex(low, "*"); star > 0 {
+				_, managed = stockedItemsRegistry[low[:star]]
+			}
+		}
+		return managed
+	}
+
 	// Try legacy format first (e.g. "itkoHP|club_sofa")
-	a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] try legacy branch field=%q", field))
 	if strings.Contains(field, "|") {
 		parts := strings.Split(field, "|")
 		if len(parts) >= 2 {
 			cand := strings.TrimSpace(parts[len(parts)-1])
-			// Reject obvious non-item header/token candidates early: require
-			// either an underscore (typical furni class), a quantity suffix,
-			// or a strict furni regex match before attempting normalization.
-			if !(strings.Contains(cand, "_") || strings.Contains(cand, "*") || stripItemNameRe.MatchString(cand)) {
-				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] legacy candidate lacks item-like structure, skipping=%q", cand))
-			} else {
-				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] legacy candidate=%q", cand))
+			if strings.Contains(cand, "_") || strings.Contains(cand, "*") || stripItemNameRe.MatchString(cand) || isWhitelisted(cand) {
 				if name, qty, ok := a.normalizeTradeFieldClassWithQty(cand); ok {
-					a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] legacy parsed %q -> %q", cand, name))
 					return name, qty, true
 				}
-				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] legacy failed to parse candidate=%q", cand))
 			}
 		}
 	}
 
 	// Try current format (e.g. "irbUAXb{chair_plasty*2")
-	a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] try current branch field=%q", field))
 	if strings.Contains(field, "{") {
 		parts := strings.SplitN(field, "{", 2)
 		if len(parts) == 2 {
 			cand := strings.TrimSpace(parts[1])
-			// Ensure the payload inside the brace looks like a furni-class or
-			// quantity suffix before trying to normalise. This avoids treating
-			// token-like headers (e.g. "m{MHcizMH") as item classes.
-			if !(strings.Contains(cand, "_") || strings.Contains(cand, "*") || strings.HasPrefix(strings.ToLower(cand), "cf_") || stripItemNameRe.MatchString(cand)) {
-				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] current candidate looks invalid, skipping: %q", cand))
-			} else {
-				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] current candidate=%q", cand))
+			if strings.Contains(cand, "_") || strings.Contains(cand, "*") || strings.HasPrefix(strings.ToLower(cand), "cf_") || stripItemNameRe.MatchString(cand) || isWhitelisted(cand) {
 				if name, qty, ok := a.normalizeTradeFieldClassWithQty(cand); ok {
-					a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] current parsed %q -> %q", cand, name))
 					return name, qty, true
 				}
-				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] current failed to parse candidate=%q", cand))
 			}
 		}
 	}
 
 	// Fallback: try strict strip regex first, then try looser token candidates.
-	a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] try fallback for field=%q", field))
-
 	if match := stripItemNameRe.FindString(field); match != "" {
-		a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] fallback strict matched=%q inside=%q", match, field))
-		// Try to accept a strict pattern match only if it verifies against the
-		// known sources (catalog or frozen/live hand). This prevents accepting
-		// token-like headers that resemble class names but are not present in
-		// the snapshot we send to the API (the authoritative view).
-		if normalized, ok := normalizeClassKeyWithVariant(match); ok {
-			// Prefer the verified path when available (catalog/hand/snapshot check).
+		if _, ok := normalizeClassKeyWithVariant(match); ok {
 			if name, qty, ok2 := a.normalizeTradeFieldClassWithQty(match); ok2 {
-				a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS_PARSE_FALLBACK] matched %q inside %q (verified)", match, field))
 				return name, qty, true
 			}
-			// Verification failed: do not accept unverified normalized classes.
-			a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS_PARSE_FALLBACK] strict fallback found %q inside %q but verification failed; skipping", normalized, field))
 		}
-		a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] fallback strict match %q rejected by normalisation/raw-check", match))
 	}
 
 	// Looser candidate scanning: find word-like tokens and try each one.
 	candidateRe := regexp.MustCompile(`[A-Za-z][A-Za-z0-9_]*(?:\*\d+)?`)
 	matches := candidateRe.FindAllString(field, -1)
 	if len(matches) > 0 {
-		a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] fallback candidates=%q", matches))
 		for _, cand := range matches {
-			a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] fallback trying candidate=%q", cand))
 			if name, qty, ok := a.normalizeTradeFieldClassWithQty(cand); ok {
-				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] fallback accepted candidate=%q -> %q", cand, name))
 				return name, qty, true
 			}
-			a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] fallback candidate rejected=%q", cand))
 		}
-	} else {
-		a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] fallback found no candidates in %q", field))
 	}
 
 	// Relaxed fallback: some server payloads include recognizable single-word
 	// class names that don't match the strict furni regex (no underscore)
 	// but are still meaningful (examples: "giftflowers", "hologram").
-	// Prefer the longest matching hand-item name found as a substring of the
-	// raw field payload to avoid choosing shorter overlapping names (e.g.
-	// prefer "redhologram" over "hologram").
 	low := strings.ToLower(field)
 	handItemsMu.Lock()
 	best := ""
-	// Prefer the frozen trade snapshot when available so relaxed parsing
-	// only accepts items that were actually present in the snapshot used
-	// for coverage checks. Fall back to the live hand when no snapshot.
 	itemsToCheck := currentHandItems
 	if tradeHandSnapshotReady && len(tradeHandSnapshot) > 0 {
 		itemsToCheck = tradeHandSnapshot
@@ -8377,7 +8419,6 @@ func (a *App) extractTradeItemAndQuantity(field string) (string, int, bool) {
 	}
 	if best != "" {
 		if normalized, ok := normalizeClassKeyWithVariant(best); ok {
-			a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS_PARSE_RELAXED] accepted %q inside %q (best match)", normalized, field))
 			handItemsMu.Unlock()
 			return normalized, 1, true
 		}
@@ -8408,27 +8449,38 @@ func isKnownTradeClassName(a *App, name string) bool {
 		return false
 	}
 
-	// Check if this item (or its base) is whitelisted in stocked_items
+	// 1. Authoritative check: Stocked Items list.
+	// If the item is in our managed list, the 'isActive' toggle is the final word.
 	stockedItemsMu.RLock()
-	_, whitelisted := stockedItemsCache[name]
-	if !whitelisted {
+	registryItem, exists := stockedItemsRegistry[name]
+	if !exists {
 		if star := strings.LastIndex(name, "*"); star > 0 {
-			_, whitelisted = stockedItemsCache[name[:star]]
+			registryItem, exists = stockedItemsRegistry[name[:star]]
 		}
 	}
+	registryHasEntries := len(stockedItemsRegistry) > 0
 	stockedItemsMu.RUnlock()
 
-	if whitelisted {
-		return true
+	if exists {
+		// Found in our table: respect the user's active/inactive toggle.
+		return registryItem.IsActive
 	}
 
-	// Determine the base name (without *n variant suffix) for fallback checks.
+	// If the user is actively using the Stocked Items feature (i.e. they have added
+	// at least one item to the database), we transition to a STRICT whitelist mode.
+	// We no longer fall back to guessing via catalog or hand snapshots. If it's
+	// not in the whitelist, it's rejected.
+	if registryHasEntries {
+		return false
+	}
+
+	// Determine the base name (without *n variant suffix) for legacy fallback checks.
 	baseName := name
 	if star := strings.LastIndex(name, "*"); star > 0 {
 		baseName = name[:star]
 	}
 
-	// Prefer explicit catalog membership.
+	// 2. Legacy fallback: catalog membership (ONLY used if Stocked Items is empty).
 	catalogSet := a.GetCatalogNameSet()
 	if _, ok := catalogSet[name]; ok {
 		return true
@@ -8439,7 +8491,7 @@ func isKnownTradeClassName(a *App, name string) bool {
 		}
 	}
 
-	// Also accept items observed in the dealer's scanned hand.
+	// 3. Last resort: items currently observed in the dealer's scanned hand (ONLY used if Stocked Items is empty).
 	handItemsMu.Lock()
 	itemsToCheck := currentHandItems
 	if tradeHandSnapshotReady && len(tradeHandSnapshot) > 0 {

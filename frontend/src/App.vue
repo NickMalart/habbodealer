@@ -404,7 +404,10 @@
         </div>
 
         <div style="margin-top:18px;border-top:1px solid rgba(255,255,255,0.04);padding-top:12px;">
-          <h3 class="section-subtitle">Stocked Items Mapping</h3>
+          <div class="stocked-items-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <h3 class="section-subtitle" style="margin:0;">Stocked Items Mapping</h3>
+            <button class="copy-btn" @click="loadStockedItems" style="padding:4px 8px;">Refresh</button>
+          </div>
           <p class="config-intro">Map raw item names (from trade) to canonical names (from inventory) and friendly display names.</p>
           
           <div class="stocked-items-add" style="background: rgba(255,255,255,0.02); padding: 10px; border-radius: 6px; margin-bottom: 12px; border: 1px solid rgba(255,255,255,0.05);">
@@ -1856,6 +1859,14 @@ export default {
     },
   },
   async mounted() {
+      // Keep stocked items in sync with backend updates
+      if (window.runtime) {
+        window.runtime.EventsOn('stockedItemsUpdate', (items) => {
+          console.log('[UI] Stocked items updated from backend:', items);
+          this.stockedItems = items || [];
+        });
+      }
+
       await this.loadEventDates();
       await this.loadStockedItems();
     window.runtime.EventsOn("logUpdate", (message) => {
