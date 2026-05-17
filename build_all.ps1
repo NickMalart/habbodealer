@@ -3,7 +3,7 @@ param([switch]$SkipLauncher)
 $root = $PSScriptRoot
 
 Write-Host ('
-=== [1/6] roll-origins (wails build) ===') -ForegroundColor Cyan
+=== [1/7] roll-origins (wails build) ===') -ForegroundColor Cyan
 Remove-Item (Join-Path $root 'build\bin\roll-origins.exe') -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $root 'build\bin\Gamba-Suite.exe') -Force -ErrorAction SilentlyContinue
 Push-Location $root
@@ -12,7 +12,7 @@ if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED' -ForegroundColor Red } else { W
 Pop-Location
 
 Write-Host ('
-=== [2/6] wave-timer-app (wails build) ===') -ForegroundColor Cyan
+=== [2/7] wave-timer-app (wails build) ===') -ForegroundColor Cyan
 Remove-Item (Join-Path $root 'wave-timer-app\build\bin\wave-timer-app.exe') -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $root 'wave-timer-app\wave-timer-app.exe') -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $root 'wave-timer-app\wave-timer.exe') -Force -ErrorAction SilentlyContinue
@@ -22,7 +22,7 @@ if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED' -ForegroundColor Red } else { W
 Pop-Location
 
 Write-Host ('
-=== [3/6] trade-tracker (wails build) ===') -ForegroundColor Cyan
+=== [3/7] trade-tracker (wails build) ===') -ForegroundColor Cyan
 Remove-Item (Join-Path $root 'trade-tracker\build\bin\trade-tracker.exe') -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $root 'trade-tracker\trade-tracker.exe') -Force -ErrorAction SilentlyContinue
 Push-Location (Join-Path $root 'trade-tracker')
@@ -31,7 +31,7 @@ if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED' -ForegroundColor Red } else { W
 Pop-Location
 
 Write-Host ('
-=== [4/6] free-raffle-bot (wails build) ===') -ForegroundColor Cyan
+=== [4/7] free-raffle-bot (wails build) ===') -ForegroundColor Cyan
 Remove-Item (Join-Path $root 'free-raffle-bot\build\bin\free-raffle-bot.exe') -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $root 'free-raffle-bot\free-raffle-bot.exe') -Force -ErrorAction SilentlyContinue
 Push-Location (Join-Path $root 'free-raffle-bot')
@@ -40,7 +40,7 @@ if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED' -ForegroundColor Red } else { W
 Pop-Location
 
 Write-Host ('
-=== [5/6] winner-picker (wails build) ===') -ForegroundColor Cyan
+=== [5/7] winner-picker (wails build) ===') -ForegroundColor Cyan
 Remove-Item (Join-Path $root 'winner-picker\build\bin\winner-picker.exe') -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $root 'winner-picker\winner-picker.exe') -Force -ErrorAction SilentlyContinue
 Push-Location (Join-Path $root 'winner-picker')
@@ -48,9 +48,18 @@ wails build
 if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED' -ForegroundColor Red } else { Write-Host '  OK' -ForegroundColor Green }
 Pop-Location
 
+Write-Host ('
+=== [6/7] auto-payout (wails build) ===') -ForegroundColor Cyan
+Remove-Item (Join-Path $root 'auto-payout\build\bin\auto-payout.exe') -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $root 'auto-payout\auto-payout.exe') -Force -ErrorAction SilentlyContinue
+Push-Location (Join-Path $root 'auto-payout')
+wails build
+if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED' -ForegroundColor Red } else { Write-Host '  OK' -ForegroundColor Green }
+Pop-Location
+
 if (-not $SkipLauncher) {
   Write-Host ('
-=== [6/6] app-launcher (wails build) ===') -ForegroundColor Cyan
+=== [7/7] app-launcher (wails build) ===') -ForegroundColor Cyan
   Remove-Item (Join-Path $root 'app-launcher\app-launcher.exe') -Force -ErrorAction SilentlyContinue
   Remove-Item (Join-Path $root 'app-launcher\build\bin\app-launcher.exe') -Force -ErrorAction SilentlyContinue
   Push-Location (Join-Path $root 'app-launcher')

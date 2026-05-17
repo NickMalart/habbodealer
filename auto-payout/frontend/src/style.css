@@ -1,0 +1,107 @@
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  place-items: center;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+#app {
+  width: 100%;
+  padding: 2rem;
+  box-sizing: border-box;
+}
+
+.container {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 2.5em;
+  line-height: 1.1;
+  margin-bottom: 1rem;
+}
+
+.payout-form {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 2rem;
+  background: #2a2a2a;
+  padding: 1rem;
+  border-radius: 8px;
+}
+
+.payout-form input {
+  padding: 0.5rem;
+  border-radius: 4px;
+  border: 1px solid #444;
+  background: #1a1a1a;
+  color: white;
+}
+
+.payout-form button {
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  border: none;
+  background: #646cff;
+  color: white;
+  cursor: pointer;
+}
+
+.payout-form button:hover {
+  background: #535bf2;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #2a2a2a;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+th, td {
+  padding: 1rem;
+  text-align: left;
+  border-bottom: 1px solid #333;
+}
+
+th {
+  background: #333;
+}
+
+.status-pending { color: #aaa; }
+.status-in-room { color: #4caf50; font-weight: bold; }
+.status-trading { color: #ff9800; font-weight: bold; }
+.status-completed { color: #2196f3; }
+.status-failed { color: #f44336; }
+
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 1rem;
+}
+
+.btn-danger {
+  background: #f44336 !important;
+}
+
+.btn-secondary {
+  background: #555 !important;
+}

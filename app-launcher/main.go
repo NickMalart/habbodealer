@@ -107,6 +107,17 @@ func knownBuildTargets() []buildTarget {
 			},
 			OutExe: filepath.Join("casino-statistics", "build", "bin", "casino-statistics.exe"),
 		},
+		{
+			ID:        "auto-payout",
+			Name:      "Auto Payout Bot",
+			SrcDir:    "auto-payout",
+			BuildType: "wails",
+			CleanPaths: []string{
+				filepath.Join("auto-payout", "build", "bin", "auto-payout.exe"),
+				filepath.Join("auto-payout", "auto-payout.exe"),
+			},
+			OutExe: filepath.Join("auto-payout", "build", "bin", "auto-payout.exe"),
+		},
 	}
 }
 
