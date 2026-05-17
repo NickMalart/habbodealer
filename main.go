@@ -449,9 +449,9 @@ var (
 )
 
 type TradeItem struct {
-	Name     string
-	Quantity int
-	RawData  string // Store raw field for debugging
+	Name     string `json:"name"`
+	Quantity int    `json:"quantity"`
+	RawData  string `json:"rawData"` // Store raw field for debugging
 }
 
 type StockedItem struct {
@@ -4307,7 +4307,9 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 		// Merge added items into the appropriate side.
 		tradeItemsMu.Lock()
-		if wasOurs {
+		// During payout, we are the only ones adding items; attribute all additions to us
+		// to avoid race conditions where fast server echoes arrive without 'wasOurs' being set.
+		if wasOurs || payoutTradeActive {
 			for name, q := range added {
 				ownMap[name] += q
 			}
@@ -4402,7 +4404,6 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 			a.AddLogMsg("[TRADE_COMPLETED #112] payout trade completed")
 			a.captureCurrentGameHistoryPayoutItems(payoutItems, "Payout trade completed successfully", true, true)
-			a.recordTradeToLedger(partnerName, "OUT", payoutItems)
 			appendPayoutTimeline(payoutSessionID, "TRADE_COMPLETED partner=%q items=%v", partnerName, payoutItems)
 
 			// Persist completed payout trade for audit
@@ -4411,6 +4412,10 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			completeMsg := fmt.Sprintf("T-Done: %s", partnerName)
 			a.AddLogMsg(fmt.Sprintf("[TRADE_COMPLETED] shouting: %q", completeMsg))
 			sendShout(completeMsg)
+
+			// Clean up payout state after successful completion
+			stopPayout()
+			stopPayoutResponseTimeoutMonitor()
 		} else {
 			a.AddLogMsg("[TRADE_COMPLETED #112] trade completed, sending trade summary")
 
@@ -5301,6 +5306,7 @@ func startPayout(a *App, targetID int, targetName string) {
 	payoutTargetName = targetName
 	payoutSessionID++
 	sessionID := payoutSessionID
+	var payoutItemsToRecord []TradeItem
 	a.gameHistoryMu.Lock()
 	a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
 		if strings.TrimSpace(entry.RiskDecision) == "" {
@@ -5333,8 +5339,14 @@ func startPayout(a *App, targetID int, targetName string) {
 				}
 			}
 		}
+		payoutItemsToRecord = cloneTradeItems(entry.PayoutItems)
 	})
 	a.gameHistoryMu.Unlock()
+
+	if len(payoutItemsToRecord) > 0 {
+		a.recordTradeToLedger(targetName, "OUT", payoutItemsToRecord)
+	}
+
 	a.noteCurrentGameHistory(fmt.Sprintf("Payout started for %s", targetName))
 	// Record timeline and notify player for large payouts
 	appendPayoutTimeline(sessionID, "Payout started target=%q id=%d session=%d", targetName, targetID, sessionID)
