@@ -3638,10 +3638,12 @@ func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
 	a.syncCurrentGameEntry()
 	if complete && completedEntry != nil {
 		isPayoutIssue := strings.Contains(strings.ToLower(completedEntry.IssueType), "payout") ||
-			strings.Contains(strings.ToLower(completedEntry.IssueReason), "payout")
+			strings.Contains(strings.ToLower(completedEntry.IssueReason), "payout") ||
+			payoutActive || payoutTradeActive
 		if isPayoutIssue {
 			go a.sendDiscordWebhookForPayout(*completedEntry)
 			a.persistCurrentGameHistoryNow("payout_issue")
+			a.dumpPayoutIssue(*completedEntry)
 		} else {
 			go a.sendDiscordWebhookForGame(*completedEntry)
 			a.persistCurrentGameHistoryNow("game_issue")
@@ -3649,6 +3651,82 @@ func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
 		a.sendLiveDealerGames(5)
 		go LogEvent("game_issue", *completedEntry, "Game completed with issue", map[string]string{"player": completedEntry.PlayerName})
 	}
+}
+
+func (a *App) dumpPayoutIssue(entry GameHistoryEntry) {
+	// Ensure issues directory exists
+	if err := os.MkdirAll("issues", 0755); err != nil {
+		a.AddLogMsg(fmt.Sprintf("[ISSUES] failed to create issues directory: %v", err))
+		return
+	}
+
+	timestamp := time.Now().Format("20060102_150405")
+	playerName := entry.PlayerName
+	if playerName == "" {
+		playerName = "unknown"
+	}
+	// Sanitize player name for filename
+	playerName = regexp.MustCompile(`[^a-zA-Z0-9_-]+`).ReplaceAllString(playerName, "_")
+
+	fname := filepath.Join("issues", fmt.Sprintf("payout_issue_%s_%s_%s.txt", playerName, entry.ID, timestamp))
+
+	f, err := os.Create(fname)
+	if err != nil {
+		a.AddLogMsg(fmt.Sprintf("[ISSUES] failed to create issue dump %s: %v", fname, err))
+		return
+	}
+	defer f.Close()
+
+	fmt.Fprintf(f, "PAYOUT ISSUE DUMP\n")
+	fmt.Fprintf(f, "=================\n")
+	fmt.Fprintf(f, "Time:      %s\n", time.Now().Format(time.RFC1123))
+	fmt.Fprintf(f, "Player:    %s\n", entry.PlayerName)
+	fmt.Fprintf(f, "Game ID:   %s\n", entry.ID)
+	fmt.Fprintf(f, "Game:      %s\n", entry.Game)
+	fmt.Fprintf(f, "Status:    %s\n", entry.Status)
+	fmt.Fprintf(f, "Reason:    %s\n", entry.IssueReason)
+	fmt.Fprintf(f, "Type:      %s\n", entry.IssueType)
+	fmt.Fprintf(f, "Winner:    %s\n", entry.Winner)
+	fmt.Fprintf(f, "Mult:      %.2fx\n", entry.PayoutMultiplier)
+	fmt.Fprintf(f, "Decision:  %s\n", entry.RiskDecision)
+
+	fmt.Fprintf(f, "\nBET ITEMS:\n")
+	if len(entry.BetItems) == 0 {
+		fmt.Fprintf(f, " (none)\n")
+	}
+	for _, it := range entry.BetItems {
+		fmt.Fprintf(f, " - %s x%d\n", it.Name, it.Quantity)
+	}
+
+	fmt.Fprintf(f, "\nPAYOUT ITEMS:\n")
+	if len(entry.PayoutItems) == 0 {
+		fmt.Fprintf(f, " (none)\n")
+	}
+	for _, it := range entry.PayoutItems {
+		fmt.Fprintf(f, " - %s x%d\n", it.Name, it.Quantity)
+	}
+
+	fmt.Fprintf(f, "\nNOTES:\n")
+	if len(entry.Notes) == 0 {
+		fmt.Fprintf(f, " (none)\n")
+	}
+	for _, note := range entry.Notes {
+		fmt.Fprintf(f, " - %s\n", note)
+	}
+
+	// Include the payout timeline if we can find it
+	// Payout timelines are stored as payout_timeline_<session>.log in the root
+	timelineFname := fmt.Sprintf("payout_timeline_%d.log", payoutSessionID)
+	if timelineContent, err := os.ReadFile(timelineFname); err == nil {
+		fmt.Fprintf(f, "\nPAYOUT TIMELINE (session %d):\n", payoutSessionID)
+		fmt.Fprintf(f, "---------------------------\n")
+		f.Write(timelineContent)
+	} else {
+		// Fallback: search for the most recent payout timeline if payoutSessionID isn't set
+		fmt.Fprintf(f, "\nPAYOUT TIMELINE (session %d) NOT FOUND\n", payoutSessionID)
+	}
+
+	a.AddLogMsg(fmt.Sprintf("[ISSUES] Payout issue dumped to %s", fname))
 }
 
 func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note string, complete bool, isPayout bool) {
