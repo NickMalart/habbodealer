@@ -4430,6 +4430,19 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				partnerName = "Unknown"
 			}
 
+			// Capture the items SYNCHRONOUSLY before TRADE_CLOSE clears them.
+			tradeItemsMu.Lock()
+			gameBetItems = make([]TradeItem, len(currentTradeItems))
+			copy(gameBetItems, currentTradeItems)
+			tradeItemsMu.Unlock()
+			a.emitActiveGameBetItemsUpdate()
+
+			if len(gameBetItems) == 0 {
+				a.AddLogMsg("[TRADE_COMPLETED] no items detected in completed trade")
+			} else {
+				a.AddLogMsg(fmt.Sprintf("[TRADE_COMPLETED] recorded %d bet item type(s) for payout", len(gameBetItems)))
+			}
+
 			// Persist completed bet trade summary for audit
 			go LogEvent("trade_completed", map[string]interface{}{"mode": "bet", "partner": partnerName, "bet_items": gameBetItems}, "Trade completed (bet)", nil)
 
@@ -5026,9 +5039,9 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				go a.reopenDealerIdle("incomplete trade close")
 			}
 		} else if payoutTradeActive {
-			// Payout trade completed normally — clear active flag
-			payoutTradeActive = false
+			// Payout trade completed normally — full cleanup
 			a.AddLogMsg("[PAYOUT] payout trade completed successfully")
+			stopPayout()
 			stopPayoutResponseTimeoutMonitor()
 			resetPayoutRetryState()
 			a.noteCurrentGameHistory("Dealer payout flow finished successfully")
@@ -5226,7 +5239,7 @@ func (a *App) startPayoutResponseTimeoutMonitor(playerName string, targetID int,
 	payoutResponseTimeoutActive = true
 
 	go func(id int, player string, retryTargetID int, retryTargetName string) {
-		time.Sleep(45 * time.Second)
+		time.Sleep(300 * time.Second) // Increased from 45s to 5 minutes for slow Origins trades
 
 		if id != payoutResponseTimeoutMonitorID || !payoutResponseTimeoutActive || !payoutTradeActive {
 			return
@@ -7739,7 +7752,7 @@ func (a *App) resetDealerSessionState(reason string) {
 	stableTradePartnerID = 0
 	stableTradePartnerName = ""
 	stableTradePartnerToken = ""
-	gameBetItems = nil
+	// gameBetItems preservation: do not clear here, as we need it for payout/risk after game results.
 	lastAddItemWasOurs = false
 	lastTradeCoverageNotice = ""
 	lastTradeBlockNotice = ""
@@ -8851,7 +8864,7 @@ func (a *App) reopenDealerIdle(reason string) {
 	stableTradePartnerID = 0
 	stableTradePartnerName = ""
 	stableTradePartnerToken = ""
-	gameBetItems = nil
+	// gameBetItems preservation: do not clear here, as we need it for payout/risk after game results.
 	a.emitActiveGameBetItemsUpdate()
 
 	// Ensure we rebuild the frozen trade-hand snapshot before announcing
@@ -10419,11 +10432,8 @@ func (a *App) formatTradeShortages(shortages []tradeShortage) string {
 
 // sendTradeCompletionMessage sends the post-trade game prompt sequence.
 func (a *App) sendTradeCompletionMessage() {
-	tradeItemsMu.Lock()
-	gameBetItems = make([]TradeItem, len(currentTradeItems))
-	copy(gameBetItems, currentTradeItems)
-	tradeItemsMu.Unlock()
-	a.emitActiveGameBetItemsUpdate()
+	// Redundant capture removed to prevent race conditions with TRADE_CLOSE wiping currentTradeItems.
+	// gameBetItems is now captured synchronously in the TRADE_COMPLETED handler.
 
 	if len(gameBetItems) == 0 {
 		a.AddLogMsg("[TRADE_MESSAGE] no items detected in trade, continuing anyway")
@@ -12872,7 +12882,7 @@ func (a *App) openDealerAfterSetup(reason string) {
 	lastTradeLimitNotice = ""
 	partnerTradeAccepted = false
 	partnerAcceptedSnapshot = nil
-	gameBetItems = nil
+	// gameBetItems preservation: do not clear here, as we need it for payout/risk after game results.
 	a.emitActiveGameBetItemsUpdate()
 	a.ClearTradeItems()
 
