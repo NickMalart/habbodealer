@@ -4463,6 +4463,8 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				} else {
 					a.AddLogMsg("[TRADE_COMPLETED] forced hand refresh failed after trade")
 				}
+				// Trigger the game choice prompt after the trade is fully finalized
+				a.sendTradeCompletionMessage()
 			}()
 		}
 		return
