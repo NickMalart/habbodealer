@@ -463,11 +463,11 @@ type StockedItem struct {
 }
 
 var (
-	stockedItems          []StockedItem
-	stockedItemsCache     = make(map[string]string) // raw_name -> canonical_name
-	stockedCanonicalSet   = make(map[string]struct{})
-	stockedItemsRegistry  = make(map[string]StockedItem) // raw_name -> StockedItem
-	stockedItemsMu        sync.RWMutex
+	stockedItems         []StockedItem
+	stockedItemsCache    = make(map[string]string) // raw_name -> canonical_name
+	stockedCanonicalSet  = make(map[string]struct{})
+	stockedItemsRegistry = make(map[string]StockedItem) // raw_name -> StockedItem
+	stockedItemsMu       sync.RWMutex
 )
 
 // LiveGameSummary is an anonymized, frontend-friendly summary of a completed
@@ -5239,7 +5239,7 @@ func (a *App) startPayoutResponseTimeoutMonitor(playerName string, targetID int,
 	payoutResponseTimeoutActive = true
 
 	go func(id int, player string, retryTargetID int, retryTargetName string) {
-		time.Sleep(300 * time.Second) // Increased from 45s to 5 minutes for slow Origins trades
+		time.Sleep(45 * time.Second) // Increased from 45s to 5 minutes for slow Origins trades
 
 		if id != payoutResponseTimeoutMonitorID || !payoutResponseTimeoutActive || !payoutTradeActive {
 			return
