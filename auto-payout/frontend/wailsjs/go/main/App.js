@@ -30,6 +30,10 @@ export function RefreshInventory() {
   return window['go']['main']['App']['RefreshInventory']();
 }
 
+export function RefreshQueue() {
+  return window['go']['main']['App']['RefreshQueue']();
+}
+
 export function ReturnAllToOwner(arg1) {
   return window['go']['main']['App']['ReturnAllToOwner'](arg1);
 }

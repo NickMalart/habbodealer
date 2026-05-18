@@ -16,6 +16,8 @@ export function GetPayouts():Promise<Array<main.Payout>>;
 
 export function RefreshInventory():Promise<void>;
 
+export function RefreshQueue():Promise<void>;
+
 export function ReturnAllToOwner(arg1:string):Promise<void>;
 
 export function ShowWindow():Promise<void>;

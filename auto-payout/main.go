@@ -45,8 +45,6 @@ type ParsedUsers28User struct {
 	TokenHex string `json:"token_hex"`
 }
 
-
-
 type App struct {
 	ctx     context.Context
 	ext     *g.Ext
@@ -133,7 +131,6 @@ func (a *App) startup(ctx context.Context) {
 	})
 
 	// Register custom headers for this version of goearth
-	// 140 and 98 are STRIPINFO for Origins/Shockwave
 	a.ext.Headers().Add("STRIPINFO_IN", g.Header{Dir: g.In, Value: 140})
 	a.ext.Headers().Add("STRIPINFO_98_IN", g.Header{Dir: g.In, Value: 98})
 	a.ext.Headers().Add("TRADE_OPEN_IN", g.Header{Dir: g.In, Value: 104})
@@ -162,13 +159,8 @@ func (a *App) startup(ctx context.Context) {
 
 func (a *App) initDatabase() {
 	a.AddLog("Connecting to database...")
-	config, err := pgxpool.ParseConfig(a.dbConnString)
-	if err != nil {
-		a.AddLog("ERROR: Database config parse failed: " + err.Error())
-		return
-	}
-
-	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	
+	pool, err := pgxpool.New(context.Background(), a.dbConnString)
 	if err != nil {
 		a.AddLog("ERROR: Database connection failed: " + err.Error())
 		return
@@ -328,6 +320,12 @@ func (a *App) ClearCompleted() {
 	a.AddLog("Completed entries cleared.")
 }
 
+func (a *App) RefreshQueue() {
+	a.loadPayoutsFromDB()
+	a.emitUpdate()
+	a.AddLog("Payout queue refreshed from database.")
+}
+
 func (a *App) RefreshInventory() {
 	if a.ext != nil {
 		a.stripScanMu.Lock()
@@ -370,32 +368,40 @@ func (a *App) ReturnAllToOwner(ownerName string) {
 
 func (a *App) loadPayoutsFromDB() {
 	if a.db == nil {
+		a.AddLog("ERROR: Database not connected. Cannot load payouts.")
 		return
 	}
-	rows, err := a.db.Query(context.Background(), "SELECT id, player_name, item_name, quantity, status, created_at FROM auto_payouts")
-	if err != nil {
-		a.AddLog("ERROR: DB Load failed: " + err.Error())
-		return
-	}
-	defer rows.Close()
+	
+	a.AddLog("Querying auto_payouts records...")
+	payouts := []Payout{}
+	count := 0
 
-	var payouts []Payout
-	for rows.Next() {
-		var p Payout
-		err := rows.Scan(&p.ID, &p.Name, &p.ItemName, &p.Quantity, &p.Status, &p.CreatedAt)
-		if err == nil {
-			payouts = append(payouts, p)
+	// Manual entries from auto_payouts table
+	rows, err := a.db.Query(context.Background(), "SELECT id, player_name, item_name, quantity, status, created_at FROM auto_payouts WHERE status != 'Completed' ORDER BY created_at DESC")
+	if err == nil {
+		for rows.Next() {
+			var p Payout
+			if err := rows.Scan(&p.ID, &p.Name, &p.ItemName, &p.Quantity, &p.Status, &p.CreatedAt); err == nil {
+				payouts = append(payouts, p)
+				count++
+			}
 		}
+		rows.Close()
+	} else {
+		a.AddLog("ERROR: DB Query failed: " + err.Error())
 	}
 	
 	a.pMu.Lock()
 	a.payouts = payouts
 	a.pMu.Unlock()
-	a.AddLog(fmt.Sprintf("Loaded %d payouts from database.", len(payouts)))
+	
+	a.AddLog(fmt.Sprintf("Sync complete. Found %d active records in auto_payouts.", count))
+	a.emitUpdate()
 }
 
 func (a *App) emitUpdate() {
-	runtime.EventsEmit(a.ctx, "payoutsUpdate", a.GetPayouts())
+	p := a.GetPayouts()
+	runtime.EventsEmit(a.ctx, "payoutsUpdate", p)
 }
 
 func (a *App) handleRoomUsers(e *g.Intercept) {
@@ -470,8 +476,8 @@ func (a *App) updatePayoutStatuses() {
 		
 		user, ok := a.roomUsers[strings.ToLower(p.Name)]
 		if ok {
-			if p.Status == "Pending" || p.Status == "Failed" {
-				a.AddLog(fmt.Sprintf("Target detected: %s (TradeID: %d)", p.Name, user.TradeID))
+			if p.Status == "Pending" || p.Status == "Failed" || p.Status == "Payout Pending" {
+				a.AddLog(fmt.Sprintf("Target detected: %s (RoomIndex/ChatID: %d, EntityID/TradeID: %d)", p.Name, user.ChatID, user.TradeID))
 				a.payouts[i].Status = "In Room"
 				changed = true
 			}
@@ -486,6 +492,12 @@ func (a *App) updatePayoutStatuses() {
 	if changed {
 		a.emitUpdate()
 	}
+}
+
+func encodeVL64(value int) string {
+	buf := make([]byte, gencoding.VL64EncodeLen(value))
+	gencoding.VL64Encode(buf, value)
+	return string(buf)
 }
 
 func (a *App) handleStripInfo(e *g.Intercept) {
@@ -662,7 +674,9 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 			if strings.EqualFold(p.Name, partner) && p.Status == "Trading" {
 				a.payouts[i].Status = "Completed"
 				if a.db != nil {
+					// Mark both potential tables as completed
 					a.db.Exec(context.Background(), "UPDATE auto_payouts SET status = 'Completed' WHERE id = $1", p.ID)
+					a.db.Exec(context.Background(), "UPDATE game_history_entries SET status = 'Completed' WHERE id = $1", p.ID)
 				}
 				a.AddLog(fmt.Sprintf("Payout for %s SUCCESSFUL.", partner))
 			}
@@ -677,43 +691,80 @@ func (a *App) payoutMonitor() {
 		time.Sleep(2 * time.Second)
 
 		a.pMu.RLock()
-		var target *Payout
+		var targetID string
+		var targetName string
+		var targetItem string
+		var found bool
 		for _, p := range a.payouts {
 			if p.Status == "In Room" {
-				target = &p
+				targetID = p.ID
+				targetName = p.Name
+				targetItem = p.ItemName
+				found = true
 				break
 			}
 		}
 		a.pMu.RUnlock()
 
-		if target != nil {
-			a.tradeMu.Lock()
-			if !a.tradeActive {
-				a.roomUsersMu.RLock()
-				user, ok := a.roomUsers[strings.ToLower(target.Name)]
-				a.roomUsersMu.RUnlock()
-
-				if ok && user.TradeID > 0 {
-					a.activeTradePartner = target.Name
-					a.activeTradeTarget = user.TradeID
-					
-					a.pMu.Lock()
-					for i, p := range a.payouts {
-						if p.ID == target.ID {
-							a.payouts[i].Status = "Trading"
-						}
-					}
-					a.pMu.Unlock()
-					a.emitUpdate()
-
-					a.AddLog(fmt.Sprintf("Initiating auto-trade for %s...", target.Name))
-					a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), user.TradeID)
-					
-					go a.automateTrade(target)
-				}
-			}
-			a.tradeMu.Unlock()
+		if !found {
+			continue
 		}
+
+		a.tradeMu.Lock()
+		tradeActive := a.tradeActive
+		a.tradeMu.Unlock()
+
+		if tradeActive {
+			continue
+		}
+
+		a.roomUsersMu.RLock()
+		user, ok := a.roomUsers[strings.ToLower(targetName)]
+		a.roomUsersMu.RUnlock()
+
+		if !ok {
+			// a.AddLog(fmt.Sprintf("DEBUG: %s no longer in roomUsers map", targetName))
+			continue
+		}
+
+		// Use ChatID (Room Index) for trading
+		roomIndex := user.ChatID
+		if roomIndex < 0 {
+			a.AddLog(fmt.Sprintf("ERROR: %s has invalid RoomIndex %d", targetName, roomIndex))
+			continue
+		}
+
+		a.tradeMu.Lock()
+		a.activeTradePartner = targetName
+		a.activeTradeTarget = roomIndex
+		a.tradeMu.Unlock()
+		
+		a.pMu.Lock()
+		var pRef *Payout
+		for i := range a.payouts {
+			if a.payouts[i].ID == targetID {
+				a.payouts[i].Status = "Trading"
+				pRef = &a.payouts[i]
+				break
+			}
+		}
+		a.pMu.Unlock()
+		a.emitUpdate()
+
+		if pRef == nil {
+			a.AddLog("ERROR: Target lost during trade setup")
+			continue
+		}
+
+		a.AddLog(fmt.Sprintf("Initiating auto-trade for %s (RoomIndex: %d) for %s...", targetName, roomIndex, targetItem))
+		
+		// Send both standard and raw fallback as seen in root app
+		a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), roomIndex)
+		a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), []byte(encodeVL64(roomIndex)))
+		
+		// Create a snapshot for the automation goroutine
+		pCopy := *pRef
+		go a.automateTrade(&pCopy)
 	}
 }
 

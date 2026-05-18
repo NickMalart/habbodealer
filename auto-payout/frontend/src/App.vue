@@ -31,6 +31,7 @@
         <div class="table-header">
           <h3>Payout Queue</h3>
           <div class="table-actions">
+            <button @click="refreshQueue" class="btn-small">Sync with DB</button>
             <button @click="clearCompleted" class="btn-small">Clear Finished</button>
             <button @click="refreshInventory" class="btn-small btn-highlight">Refresh My Hand</button>
             <button @click="returnToOwner" class="btn-danger btn-small">Empty Hand to Owner</button>
@@ -127,6 +128,12 @@ const deletePayout = async (id) => {
 const toggleStatus = async (id) => {
   if (window.go?.main?.App) {
     await window.go.main.App.TogglePayoutStatus(id)
+  }
+}
+
+const refreshQueue = async () => {
+  if (window.go?.main?.App) {
+    await window.go.main.App.RefreshQueue()
   }
 }
 
