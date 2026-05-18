@@ -12,6 +12,8 @@ export function GetOwnerKey():Promise<string>;
 
 export function GetPlayerGameStats(arg1:string,arg2:string,arg3:string):Promise<Array<main.GameStats>>;
 
+export function GetPlayerLedgerStats(arg1:string,arg2:string,arg3:string):Promise<Array<main.LedgerItemStats>>;
+
 export function GetPlayerStats(arg1:string,arg2:string):Promise<Array<main.PlayerStats>>;
 
 export function GetPlayers():Promise<Array<string>>;

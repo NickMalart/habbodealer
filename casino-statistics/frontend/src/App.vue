@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import * as Events from './wailsjs/runtime/runtime'
-import { GetStats, GetPlayerStats, GetPlayerGameStats, GetPlayers, GetBlockedPlayers, ToggleBlockPlayer, GetDbStatus, GetSettings, SaveSettings, GetOwnerKey, GetLedgerStats } from './wailsjs/go/main/App'
+import { GetStats, GetPlayerStats, GetPlayerGameStats, GetPlayers, GetBlockedPlayers, ToggleBlockPlayer, GetDbStatus, GetSettings, SaveSettings, GetOwnerKey, GetLedgerStats, GetPlayerLedgerStats } from './wailsjs/go/main/App'
 
 const activeTab = ref('dashboard')
 const dbStatus = ref('Unknown')
@@ -21,20 +21,29 @@ const isRefreshing = ref(false)
 const showPlayerModal = ref(false)
 const selectedPlayer = ref(null)
 const selectedPlayerGameStats = ref([])
+const selectedPlayerLedger = ref([])
 const isLoadingPlayerDetails = ref(false)
 
 async function openPlayerDetails(player) {
   selectedPlayer.value = player
   showPlayerModal.value = true
   isLoadingPlayerDetails.value = true
+  selectedPlayerLedger.value = []
   logMessage(`Opening details for player: ${player.name}`)
   
   try {
     const s = startDate.value ? startDate.value + 'T00:00:00' : ''
     const e = endDate.value ? endDate.value + 'T23:59:59' : ''
-    const stats = await GetPlayerGameStats(player.name, s, e)
-    selectedPlayerGameStats.value = stats.sort((a, b) => b.totalRounds - a.totalRounds)
-    logMessage(`Loaded ${stats.length} game stats for ${player.name}`)
+    
+    // Fetch game stats and ledger stats in parallel
+    const [gStats, lStats] = await Promise.all([
+      GetPlayerGameStats(player.name, s, e),
+      GetPlayerLedgerStats(player.name, s, e)
+    ])
+    
+    selectedPlayerGameStats.value = gStats.sort((a, b) => b.totalRounds - a.totalRounds)
+    selectedPlayerLedger.value = lStats
+    logMessage(`Loaded ${gStats.length} game stats and ${lStats.length} ledger entries for ${player.name}`)
   } catch (err) {
     logMessage(`ERROR loading player details: ${err.message || err}`)
   } finally {
@@ -641,6 +650,33 @@ onMounted(async () => {
           </table>
           <div v-else style="text-align: center; padding: 2rem; color: #666;">
             No game data found for this period.
+          </div>
+
+          <div style="margin-top: 2rem;">
+            <h3>Item Ledger (Physical In/Out)</h3>
+            <table v-if="selectedPlayerLedger.length > 0">
+              <thead>
+                <tr>
+                  <th>Item Name</th>
+                  <th>Total In (Bets)</th>
+                  <th>Total Out (Payouts)</th>
+                  <th>Net Profit/Loss</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in selectedPlayerLedger" :key="item.name">
+                  <td style="font-weight: bold; color: #bbe1fa;">{{ item.name }}</td>
+                  <td style="color: #2ecc71;">+{{ item.totalIn }}</td>
+                  <td style="color: #e74c3c;">-{{ item.totalOut }}</td>
+                  <td :class="item.net >= 0 ? 'dealer-win' : 'player-win'" style="font-weight: bold;">
+                    {{ item.net > 0 ? '+' : '' }}{{ item.net }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-else style="text-align: center; padding: 2rem; color: #666; background: #0f4c75; border-radius: 4px; border: 1px dashed #3282b8;">
+              No item ledger data found for this player.
+            </div>
           </div>
         </div>
       </div>

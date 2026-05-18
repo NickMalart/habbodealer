@@ -797,6 +797,83 @@ func (a *App) GetLedgerStats(startDate, endDate string) []LedgerItemStats {
 	return result
 }
 
+func (a *App) GetPlayerLedgerStats(playerName, startDate, endDate string) []LedgerItemStats {
+	a.initWg.Wait()
+	if a.db == nil {
+		return []LedgerItemStats{}
+	}
+
+	query := `
+		SELECT trade_type, items
+		FROM trade_ledger
+		WHERE owner_key = $1 AND TRIM(LOWER(partner_name)) = $2
+	`
+	args := []interface{}{a.ownerKey, strings.TrimSpace(strings.ToLower(playerName))}
+	if startDate != "" {
+		query += fmt.Sprintf(" AND created_at >= $%d", len(args)+1)
+		args = append(args, startDate)
+	}
+	if endDate != "" {
+		query += fmt.Sprintf(" AND created_at <= $%d", len(args)+1)
+		args = append(args, endDate)
+	}
+
+	rows, err := a.db.Query(context.Background(), query, args...)
+	if err != nil {
+		log.Printf("[PLAYER_LEDGER_STATS] Query failed: %v", err)
+		return []LedgerItemStats{}
+	}
+	defer rows.Close()
+
+	itemMap := make(map[string]*LedgerItemStats)
+	for rows.Next() {
+		var tradeType string
+		var itemsJSON []byte
+		if err := rows.Scan(&tradeType, &itemsJSON); err != nil {
+			continue
+		}
+
+		var items []TradeItem
+		if err := json.Unmarshal(itemsJSON, &items); err != nil {
+			continue
+		}
+
+		for _, it := range items {
+			name := strings.TrimSpace(it.Name)
+			if name == "" {
+				continue
+			}
+			ls, ok := itemMap[name]
+			if !ok {
+				ls = &LedgerItemStats{Name: name}
+				itemMap[name] = ls
+			}
+
+			if tradeType == "IN" {
+				ls.TotalIn += it.Quantity
+			} else if tradeType == "OUT" {
+				ls.TotalOut += it.Quantity
+			}
+		}
+	}
+
+	result := make([]LedgerItemStats, 0, len(itemMap))
+	for _, ls := range itemMap {
+		ls.Net = ls.TotalIn - ls.TotalOut
+		result = append(result, *ls)
+	}
+
+	// Sort by Net descending (most profitable for casino first)
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Net != result[j].Net {
+			return result[i].Net > result[j].Net
+		}
+		return result[i].Name < result[j].Name
+	})
+
+	return result
+}
+
 func main() {
 	app := NewApp()
 
