@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -33,7 +34,7 @@ type Payout struct {
 	Name      string `json:"name"`
 	ItemName  string `json:"itemName"`
 	Quantity  int    `json:"quantity"`
-	Status    string `json:"status"` // "Pending", "In Room", "Trading", "Completed", "Failed"
+	Status    string `json:"status"` // "Pending", "In Room", "Trading", "Completed", "Failed", "Disabled"
 	CreatedAt string `json:"createdAt"`
 }
 
@@ -44,21 +45,30 @@ type ParsedUsers28User struct {
 	TokenHex string `json:"token_hex"`
 }
 
-type ParsedUsers28Result struct {
-	Users []ParsedUsers28User `json:"users"`
-}
+
 
 type App struct {
 	ctx     context.Context
 	ext     *g.Ext
-	payouts []Payout
 	pMu     sync.RWMutex
+	payouts []Payout
+
+	// Logs
+	logs   []string
+	logsMu sync.Mutex
 
 	// Room state
 	roomUsers   map[string]ParsedUsers28User
 	roomUsersMu sync.RWMutex
 
-	// Inventory state
+	// Inventory (Strip) Scan state
+	stripScanActive      bool
+	stripScanSessionID   int
+	stripScanSeenItemIDs map[int]struct{}
+	stripScanItemIDs     map[string][]int
+	stripScanMu          sync.Mutex
+
+	// Inventory final state
 	inventory   map[string][]int // name -> list of strip IDs
 	inventoryMu sync.RWMutex
 
@@ -69,23 +79,50 @@ type App struct {
 	tradeAccepted      bool
 	tradeMu            sync.Mutex
 
-	// Config
+	// Config & DB
 	pythonExec   string
 	parserScript string
+	db           *pgxpool.Pool
+	dbConnString string
 }
 
 func NewApp() *App {
 	return &App{
-		payouts:    []Payout{},
-		roomUsers:  make(map[string]ParsedUsers28User),
-		inventory:  make(map[string][]int),
-		pythonExec: "python",
+		payouts:      []Payout{},
+		logs:         []string{"Bot initialized..."},
+		roomUsers:    make(map[string]ParsedUsers28User),
+		inventory:    make(map[string][]int),
+		pythonExec:   "python",
+		dbConnString: "postgresql://neondb_owner:npg_Jx8ERGzK6eog@ep-small-thunder-a7ceewoj-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
+		stripScanSeenItemIDs: make(map[int]struct{}),
+		stripScanItemIDs:     make(map[string][]int),
 	}
+}
+
+func (a *App) AddLog(msg string) {
+	fullMsg := fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), msg)
+	log.Println(fullMsg)
+	a.logsMu.Lock()
+	a.logs = append(a.logs, fullMsg)
+	if len(a.logs) > 50 {
+		a.logs = a.logs[len(a.logs)-50:]
+	}
+	a.logsMu.Unlock()
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "logsUpdate", a.GetLogs())
+	}
+}
+
+func (a *App) GetLogs() []string {
+	a.logsMu.Lock()
+	defer a.logsMu.Unlock()
+	return a.logs
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	a.loadPayouts()
+	a.initDatabase()
+	a.loadPayoutsFromDB()
 	a.initParser()
 
 	a.ext = g.NewExt(g.ExtInfo{
@@ -96,18 +133,20 @@ func (a *App) startup(ctx context.Context) {
 	})
 
 	// Register custom headers for this version of goearth
-	a.ext.Headers().Add("STRIPINFO_IN", g.Header{Dir: g.In, Value: 98})
+	// 140 and 98 are STRIPINFO for Origins/Shockwave
+	a.ext.Headers().Add("STRIPINFO_IN", g.Header{Dir: g.In, Value: 140})
+	a.ext.Headers().Add("STRIPINFO_98_IN", g.Header{Dir: g.In, Value: 98})
 	a.ext.Headers().Add("TRADE_OPEN_IN", g.Header{Dir: g.In, Value: 104})
-	a.ext.Headers().Add("TRADE_CLOSE_IN", g.Header{Dir: g.In, Value: 105})
+	a.ext.Headers().Add("TRADE_CLOSE_IN", g.Header{Dir: g.In, Value: 110})
 	a.ext.Headers().Add("TRADE_COMPLETED_IN", g.Header{Dir: g.In, Value: 112})
 	
-	a.ext.Headers().Add("GETSTRIP_OUT", g.Header{Dir: g.Out, Value: 101})
+	a.ext.Headers().Add("GETSTRIP_OUT", g.Header{Dir: g.Out, Value: 65})
 	a.ext.Headers().Add("TRADE_OPEN_OUT", g.Header{Dir: g.Out, Value: 71})
 	a.ext.Headers().Add("TRADE_ADDITEM_OUT", g.Header{Dir: g.Out, Value: 72})
 	a.ext.Headers().Add("TRADE_ACCEPT_OUT", g.Header{Dir: g.Out, Value: 69})
 
-	a.ext.Intercept(in.USERS).With(a.handleRoomUsers)
-	a.ext.Intercept(g.In.Id("STRIPINFO_IN")).With(a.handleStripInfo)
+	a.ext.Intercept(in.USERS, in.SPACENODEUSERS).With(a.handleRoomUsers)
+	a.ext.Intercept(g.In.Id("STRIPINFO_IN"), g.In.Id("STRIPINFO_98_IN")).With(a.handleStripInfo)
 	a.ext.Intercept(g.In.Id("TRADE_OPEN_IN")).With(a.handleTradeOpen)
 	a.ext.Intercept(g.In.Id("TRADE_CLOSE_IN")).With(a.handleTradeClose)
 	a.ext.Intercept(g.In.Id("TRADE_COMPLETED_IN")).With(a.handleTradeCompleted)
@@ -116,8 +155,42 @@ func (a *App) startup(ctx context.Context) {
 		a.ShowWindow()
 	})
 
+	a.AddLog("Extension registered. Waiting for connection...")
 	go a.ext.Run()
 	go a.payoutMonitor()
+}
+
+func (a *App) initDatabase() {
+	a.AddLog("Connecting to database...")
+	config, err := pgxpool.ParseConfig(a.dbConnString)
+	if err != nil {
+		a.AddLog("ERROR: Database config parse failed: " + err.Error())
+		return
+	}
+
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		a.AddLog("ERROR: Database connection failed: " + err.Error())
+		return
+	}
+
+	a.db = pool
+	
+	// Create table if not exists
+	query := `CREATE TABLE IF NOT EXISTS auto_payouts (
+		id TEXT PRIMARY KEY,
+		player_name TEXT NOT NULL,
+		item_name TEXT NOT NULL,
+		quantity INTEGER NOT NULL,
+		status TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	);`
+	_, err = a.db.Exec(context.Background(), query)
+	if err != nil {
+		a.AddLog("ERROR: Table creation failed: " + err.Error())
+	} else {
+		a.AddLog("Database connected and ready.")
+	}
 }
 
 func (a *App) ShowWindow() {
@@ -133,14 +206,22 @@ func (a *App) initParser() {
 		a.pythonExec = p
 	}
 
-	script := filepath.Join("scripts", "parse_users28.py")
-	if _, err := os.Stat(script); err != nil {
-		script = filepath.Join("..", "scripts", "parse_users28.py")
+	candidates := []string{
+		filepath.Join("scripts", "parse_users28.py"),
+		filepath.Join("..", "scripts", "parse_users28.py"),
+		"C:\\Users\\Dubbo\\habbodealer\\habbodealer\\scripts\\parse_users28.py",
 	}
-	if _, err := os.Stat(script); err != nil {
-		abs, _ := filepath.Abs(script)
+
+	for _, cand := range candidates {
+		if _, err := os.Stat(cand); err != nil {
+			continue
+		}
+		abs, _ := filepath.Abs(cand)
 		a.parserScript = abs
+		a.AddLog("Parser found: " + abs)
+		return
 	}
+	a.AddLog("ERROR: parse_users28.py NOT FOUND. Detection will not work.")
 }
 
 // --- Wails Methods ---
@@ -152,42 +233,89 @@ func (a *App) GetPayouts() []Payout {
 }
 
 func (a *App) AddPayout(name, itemName string, qty int) {
-	log.Printf("[DEBUG] AddPayout called: name=%s, item=%s, qty=%d", name, itemName, qty)
-	a.pMu.Lock()
-	defer a.pMu.Unlock()
-
+	id := fmt.Sprintf("%d", time.Now().UnixNano())
+	createdAt := time.Now().Format("2006-01-02 15:04:05")
 	p := Payout{
-		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
+		ID:        id,
 		Name:      strings.TrimSpace(name),
 		ItemName:  strings.TrimSpace(strings.ToLower(itemName)),
 		Quantity:  qty,
 		Status:    "Pending",
-		CreatedAt: time.Now().Format("2006-01-02 15:04:05"),
+		CreatedAt: createdAt,
 	}
+
+	a.AddLog(fmt.Sprintf("Adding payout: %s x %d %s", p.Name, p.Quantity, p.ItemName))
+
+	if a.db != nil {
+		_, err := a.db.Exec(context.Background(), 
+			"INSERT INTO auto_payouts (id, player_name, item_name, quantity, status, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+			p.ID, p.Name, p.ItemName, p.Quantity, p.Status, p.CreatedAt)
+		if err != nil {
+			a.AddLog("ERROR: DB Save failed: " + err.Error())
+		}
+	}
+
+	a.pMu.Lock()
 	a.payouts = append(a.payouts, p)
-	a.savePayouts()
+	a.pMu.Unlock()
 	a.emitUpdate()
 }
 
 func (a *App) DeletePayout(id string) {
-	a.pMu.Lock()
-	defer a.pMu.Unlock()
+	if a.db != nil {
+		_, err := a.db.Exec(context.Background(), "DELETE FROM auto_payouts WHERE id = $1", id)
+		if err != nil {
+			a.AddLog("ERROR: DB Delete failed: " + err.Error())
+		}
+	}
 
+	a.pMu.Lock()
 	newPayouts := []Payout{}
+	found := false
 	for _, p := range a.payouts {
 		if p.ID != id {
 			newPayouts = append(newPayouts, p)
+		} else {
+			found = true
 		}
 	}
-	a.payouts = newPayouts
-	a.savePayouts()
+	if found {
+		a.payouts = newPayouts
+		a.pMu.Unlock()
+		a.emitUpdate()
+		a.AddLog("Entry deleted.")
+	} else {
+		a.pMu.Unlock()
+	}
+}
+
+func (a *App) TogglePayoutStatus(id string) {
+	a.pMu.Lock()
+	defer a.pMu.Unlock()
+	
+	for i, p := range a.payouts {
+		if p.ID == id {
+			newStatus := "Pending"
+			if p.Status == "Pending" || p.Status == "In Room" {
+				newStatus = "Disabled"
+			}
+			a.payouts[i].Status = newStatus
+			
+			if a.db != nil {
+				a.db.Exec(context.Background(), "UPDATE auto_payouts SET status = $1 WHERE id = $2", newStatus, id)
+			}
+			break
+		}
+	}
 	a.emitUpdate()
 }
 
 func (a *App) ClearCompleted() {
-	a.pMu.Lock()
-	defer a.pMu.Unlock()
+	if a.db != nil {
+		a.db.Exec(context.Background(), "DELETE FROM auto_payouts WHERE status = 'Completed'")
+	}
 
+	a.pMu.Lock()
 	newPayouts := []Payout{}
 	for _, p := range a.payouts {
 		if p.Status != "Completed" {
@@ -195,92 +323,137 @@ func (a *App) ClearCompleted() {
 		}
 	}
 	a.payouts = newPayouts
-	a.savePayouts()
+	a.pMu.Unlock()
 	a.emitUpdate()
+	a.AddLog("Completed entries cleared.")
 }
 
 func (a *App) RefreshInventory() {
 	if a.ext != nil {
+		a.stripScanMu.Lock()
+		a.stripScanActive = true
+		sessionID := a.stripScanSessionID + 1
+		a.stripScanSessionID = sessionID
+		a.stripScanSeenItemIDs = make(map[int]struct{})
+		a.stripScanItemIDs = make(map[string][]int)
+		a.stripScanMu.Unlock()
+
+		a.AddLog("Requesting hand inventory...")
 		a.ext.Send(g.Out.Id("GETSTRIP_OUT"), "new")
+
+		go func() {
+			time.Sleep(2 * time.Second) // 2 second timeout for inventory scan
+			a.finalizeStripScan(sessionID)
+		}()
 	}
 }
 
 func (a *App) ReturnAllToOwner(ownerName string) {
-	a.pMu.Lock()
-	defer a.pMu.Unlock()
-
 	a.inventoryMu.RLock()
 	defer a.inventoryMu.RUnlock()
 
+	count := 0
 	for name, ids := range a.inventory {
 		if len(ids) > 0 {
-			a.payouts = append(a.payouts, Payout{
-				ID:        fmt.Sprintf("return-%d", time.Now().UnixNano()),
-				Name:      ownerName,
-				ItemName:  name,
-				Quantity:  len(ids),
-				Status:    "Pending",
-				CreatedAt: time.Now().Format("2006-01-02 15:04:05"),
-			})
+			a.AddPayout(ownerName, name, len(ids))
+			count++
 		}
 	}
-	a.savePayouts()
-	a.emitUpdate()
+	if count > 0 {
+		a.AddLog(fmt.Sprintf("Queued %d return tasks to %s", count, ownerName))
+	} else {
+		a.AddLog("Nothing to return - hand is empty.")
+	}
 }
 
 // --- Internal Logic ---
+
+func (a *App) loadPayoutsFromDB() {
+	if a.db == nil {
+		return
+	}
+	rows, err := a.db.Query(context.Background(), "SELECT id, player_name, item_name, quantity, status, created_at FROM auto_payouts")
+	if err != nil {
+		a.AddLog("ERROR: DB Load failed: " + err.Error())
+		return
+	}
+	defer rows.Close()
+
+	var payouts []Payout
+	for rows.Next() {
+		var p Payout
+		err := rows.Scan(&p.ID, &p.Name, &p.ItemName, &p.Quantity, &p.Status, &p.CreatedAt)
+		if err == nil {
+			payouts = append(payouts, p)
+		}
+	}
+	
+	a.pMu.Lock()
+	a.payouts = payouts
+	a.pMu.Unlock()
+	a.AddLog(fmt.Sprintf("Loaded %d payouts from database.", len(payouts)))
+}
 
 func (a *App) emitUpdate() {
 	runtime.EventsEmit(a.ctx, "payoutsUpdate", a.GetPayouts())
 }
 
-func (a *App) loadPayouts() {
-	data, err := os.ReadFile("payouts.json")
-	if err == nil {
-		json.Unmarshal(data, &a.payouts)
-	}
-}
-
-func (a *App) savePayouts() {
-	data, _ := json.MarshalIndent(a.payouts, "", "  ")
-	os.WriteFile("payouts.json", data, 0644)
-}
-
 func (a *App) handleRoomUsers(e *g.Intercept) {
+	headerName := "USERS"
+	if e.Packet.Header.Value != 28 {
+		headerName = "SPACENODEUSERS"
+	}
+	a.AddLog(fmt.Sprintf("Intercepted %s packet (len: %d).", headerName, len(e.Packet.Data)))
+
 	if a.parserScript == "" {
+		a.AddLog("ERROR: Parser script path is empty.")
 		return
 	}
 
 	tmpFile, err := os.CreateTemp("", "users28_*.bin")
 	if err != nil {
+		a.AddLog("ERROR: Failed to create temp file: " + err.Error())
 		return
 	}
 	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
 
-	tmpFile.Write(e.Packet.Data)
+	_, err = tmpFile.Write(e.Packet.Data)
 	tmpFile.Close()
-
-	cmd := exec.Command(a.pythonExec, a.parserScript, "--input", tmpPath, "--json")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	if err := cmd.Run(); err != nil {
+	if err != nil {
+		a.AddLog("ERROR: Failed to write to temp file: " + err.Error())
+		os.Remove(tmpPath)
 		return
 	}
 
-	var result ParsedUsers28Result
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		return
-	}
+	go func(path string) {
+		defer os.Remove(path)
 
-	a.roomUsersMu.Lock()
-	for _, u := range result.Users {
-		a.roomUsers[strings.ToLower(u.Username)] = u
-	}
-	a.roomUsersMu.Unlock()
+		cmd := exec.Command(a.pythonExec, a.parserScript, "--input", path, "--json")
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			a.AddLog("ERROR: Parser execution failed: " + err.Error())
+			a.AddLog("Stderr: " + stderr.String())
+			return
+		}
 
-	a.updatePayoutStatuses()
+		var users []ParsedUsers28User
+		if err := json.Unmarshal(stdout.Bytes(), &users); err != nil {
+			a.AddLog("ERROR: Failed to parse JSON from parser.")
+			return
+		}
+
+		a.roomUsersMu.Lock()
+		for _, u := range users {
+			a.roomUsers[strings.ToLower(u.Username)] = u
+		}
+		a.roomUsersMu.Unlock()
+
+		a.updatePayoutStatuses()
+	}(tmpPath)
 }
 
 func (a *App) updatePayoutStatuses() {
@@ -291,16 +464,20 @@ func (a *App) updatePayoutStatuses() {
 
 	changed := false
 	for i, p := range a.payouts {
-		if p.Status == "Completed" || p.Status == "Trading" {
+		if p.Status == "Completed" || p.Status == "Disabled" {
 			continue
 		}
-		if _, ok := a.roomUsers[strings.ToLower(p.Name)]; ok {
-			if p.Status == "Pending" {
+		
+		user, ok := a.roomUsers[strings.ToLower(p.Name)]
+		if ok {
+			if p.Status == "Pending" || p.Status == "Failed" {
+				a.AddLog(fmt.Sprintf("Target detected: %s (TradeID: %d)", p.Name, user.TradeID))
 				a.payouts[i].Status = "In Room"
 				changed = true
 			}
 		} else {
 			if p.Status == "In Room" {
+				a.AddLog(fmt.Sprintf("Target left room: %s", p.Name))
 				a.payouts[i].Status = "Pending"
 				changed = true
 			}
@@ -312,6 +489,12 @@ func (a *App) updatePayoutStatuses() {
 }
 
 func (a *App) handleStripInfo(e *g.Intercept) {
+	a.stripScanMu.Lock()
+	if !a.stripScanActive {
+		a.stripScanMu.Unlock()
+		return
+	}
+	sessionID := a.stripScanSessionID
 	data := e.Packet.Data
 	pos := 0
 
@@ -339,25 +522,29 @@ func (a *App) handleStripInfo(e *g.Intercept) {
 
 	count, ok := readVL64()
 	if !ok {
+		a.stripScanMu.Unlock()
 		return
 	}
 
-	newInventory := make(map[string][]int)
-
+	pageRepeated := false
 	for i := 0; i < count; i++ {
 		if pos >= len(data) {
 			break
 		}
 
 		mainID, ok := readVL64()
-		if !ok {
-			break
+		if !ok { break }
+		
+		// If we've seen this item, we've wrapped around
+		if i == 0 {
+			if _, seen := a.stripScanSeenItemIDs[mainID]; seen {
+				pageRepeated = true
+			} else {
+				a.stripScanSeenItemIDs[mainID] = struct{}{}
+			}
 		}
 
-		extraCount, ok := readVL64()
-		if !ok {
-			break
-		}
+		extraCount, _ := readVL64()
 		extraIDs := make([]int, 0, extraCount)
 		for j := 0; j < extraCount; j++ {
 			if extraID, ok := readVL64(); ok {
@@ -385,23 +572,51 @@ func (a *App) handleStripInfo(e *g.Intercept) {
 
 		switch typeChar {
 		case 'S':
-			readVL64()
-			readVL64()
-			skipUntilDelim()
+			readVL64(); readVL64(); skipUntilDelim()
 		case 'I':
 			skipUntilDelim()
 		default:
 			skipUntilDelim()
 		}
 
-		newInventory[classRaw] = append(newInventory[classRaw], mainID)
-		newInventory[classRaw] = append(newInventory[classRaw], extraIDs...)
+		if !pageRepeated {
+			a.stripScanItemIDs[classRaw] = append(a.stripScanItemIDs[classRaw], mainID)
+			a.stripScanItemIDs[classRaw] = append(a.stripScanItemIDs[classRaw], extraIDs...)
+		}
 	}
+	a.stripScanMu.Unlock()
+
+	if pageRepeated {
+		a.finalizeStripScan(sessionID)
+	} else {
+		// Request next page asynchronously to avoid blocking the packet thread
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			a.ext.Send(g.Out.Id("GETSTRIP_OUT"), "next")
+		}()
+	}
+}
+
+func (a *App) finalizeStripScan(sessionID int) {
+	a.stripScanMu.Lock()
+	if !a.stripScanActive || a.stripScanSessionID != sessionID {
+		a.stripScanMu.Unlock()
+		return
+	}
+	
+	finalInventory := make(map[string][]int)
+	for name, ids := range a.stripScanItemIDs {
+		finalInventory[name] = ids
+	}
+	
+	a.stripScanActive = false
+	a.stripScanMu.Unlock()
 
 	a.inventoryMu.Lock()
-	a.inventory = newInventory
+	a.inventory = finalInventory
 	a.inventoryMu.Unlock()
-	log.Printf("Inventory updated: %d categories", len(newInventory))
+	
+	a.AddLog(fmt.Sprintf("Hand scanning complete. Found %d unique item types.", len(finalInventory)))
 }
 
 func (a *App) handleTradeOpen(e *g.Intercept) {
@@ -409,6 +624,7 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 	a.tradeActive = true
 	a.tradeAccepted = false
 	a.tradeMu.Unlock()
+	a.AddLog("Trade window opened.")
 }
 
 func (a *App) handleTradeClose(e *g.Intercept) {
@@ -422,12 +638,14 @@ func (a *App) handleTradeClose(e *g.Intercept) {
 		a.pMu.Lock()
 		for i, p := range a.payouts {
 			if strings.EqualFold(p.Name, partner) && p.Status == "Trading" {
-				// Revert to In Room so it can be retried
 				a.payouts[i].Status = "In Room"
+				a.AddLog("Trade closed prematurely. Re-queueing...")
 			}
 		}
 		a.pMu.Unlock()
 		a.emitUpdate()
+	} else {
+		a.AddLog("Trade closed.")
 	}
 }
 
@@ -443,11 +661,14 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 		for i, p := range a.payouts {
 			if strings.EqualFold(p.Name, partner) && p.Status == "Trading" {
 				a.payouts[i].Status = "Completed"
+				if a.db != nil {
+					a.db.Exec(context.Background(), "UPDATE auto_payouts SET status = 'Completed' WHERE id = $1", p.ID)
+				}
+				a.AddLog(fmt.Sprintf("Payout for %s SUCCESSFUL.", partner))
 			}
 		}
 		a.pMu.Unlock()
 		a.emitUpdate()
-		a.savePayouts()
 	}
 }
 
@@ -485,7 +706,7 @@ func (a *App) payoutMonitor() {
 					a.pMu.Unlock()
 					a.emitUpdate()
 
-					log.Printf("Opening trade with %s (ID %d)", target.Name, user.TradeID)
+					a.AddLog(fmt.Sprintf("Initiating auto-trade for %s...", target.Name))
 					a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), user.TradeID)
 					
 					go a.automateTrade(target)
@@ -497,43 +718,41 @@ func (a *App) payoutMonitor() {
 }
 
 func (a *App) automateTrade(p *Payout) {
-	time.Sleep(1500 * time.Millisecond)
+	time.Sleep(2500 * time.Millisecond) // Wait for trade window
 	
 	a.tradeMu.Lock()
-	if !a.tradeActive {
-		a.tradeMu.Unlock()
-		return
-	}
+	if !a.tradeActive { return }
 	a.tradeMu.Unlock()
 
 	a.inventoryMu.RLock()
 	ids, ok := a.inventory[strings.ToLower(p.ItemName)]
+	inventoryCount := len(ids)
 	a.inventoryMu.RUnlock()
 
-	if !ok || len(ids) < p.Quantity {
-		log.Printf("Shortage for %s: need %d of %s, only have %d", p.Name, p.Quantity, p.ItemName, len(ids))
+	if !ok || inventoryCount == 0 {
+		a.AddLog(fmt.Sprintf("ERROR: Inventory shortage for '%s'. Refresh hand or restock.", p.ItemName))
+		return
 	}
 
 	toAdd := p.Quantity
-	if len(ids) < toAdd {
-		toAdd = len(ids)
+	if inventoryCount < toAdd {
+		a.AddLog(fmt.Sprintf("WARNING: Only have %d of %s. Trading all.", inventoryCount, p.ItemName))
+		toAdd = inventoryCount
 	}
 
+	a.AddLog(fmt.Sprintf("Adding %d x %s...", toAdd, p.ItemName))
 	for i := 0; i < toAdd; i++ {
 		a.tradeMu.Lock()
-		if !a.tradeActive {
-			a.tradeMu.Unlock()
-			return
-		}
+		if !a.tradeActive { return }
 		a.tradeMu.Unlock()
 
 		itemID := ids[i]
-		log.Printf("Adding item %d (%s) for %s", itemID, p.ItemName, p.Name)
 		a.ext.Send(g.Out.Id("TRADE_ADDITEM_OUT"), itemID)
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(600 * time.Millisecond)
 	}
 
-	time.Sleep(1 * time.Second)
+	a.AddLog("Finalizing trade...")
+	time.Sleep(1000 * time.Millisecond)
 	a.ext.Send(g.Out.Id("TRADE_ACCEPT_OUT"))
 }
 
@@ -542,8 +761,8 @@ func main() {
 
 	err := wails.Run(&options.App{
 		Title:  "Auto Payout Bot",
-		Width:  800,
-		Height: 600,
+		Width:  950,
+		Height: 700,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
