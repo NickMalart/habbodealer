@@ -470,9 +470,9 @@ export namespace main {
 	    }
 	}
 	export class TradeItem {
-	    Name: string;
-	    Quantity: number;
-	    RawData: string;
+	    name: string;
+	    quantity: number;
+	    rawData: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new TradeItem(source);
@@ -480,9 +480,9 @@ export namespace main {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.Name = source["Name"];
-	        this.Quantity = source["Quantity"];
-	        this.RawData = source["RawData"];
+	        this.name = source["name"];
+	        this.quantity = source["quantity"];
+	        this.rawData = source["rawData"];
 	    }
 	}
 

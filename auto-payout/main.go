@@ -78,10 +78,11 @@ type App struct {
 	tradeMu            sync.Mutex
 
 	// Config & DB
-	pythonExec   string
-	parserScript string
-	db           *pgxpool.Pool
-	dbConnString string
+	pythonExec     string
+	parserScript   string
+	db             *pgxpool.Pool
+	dbConnString   string
+	discordWebhook string
 }
 
 func NewApp() *App {
@@ -92,9 +93,31 @@ func NewApp() *App {
 		inventory:    make(map[string][]int),
 		pythonExec:   "python",
 		dbConnString: "postgresql://neondb_owner:npg_Jx8ERGzK6eog@ep-small-thunder-a7ceewoj-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
+		discordWebhook: "https://discordapp.com/api/webhooks/1505787297696583800/aUE_M4-quy6wkFs0qVySjHgZq3zYOze5watr67D89e6O1V9VwmjNy24HzN-X7TI5G5k3",
 		stripScanSeenItemIDs: make(map[int]struct{}),
 		stripScanItemIDs:     make(map[string][]int),
 	}
+}
+
+func (a *App) sendDiscordNotification(p Payout) {
+	if a.discordWebhook == "" {
+		return
+	}
+
+	content := fmt.Sprintf("✅ **Payout Successful**\n**Player:** %s\n**Items:** %d x %s\n**Time:** %s", 
+		p.Name, p.Quantity, p.ItemName, time.Now().Format("2006-01-02 15:04:05"))
+
+	payload := map[string]string{
+		"content": content,
+	}
+	jsonPayload, _ := json.Marshal(payload)
+
+	go func() {
+		// Using os/exec to call curl is often more reliable in these environments if http isn't fully configured
+		cmd := exec.Command("curl", "-H", "Content-Type: application/json", "-X", "POST", "-d", string(jsonPayload), a.discordWebhook)
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		cmd.Run()
+	}()
 }
 
 func (a *App) AddLog(msg string) {
@@ -768,6 +791,7 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 					}
 				}
 				a.AddLog(fmt.Sprintf("Payout for %s SUCCESSFUL. Items delivered.", partner))
+				a.sendDiscordNotification(a.payouts[i])
 			}
 		}
 		a.pMu.Unlock()
