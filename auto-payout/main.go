@@ -75,6 +75,7 @@ type App struct {
 	activeTradeTarget  int
 	tradeActive        bool
 	tradeAccepted      bool
+	lastScreenshotPath string
 	tradeMu            sync.Mutex
 
 	// Config & DB
@@ -99,24 +100,83 @@ func NewApp() *App {
 	}
 }
 
-func (a *App) sendDiscordNotification(p Payout) {
+func (a *App) takeScreenshot() string {
+	ex, err := os.Executable()
+	if err != nil {
+		a.AddLog("ERROR: Could not get executable path: " + err.Error())
+		return ""
+	}
+	appDir := filepath.Dir(ex)
+	shotDir := filepath.Join(appDir, "screenshots")
+	
+	if _, err := os.Stat(shotDir); os.IsNotExist(err) {
+		os.MkdirAll(shotDir, 0755)
+	}
+
+	path := filepath.Join(shotDir, fmt.Sprintf("payout_%s_%d.png", time.Now().Format("20060102_150405"), time.Now().UnixNano()%1000))
+	
+	// PowerShell command to capture the primary screen. 
+	psCommand := fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms, System.Drawing; $Screen = [System.Windows.Forms.Screen]::PrimaryScreen; $Bitmap = New-Object System.Drawing.Bitmap $Screen.Bounds.Width, $Screen.Bounds.Height; $Graphics = [System.Drawing.Graphics]::FromImage($Bitmap); $Graphics.CopyFromScreen($Screen.Bounds.X, $Screen.Bounds.Y, 0, 0, $Bitmap.Size); $Bitmap.Save('%s', [System.Drawing.Imaging.ImageFormat]::Png); $Graphics.Dispose(); $Bitmap.Dispose();`, path)
+	
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-Command", psCommand)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := cmd.Run(); err != nil {
+		a.AddLog("ERROR: Screenshot failed: " + err.Error())
+		return ""
+	}
+	return path
+}
+
+func (a *App) sendDiscordNotification(p Payout, screenshotPath string) {
 	if a.discordWebhook == "" {
 		return
 	}
 
-	content := fmt.Sprintf("✅ **Payout Successful**\n**Player:** %s\n**Items:** %d x %s\n**Time:** %s", 
-		p.Name, p.Quantity, p.ItemName, time.Now().Format("2006-01-02 15:04:05"))
-
-	payload := map[string]string{
-		"content": content,
-	}
-	jsonPayload, _ := json.Marshal(payload)
-
 	go func() {
-		// Using os/exec to call curl is often more reliable in these environments if http isn't fully configured
-		cmd := exec.Command("curl", "-H", "Content-Type: application/json", "-X", "POST", "-d", string(jsonPayload), a.discordWebhook)
+		// Embed construction
+		payload := map[string]interface{}{
+			"embeds": []map[string]interface{}{
+				{
+					"title": "✅ Payout Successful",
+					"color": 0x00ff00, // Green
+					"fields": []map[string]interface{}{
+						{"name": "Player", "value": p.Name, "inline": true},
+						{"name": "Items", "value": fmt.Sprintf("%d x %s", p.Quantity, p.ItemName), "inline": true},
+						{"name": "Status", "value": "Delivered", "inline": true},
+					},
+					"timestamp": time.Now().Format(time.RFC3339),
+					"footer": map[string]string{
+						"text": "Auto Payout Bot • Proof of Delivery",
+					},
+				},
+			},
+		}
+
+		if screenshotPath != "" {
+			// Add image attachment reference to the embed
+			payload["embeds"].([]map[string]interface{})[0]["image"] = map[string]string{
+				"url": "attachment://screenshot.png",
+			}
+		}
+
+		jsonPayload, _ := json.Marshal(payload)
+
+		var cmd *exec.Cmd
+		if screenshotPath != "" {
+			// Using payload_json with file attachment
+			cmd = exec.Command("curl", "-s", "-H", "Content-Type: multipart/form-data", 
+				"-F", fmt.Sprintf("payload_json=%s", string(jsonPayload)),
+				"-F", fmt.Sprintf("screenshot.png=@%s", screenshotPath),
+				a.discordWebhook)
+		} else {
+			// Standard JSON post
+			cmd = exec.Command("curl", "-s", "-H", "Content-Type: application/json", "-X", "POST", "-d", string(jsonPayload), a.discordWebhook)
+		}
+		
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-		cmd.Run()
+		if err := cmd.Run(); err != nil {
+			a.AddLog("ERROR: Discord notification failed: " + err.Error())
+		}
 	}()
 }
 
@@ -744,9 +804,15 @@ func (a *App) handlePartnerConfirm(e *g.Intercept) {
 func (a *App) handleTradeClose(e *g.Intercept) {
 	a.tradeMu.Lock()
 	partner := a.activeTradePartner
+	screenshotPath := a.lastScreenshotPath
 	a.tradeActive = false
 	a.activeTradePartner = ""
+	a.lastScreenshotPath = ""
 	a.tradeMu.Unlock()
+
+	if screenshotPath != "" {
+		os.Remove(screenshotPath)
+	}
 
 	if partner != "" {
 		a.pMu.Lock()
@@ -774,8 +840,10 @@ func (a *App) handleTradeClose(e *g.Intercept) {
 func (a *App) handleTradeCompleted(e *g.Intercept) {
 	a.tradeMu.Lock()
 	partner := a.activeTradePartner
+	screenshotPath := a.lastScreenshotPath
 	a.tradeActive = false
 	a.activeTradePartner = ""
+	a.lastScreenshotPath = ""
 	a.tradeMu.Unlock()
 
 	if partner != "" {
@@ -791,7 +859,7 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 					}
 				}
 				a.AddLog(fmt.Sprintf("Payout for %s SUCCESSFUL. Items delivered.", partner))
-				a.sendDiscordNotification(a.payouts[i])
+				a.sendDiscordNotification(a.payouts[i], screenshotPath)
 			}
 		}
 		a.pMu.Unlock()
@@ -1017,6 +1085,16 @@ func (a *App) automateTrade(p *Payout) {
 		if !active {
 			a.AddLog("Stage 2 aborted: trade closed (likely completed or cancelled).")
 			return
+		}
+		
+		if attempt == 1 {
+			a.AddLog("Capturing trade confirmation screenshot...")
+			go func() {
+				path := a.takeScreenshot()
+				a.tradeMu.Lock()
+				a.lastScreenshotPath = path
+				a.tradeMu.Unlock()
+			}()
 		}
 		
 		a.AddLog(fmt.Sprintf("Finalizing stage 2 (Confirm Trade) attempt %d/5...", attempt))
