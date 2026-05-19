@@ -1185,8 +1185,6 @@ func (a *App) SaveDealerOpenConfig(enabled bool, tradeSeconds int, announceSecon
 	}
 
 	return cfg
-
-	return cfg
 }
 
 // BlockRecommendedConfig holds frontend-friendly block-recommend config.
@@ -8394,6 +8392,23 @@ func (a *App) parseTradeItemsPacket(data []byte) []TradeItem {
 				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] skipping field matching trader name=%q", fieldStr))
 				continue
 			}
+
+			// Skip fields that match any known room user to avoid picking up names as items.
+			// This is critical for usernames with underscores that look like furni classes.
+			isUser := false
+			users28Mu.Lock()
+			for _, u := range users28Canonical {
+				if lowField == strings.ToLower(strings.TrimSpace(u.Username)) {
+					isUser = true
+					break
+				}
+			}
+			users28Mu.Unlock()
+			if isUser {
+				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] skipping field matching room user name=%q", fieldStr))
+				continue
+			}
+
 			if _, err := strconv.Atoi(fieldStr); err == nil {
 				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] skipping numeric field (likely user id)=%q", fieldStr))
 				continue
@@ -8605,20 +8620,11 @@ func isKnownTradeClassName(a *App, name string) bool {
 			registryItem, exists = stockedItemsRegistry[name[:star]]
 		}
 	}
-	registryHasEntries := len(stockedItemsRegistry) > 0
 	stockedItemsMu.RUnlock()
 
 	if exists {
 		// Found in our table: respect the user's active/inactive toggle.
 		return registryItem.IsActive
-	}
-
-	// If the user is actively using the Stocked Items feature (i.e. they have added
-	// at least one item to the database), we transition to a STRICT whitelist mode.
-	// We no longer fall back to guessing via catalog or hand snapshots. If it's
-	// not in the whitelist, it's rejected.
-	if registryHasEntries {
-		return false
 	}
 
 	// Determine the base name (without *n variant suffix) for legacy fallback checks.
@@ -8627,7 +8633,8 @@ func isKnownTradeClassName(a *App, name string) bool {
 		baseName = name[:star]
 	}
 
-	// 2. Legacy fallback: catalog membership (ONLY used if Stocked Items is empty).
+	// 2. Legacy fallback: catalog membership (checks even if registry has entries,
+	// unless the specific item was found and marked inactive above).
 	catalogSet := a.GetCatalogNameSet()
 	if _, ok := catalogSet[name]; ok {
 		return true

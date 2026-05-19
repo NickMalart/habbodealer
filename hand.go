@@ -435,24 +435,6 @@ func (a *App) evaluate13Hand() {
 		}
 
 		if thirteenPlayerTotal == 13 {
-			playerLabel := strings.TrimSpace(thirteenPlayerName)
-			if playerLabel == "" {
-				playerLabel = strings.TrimSpace(lastTradePartnerName)
-			}
-			if playerLabel == "" {
-				playerLabel = "Player"
-			}
-
-			// Announce player result and indicate dealer roll in one message
-			msg := fmt.Sprintf("%s got 13 | Rolling...", playerLabel)
-			a.AddLogMsg(fmt.Sprintf("[13] announcing: %q", msg))
-			log.Printf("[13] announcing: %q", msg)
-			if !ChatIsDisabled {
-				waitForUnmute(90 * time.Second)
-				time.Sleep(800 * time.Millisecond)
-				sendMessageWithDelay(msg)
-			}
-
 			a.start13DealerTurn("player reached 13")
 			is13Rolling = false
 			is13Hitting = false
