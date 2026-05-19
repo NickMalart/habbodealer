@@ -186,20 +186,23 @@
                 style="width:100%;padding:8px;border-radius:4px;border:1px solid #ccc;max-width:420px;"
               />
             </div>
-            <div class="game-guide-block dealer-limits-grid">
-              <div class="dealer-limit-field">
-                <div class="game-guide-label">Max Unique Items</div>
-                <input v-model.number="maxUniqueItemsInput" type="number" min="1" class="modal-number" />
+            <div v-if="!fulfillmentModeInput" class="game-guide-block">
+              <div class="dealer-limits-grid">
+                <div class="dealer-limit-field">
+                  <div class="game-guide-label">Max Unique Items</div>
+                  <input v-model.number="maxUniqueItemsInput" type="number" min="1" class="modal-number" />
+                </div>
+                <div class="dealer-limit-field">
+                  <div class="game-guide-label">Max Quantity Per Item</div>
+                  <input v-model.number="maxQuantityPerItemInput" type="number" min="1" class="modal-number" />
+                </div>
               </div>
-              <div class="dealer-limit-field">
-                <div class="game-guide-label">Max Quantity Per Item</div>
-                <input v-model.number="maxQuantityPerItemInput" type="number" min="1" class="modal-number" />
+              <div style="font-size:12px;color:#bdbdbd;margin-top:8px;">
+                Max Unique Items = how many different item types the player may offer. Max Quantity Per Item = max allowed amount for any one item type.
               </div>
             </div>
-            <div style="font-size:12px;color:#bdbdbd;margin-top:8px;">
-              Max Unique Items = how many different item types the player may offer. Max Quantity Per Item = max allowed amount for any one item type.
-            </div>
-            <div class="game-guide-block" style="margin-top:8px;">
+            
+            <div v-if="!fulfillmentModeInput" class="game-guide-block" style="margin-top:8px;">
               <div class="game-guide-label">Standalone Mode (no Risk)</div>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;">
                 <input type="checkbox" v-model="underOver7Mode" :disabled="enableGameBandit" />
@@ -223,7 +226,26 @@
                 </div>
               </div>
             </div>
+
             <div class="game-guide-block" style="margin-top:8px;">
+              <div class="game-guide-label">{{ fulfillmentModeInput ? 'Banker Role' : 'Banker Mode (Dealer Redirection)' }}</div>
+              <label v-if="!fulfillmentModeInput" style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;">
+                <input type="checkbox" v-model="bankerModeInput" />
+                Enable Banker mode (Redirect trades and check remote stock)
+              </label>
+              <div v-if="bankerModeInput && !fulfillmentModeInput" style="margin-top:8px;padding-left:24px;display:flex;flex-direction:column;gap:8px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="font-size:12px;color:#bdbdbd;">Target Banker Name:</span>
+                  <input type="text" v-model="bankerNameInput" placeholder="Enter banker name" style="flex:1;padding:4px;background:#2e2e2e;color:#fff;border:1px solid #444;border-radius:4px;" />
+                </div>
+              </div>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:10px;">
+                <input type="checkbox" v-model="fulfillmentModeInput" />
+                Enable Fulfillment mode (Acts as the Banker for this account)
+              </label>
+            </div>
+
+            <div v-if="!fulfillmentModeInput" class="game-guide-block" style="margin-top:8px;">
               <div class="game-guide-label">Enabled Games</div>
               <label style="font-size:13px;display:flex;align-items:center;gap:8px;">
                 <input type="checkbox" v-model="enableGamePkr" :disabled="underOver7Mode || enableGameBandit" />
@@ -887,6 +909,9 @@ export default {
       enableGameMH: false,
       // Risk mode: when true, enable Risk banking mechanic
       riskModeEnabledInput: false,
+      bankerModeInput: false,
+      bankerNameInput: '',
+      fulfillmentModeInput: false,
       // Block recommended-rooms packet
       blockRecommendedRooms: true,
       // Block slide-object-bundle packet
@@ -1092,7 +1117,7 @@ export default {
           if (this.enableGameBandit) selectedGames.push('bandit');
 
           const standaloneMode = this.underOver7Mode || this.enableGameBandit;
-          if (!standaloneMode && selectedGames.length === 0) {
+          if (!this.fulfillmentModeInput && !standaloneMode && selectedGames.length === 0) {
             this.addLogMsg('[UI] Start cancelled: select at least one enabled game (pkr, 21, 13, 6, tri, uo7, pairup, h18, dt, mh, bandit)');
             return;
           }
@@ -1110,15 +1135,21 @@ export default {
             await window.go.main.App.SetBanditTriplesPayout(Number(this.banditTriplesPayout || 5));
           }
 
-          await window.go.main.App.StartCasinoSetup(name, roomName, maxUnique, maxPer, this.riskModeEnabledInput, selectedGames);
+          await window.go.main.App.StartCasinoSetup(name, roomName, maxUnique, maxPer, this.riskModeEnabledInput, selectedGames, !!this.bankerModeInput, (this.bankerNameInput || '').trim(), !!this.fulfillmentModeInput);
 
           this.showDealerNameModal = false;
-          const expected = this.enableGameBandit ? 3 : (this.underOver7Mode ? 2 : 5);
-          this.diceSetup = Array.from({ length: expected }).map(() => ({ rolled: false, id: 0, value: 0 }));
-          this.showDiceSetupModal = true;
-          this.casinoStatus = 'Awaiting dice rolls';
-          this.casinoStatusKey = 'awaiting';
-          this.addLogMsg(`[UI] Dice setup started; roll all ${expected} dice`);
+          if (!this.fulfillmentModeInput) {
+            const expected = this.enableGameBandit ? 3 : (this.underOver7Mode ? 2 : 5);
+            this.diceSetup = Array.from({ length: expected }).map(() => ({ rolled: false, id: 0, value: 0 }));
+            this.showDiceSetupModal = true;
+            this.casinoStatus = 'Awaiting dice rolls';
+            this.casinoStatusKey = 'awaiting';
+            this.addLogMsg(`[UI] Dice setup started; roll all ${expected} dice`);
+          } else {
+            this.casinoStatus = 'Running (Fulfillment)';
+            this.casinoStatusKey = 'running';
+            this.addLogMsg('[UI] Fulfillment mode started; monitoring payouts');
+          }
         } catch (err) {
           this.addLogMsg('[UI] Failed to start dice setup');
           console.error(err);

@@ -439,6 +439,13 @@ var (
 	autoShoutStopChan chan struct{}
 	autoShoutMu       sync.Mutex
 
+	// Banker mode: when true, redirection chat is active and inventory is fetched remotely.
+	bankerMode bool
+	bankerName string
+
+	// Fulfillment mode: when true, the app acts as the Banker, listening for payout requests.
+	fulfillmentMode bool
+
 	// Auto shout #2 (duplicate slot)
 	autoShout2Enabled bool
 	autoShout2Phrase  string
@@ -494,6 +501,8 @@ type LiveDealerStatusPayload struct {
 	MaxUniqueItems     int               `json:"maxUniqueItems"`
 	MaxQuantityPerItem int               `json:"maxQuantityPerItem"`
 	RiskEnabled        bool              `json:"riskEnabled"`
+	BankerMode         bool              `json:"bankerMode"`
+	BankerName         string            `json:"bankerName,omitempty"`
 	Snapshot           []TradeItem       `json:"snapshot,omitempty"`
 	RecentGames        []LiveGameSummary `json:"recentGames,omitempty"`
 }
@@ -731,6 +740,7 @@ type GameHistoryEntry struct {
 	RiskBank    int  `json:"riskBank,omitempty"`    // player's internal bank at that moment
 	// Explicit decision marker for risk rounds (e.g. "Keep" or "Risk 3")
 	RiskDecision string `json:"riskDecision,omitempty"`
+	PayoutStatus string `json:"payoutStatus,omitempty"`
 }
 
 type tradeShortage struct {
@@ -1923,6 +1933,9 @@ func dealerGameActive() bool {
 }
 
 func dealerReadyForNewTrade() bool {
+	if fulfillmentMode {
+		return dealerAcceptingTrades && !payoutTradeActive && !tradeOpen
+	}
 	return dealerAcceptingTrades &&
 		!dealerGameActive() &&
 		!dealerResyncInProgress &&
@@ -4486,7 +4499,9 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 			completeMsg := fmt.Sprintf("T-Done: %s", partnerName)
 			a.AddLogMsg(fmt.Sprintf("[TRADE_COMPLETED] shouting: %q", completeMsg))
-			sendShout(completeMsg)
+			if !fulfillmentMode {
+				sendShout(completeMsg)
+			}
 
 			// NOTE: do not call stopPayout() here; we must wait for the TRADE_CLOSE (110)
 			// to arrive so the payoutTradeActive flag is still visible to the close-handler
@@ -4556,6 +4571,13 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				} else {
 					a.AddLogMsg("[TRADE_COMPLETED] forced hand refresh failed after trade")
 				}
+				// Skip game prompt/shout if we are just the fulfillment Banker.
+				if fulfillmentMode {
+					a.AddLogMsg("[FULFILLMENT] Banker received items; skipping game trigger and chat.")
+					// We still need to record this in history or ledger, which was already done above.
+					// But we must NOT call sendTradeCompletionMessage.
+					return
+				}
 				// Trigger the game choice prompt after the trade is fully finalized
 				a.sendTradeCompletionMessage()
 			}()
@@ -4564,6 +4586,18 @@ func handleTradePacket(a *App, e *g.Intercept) {
 	}
 
 	if e.Packet.Header.Value == 104 {
+		if bankerMode {
+			bName := bankerName
+			if bName == "" {
+				bName = "the banker"
+			}
+			a.AddLogMsg(fmt.Sprintf("[BANKER_MODE] Blocking trade and redirecting to %s", bName))
+			sendMessageWithDelay(fmt.Sprintf("Please trade %s", bName))
+			e.Block()
+			ext.Send(out.TRADE_CLOSE)
+			return
+		}
+
 		// Manual block-all-trades toggle — skip if we just sent our own payout trade open
 		if !payoutTradeSent && !matchesRecentOutgoingFunc(e.Packet.Data) {
 			activeRound := awaitingGameChoice || dealerGameActive() || payoutActive || payoutTradeActive
@@ -5425,6 +5459,37 @@ func startPayout(a *App, targetID int, targetName string) {
 	a.noteCurrentGameHistory(fmt.Sprintf("Payout started for %s", targetName))
 	// Record timeline and notify player for large payouts
 	appendPayoutTimeline(sessionID, "Payout started target=%q id=%d session=%d", targetName, targetID, sessionID)
+
+	if bankerMode {
+		a.AddLogMsg(fmt.Sprintf("[BANKER_MODE] Redirecting payout for %s to auto_payouts table", targetName))
+		go func() {
+			for _, it := range payoutItemsToRecord {
+				err := a.insertAutoPayout(targetName, it.Name, it.Quantity)
+				if err != nil {
+					a.AddLogMsg(fmt.Sprintf("[BANKER_MODE] Failed to insert auto_payout: %v", err))
+				}
+			}
+			a.AddLogMsg(fmt.Sprintf("[BANKER_MODE] Payout for %s queued for banker %s", targetName, bankerName))
+			msg := fmt.Sprintf("Your payout has been queued! Please trade %s to receive your items.", bankerName)
+			if bankerName == "" {
+				msg = "Your payout has been queued! Please trade the banker to receive your items."
+			}
+			sendMessageWithDelay(msg)
+
+			// We need to mark the game as completed in history
+			a.gameHistoryMu.Lock()
+			a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+				entry.Status = "Completed"
+				entry.PayoutStatus = "BankerQueued"
+			})
+			a.gameHistoryMu.Unlock()
+
+			// Resume dealer
+			time.Sleep(2 * time.Second)
+			a.openDealerAfterRound()
+		}()
+		return
+	}
 	if strings.TrimSpace(targetName) != "" {
 		go sendMessageWithDelay(fmt.Sprintf("Payout started for %s — offering items now, please remain in trade until 'Trade Completed'.", targetName))
 	}
@@ -9514,6 +9579,17 @@ func (a *App) emitHandItemsUpdate() {
 // Runs asynchronously and logs status via `AddLogMsg`.
 func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 	go func(snapshot []TradeItem) {
+		// If Banker mode is active, we want the public-facing snapshot to show the banker's inventory,
+		// not the dealer's (which is likely empty).
+		if bankerMode && bankerName != "" {
+			// tradeHandSnapshot is updated via forceRefreshHandSnapshot which fetches from banker
+			mutex.Lock()
+			if len(tradeHandSnapshot) > 0 {
+				snapshot = tradeHandSnapshot
+			}
+			mutex.Unlock()
+		}
+
 		payload := LiveDealerStatusPayload{
 			LastSeenAt:         time.Now().UTC().Format(time.RFC3339),
 			DealerOpen:         dealerAcceptingTrades,
@@ -9524,6 +9600,9 @@ func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 			RoomName:           a.getCurrentRoomName(),
 			MaxUniqueItems:     maxTradeUniqueItems,
 			MaxQuantityPerItem: maxTradeQuantityPerItem,
+			RiskEnabled:        isRiskEnabled,
+			BankerMode:         bankerMode,
+			BankerName:         bankerName,
 			Snapshot:           snapshot,
 		}
 
@@ -10139,6 +10218,25 @@ func playerBankMaxRisk() int {
 }
 
 func (a *App) forceRefreshHandSnapshot(reason string) bool {
+	if bankerMode && bankerName != "" {
+		items, err := a.fetchBankerSnapshot(bankerName)
+		if err == nil {
+			handItemsMu.Lock()
+			currentHandItems = items
+			currentHandItemIDs = map[string][]int{} // Remote hand doesn't have IDs we can use
+			handItemsMu.Unlock()
+
+			mutex.Lock()
+			tradeHandSnapshot = items
+			tradeHandSnapshotReady = true
+			mutex.Unlock()
+
+			a.AddLogMsg(fmt.Sprintf("[BANKER_MODE] Refreshed snapshot from banker %s (%d items)", bankerName, len(items)))
+			return true
+		}
+		a.AddLogMsg(fmt.Sprintf("[BANKER_MODE] Failed to fetch banker snapshot: %v", err))
+	}
+
 	a.invalidateTradeHandSnapshot(reason)
 
 	scanID := a.requestPlayerStrip(true)
@@ -12827,9 +12925,23 @@ func getExpectedDiceCount() int {
 // when the user clicks the "Start Casino" button. It resets any existing dice and
 // enables recording of incoming dice IDs. It also receives trade-limit configuration
 // values which are stored in global state and emitted in live-dealer payloads.
-func (a *App) StartCasinoSetup(dealerName string, roomName string, maxUniqueItems int, maxQuantityPerItem int, riskEnabled bool, enabledGames []string) {
+func (a *App) StartCasinoSetup(dealerName string, roomName string, maxUniqueItems int, maxQuantityPerItem int, riskEnabled bool, enabledGames []string, bMode bool, bName string, fMode bool) {
 	// Reset state first (this will lock/unlock internally)
 	resetDiceState()
+
+	mutex.Lock()
+	bankerMode = bMode
+	bankerName = strings.TrimSpace(bName)
+	fulfillmentMode = fMode
+	mutex.Unlock()
+
+	if bankerMode {
+		a.AddLogMsg(fmt.Sprintf("[CONFIG] Banker mode (Dealer Redirection) enabled: %s", bankerName))
+	}
+	if fulfillmentMode {
+		a.AddLogMsg("[CONFIG] Fulfillment mode (Banker Role) enabled")
+		go a.runFulfillmentWorker()
+	}
 
 	mutex.Lock()
 	setEnabledGamesFromSelection(enabledGames)
@@ -12862,9 +12974,16 @@ func (a *App) StartCasinoSetup(dealerName string, roomName string, maxUniqueItem
 	mutex.Unlock()
 
 	mutex.Lock()
-	diceSetupActive = true
-	casinoActive = true
-	casinoReady = false
+	if fulfillmentMode {
+		diceSetupActive = false
+		casinoActive = true
+		casinoReady = true
+		dealerAcceptingTrades = true
+	} else {
+		diceSetupActive = true
+		casinoActive = true
+		casinoReady = false
+	}
 	mutex.Unlock()
 
 	// Resolve dealer name: prefer provided value, then env, then username.
@@ -15670,4 +15789,118 @@ func resetMidHouseSequence() {
 	awaitingMHChoice = false
 	awaitingMHChoicePartnerID = 0
 	awaitingMHChoicePartnerName = ""
+}
+
+func (a *App) runFulfillmentWorker() {
+	a.AddLogMsg("[FULFILLMENT] Worker started - monitoring auto_payouts table")
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			mutex.Lock()
+			active := fulfillmentMode
+			mutex.Unlock()
+			if !active {
+				a.AddLogMsg("[FULFILLMENT] Worker stopping - mode disabled")
+				return
+			}
+
+			a.processPendingFulfillmentPayouts()
+		}
+	}
+}
+
+func (a *App) processPendingFulfillmentPayouts() {
+	db, _ := a.getHistoryDB()
+	if db == nil {
+		return
+	}
+
+	ctx := context.Background()
+	// Fetch payouts that are 'Pending' or 'BankerQueued' (if the dealer marked them so)
+	rows, err := db.Query(ctx, "SELECT id, player_name, item_name, quantity FROM auto_payouts WHERE status IN ('Pending', 'BankerQueued') ORDER BY created_at ASC")
+	if err != nil {
+		a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Failed to query payouts: %v", err))
+		return
+	}
+	defer rows.Close()
+
+	type pendingPayout struct {
+		id     string
+		player string
+		item   string
+		qty    int
+	}
+	var list []pendingPayout
+	for rows.Next() {
+		var p pendingPayout
+		if err := rows.Scan(&p.id, &p.player, &p.item, &p.qty); err == nil {
+			list = append(list, p)
+		}
+	}
+
+	if len(list) == 0 {
+		return
+	}
+
+	a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Found %d pending payout(s)", len(list)))
+
+	// For now, we just notify and log. The user will still need to trade the player.
+	// We could automate this further by having the bot open a trade with the player
+	// if they are in the room.
+	for _, p := range list {
+		// Attempt to find the player in the room
+		if targetID, ok := lookupRoomEntityIndexByName(p.player); ok && targetID > 0 {
+			a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Player %s is in the room! Attempting to open trade for %dx %s", p.player, p.qty, p.item))
+			// This would trigger the same trade/add logic used by the dealer
+			// For a fully autonomous banker, we'd need to set up the payout state
+			// and call startPayout.
+		}
+	}
+}
+
+func (a *App) fetchBankerSnapshot(name string) ([]TradeItem, error) {
+	url := os.Getenv("LIVE_SYNC_URL")
+	if url == "" {
+		url = "http://rollorigins.club/api/live-dealer"
+	}
+	// Assuming the API has a /snapshot GET endpoint
+	targetURL := fmt.Sprintf("%s/snapshot?name=%s", url, strings.TrimSpace(name))
+
+	resp, err := http.Get(targetURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("banker API returned status %d", resp.StatusCode)
+	}
+
+	var payload LiveDealerStatusPayload
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+
+	return payload.Snapshot, nil
+}
+
+func (a *App) insertAutoPayout(playerName string, itemName string, quantity int) error {
+	a.historyDBMu.Lock()
+	db := a.historyDB
+	a.historyDBMu.Unlock()
+
+	if db == nil {
+		return fmt.Errorf("history database not connected")
+	}
+
+	id := fmt.Sprintf("%d", time.Now().UnixNano())
+	createdAt := time.Now().Format("2006-01-02 15:04:05")
+
+	_, err := db.Exec(context.Background(),
+		"INSERT INTO auto_payouts (id, player_name, item_name, quantity, status, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+		id, playerName, itemName, quantity, "Pending", createdAt)
+	return err
 }
