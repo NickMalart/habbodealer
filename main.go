@@ -2693,10 +2693,6 @@ func (a *App) ensureGameHistoryTables() error {
 }
 
 func (a *App) recordTradeToLedger(partnerName string, tradeType string, items []TradeItem) {
-	if !casinoReady {
-		return
-	}
-
 	db, owner := a.getHistoryDB()
 	if db == nil {
 		return
@@ -4484,6 +4480,9 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 			// Persist completed payout trade for audit
 			go LogEvent("trade_completed", map[string]interface{}{"mode": "payout", "partner": partnerName, "payout_items": payoutItems}, fmt.Sprintf("Payout trade completed to %s", partnerName), nil)
+
+			// Record the payout items to the trade ledger
+			a.recordTradeToLedger(partnerName, "OUT", payoutItems)
 
 			completeMsg := fmt.Sprintf("T-Done: %s", partnerName)
 			a.AddLogMsg(fmt.Sprintf("[TRADE_COMPLETED] shouting: %q", completeMsg))
