@@ -4568,6 +4568,9 @@ func handleTradePacket(a *App, e *g.Intercept) {
 						if err == nil {
 							count := res.RowsAffected()
 							if count > 0 {
+								// Also mark any associated auto_payouts as completed to satisfy fulfillment requirements
+								db.Exec(ctx, "UPDATE auto_payouts SET status = 'Completed' WHERE LOWER(player_name) = LOWER($1) AND status != 'Completed'", pName)
+
 								a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Resolved %d 'paying' bet(s) to COMPLETED for %s", count, pName))
 								// If we resolved a payout, we MUST NOT register this as a new bet
 								return
@@ -5660,7 +5663,7 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 		handItemsMu.Unlock()
 		liveCover := riskRelevantHandQuantity(snap, gameBetItems)
 		totalCommitted := playerRisk + dealerRisk
-		if liveCover < totalCommitted && !bankerMode {
+		if liveCover < totalCommitted {
 			diff := totalCommitted - liveCover
 			if diff > dealerRisk {
 				diff = dealerRisk
@@ -6085,7 +6088,7 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			handItemsMu.Unlock()
 			liveCover := riskRelevantHandQuantity(snap, gameBetItems)
 			totalCommitted := playerRisk + dealerRisk
-			if liveCover < totalCommitted && !bankerMode {
+			if liveCover < totalCommitted {
 				diff := totalCommitted - liveCover
 				if diff > dealerRisk {
 					diff = dealerRisk
@@ -6217,7 +6220,7 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		handItemsMu.Unlock()
 		liveCover := riskRelevantHandQuantity(snap, gameBetItems)
 		totalCommitted := playerRisk + dealerRisk
-		if liveCover < totalCommitted && !bankerMode {
+		if liveCover < totalCommitted {
 			diff := totalCommitted - liveCover
 			if diff > dealerRisk {
 				diff = dealerRisk
@@ -8010,8 +8013,9 @@ func isLikelyChatToken(s string) bool {
 	if len(s) != 2 {
 		return false
 	}
+	// Allow non-printable characters for Shockwave short tokens.
 	for i := 0; i < len(s); i++ {
-		if s[i] < 32 || s[i] > 126 {
+		if s[i] == 0 {
 			return false
 		}
 	}
@@ -9974,6 +9978,40 @@ func (a *App) captureRiskSnapshot(force bool) bool {
 		return true
 	}
 
+	// In Banker Mode, fetch the snapshot from the Banker API instead of using the local hand.
+	if bankerMode {
+		bName := ""
+		mutex.Lock()
+		bName = bankerName
+		mutex.Unlock()
+
+		if bName != "" {
+			a.AddLogMsg(fmt.Sprintf("[RISK] Banker mode active; fetching risk snapshot from banker %s...", bName))
+			snap, err := a.fetchBankerSnapshot(bName)
+			if err == nil && len(snap) > 0 {
+				mutex.Lock()
+				riskHandSnapshot = snap
+				riskHandSnapshotReady = true
+				total := 0
+				for _, it := range snap {
+					total += it.Quantity
+				}
+				dealerSnapshotQty = total
+				riskSnapshotTaken = true
+				mutex.Unlock()
+				a.AddLogMsg(fmt.Sprintf("[RISK] captured banker snapshot for %s: total=%d types=%d", bName, dealerSnapshotQty, len(snap)))
+				return true
+			} else if err != nil {
+				a.AddLogMsg(fmt.Sprintf("[RISK] failed to fetch banker snapshot for %s: %v", bName, err))
+			} else {
+				a.AddLogMsg(fmt.Sprintf("[RISK] banker %s returned an empty snapshot", bName))
+			}
+		} else {
+			a.AddLogMsg("[RISK] Banker mode active but no Banker Name configured; cannot fetch snapshot")
+		}
+		// Fall through to local snapshot if banker fetch fails
+	}
+
 	// Wait briefly for frozen snapshot to be available.
 	deadline := time.Now().Add(2 * time.Second)
 	for {
@@ -10948,8 +10986,10 @@ func isLikelyToken(s string) bool {
 	if len(s) != 4 {
 		return false
 	}
+	// Shockwave tokens often contain non-printable characters like \x7f.
+	// We allow everything except null bytes to be safe while remaining lenient.
 	for i := 0; i < len(s); i++ {
-		if s[i] < 32 || s[i] > 126 {
+		if s[i] == 0 {
 			return false
 		}
 	}
