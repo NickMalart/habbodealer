@@ -4518,6 +4518,20 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 			// wasPayout is true if we added items (payout) OR if we previously flagged an add as ours OR if we initiated this trade as a payout.
 			wasPayout := len(currentOwnTradeItems) > 0 || lastAddItemWasOurs || isPayoutActive
+			
+			// FALLBACK: If fulfillmentMode is active and we haven't identified this as a payout,
+			// check the auto_payouts table. If a payout for this player exists, treat it as a payout.
+			if !wasPayout && fulfillmentMode && partnerName != "Unknown" {
+				db, _ := a.getHistoryDB()
+				if db != nil {
+					var exists bool
+					err := db.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM auto_payouts WHERE LOWER(player_name) = LOWER($1) AND status != 'Completed')", partnerName).Scan(&exists)
+					if err == nil && exists {
+						wasPayout = true
+						a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Identified trade with %s as payout via auto_payouts table check", partnerName))
+					}
+				}
+			}
 			tradeItemsMu.Unlock()
 			a.emitActiveGameBetItemsUpdate()
 
@@ -4669,6 +4683,8 @@ func handleTradePacket(a *App, e *g.Intercept) {
 						// or the server responding to our TRADE_OPEN with a different ID type.
 						if partnerName == "" || partnerName == "Unknown" || strings.EqualFold(partnerName, activePlayerName) {
 							a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Allowing unidentified or name-matched trade during 'paying' status for %s.", activePlayerName))
+							payoutTradeActive = true
+							lastTradePartnerName = activePlayerName
 						} else {
 							a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Blocking trade from %s (id:%d): session is currently locked to active player %s (status:%s).", partnerName, partnerID, activePlayerName, activeStatus))
 							e.Block()

@@ -67,9 +67,11 @@ type App struct {
 	inventoryMu sync.RWMutex
 
 	activeTradePartner string
+	lastActiveTradePartner string
 	activeTradeTarget  int
 	tradeActive        bool
 	tradeAccepted      bool
+	tradeCompleted     bool
 	payoutPending      bool
 	lastPayoutTime     time.Time
 	lastScreenshotPath string
@@ -597,9 +599,21 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 	a.tradeActive = true
 	a.payoutPending = false // Reset pending flag as trade is now officially open
 	a.tradeAccepted = false
+	a.tradeCompleted = false // Reset for new trade
 	a.activeTradePartner = partnerName
+	a.lastActiveTradePartner = partnerName
 	a.activeTradeTarget = partnerID
 	a.tradeMu.Unlock()
+
+	// Update payout status to Trading if we found a match
+	a.pMu.Lock()
+	for i, p := range a.payouts {
+		if strings.EqualFold(p.Name, partnerName) && (p.Status == "In Room" || p.Status == "Pending") {
+			a.payouts[i].Status = "Trading"
+		}
+	}
+	a.pMu.Unlock()
+	a.emitUpdate()
 
 	a.AddLog(fmt.Sprintf("Trade window opened with %s.", partnerName))
 }
@@ -607,29 +621,46 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 func (a *App) handlePartnerAccept(e *g.Intercept) { a.AddLog("Partner accepted offer.") }
 func (a *App) handlePartnerConfirm(e *g.Intercept) { a.AddLog("Partner confirmed trade.") }
 func (a *App) handleTradeClose(e *g.Intercept) {
-	a.tradeMu.Lock()
-	partner := a.activeTradePartner
-	a.tradeActive = false
-	a.payoutPending = false // Reset pending flag on close
-	a.activeTradePartner = ""
-	a.tradeMu.Unlock()
-	if partner != "" {
-		a.pMu.Lock()
-		for i, p := range a.payouts {
-			if strings.EqualFold(p.Name, partner) && p.Status == "Trading" {
-				a.payouts[i].Status = "Pending"
+	// Small delay to allow TRADE_COMPLETED (112) to arrive first if they are out of order
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		a.tradeMu.Lock()
+		partner := a.activeTradePartner
+		wasCompleted := a.tradeCompleted
+		a.tradeActive = false
+		a.payoutPending = false // Reset pending flag on close
+		a.tradeCompleted = false
+		a.activeTradePartner = ""
+		a.tradeMu.Unlock()
+
+		if partner != "" && !wasCompleted {
+			a.pMu.Lock()
+			for i, p := range a.payouts {
+				if strings.EqualFold(p.Name, partner) && p.Status == "Trading" {
+					a.payouts[i].Status = "Pending"
+				}
 			}
+			a.pMu.Unlock()
+			a.emitUpdate()
+			a.AddLog(fmt.Sprintf("Trade with %s closed without completing. Re-queued.", partner))
+		} else if partner != "" {
+			a.AddLog("Trade closed (completed).")
+		} else {
+			a.AddLog("Trade closed.")
 		}
-		a.pMu.Unlock()
-		a.emitUpdate()
-		a.AddLog(fmt.Sprintf("Trade with %s closed without completing. Re-queued.", partner))
-	} else {
-		a.AddLog("Trade closed.")
-	}
+	}()
 }
 
 func (a *App) handleTradeCompleted(e *g.Intercept) {
-	a.tradeMu.Lock(); partner := a.activeTradePartner; a.tradeActive = false; a.activeTradePartner = ""; a.tradeMu.Unlock()
+	a.tradeMu.Lock()
+	partner := a.activeTradePartner
+	if partner == "" {
+		partner = a.lastActiveTradePartner
+	}
+	a.tradeCompleted = true
+	a.tradeActive = false
+	a.tradeMu.Unlock()
+
 	if partner != "" {
 		a.pMu.Lock()
 		for i, p := range a.payouts {
@@ -638,8 +669,14 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 				if a.db != nil {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
+					// Update auto_payouts table
 					a.db.Exec(ctx, "UPDATE auto_payouts SET status = 'Completed' WHERE id = $1", p.ID)
-					if p.BankerTradeID > 0 { a.db.Exec(ctx, "UPDATE banker_trades SET status = 'completed' WHERE id = $1", p.BankerTradeID) } else { a.db.Exec(ctx, "UPDATE banker_trades SET status = 'completed' WHERE LOWER(player_name) = LOWER($1) AND status = 'paying'", p.Name) }
+					// Update banker_trades table: resolve by ID if available, otherwise by name + status 'paying'
+					if p.BankerTradeID > 0 { 
+						a.db.Exec(ctx, "UPDATE banker_trades SET status = 'completed' WHERE id = $1", p.BankerTradeID) 
+					} else { 
+						a.db.Exec(ctx, "UPDATE banker_trades SET status = 'completed' WHERE LOWER(player_name) = LOWER($1) AND status = 'paying'", p.Name) 
+					}
 				}
 				a.AddLog(fmt.Sprintf("Payout for %s COMPLETED.", partner))
 			}

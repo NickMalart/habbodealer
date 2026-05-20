@@ -28,6 +28,7 @@ func main() {
 		fmt.Printf("Total rows in auto_payouts: %d\n", count)
 	}
 
+	fmt.Println("\n--- auto_payouts ---")
 	rows, err := db.Query(ctx, "SELECT id, player_name, item_name, quantity, status FROM auto_payouts")
 	if err == nil {
 		defer rows.Close()
@@ -36,6 +37,19 @@ func main() {
 			var qty int
 			rows.Scan(&id, &name, &item, &qty, &status)
 			fmt.Printf("Row: id=%s name=%s item=%s qty=%d status=%s\n", id, name, item, qty, status)
+		}
+	}
+
+	fmt.Println("\n--- banker_trades (recent) ---")
+	rowsBT, err := db.Query(ctx, "SELECT id, player_name, status, banker_name, created_at FROM banker_trades ORDER BY created_at DESC LIMIT 10")
+	if err == nil {
+		defer rowsBT.Close()
+		for rowsBT.Next() {
+			var id int
+			var name, status, bankerName string
+			var createdAt time.Time
+			rowsBT.Scan(&id, &name, &status, &bankerName, &createdAt)
+			fmt.Printf("BT: id=%d name=%s status=%s banker=%s at=%v\n", id, name, status, bankerName, createdAt)
 		}
 	}
 }
