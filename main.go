@@ -25,7 +25,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sirupsen/logrus"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -2733,6 +2732,7 @@ func (a *App) ensureGameHistoryTables() error {
 		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS player_trade_id INTEGER`,
 		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS player_chat_id INTEGER`,
 		`CREATE INDEX IF NOT EXISTS idx_banker_trades_status ON banker_trades(status, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_banker_trades_banker_name_lower ON banker_trades (LOWER(banker_name))`,
 		`CREATE TABLE IF NOT EXISTS auto_payouts (
 			id TEXT PRIMARY KEY,
 			player_name TEXT NOT NULL,
@@ -5320,6 +5320,15 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 		} else {
 			initialQty = dealerSnapshotQty
 		}
+
+		// FALLBACK: In Banker Mode, the Dealer doesn't hold the stock.
+		// If the remote snapshot failed or returned 0, we must allow the risk
+		// session to proceed by trusting the Banker's overall liquidity.
+		if bankerMode && initialQty <= 0 {
+			initialQty = 999999
+			a.AddLogMsg("[RISK] Banker mode active; using Trusted initial bank for risk session")
+		}
+
 		dealerRisk = initialQty
 		playerRisk = 0
 		riskInitialized = true
@@ -9993,10 +10002,17 @@ func (a *App) notifyTradeQuantityCoverage() {
 }
 
 func (a *App) getTradeCoverageShortages() []tradeShortage {
+	mutex.Lock()
+	isBanker := fulfillmentMode
+	mutex.Unlock()
+
 	// Ensure we have a frozen hand snapshot to compare against.
 	handItemsMu.Lock()
 	if !tradeHandSnapshotReady || tradeHandSnapshot == nil {
 		handItemsMu.Unlock()
+		if isBanker {
+			return []tradeShortage{}
+		}
 		return nil
 	}
 	// copy snapshot
@@ -15495,18 +15511,11 @@ func (a *App) processPendingBankerTrades() {
 
 	mutex.Lock()
 	bName := bankerName
+	dName := a.currentDealerName
 	mutex.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	// Fetch one pending trade at a time. If a banker name is configured, filter by it.
-	var row pgx.Row
-	if bName != "" {
-		row = db.QueryRow(ctx, "SELECT id, player_name, player_trade_id, player_chat_id, bet_items, banker_name FROM banker_trades WHERE status = 'pending' AND banker_name = $1 ORDER BY created_at ASC LIMIT 1", bName)
-	} else {
-		row = db.QueryRow(ctx, "SELECT id, player_name, player_trade_id, player_chat_id, bet_items, banker_name FROM banker_trades WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1")
-	}
 
 	var id int
 	var playerName string
@@ -15515,33 +15524,65 @@ func (a *App) processPendingBankerTrades() {
 	var betItemsJSON []byte
 	var dbBankerName string
 
-	if err := row.Scan(&id, &playerName, &playerTradeID, &playerChatID, &betItemsJSON, &dbBankerName); err != nil {
-		// No rows found is normal for polling
-		if strings.Contains(err.Error(), "no rows") {
-			// If we are looking for a specific banker but nothing found, 
-			// check if there are ANY pending trades for other bankers to help debug
+	found := false
+
+	// Step 1: Try to find a trade matching the configured Banker Name (if any)
+	if bName != "" {
+		row := db.QueryRow(ctx, "SELECT id, player_name, player_trade_id, player_chat_id, bet_items, banker_name FROM banker_trades WHERE status = 'pending' AND LOWER(banker_name) = LOWER($1) ORDER BY created_at ASC LIMIT 1", bName)
+		if err := row.Scan(&id, &playerName, &playerTradeID, &playerChatID, &betItemsJSON, &dbBankerName); err == nil {
+			found = true
+		}
+	}
+
+	// Step 2: Fallback - if Step 1 failed, try matching the Dealer's OWN name
+	if !found {
+		row := db.QueryRow(ctx, "SELECT id, player_name, player_trade_id, player_chat_id, bet_items, banker_name FROM banker_trades WHERE status = 'pending' AND LOWER(banker_name) = LOWER($1) ORDER BY created_at ASC LIMIT 1", dName)
+		if err := row.Scan(&id, &playerName, &playerTradeID, &playerChatID, &betItemsJSON, &dbBankerName); err == nil {
+			found = true
 			if bName != "" {
-				var count int
-				_ = db.QueryRow(ctx, "SELECT COUNT(*) FROM banker_trades WHERE status = 'pending'").Scan(&count)
-				if count > 0 {
-					// Find what banker names ARE in the DB
-					var others []string
-					rows, _ := db.Query(ctx, "SELECT DISTINCT banker_name FROM banker_trades WHERE status = 'pending'")
-					if rows != nil {
-						for rows.Next() {
-							var n string
-							if err := rows.Scan(&n); err == nil { others = append(others, n) }
+				a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Note: Found trade for your name (%s) despite 'Banker Name' filter (%s). Using it.", dName, bName))
+			}
+		}
+	}
+
+	// Step 3: Final Fallback - take ANY pending trade if no specific bName was set
+	if !found && bName == "" {
+		row := db.QueryRow(ctx, "SELECT id, player_name, player_trade_id, player_chat_id, bet_items, banker_name FROM banker_trades WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1")
+		if err := row.Scan(&id, &playerName, &playerTradeID, &playerChatID, &betItemsJSON, &dbBankerName); err == nil {
+			found = true
+		}
+	}
+
+	if !found {
+		// Only show warnings/hints if we absolutely couldn't find a relevant trade
+		if bName != "" {
+			var count int
+			_ = db.QueryRow(ctx, "SELECT COUNT(*) FROM banker_trades WHERE status = 'pending'").Scan(&count)
+			if count > 0 {
+				var others []string
+				rows, _ := db.Query(ctx, "SELECT DISTINCT banker_name FROM banker_trades WHERE status = 'pending'")
+				if rows != nil {
+					for rows.Next() {
+						var n string
+						if err := rows.Scan(&n); err == nil {
+							others = append(others, n)
 						}
-						rows.Close()
 					}
-					a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Warning: %d trades pending for other bankers: %v (You are looking for: %s)", count, others, bName))
+					rows.Close()
+				}
+				a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Warning: %d trades pending for other bankers: %v (You are looking for: %s)", count, others, bName))
+				for _, o := range others {
+					if strings.EqualFold(o, dName) {
+						a.AddLogMsg("[BANKER_POLL] Hint: Found a trade registered for your own name! Try clearing the 'Banker Name' field in your Dealer config or matching it with the 'Dealer Name' in your Banker app.")
+					}
 				}
 			}
-			return
 		}
-		a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Query error: %v", err))
 		return
 	}
+
+	// At this point, we have a trade (found == true)
+	a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Found pending banker trade for %s (from banker: %s)", playerName, dbBankerName))
 
 	// Immediately mark as 'claimed'
 	_, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'claimed' WHERE id = $1", id)
