@@ -26,6 +26,10 @@ export function GetPayouts() {
   return window['go']['main']['App']['GetPayouts']();
 }
 
+export function Ping() {
+  return window['go']['main']['App']['Ping']();
+}
+
 export function RefreshInventory() {
   return window['go']['main']['App']['RefreshInventory']();
 }

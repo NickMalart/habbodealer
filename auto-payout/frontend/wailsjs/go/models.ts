@@ -7,6 +7,7 @@ export namespace main {
 	    quantity: number;
 	    status: string;
 	    createdAt: string;
+	    bankerTradeId: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Payout(source);
@@ -20,6 +21,7 @@ export namespace main {
 	        this.quantity = source["quantity"];
 	        this.status = source["status"];
 	        this.createdAt = source["createdAt"];
+	        this.bankerTradeId = source["bankerTradeId"];
 	    }
 	}
 

@@ -97,17 +97,27 @@ const newQty = ref(1)
 const isConnected = ref(false)
 const logContainer = ref(null)
 
-const loadInitialData = async () => {
+const tryInitialize = async () => {
   if (window.go?.main?.App) {
-    payouts.value = await window.go.main.App.GetPayouts()
-    logs.value = await window.go.main.App.GetLogs()
-    isConnected.value = true
+    console.log("Wails bridge detected. Loading initial data...")
+    try {
+      payouts.value = await window.go.main.App.GetPayouts()
+      logs.value = await window.go.main.App.GetLogs()
+      isConnected.value = true
+      return true
+    } catch (e) {
+      console.error("Failed to load initial data:", e)
+    }
   }
+  return false
 }
 
 const addPayout = async () => {
   if (!newName.value || !newItem.value) return
-  if (!window.go?.main?.App) return
+  if (!window.go?.main?.App) {
+    alert("Wails not ready")
+    return
+  }
   
   try {
     await window.go.main.App.AddPayout(newName.value, newItem.value, newQty.value)
@@ -132,8 +142,11 @@ const toggleStatus = async (id) => {
 }
 
 const refreshQueue = async () => {
+  console.log("Refresh Queue clicked")
   if (window.go?.main?.App) {
     await window.go.main.App.RefreshQueue()
+  } else {
+    console.warn("window.go.main.App is not available")
   }
 }
 
@@ -144,8 +157,11 @@ const clearCompleted = async () => {
 }
 
 const refreshInventory = async () => {
+  console.log("Refresh Inventory clicked")
   if (window.go?.main?.App) {
     await window.go.main.App.RefreshInventory()
+  } else {
+    console.warn("window.go.main.App is not available")
   }
 }
 
@@ -165,8 +181,14 @@ watch(logs, () => {
 }, { deep: true })
 
 onMounted(() => {
-  loadInitialData()
-  
+  // Start polling for Wails readiness
+  const initInterval = setInterval(async () => {
+    const success = await tryInitialize()
+    if (success) {
+      clearInterval(initInterval)
+    }
+  }, 500)
+
   if (window.runtime) {
     window.runtime.EventsOn('payoutsUpdate', (data) => {
       payouts.value = data

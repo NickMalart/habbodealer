@@ -2797,7 +2797,17 @@ func (a *App) recordTradeToLedger(partnerName string, tradeType string, items []
 		return
 	}
 
-	itemsJSON, _ := json.Marshal(items)
+	// Ensure we use raw names for ledger records
+	ledgerItems := make([]TradeItem, 0, len(items))
+	for _, it := range items {
+		ledgerItems = append(ledgerItems, TradeItem{
+			Name:     a.getRawItemName(it.Name),
+			Quantity: it.Quantity,
+			RawData:  it.RawData,
+		})
+	}
+
+	itemsJSON, _ := json.Marshal(ledgerItems)
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -4575,7 +4585,10 @@ func handleTradePacket(a *App, e *g.Intercept) {
 						if err := a.insertBankerTrade(pName, pTradeID, pChatID, items, a.currentDealerName); err != nil {
 							a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Error inserting banker trade: %v", err))
 						} else {
-							a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Successfully registered banker trade for %s", pName))
+							a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Successfully registered banker trade for %s. Closing trade acceptance.", pName))
+							mutex.Lock()
+							dealerAcceptingTrades = false
+							mutex.Unlock()
 						}
 					} else {
 						a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Ignoring completed trade with %s because it was identified as a payout (isPayout=true)", pName))
@@ -4590,6 +4603,47 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 	// TRADE_OPEN incoming 104
 	if e.Packet.Header.Value == 104 {
+		if fulfillmentMode {
+			// Identify incoming partner
+			partnerName := ""
+			partnerID, ok := decodeLeadingVL64(e.Packet.Data)
+			if ok {
+				if name, ok := lookupUsers28Index(partnerID); ok {
+					partnerName = name
+				}
+			}
+
+			a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Incoming trade from id:%d (%s). Checking authorization...", partnerID, partnerName))
+
+			// AUTHORIZATION 1: Did we (the bot) just open this trade?
+			if matchesRecentOutgoingFunc(e.Packet.Data) {
+				a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Allowing trade with %s: matched recent outgoing request.", partnerName))
+			} else {
+				// AUTHORIZATION 2: Session Isolation
+				activePlayerName := ""
+				db, _ := a.getHistoryDB()
+				if db != nil {
+					// Check if there is ANY active transaction for this banker
+					db.QueryRow(context.Background(), "SELECT player_name FROM banker_trades WHERE LOWER(banker_name) = LOWER($1) AND status IN ('pending', 'playing', 'paying') LIMIT 1", a.currentDealerName).Scan(&activePlayerName)
+				}
+
+				if activePlayerName != "" {
+					// An active session exists. We ONLY allow trades from the player currently engaged.
+					if strings.EqualFold(partnerName, activePlayerName) {
+						a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Allowing trade: %s is the currently active player in DB.", partnerName))
+					} else {
+						a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Blocking trade from %s: session is currently locked to active player %s.", partnerName, activePlayerName))
+						e.Block()
+						ext.Send(out.TRADE_CLOSE)
+						return
+					}
+				} else {
+					// No active sessions exist. The bot is open to the public for new bets.
+					a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Authorized new bet from %s (no active sessions).", partnerName))
+				}
+			}
+		}
+
 		if bankerMode {
 			bName := bankerName
 			if bName == "" {
@@ -15524,6 +15578,26 @@ func (a *App) runFulfillmentWorker() {
 			}
 
 			a.processPendingFulfillmentPayouts()
+
+			// AUTONOMOUS REOPEN: If we are locked but no active trades remain in DB, reopen.
+			mutex.Lock()
+			locked := !dealerAcceptingTrades
+			currentDealer := a.currentDealerName
+			mutex.Unlock()
+
+			if locked {
+				db, _ := a.getHistoryDB()
+				if db != nil {
+					var activeCount int
+					err := db.QueryRow(context.Background(), "SELECT COUNT(*) FROM banker_trades WHERE LOWER(banker_name) = LOWER($1) AND status IN ('pending', 'playing', 'paying')", currentDealer).Scan(&activeCount)
+					if err == nil && activeCount == 0 {
+						a.AddLogMsg("[FULFILLMENT] No active transactions remaining. Reopening trade acceptance.")
+						mutex.Lock()
+						dealerAcceptingTrades = true
+						mutex.Unlock()
+					}
+				}
+			}
 		}
 	}
 }

@@ -14,6 +14,8 @@ export function GetLogs():Promise<Array<string>>;
 
 export function GetPayouts():Promise<Array<main.Payout>>;
 
+export function Ping():Promise<string>;
+
 export function RefreshInventory():Promise<void>;
 
 export function RefreshQueue():Promise<void>;
