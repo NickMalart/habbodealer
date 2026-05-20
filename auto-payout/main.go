@@ -764,6 +764,11 @@ func (a *App) payoutMonitor() {
 		for i := range a.payouts {
 			if a.payouts[i].ID == target.ID {
 				a.payouts[i].Status = "Trading"
+				if a.db != nil {
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+					defer cancel()
+					a.db.Exec(ctx, "UPDATE auto_payouts SET status = 'Trading' WHERE id = $1", target.ID)
+				}
 				break
 			}
 		}
@@ -789,6 +794,11 @@ func (a *App) payoutMonitor() {
 				for i, p := range a.payouts {
 					if p.ID == id && p.Status == "Trading" {
 						a.payouts[i].Status = "In Room"
+						if a.db != nil {
+							ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+							defer cancel()
+							a.db.Exec(ctx, "UPDATE auto_payouts SET status = 'In Room' WHERE id = $1", id)
+						}
 					}
 				}
 				a.pMu.Unlock()

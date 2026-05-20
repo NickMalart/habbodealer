@@ -4260,6 +4260,21 @@ func handleTradePacket(a *App, e *g.Intercept) {
 					}
 				}
 
+				if len(added) > 0 && !wasOurs {
+					db, _ := a.getHistoryDB()
+					if db != nil {
+						partnerName := normalizeUsername(strings.TrimSpace(lastTradePartnerName))
+						var activePayout bool
+						ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+						db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM auto_payouts WHERE LOWER(player_name) = LOWER($1) AND status != 'Completed')", partnerName).Scan(&activePayout)
+						cancel()
+						if activePayout {
+							wasOurs = true
+							a.AddLogMsg(fmt.Sprintf("[TRADE_ITEMS] attributing items to us because partner %s has an active auto-payout", partnerName))
+						}
+					}
+				}
+
 				if len(prevAllCopy) == 0 && len(allItems) > 0 {
 					for name, q := range allMap {
 						partnerMap[name] = q
@@ -4513,6 +4528,21 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			copy(gameBetItems, currentTradeItems)
 			// wasPayout is true if we added items (payout) OR if we previously flagged an add as ours.
 			wasPayout := len(currentOwnTradeItems) > 0 || lastAddItemWasOurs
+
+			// Final safeguard: check DB for any active auto-payout for this partner
+			if !wasPayout {
+				db, _ := a.getHistoryDB()
+				if db != nil {
+					var activePayout bool
+					ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+					db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM auto_payouts WHERE LOWER(player_name) = LOWER($1) AND status != 'Completed')", partnerName).Scan(&activePayout)
+					cancel()
+					if activePayout {
+						wasPayout = true
+						a.AddLogMsg(fmt.Sprintf("[TRADE_COMPLETED] partner %s has an active auto-payout; skipping bet registration", partnerName))
+					}
+				}
+			}
 			tradeItemsMu.Unlock()
 			a.emitActiveGameBetItemsUpdate()
 
