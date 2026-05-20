@@ -578,11 +578,53 @@ func (a *App) lookupNameByID(id int) string {
 }
 
 func (a *App) handleTradeOpen(e *g.Intercept) {
-	partnerID := gencoding.VL64Decode(e.Packet.Data)
-	partnerName := a.lookupNameByID(partnerID)
+	data := e.Packet.Data
+	ids := []int{}
+	pos := 0
+	for pos < len(data) {
+		vlen := gencoding.VL64DecodeLen(data[pos])
+		if vlen <= 0 || pos+vlen > len(data) { break }
+		ids = append(ids, gencoding.VL64Decode(data[pos:pos+vlen]))
+		pos += vlen
+	}
+
+	partnerID := 0
+	partnerName := ""
+
+	// Try to find the partner among the decoded IDs
+	for _, id := range ids {
+		name := a.lookupNameByID(id)
+		if name != "" {
+			// If we have an active payout for this name, it's definitely the partner
+			a.pMu.RLock()
+			isTarget := false
+			for _, p := range a.payouts {
+				if strings.EqualFold(p.Name, name) && p.Status == "Trading" {
+					isTarget = true
+					break
+				}
+			}
+			a.pMu.RUnlock()
+			if isTarget {
+				partnerID = id
+				partnerName = name
+				break
+			}
+			// Fallback: use the first non-empty name we find
+			if partnerName == "" {
+				partnerID = id
+				partnerName = name
+			}
+		}
+	}
+
+	// If we still don't have a partner ID but we have IDs, use the first one as fallback
+	if partnerID == 0 && len(ids) > 0 {
+		partnerID = ids[0]
+	}
 
 	// Authorize if we just opened this, or if the person has a pending payout
-	authorized := a.matchesRecentOutgoing(e.Packet.Data)
+	authorized := a.matchesRecentOutgoing(data)
 	if !authorized && partnerName != "" {
 		a.pMu.RLock()
 		for _, p := range a.payouts {
@@ -594,15 +636,19 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 		a.pMu.RUnlock()
 	}
 
-	// Lenient fallback: if partnerName is empty, but we are actively trying to payout someone,
-	// assume this is the server responding to our request (with a DB ID instead of room index).
-	if !authorized && partnerName == "" {
+	// Lenient fallback: if we are actively trying to payout someone,
+	// assume this is the server responding to our request.
+	if !authorized {
 		a.tradeMu.Lock()
 		isPending := a.payoutPending
+		pendingPartner := a.activeTradePartner
 		a.tradeMu.Unlock()
 		if isPending {
 			authorized = true
-			a.AddLog(fmt.Sprintf("Leniently authorizing unidentified trade (id:%d) due to active pending payout.", partnerID))
+			if partnerName == "" {
+				partnerName = pendingPartner
+			}
+			a.AddLog(fmt.Sprintf("Leniently authorizing trade (id:%d) due to active pending payout for %s.", partnerID, partnerName))
 		}
 	}
 
@@ -617,12 +663,8 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 		}
 
 		if activePlayerName != "" {
-			// There is an active game. We should only accept trades if it's the active player AND status is paying.
-			// If they are in banker_trades but NOT authorized above, they are likely trying to trade mid-game.
 			a.AddLog(fmt.Sprintf("Blocking trade from %s: session is currently locked to active player %s (status:%s).", partnerName, activePlayerName, activeStatus))
 		} else {
-			// No active games in banker_trades AND no active payouts in our queue.
-			// Bot is completely idle. Accept trades (e.g., for restocking).
 			authorized = true
 			a.AddLog(fmt.Sprintf("Authorizing trade from %s (id:%d): no active games or payouts.", partnerName, partnerID))
 		}
@@ -631,20 +673,21 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 	if !authorized {
 		a.AddLog(fmt.Sprintf("Rejecting unauthorized incoming trade request from %s (id:%d).", partnerName, partnerID))
 		e.Block()
-		// Send server-side close to ensure the server knows we've rejected it.
 		a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
 		return
 	}
 
 	a.tradeMu.Lock()
 	a.tradeActive = true
-	a.payoutPending = false // Reset pending flag as trade is now officially open
+	a.payoutPending = false 
 	a.tradeAccepted = false
-	a.activeTradePartner = partnerName
+	if partnerName != "" {
+		a.activeTradePartner = partnerName
+	}
 	a.activeTradeTarget = partnerID
 	a.tradeMu.Unlock()
 
-	a.AddLog(fmt.Sprintf("Trade window opened with %s.", partnerName))
+	a.AddLog(fmt.Sprintf("Trade window opened with %s.", a.activeTradePartner))
 }
 
 func (a *App) handleTradeAlreadyOpen(e *g.Intercept) {

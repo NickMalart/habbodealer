@@ -4633,20 +4633,53 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 	// TRADE_OPEN incoming 104
 	if e.Packet.Header.Value == 104 {
-		if fulfillmentMode {
-			// Identify incoming partner
-			partnerName := ""
-			partnerID, ok := decodeLeadingVL64(e.Packet.Data)
-			if ok {
-				if name, ok := lookupUsers28Index(partnerID); ok {
-					partnerName = name
-				} else if name, ok := lookupUsers28TradeID(partnerID); ok {
-					partnerName = name
-				} else if name, ok := waitForUsers28IndexName(partnerID, 300*time.Millisecond); ok {
-					partnerName = name
-				}
-			}
+		// Identify incoming partner
+		partnerID := 0
+		partnerName := ""
 
+		data := e.Packet.Data
+		ids := []int{}
+		pos := 0
+		for pos < len(data) {
+			vlen := gencoding.VL64DecodeLen(data[pos])
+			if vlen <= 0 || pos+vlen > len(data) {
+				break
+			}
+			ids = append(ids, gencoding.VL64Decode(data[pos:pos+vlen]))
+			pos += vlen
+		}
+
+		// Find the partner among the decoded IDs
+		for _, id := range ids {
+			if name, ok := lookupUsers28Index(id); ok {
+				// Ignore our own name if we can identify it
+				if strings.EqualFold(name, a.currentDealerName) {
+					continue
+				}
+				partnerID = id
+				partnerName = name
+				break
+			} else if name, ok := lookupUsers28TradeID(id); ok {
+				if strings.EqualFold(name, a.currentDealerName) {
+					continue
+				}
+				partnerID = id
+				partnerName = name
+				break
+			}
+		}
+
+		// Fallback: if we only have one ID or couldn't filter out the dealer
+		if partnerID == 0 && len(ids) > 0 {
+			partnerID = ids[0]
+			if name, ok := lookupUsers28Index(partnerID); ok {
+				partnerName = name
+			} else if name, ok := lookupUsers28TradeID(partnerID); ok {
+				partnerName = name
+			}
+		}
+
+		if fulfillmentMode {
 			a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Incoming trade from id:%d (%s). Checking authorization...", partnerID, partnerName))
 
 			// AUTHORIZATION 1: Did we (the bot) just open this trade?
@@ -4692,12 +4725,24 @@ func handleTradePacket(a *App, e *g.Intercept) {
 						if partnerName == "" || partnerName == "Unknown" || strings.EqualFold(partnerName, activePlayerName) {
 							a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Allowing unidentified or name-matched trade during 'paying' status for %s.", activePlayerName))
 						} else {
-							a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Blocking trade from %s (id:%d): session is currently locked to active player %s (status:%s).", partnerName, partnerID, activePlayerName, activeStatus))
-							e.Block()
-							ext.Send(out.TRADE_CLOSE)
-							return
+							// Check if there is a pending auto-payout for the partner as well
+							var activePayout bool
+							if db != nil {
+								ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+								db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM auto_payouts WHERE LOWER(player_name) = LOWER($1) AND status != 'Completed')", strings.ToLower(partnerName)).Scan(&activePayout)
+								cancel()
+							}
+							if activePayout {
+								a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Allowing trade from %s due to active auto-payout (current session: %s status %s).", partnerName, activePlayerName, activeStatus))
+							} else {
+								a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Blocking trade from %s (id:%d): session is currently locked to active player %s (status:%s).", partnerName, partnerID, activePlayerName, activeStatus))
+								e.Block()
+								ext.Send(out.TRADE_CLOSE)
+								return
+							}
 						}
 					} else {
+						// Session is active but not paying. Only the active player can trade, but they are already playing.
 						a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Blocking trade from %s (id:%d): session is currently locked to active player %s (status:%s).", partnerName, partnerID, activePlayerName, activeStatus))
 						e.Block()
 						ext.Send(out.TRADE_CLOSE)
@@ -4793,7 +4838,11 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			startTradeWindowTimeoutMonitor(a)
 		}
 
-		if id, ok := decodeLeadingVL64(e.Packet.Data); ok {
+		// Update global trade tracking
+		if partnerID > 0 {
+			lastTradePartnerID = partnerID
+			tradeStarterTradeID = partnerID
+		} else if id, ok := decodeLeadingVL64(e.Packet.Data); ok {
 			lastTradePartnerID = id
 			tradeStarterTradeID = id
 		}
