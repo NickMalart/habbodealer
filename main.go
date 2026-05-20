@@ -4610,6 +4610,10 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			if ok {
 				if name, ok := lookupUsers28Index(partnerID); ok {
 					partnerName = name
+				} else if name, ok := lookupUsers28TradeID(partnerID); ok {
+					partnerName = name
+				} else if name, ok := waitForUsers28IndexName(partnerID, 300*time.Millisecond); ok {
+					partnerName = name
 				}
 			}
 
@@ -4621,18 +4625,50 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			} else {
 				// AUTHORIZATION 2: Session Isolation
 				activePlayerName := ""
+				activeTradeID := 0
+				activeChatID := 0
+				activeStatus := ""
 				db, _ := a.getHistoryDB()
 				if db != nil {
 					// Check if there is ANY active transaction for this banker
-					db.QueryRow(context.Background(), "SELECT player_name FROM banker_trades WHERE LOWER(banker_name) = LOWER($1) AND status IN ('pending', 'playing', 'paying') LIMIT 1", a.currentDealerName).Scan(&activePlayerName)
+					db.QueryRow(context.Background(), "SELECT player_name, COALESCE(player_trade_id, 0), COALESCE(player_chat_id, 0), status FROM banker_trades WHERE LOWER(banker_name) = LOWER($1) AND status IN ('pending', 'playing', 'paying') LIMIT 1", a.currentDealerName).Scan(&activePlayerName, &activeTradeID, &activeChatID, &activeStatus)
 				}
 
 				if activePlayerName != "" {
-					// An active session exists. We ONLY allow trades from the player currently engaged.
-					if strings.EqualFold(partnerName, activePlayerName) {
-						a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Allowing trade: %s is the currently active player in DB.", partnerName))
+					isPartnerActivePlayer := false
+					if partnerName != "" && strings.EqualFold(partnerName, activePlayerName) {
+						isPartnerActivePlayer = true
+					} else if partnerID > 0 && (partnerID == activeTradeID || partnerID == activeChatID) {
+						isPartnerActivePlayer = true
+					} else if partnerID > 0 && a.isIDAssociatedWithName(partnerID, activePlayerName) {
+						isPartnerActivePlayer = true
+					}
+
+					if isPartnerActivePlayer {
+						// If the dealer is still playing, don't allow ANY trades with the banker still
+						// even the person playing because you don't want them to be able to trade more items again.
+						if activeStatus == "playing" || activeStatus == "pending" {
+							a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Blocking trade from %s: session is active (status:%s). No additional bets allowed.", activePlayerName, activeStatus))
+							e.Block()
+							ext.Send(out.TRADE_CLOSE)
+							return
+						}
+						a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Allowing trade: %s is the currently active player (status:%s).", activePlayerName, activeStatus))
+					} else if activeStatus == "paying" {
+						// LENIENT PAYOUT PATH: If the status is 'paying', we are looking to pay someone.
+						// If we can't prove the trader IS the active player, but the trader is unidentified
+						// (no name), we allow it because it's likely the player responding to our trade
+						// or the server responding to our TRADE_OPEN with a different ID type.
+						if partnerName == "" || partnerName == "Unknown" || strings.EqualFold(partnerName, activePlayerName) {
+							a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Allowing unidentified or name-matched trade during 'paying' status for %s.", activePlayerName))
+						} else {
+							a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Blocking trade from %s (id:%d): session is currently locked to active player %s (status:%s).", partnerName, partnerID, activePlayerName, activeStatus))
+							e.Block()
+							ext.Send(out.TRADE_CLOSE)
+							return
+						}
 					} else {
-						a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Blocking trade from %s: session is currently locked to active player %s.", partnerName, activePlayerName))
+						a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Blocking trade from %s (id:%d): session is currently locked to active player %s (status:%s).", partnerName, partnerID, activePlayerName, activeStatus))
 						e.Block()
 						ext.Send(out.TRADE_CLOSE)
 						return
@@ -4645,15 +4681,30 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		}
 
 		if bankerMode {
-			bName := bankerName
-			if bName == "" {
-				bName = "the banker"
+			partnerName := ""
+			partnerID, ok := decodeLeadingVL64(e.Packet.Data)
+			if ok {
+				if name, ok := lookupUsers28Index(partnerID); ok {
+					partnerName = name
+				} else if name, ok := lookupUsers28TradeID(partnerID); ok {
+					partnerName = name
+				}
 			}
-			a.AddLogMsg(fmt.Sprintf("[BANKER_MODE] Blocking trade and redirecting to %s", bName))
-			sendMessageWithDelay(fmt.Sprintf("Please trade %s", bName))
-			e.Block()
-			ext.Send(out.TRADE_CLOSE)
-			return
+
+			// Allow our banker to trade us
+			if partnerName != "" && bankerName != "" && strings.EqualFold(partnerName, bankerName) {
+				a.AddLogMsg(fmt.Sprintf("[BANKER_MODE] Allowing trade with authorized banker: %s", partnerName))
+			} else {
+				bName := bankerName
+				if bName == "" {
+					bName = "the banker"
+				}
+				a.AddLogMsg(fmt.Sprintf("[BANKER_MODE] Blocking trade from %s and redirecting to %s", partnerName, bName))
+				sendMessageWithDelay(fmt.Sprintf("Please trade %s", bName))
+				e.Block()
+				ext.Send(out.TRADE_CLOSE)
+				return
+			}
 		}
 
 		if !payoutTradeSent && !matchesRecentOutgoingFunc(e.Packet.Data) {
@@ -7714,6 +7765,66 @@ func lookupUsers28TradeID(id int) (string, bool) {
 		return "", false
 	}
 	return u.Username, true
+}
+
+func (a *App) isIDAssociatedWithName(id int, name string) bool {
+	if id <= 0 || name == "" {
+		return false
+	}
+	target := strings.ToLower(strings.TrimSpace(name))
+
+	users28Mu.Lock()
+	defer users28Mu.Unlock()
+
+	// Check canonical entry directly first
+	if u, ok := users28Canonical[target]; ok {
+		if u.ChatID == id || u.TradeID == id {
+			return true
+		}
+	}
+
+	// Check by room index map
+	if u, ok := users28ByIndex[id]; ok {
+		if strings.ToLower(strings.TrimSpace(u.Username)) == target {
+			return true
+		}
+	}
+
+	// Check by trade id map
+	if u, ok := users28ByTradeID[id]; ok {
+		if strings.ToLower(strings.TrimSpace(u.Username)) == target {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (a *App) lookupAllIDsForName(name string) (tradeID int, chatID int) {
+	needle := strings.ToLower(strings.TrimSpace(name))
+	if needle == "" {
+		return 0, 0
+	}
+	users28Mu.Lock()
+	defer users28Mu.Unlock()
+
+	if u, ok := users28Canonical[needle]; ok {
+		return u.TradeID, u.ChatID
+	}
+
+	// Fallback: search index maps if canonical lookup fails
+	for _, u := range users28ByTradeID {
+		if strings.ToLower(strings.TrimSpace(u.Username)) == needle {
+			return u.TradeID, u.ChatID
+		}
+	}
+	for _, u := range users28ByIndex {
+		if strings.ToLower(strings.TrimSpace(u.Username)) == needle {
+			return u.TradeID, u.ChatID
+		}
+	}
+
+	return 0, 0
 }
 
 func lookupUsers28TradeIDByName(name string) (int, bool) {

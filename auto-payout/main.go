@@ -70,6 +70,8 @@ type App struct {
 	activeTradeTarget  int
 	tradeActive        bool
 	tradeAccepted      bool
+	payoutPending      bool
+	lastPayoutTime     time.Time
 	lastScreenshotPath string
 	tradeMu            sync.Mutex
 
@@ -481,24 +483,68 @@ func (a *App) finalizeStripScan(sessionID int) {
 	a.AddLog(fmt.Sprintf("Hand scan complete: %s", strings.Join(details, ", ")))
 }
 
+func (a *App) lookupNameByID(id int) string {
+	a.roomUsersMu.RLock()
+	defer a.roomUsersMu.RUnlock()
+	for _, u := range a.roomUsers {
+		if u.TradeID == id || u.ChatID == id {
+			return u.Username
+		}
+	}
+	return ""
+}
+
 func (a *App) handleTradeOpen(e *g.Intercept) {
-	if !a.matchesRecentOutgoing(e.Packet.Data) { 
-		a.AddLog("Blocked unauthorized incoming trade request.")
+	partnerID := gencoding.VL64Decode(e.Packet.Data)
+	partnerName := a.lookupNameByID(partnerID)
+
+	// Authorize if we just opened this, or if the person has a pending payout
+	authorized := a.matchesRecentOutgoing(e.Packet.Data)
+	if !authorized && partnerName != "" {
+		a.pMu.RLock()
+		for _, p := range a.payouts {
+			if strings.EqualFold(p.Name, partnerName) && (p.Status == "In Room" || p.Status == "Pending" || p.Status == "Trading") {
+				authorized = true
+				break
+			}
+		}
+		a.pMu.RUnlock()
+	}
+
+	if !authorized {
+		a.AddLog(fmt.Sprintf("Blocked unauthorized incoming trade request from %s (id:%d).", partnerName, partnerID))
 		e.Block()
 		a.ext.Send(g.In.Id("TRADE_CLOSE_IN"), []byte{0x40})
-		return 
+		return
 	}
-	a.tradeMu.Lock(); a.tradeActive = true; a.tradeAccepted = false; a.tradeMu.Unlock()
-	a.AddLog("Trade window opened.")
+
+	a.tradeMu.Lock()
+	a.tradeActive = true
+	a.payoutPending = false // Reset pending flag as trade is now officially open
+	a.tradeAccepted = false
+	a.activeTradePartner = partnerName
+	a.activeTradeTarget = partnerID
+	a.tradeMu.Unlock()
+
+	a.AddLog(fmt.Sprintf("Trade window opened with %s.", partnerName))
 }
 
 func (a *App) handlePartnerAccept(e *g.Intercept) { a.AddLog("Partner accepted offer.") }
 func (a *App) handlePartnerConfirm(e *g.Intercept) { a.AddLog("Partner confirmed trade.") }
 func (a *App) handleTradeClose(e *g.Intercept) {
-	a.tradeMu.Lock(); partner := a.activeTradePartner; a.tradeActive = false; a.activeTradePartner = ""; a.tradeMu.Unlock()
+	a.tradeMu.Lock()
+	partner := a.activeTradePartner
+	a.tradeActive = false
+	a.payoutPending = false // Reset pending flag on close
+	a.activeTradePartner = ""
+	a.tradeMu.Unlock()
 	if partner != "" {
 		a.pMu.Lock()
-		for i, p := range a.payouts { if strings.EqualFold(p.Name, partner) && p.Status == "Trading" { a.payouts[i].Status = "Pending" } }
+		for i, p := range a.payouts {
+			if strings.EqualFold(p.Name, partner) && p.Status == "Trading" {
+				a.payouts[i].Status = "Pending"
+			}
+		}
 		a.pMu.Unlock()
 		a.emitUpdate()
 		a.AddLog(fmt.Sprintf("Trade with %s closed without completing. Re-queued.", partner))
@@ -538,18 +584,88 @@ func (a *App) dbMonitor() {
 
 func (a *App) payoutMonitor() {
 	for {
-		time.Sleep(500 * time.Millisecond)
-		a.pMu.RLock(); var targets []Payout; for _, p := range a.payouts { if p.Status == "In Room" { targets = append(targets, p) } }; a.pMu.RUnlock()
-		a.tradeMu.Lock(); active := a.tradeActive; a.tradeMu.Unlock()
-		if active || len(targets) == 0 { continue }
+		time.Sleep(1 * time.Second)
+		a.pMu.RLock()
+		var targets []Payout
+		for _, p := range a.payouts {
+			if p.Status == "In Room" {
+				targets = append(targets, p)
+			}
+		}
+		a.pMu.RUnlock()
+
+		a.tradeMu.Lock()
+		active := a.tradeActive
+		pending := a.payoutPending
+		lastTime := a.lastPayoutTime
+		a.tradeMu.Unlock()
+
+		// Skip if already in a trade, if we just sent a request (pending),
+		// or if we've attempted a trade in the last 8 seconds (cooldown).
+		if active || pending || len(targets) == 0 || time.Since(lastTime) < 8*time.Second {
+			continue
+		}
+
 		target := targets[0]
-		a.roomUsersMu.RLock(); user, ok := a.roomUsers[strings.ToLower(target.Name)]; a.roomUsersMu.RUnlock()
-		if !ok { continue }
-		a.tradeMu.Lock(); a.activeTradePartner = target.Name; a.activeTradeTarget = user.ChatID; a.tradeMu.Unlock()
-		a.pMu.Lock(); for i := range a.payouts { if a.payouts[i].ID == target.ID { a.payouts[i].Status = "Trading"; break } }; a.pMu.Unlock()
+		a.roomUsersMu.RLock()
+		user, ok := a.roomUsers[strings.ToLower(target.Name)]
+		a.roomUsersMu.RUnlock()
+
+		if !ok {
+			continue
+		}
+
+		// Pre-flight delay to allow Habbo client/server to settle
+		a.AddLog(fmt.Sprintf("Preparing payout for %s (waiting 4s)...", target.Name))
+		time.Sleep(4 * time.Second)
+
+		// Re-check state after delay
+		a.tradeMu.Lock()
+		if a.tradeActive || a.payoutPending {
+			a.tradeMu.Unlock()
+			continue
+		}
+		a.payoutPending = true
+		a.lastPayoutTime = time.Now()
+		a.activeTradePartner = target.Name
+		a.activeTradeTarget = user.ChatID
+		a.tradeMu.Unlock()
+
+		a.pMu.Lock()
+		for i := range a.payouts {
+			if a.payouts[i].ID == target.ID {
+				a.payouts[i].Status = "Trading"
+				break
+			}
+		}
+		a.pMu.Unlock()
+		a.emitUpdate()
+
 		a.registerOutgoing(user.ChatID)
 		a.AddLog(fmt.Sprintf("Initiating payout trade for %s...", target.Name))
 		a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), user.ChatID)
+
+		// Start a timeout monitor to clear 'pending' if the trade never opens
+		go func(id string) {
+			time.Sleep(10 * time.Second)
+			a.tradeMu.Lock()
+			if a.payoutPending && !a.tradeActive {
+				a.AddLog("Payout trade request timed out. Resetting state.")
+				a.payoutPending = false
+				a.tradeMu.Unlock()
+				a.pMu.Lock()
+				for i, p := range a.payouts {
+					if p.ID == id && p.Status == "Trading" {
+						a.payouts[i].Status = "In Room"
+					}
+				}
+				a.pMu.Unlock()
+				a.emitUpdate()
+				return
+			}
+			a.tradeMu.Unlock()
+		}(target.ID)
+
 		go a.automateTrade(&target)
 	}
 }
