@@ -479,9 +479,10 @@ type StockedItem struct {
 
 var (
 	stockedItems         []StockedItem
-	stockedItemsCache    = make(map[string]string) // raw_name -> canonical_name
-	stockedCanonicalSet  = make(map[string]struct{})
-	stockedItemsRegistry = make(map[string]StockedItem) // raw_name -> StockedItem
+	stockedItemsCache     = make(map[string]string) // raw_name -> canonical_name
+	stockedCanonicalToRaw = make(map[string]string) // canonical_name -> original_raw_name
+	stockedCanonicalSet   = make(map[string]struct{})
+	stockedItemsRegistry  = make(map[string]StockedItem) // raw_name -> StockedItem
 	stockedItemsMu       sync.RWMutex
 )
 
@@ -803,6 +804,10 @@ type App struct {
 	users28PythonExec     string
 	users28ParserScript   string
 	activeRaffleSessionID int64
+
+	// currentBankerTradeID tracks the ID of the pending trade from the
+	// banker_trades table that this dealer instance is currently processing.
+	currentBankerTradeID int
 }
 
 type DBConfig struct {
@@ -2342,6 +2347,7 @@ func (a *App) loadStockedItems() {
 
 	newItems := make([]StockedItem, 0)
 	newCache := make(map[string]string)
+	newCanonToRaw := make(map[string]string)
 	newCanonSet := make(map[string]struct{})
 	newRegistry := make(map[string]StockedItem)
 
@@ -2361,6 +2367,7 @@ func (a *App) loadStockedItems() {
 		if it.IsActive {
 			canon := strings.ToLower(strings.TrimSpace(it.CanonicalName))
 			newCache[raw] = canon
+			newCanonToRaw[canon] = it.RawName
 			newCanonSet[canon] = struct{}{}
 		}
 	}
@@ -2369,6 +2376,7 @@ func (a *App) loadStockedItems() {
 	stockedItemsMu.Lock()
 	stockedItems = newItems
 	stockedItemsCache = newCache
+	stockedCanonicalToRaw = newCanonToRaw
 	stockedCanonicalSet = newCanonSet
 	stockedItemsRegistry = newRegistry
 	stockedItemsMu.Unlock()
@@ -2447,6 +2455,23 @@ func (a *App) DeleteStockedItem(id int) string {
 
 	a.loadStockedItems()
 	return "ok"
+}
+
+func (a *App) getRawItemName(name string) string {
+	stockedItemsMu.RLock()
+	defer stockedItemsMu.RUnlock()
+	low := strings.ToLower(strings.TrimSpace(name))
+
+	// 1. Try canonical -> raw mapping
+	if raw, exists := stockedCanonicalToRaw[low]; exists {
+		return raw
+	}
+
+	// 2. Fallback to registry (raw -> item)
+	if it, exists := stockedItemsRegistry[low]; exists {
+		return it.RawName
+	}
+	return name
 }
 
 func (a *App) ToggleStockedItem(id int, active bool) string {
@@ -2739,8 +2764,10 @@ func (a *App) ensureGameHistoryTables() error {
 			item_name TEXT NOT NULL,
 			quantity INTEGER NOT NULL,
 			status TEXT NOT NULL,
-			created_at TEXT NOT NULL
+			created_at TEXT NOT NULL,
+			banker_trade_id INTEGER
 		)`,
+		`ALTER TABLE auto_payouts ADD COLUMN IF NOT EXISTS banker_trade_id INTEGER`,
 	}
 
 	for _, q := range queries {
@@ -4474,17 +4501,23 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			tradeItemsMu.Lock()
 			gameBetItems = make([]TradeItem, len(currentTradeItems))
 			copy(gameBetItems, currentTradeItems)
+			// wasPayout is true if we added items (payout) OR if we previously flagged an add as ours.
+			wasPayout := len(currentOwnTradeItems) > 0 || lastAddItemWasOurs
 			tradeItemsMu.Unlock()
 			a.emitActiveGameBetItemsUpdate()
 
-			if len(gameBetItems) == 0 {
+			if len(gameBetItems) == 0 && !wasPayout {
 				a.AddLogMsg("[TRADE_COMPLETED] no items detected in completed trade")
-			} else {
+			} else if !wasPayout {
 				a.AddLogMsg(fmt.Sprintf("[TRADE_COMPLETED] recorded %d bet item type(s) for payout", len(gameBetItems)))
 			}
 
-			go LogEvent("trade_completed", map[string]interface{}{"mode": "bet", "partner": partnerName, "bet_items": gameBetItems}, "Trade completed (bet)", nil)
-			a.recordTradeToLedger(partnerName, "IN", gameBetItems)
+			if !wasPayout {
+				go LogEvent("trade_completed", map[string]interface{}{"mode": "bet", "partner": partnerName, "bet_items": gameBetItems}, "Trade completed (bet)", nil)
+				a.recordTradeToLedger(partnerName, "IN", gameBetItems)
+			} else {
+				a.AddLogMsg(fmt.Sprintf("[TRADE_COMPLETED] detected outgoing payout trade with %s (skipping bet registration)", partnerName))
+			}
 
 			mutex.Lock()
 			mult := payoutMultiplierForRound
@@ -4493,23 +4526,47 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			}
 			mutex.Unlock()
 
-			payoutPred := make([]TradeItem, 0, len(gameBetItems))
-			for _, it := range gameBetItems {
-				if it.Quantity <= 0 {
-					continue
+			if !wasPayout {
+				payoutPred := make([]TradeItem, 0, len(gameBetItems))
+				for _, it := range gameBetItems {
+					if it.Quantity <= 0 {
+						continue
+					}
+					payoutPred = append(payoutPred, TradeItem{Name: it.Name, Quantity: int(float64(it.Quantity) * mult), RawData: it.RawData})
 				}
-				payoutPred = append(payoutPred, TradeItem{Name: it.Name, Quantity: int(float64(it.Quantity) * mult), RawData: it.RawData})
-			}
-			if len(payoutPred) > 0 {
-				a.setCurrentGameHistoryPayoutMultiplier(mult)
-				a.captureCurrentGameHistoryPayoutItems(payoutPred, fmt.Sprintf("Predicted payout (%.2fx bet)", mult), false, false)
+				if len(payoutPred) > 0 {
+					a.setCurrentGameHistoryPayoutMultiplier(mult)
+					a.captureCurrentGameHistoryPayoutItems(payoutPred, fmt.Sprintf("Predicted payout (%.2fx bet)", mult), false, false)
+				}
 			}
 
-				go func(pName string, pTradeID int, pChatID int) {
-					if ok := a.forceRefreshHandSnapshot("trade completed"); ok {
-						a.AddLogMsg("[TRADE_COMPLETED] forced hand refresh complete after trade")
+			go func(pName string, pTradeID int, pChatID int, isPayout bool) {
+				if ok := a.forceRefreshHandSnapshot("trade completed"); ok {
+					a.AddLogMsg("[TRADE_COMPLETED] forced hand refresh complete after trade")
+				}
+				if fulfillmentMode {
+					// Banker Mode Payout Resolution / Bet Registration Logic
+					db, _ := a.getHistoryDB()
+					if db != nil {
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						defer cancel()
+
+						// FAILSAFE: Resolve ANY existing 'paying' entries for this player.
+						// In Banker Mode, if we finish a trade with someone who had a pending payout,
+						// we assume this trade was that payout.
+						res, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'completed' WHERE LOWER(player_name) = LOWER($1) AND status = 'paying' AND LOWER(banker_name) = LOWER($2)", pName, a.currentDealerName)
+						if err == nil {
+							count := res.RowsAffected()
+							if count > 0 {
+								a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Resolved %d 'paying' bet(s) to COMPLETED for %s", count, pName))
+								// If we resolved a payout, we MUST NOT register this as a new bet
+								return
+							}
+						} else {							a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Error resolving 'paying' bets for %s: %v", pName, err))
+						}
 					}
-					if fulfillmentMode {
+
+					if !isPayout {
 						a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Banker received items; registering trade for dealer: %s (chat %d, trade %d)", pName, pChatID, pTradeID))
 						tradeItemsMu.Lock()
 						items := cloneTradeItems(gameBetItems)
@@ -4520,11 +4577,13 @@ func handleTradePacket(a *App, e *g.Intercept) {
 						} else {
 							a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Successfully registered banker trade for %s", pName))
 						}
-						return
+					} else {
+						a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Ignoring completed trade with %s because it was identified as a payout (isPayout=true)", pName))
 					}
-
-					a.sendTradeCompletionMessage()
-				}(partnerName, lastTradePartnerID, tradeStarterChatID)
+					return
+				}
+				a.sendTradeCompletionMessage()
+			}(partnerName, lastTradePartnerID, tradeStarterChatID, wasPayout)
 		}
 		return
 	}
@@ -4933,41 +4992,49 @@ func startPayout(a *App, targetID int, targetName string) {
 	payoutSessionID++
 	sessionID := payoutSessionID
 	var payoutItemsToRecord []TradeItem
+	mutex.Lock()
+	isRisk := riskPayoutActive
+	riskReq := riskPayoutRequired
+	mutex.Unlock()
+
 	a.gameHistoryMu.Lock()
 	a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
 		if strings.TrimSpace(entry.RiskDecision) == "" {
 			entry.RiskDecision = "Keep"
 		}
-		// If payout items are empty (e.g. trade hasn't opened yet to auto-add),
-		// pre-populate them for Discord/Issue visibility in case trade never opens.
-		if len(entry.PayoutItems) == 0 {
-			mutex.Lock()
-			isRisk := riskPayoutActive
-			riskReq := riskPayoutRequired
-			mutex.Unlock()
 
-			if isRisk && len(riskReq) > 0 {
-				for name, qty := range riskReq {
-					entry.PayoutItems = append(entry.PayoutItems, TradeItem{Name: name, Quantity: qty})
-				}
-				sort.Slice(entry.PayoutItems, func(i, j int) bool { return entry.PayoutItems[i].Name < entry.PayoutItems[j].Name })
-			} else if len(entry.BetItems) > 0 {
-				mult := entry.PayoutMultiplier
-				if mult <= 0 {
-					mult = 2.0 // fallback
-				}
-				for _, it := range entry.BetItems {
-					entry.PayoutItems = append(entry.PayoutItems, TradeItem{
-						Name:     it.Name,
-						Quantity: int(float64(it.Quantity) * mult),
-						RawData:  it.RawData,
-					})
-				}
+		// If this is a Risk keep, we MUST use the calculated riskReq as it
+		// represents the current cumulative bank, overriding any stale round data.
+		if isRisk && len(riskReq) > 0 {
+			entry.PayoutItems = []TradeItem{} // Clear stale
+			for name, qty := range riskReq {
+				entry.PayoutItems = append(entry.PayoutItems, TradeItem{Name: name, Quantity: qty})
+			}
+			sort.Slice(entry.PayoutItems, func(i, j int) bool { return entry.PayoutItems[i].Name < entry.PayoutItems[j].Name })
+		} else if len(entry.PayoutItems) == 0 && len(entry.BetItems) > 0 {
+			mult := entry.PayoutMultiplier
+			if mult <= 0 {
+				mult = 2.0 // fallback
+			}
+			for _, it := range entry.BetItems {
+				entry.PayoutItems = append(entry.PayoutItems, TradeItem{
+					Name:     it.Name,
+					Quantity: int(float64(it.Quantity) * mult),
+					RawData:  it.RawData,
+				})
 			}
 		}
 		payoutItemsToRecord = cloneTradeItems(entry.PayoutItems)
 	})
 	a.gameHistoryMu.Unlock()
+
+	// FALLBACK: If we have risk requirements but failed to update history (e.g. entry cleared),
+	// we must still record the payout items for Banker mode.
+	if len(payoutItemsToRecord) == 0 && isRisk && len(riskReq) > 0 {
+		for name, qty := range riskReq {
+			payoutItemsToRecord = append(payoutItemsToRecord, TradeItem{Name: name, Quantity: qty})
+		}
+	}
 
 	if len(payoutItemsToRecord) > 0 {
 		a.recordTradeToLedger(targetName, "OUT", payoutItemsToRecord)
@@ -4979,21 +5046,40 @@ func startPayout(a *App, targetID int, targetName string) {
 
 	if bankerMode {
 		a.AddLogMsg(fmt.Sprintf("[BANKER_MODE] Redirecting payout for %s to auto_payouts table", targetName))
+
+		// Mark the original bet trade as 'paying'
+		mutex.Lock()
+		btID := a.currentBankerTradeID
+		a.currentBankerTradeID = 0 // Clear so openDealerAfterRound doesn't mark as completed
+		mutex.Unlock()
+
+		if btID > 0 {
+			go func(id int) {
+				db, _ := a.getHistoryDB()
+				if db == nil {
+					return
+				}
+				ctx := context.Background()
+				_, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'paying' WHERE id = $1", id)
+				if err == nil {
+					a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Marked trade %d as paying (Player selected Keep)", id))
+				}
+			}(btID)
+		}
+
 		go func() {
 			for _, it := range payoutItemsToRecord {
-				err := a.insertAutoPayout(targetName, it.Name, it.Quantity)
+				rawName := a.getRawItemName(it.Name)
+				err := a.insertAutoPayout(targetName, rawName, it.Quantity, btID)
 				if err != nil {
 					a.AddLogMsg(fmt.Sprintf("[BANKER_MODE] Failed to insert auto_payout: %v", err))
 				}
 			}
-			a.AddLogMsg(fmt.Sprintf("[BANKER_MODE] Payout for %s queued for banker %s", targetName, bankerName))
-			msg := fmt.Sprintf("Your payout has been queued! Please trade %s to receive your items.", bankerName)
-			if bankerName == "" {
-				msg = "Your payout has been queued! Please trade the banker to receive your items."
-			}
+			a.AddLogMsg(fmt.Sprintf("[BANKER_MODE] Payout for %s queued for banker %s (bet id %d)", targetName, bankerName, btID))
+			msg := "Payout pending"
 			sendMessageWithDelay(msg)
 
-			// We need to mark the game as completed in history
+			// Mark the game as completed in history
 			a.gameHistoryMu.Lock()
 			a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
 				entry.Status = "Completed"
@@ -5001,7 +5087,41 @@ func startPayout(a *App, targetID int, targetName string) {
 			})
 			a.gameHistoryMu.Unlock()
 
-			// Resume dealer
+			// WAIT for the Banker to actually finish the trade before reopening.
+			// This prevents the dealer from starting a new game while the banker is still 
+			// trying to pay out the previous winner.
+			if btID > 0 {
+				a.AddLogMsg(fmt.Sprintf("[BANKER_MODE] Dealer staying closed until Banker completes payout %d...", btID))
+				
+				// Poll DB for status change
+				ticker := time.NewTicker(2 * time.Second)
+				defer ticker.Stop()
+				
+				// Safety timeout: 5 minutes
+				timeout := time.After(5 * time.Minute)
+				
+				for {
+					select {
+					case <-ticker.C:
+						db, _ := a.getHistoryDB()
+						if db != nil {
+							var status string
+							err := db.QueryRow(context.Background(), "SELECT status FROM banker_trades WHERE id = $1", btID).Scan(&status)
+							if err == nil && strings.EqualFold(status, "completed") {
+								a.AddLogMsg(fmt.Sprintf("[BANKER_MODE] Banker completed trade %d. Reopening dealer.", btID))
+								a.openDealerAfterRound()
+								return
+							}
+						}
+					case <-timeout:
+						a.AddLogMsg(fmt.Sprintf("[BANKER_MODE] Timeout waiting for banker to complete trade %d. Force reopening.", btID))
+						a.openDealerAfterRound()
+						return
+					}
+				}
+			}
+
+			// Fallback: If no bet ID was tracked, just wait a bit and reopen
 			time.Sleep(2 * time.Second)
 			a.openDealerAfterRound()
 		}()
@@ -5435,7 +5555,7 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 		handItemsMu.Unlock()
 		liveCover := riskRelevantHandQuantity(snap, gameBetItems)
 		totalCommitted := playerRisk + dealerRisk
-		if liveCover < totalCommitted {
+		if liveCover < totalCommitted && !bankerMode {
 			diff := totalCommitted - liveCover
 			if diff > dealerRisk {
 				diff = dealerRisk
@@ -5860,7 +5980,7 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			handItemsMu.Unlock()
 			liveCover := riskRelevantHandQuantity(snap, gameBetItems)
 			totalCommitted := playerRisk + dealerRisk
-			if liveCover < totalCommitted {
+			if liveCover < totalCommitted && !bankerMode {
 				diff := totalCommitted - liveCover
 				if diff > dealerRisk {
 					diff = dealerRisk
@@ -5992,7 +6112,7 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		handItemsMu.Unlock()
 		liveCover := riskRelevantHandQuantity(snap, gameBetItems)
 		totalCommitted := playerRisk + dealerRisk
-		if liveCover < totalCommitted {
+		if liveCover < totalCommitted && !bankerMode {
 			diff := totalCommitted - liveCover
 			if diff > dealerRisk {
 				diff = dealerRisk
@@ -6082,14 +6202,27 @@ func (a *App) finalizeRiskKeep() {
 
 	required := map[string]int{}
 	if baseTotal == 0 {
-		// fallback: use first snapshot item name
+		// fallback 1: use first snapshot item name
 		handItemsMu.Lock()
 		if len(tradeHandSnapshot) > 0 {
 			required[tradeHandSnapshot[0].Name] = total
 		}
 		handItemsMu.Unlock()
+
+		// fallback 2: (Banker Mode) use first stocked item if snapshot is empty
 		if len(required) == 0 {
-			a.AddLogMsg("[RISK] cannot build payout requirement: no base bet and no snapshot")
+			stockedItemsMu.RLock()
+			for _, it := range stockedItemsRegistry {
+				if it.IsActive {
+					required[it.CanonicalName] = total
+					break
+				}
+			}
+			stockedItemsMu.RUnlock()
+		}
+
+		if len(required) == 0 {
+			a.AddLogMsg("[RISK] cannot build payout requirement: no base bet, no snapshot, and no stocked items")
 			return
 		}
 	} else {
@@ -8737,6 +8870,29 @@ func (a *App) openDealerAfterRound() {
 	tradeStarterName = ""
 	tradeStarterToken = ""
 	tradeStarterLocked = false
+
+	// If we were processing a banker trade, mark it as completed now that the dealer is reopening
+	mutex.Lock()
+	btID := a.currentBankerTradeID
+	a.currentBankerTradeID = 0
+	mutex.Unlock()
+
+	if btID > 0 {
+		go func(id int) {
+			db, _ := a.getHistoryDB()
+			if db == nil {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'completed' WHERE id = $1", id)
+			if err != nil {
+				a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Failed to mark trade %d as completed: %v", id, err))
+			} else {
+				a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Marked trade %d as completed (Dealer reopen)", id))
+			}
+		}(btID)
+	}
 
 	// Move hand refresh to background so dealer opens immediately without waiting
 	go func() {
@@ -15353,7 +15509,7 @@ func resetMidHouseSequence() {
 
 func (a *App) runFulfillmentWorker() {
 	a.AddLogMsg("[FULFILLMENT] Worker started - monitoring auto_payouts table")
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -15447,7 +15603,7 @@ func (a *App) fetchBankerSnapshot(name string) ([]TradeItem, error) {
 	return payload.Snapshot, nil
 }
 
-func (a *App) insertAutoPayout(playerName string, itemName string, quantity int) error {
+func (a *App) insertAutoPayout(playerName string, itemName string, quantity int, bankerTradeID int) error {
 	a.historyDBMu.Lock()
 	db := a.historyDB
 	a.historyDBMu.Unlock()
@@ -15460,8 +15616,8 @@ func (a *App) insertAutoPayout(playerName string, itemName string, quantity int)
 	createdAt := time.Now().Format("2006-01-02 15:04:05")
 
 	_, err := db.Exec(context.Background(),
-		"INSERT INTO auto_payouts (id, player_name, item_name, quantity, status, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
-		id, playerName, itemName, quantity, "Pending", createdAt)
+		"INSERT INTO auto_payouts (id, player_name, item_name, quantity, status, created_at, banker_trade_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+		id, playerName, itemName, quantity, "Pending", createdAt, bankerTradeID)
 	return err
 }
 
@@ -15492,13 +15648,18 @@ func (a *App) runBankerPollingWorker() {
 		case <-ticker.C:
 			mutex.Lock()
 			active := bankerMode
+			accepting := dealerAcceptingTrades
 			mutex.Unlock()
+
 			if !active {
 				a.AddLogMsg("[BANKER_POLL] Worker stopping - mode disabled")
 				return
 			}
 
-			a.processPendingBankerTrades()
+			// Only poll if we aren't currently in a game
+			if accepting {
+				a.processPendingBankerTrades()
+			}
 		}
 	}
 }
@@ -15584,10 +15745,10 @@ func (a *App) processPendingBankerTrades() {
 	// At this point, we have a trade (found == true)
 	a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Found pending banker trade for %s (from banker: %s)", playerName, dbBankerName))
 
-	// Immediately mark as 'claimed'
-	_, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'claimed' WHERE id = $1", id)
+	// Immediately mark as 'playing' so it's known as active in the database
+	_, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'playing' WHERE id = $1", id)
 	if err != nil {
-		a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Failed to claim trade %d: %v", id, err))
+		a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Failed to mark trade %d as playing: %v", id, err))
 		return
 	}
 
@@ -15598,6 +15759,13 @@ func (a *App) processPendingBankerTrades() {
 	}
 
 	a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Found trade for player %s (id %d, chat %d, %d items) from banker %s", playerName, playerTradeID, playerChatID, len(items), bName))
+
+	// Update Dealer state to reflect an active game
+	mutex.Lock()
+	dealerAcceptingTrades = false
+	awaitingTradeOpen = false
+	tradeOpen = true // Simulate trade open state for Risk logic
+	mutex.Unlock()
 
 	// Inject into Dealer state
 	tradeItemsMu.Lock()
@@ -15630,7 +15798,8 @@ func (a *App) processPendingBankerTrades() {
 		a.sendTradeCompletionMessage()
 	}()
 
-	// Finally mark as 'processed'
-	_, _ = db.Exec(ctx, "UPDATE banker_trades SET status = 'processed' WHERE id = $1", id)
+	mutex.Lock()
+	a.currentBankerTradeID = id
+	mutex.Unlock()
 }
 

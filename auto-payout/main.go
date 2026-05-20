@@ -30,12 +30,13 @@ var assets embed.FS
 
 // Payout represents a single delivery task
 type Payout struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	ItemName  string `json:"itemName"`
-	Quantity  int    `json:"quantity"`
-	Status    string `json:"status"` // "Pending", "In Room", "Trading", "Completed", "Failed", "Disabled"
-	CreatedAt string `json:"createdAt"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	ItemName       string `json:"itemName"`
+	Quantity       int    `json:"quantity"`
+	Status         string `json:"status"` // "Pending", "In Room", "Trading", "Completed", "Failed", "Disabled"
+	CreatedAt      string `json:"createdAt"`
+	BankerTradeID  int    `json:"bankerTradeId"`
 }
 
 type ParsedUsers28User struct {
@@ -520,11 +521,11 @@ func (a *App) loadPayoutsFromDB() {
 	count := 0
 
 	// Manual entries from auto_payouts table
-	rows, err := a.db.Query(context.Background(), "SELECT id, player_name, item_name, quantity, status, created_at FROM auto_payouts WHERE status != 'Completed' ORDER BY created_at DESC")
+	rows, err := a.db.Query(context.Background(), "SELECT id, player_name, item_name, quantity, status, created_at, banker_trade_id FROM auto_payouts WHERE status != 'Completed' ORDER BY created_at DESC")
 	if err == nil {
 		for rows.Next() {
 			var p Payout
-			if err := rows.Scan(&p.ID, &p.Name, &p.ItemName, &p.Quantity, &p.Status, &p.CreatedAt); err == nil {
+			if err := rows.Scan(&p.ID, &p.Name, &p.ItemName, &p.Quantity, &p.Status, &p.CreatedAt, &p.BankerTradeID); err == nil {
 				p.Name = normalizeName(p.Name)
 				payouts = append(payouts, p)
 				count++
@@ -855,7 +856,26 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 					// Mark as completed in DB
 					_, err := a.db.Exec(context.Background(), "UPDATE auto_payouts SET status = 'Completed' WHERE id = $1", p.ID)
 					if err != nil {
-						a.AddLog("ERROR: Failed to update DB status: " + err.Error())
+						a.AddLog("ERROR: Failed to update auto_payouts status: " + err.Error())
+					}
+
+					// Mark the original bet in banker_trades as completed
+					if p.BankerTradeID > 0 {
+						_, err := a.db.Exec(context.Background(), "UPDATE banker_trades SET status = 'completed' WHERE id = $1", p.BankerTradeID)
+						if err != nil {
+							a.AddLog(fmt.Sprintf("ERROR: Failed to update banker_trades %d to completed: %v", p.BankerTradeID, err))
+						} else {
+							a.AddLog(fmt.Sprintf("Original bet (id %d) marked as COMPLETED.", p.BankerTradeID))
+						}
+					} else {
+						// Fallback: Resolve by name if ID is missing
+						res, err := a.db.Exec(context.Background(), "UPDATE banker_trades SET status = 'completed' WHERE LOWER(player_name) = LOWER($1) AND status = 'paying'", p.Name)
+						if err == nil {
+							count := res.RowsAffected()
+							if count > 0 {
+								a.AddLog(fmt.Sprintf("Resolved %d 'paying' bet(s) to COMPLETED for %s (via name fallback)", count, p.Name))
+							}
+						}
 					}
 				}
 				a.AddLog(fmt.Sprintf("Payout for %s SUCCESSFUL. Items delivered.", partner))
@@ -871,7 +891,7 @@ func (a *App) payoutMonitor() {
 	a.AddLog("Trade monitor loop started.")
 	cycle := 0
 	for {
-		time.Sleep(2 * time.Second)
+		time.Sleep(500 * time.Millisecond)
 		cycle++
 
 		a.pMu.RLock()
@@ -911,7 +931,7 @@ func (a *App) payoutMonitor() {
 		}
 
 		if len(targets) == 0 {
-			if cycle%30 == 0 {
+			if cycle%120 == 0 {
 				// a.AddLog("DEBUG: Trade monitor heartbeat (scanning, no targets in room).")
 			}
 			continue
@@ -924,7 +944,7 @@ func (a *App) payoutMonitor() {
 
 		// 1. Auto-refresh hand inventory before opening trade
 		a.RefreshInventory()
-		time.Sleep(3 * time.Second) // Wait for scan to finish
+		time.Sleep(500 * time.Millisecond) // Wait for scan to finish (reduced)
 
 		a.roomUsersMu.RLock()
 		user, ok := a.roomUsers[strings.ToLower(normalizeName(targetName))]
