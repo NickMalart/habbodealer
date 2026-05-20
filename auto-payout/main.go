@@ -172,9 +172,35 @@ func (a *App) GetLogs() []string {
 	return a.logs
 }
 
+func normalizeTradeItemName(raw string) (string, bool) {
+	// Shockwave protocol heuristic: the actual item class name usually 
+	// follows the last 'H' in the raw descriptor string.
+	if idx := strings.LastIndex(raw, "H"); idx != -1 {
+		raw = raw[idx+1:]
+	}
+
+	name := strings.TrimSpace(strings.ToLower(raw))
+	name = strings.Trim(name, "\x00\r\n\t")
+
+	if name == "" {
+		return "", false
+	}
+	return name, true
+}
+
+func normalizeClassKeyWithVariant(raw string) (string, bool) {
+	return normalizeTradeItemName(raw)
+}
+
 func (a *App) AddPayout(name, itemName string, qty int) {
 	a.AddLog(fmt.Sprintf("UI AddPayout: %s x %d %s", name, qty, itemName))
-	p := Payout{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Name: strings.TrimSpace(name), ItemName: strings.ToLower(itemName), Quantity: qty, Status: "Pending", CreatedAt: time.Now().Format("2006-01-02 15:04:05")}
+	
+	normItem, ok := normalizeClassKeyWithVariant(itemName)
+	if !ok {
+		normItem = strings.TrimSpace(strings.ToLower(itemName))
+	}
+	
+	p := Payout{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Name: strings.TrimSpace(name), ItemName: normItem, Quantity: qty, Status: "Pending", CreatedAt: time.Now().Format("2006-01-02 15:04:05")}
 	if a.db != nil { 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -457,10 +483,16 @@ func (a *App) handleStripInfo(e *g.Intercept) {
 		readVL64(); typeChar := data[pos]; pos++; skipUntilDelim(); readVL64(); readVL64(); readVL64()
 		classStart := pos
 		for pos < len(data) && data[pos] != 0x02 { pos++ }
-		classRaw := strings.ToLower(string(data[classStart:pos]))
+		classRaw := string(data[classStart:pos])
 		if pos < len(data) { pos++ }
 		switch typeChar { case 'S': readVL64(); readVL64(); skipUntilDelim(); case 'I': skipUntilDelim(); default: skipUntilDelim() }
-		if !pageRepeated { a.stripScanItemIDs[classRaw] = append(a.stripScanItemIDs[classRaw], mainID); a.stripScanItemIDs[classRaw] = append(a.stripScanItemIDs[classRaw], extraIDs...) }
+		
+		normName, ok := normalizeClassKeyWithVariant(classRaw)
+		if !ok {
+			normName = strings.TrimSpace(strings.ToLower(classRaw))
+		}
+
+		if !pageRepeated { a.stripScanItemIDs[normName] = append(a.stripScanItemIDs[normName], mainID); a.stripScanItemIDs[normName] = append(a.stripScanItemIDs[normName], extraIDs...) }
 	}
 	a.stripScanMu.Unlock()
 	if pageRepeated { a.finalizeStripScan(sessionID) } else { go func() { time.Sleep(200 * time.Millisecond); a.ext.Send(g.Out.Id("GETSTRIP_OUT"), "next") }() }
@@ -495,11 +527,41 @@ func (a *App) lookupNameByID(id int) string {
 }
 
 func (a *App) handleTradeOpen(e *g.Intercept) {
-	partnerID := gencoding.VL64Decode(e.Packet.Data)
-	partnerName := a.lookupNameByID(partnerID)
+	// In Shockwave, TRADE_OPEN (104) can contain multiple VL64 IDs.
+	// We scan for the first one that matches a known user.
+	partnerID := 0
+	partnerName := ""
+	
+	pos := 0
+	data := e.Packet.Data
+	for pos < len(data) {
+		vlen := gencoding.VL64DecodeLen(data[pos])
+		if vlen <= 0 || pos+vlen > len(data) {
+			break
+		}
+		id := gencoding.VL64Decode(data[pos : pos+vlen])
+		pos += vlen
+		
+		if name := a.lookupNameByID(id); name != "" {
+			partnerID = id
+			partnerName = name
+			break
+		}
+	}
+	
+	// Fallback to first ID if no name found
+	if partnerID == 0 && len(data) > 0 {
+		partnerID = gencoding.VL64Decode(data)
+	}
 
 	// Authorize if we just opened this, or if the person has a pending payout
 	authorized := a.matchesRecentOutgoing(e.Packet.Data)
+	
+	a.tradeMu.Lock()
+	pPending := a.payoutPending
+	pPartner := a.activeTradePartner
+	a.tradeMu.Unlock()
+
 	if !authorized && partnerName != "" {
 		a.pMu.RLock()
 		for _, p := range a.payouts {
@@ -509,6 +571,19 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 			}
 		}
 		a.pMu.RUnlock()
+	}
+	
+	// Extra leniency: If we are actively waiting for a payout partner to open a trade
+	if !authorized && pPending && pPartner != "" {
+		if strings.EqualFold(partnerName, pPartner) {
+			authorized = true
+		} else if partnerName == "" {
+			// If unidentified but we are expecting someone, allow it and we'll check items later.
+			// This handles cases where the TradeID in the packet doesn't match our room cache.
+			authorized = true
+			partnerName = pPartner
+			a.AddLog(fmt.Sprintf("Allowing unidentified trade request (id:%d) during payout session for %s.", partnerID, pPartner))
+		}
 	}
 
 	if !authorized {
@@ -615,9 +690,21 @@ func (a *App) payoutMonitor() {
 			continue
 		}
 
-		// Pre-flight delay to allow Habbo client/server to settle
-		a.AddLog(fmt.Sprintf("Preparing payout for %s (waiting 4s)...", target.Name))
-		time.Sleep(4 * time.Second)
+		// Pre-flight delay to allow Habbo client/server to settle and refresh inventory
+		a.AddLog(fmt.Sprintf("Preparing payout for %s (waiting 6s and scanning hand)...", target.Name))
+		a.RefreshInventory()
+		time.Sleep(6 * time.Second)
+
+		// Verify inventory AFTER the scan but BEFORE opening the trade
+		a.inventoryMu.RLock()
+		ids, ok := a.inventory[strings.ToLower(target.ItemName)]
+		inventoryCount := len(ids)
+		a.inventoryMu.RUnlock()
+
+		if !ok || inventoryCount == 0 {
+			a.AddLog(fmt.Sprintf("ERROR: Inventory shortage for '%s' (0 in hand). Waiting for next cycle.", target.ItemName))
+			continue
+		}
 
 		// Re-check state after delay
 		a.tradeMu.Lock()

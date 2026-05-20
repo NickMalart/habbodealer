@@ -4511,8 +4511,13 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			tradeItemsMu.Lock()
 			gameBetItems = make([]TradeItem, len(currentTradeItems))
 			copy(gameBetItems, currentTradeItems)
-			// wasPayout is true if we added items (payout) OR if we previously flagged an add as ours.
-			wasPayout := len(currentOwnTradeItems) > 0 || lastAddItemWasOurs
+			
+			mutex.Lock()
+			isPayoutActive := payoutTradeActive
+			mutex.Unlock()
+
+			// wasPayout is true if we added items (payout) OR if we previously flagged an add as ours OR if we initiated this trade as a payout.
+			wasPayout := len(currentOwnTradeItems) > 0 || lastAddItemWasOurs || isPayoutActive
 			tradeItemsMu.Unlock()
 			a.emitActiveGameBetItemsUpdate()
 
@@ -9077,18 +9082,47 @@ func (a *App) openDealerAfterRound() {
 	}()
 
 	dealerResyncInProgress = false
-	awaitingTradeOpen = true
-	dealerAcceptingTrades = true
-	if shouldAnnounceDealerOpen() {
-		dealerTradeWindowOpen = true
-		openMsg := a.dealerOpenMessage()
-		a.AddLogMsg(fmt.Sprintf("[DEALER_REOPEN] shouting: %q", openMsg))
-		go sendMessageWithDelay(openMsg)
-	} else {
-		dealerTradeWindowOpen = false
-		log.Printf("[DEALER_REOPEN] dealer open skipped (muted or no dice)")
-	}
-	startDealerOpenHeartbeat(a)
+	
+	// Background the re-opening logic so we can poll for Banker fulfillment if necessary.
+	go func(bId int) {
+		if bId > 0 {
+			db, _ := a.getHistoryDB()
+			if db != nil {
+				if bankerMode {
+					a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Waiting for banker fulfillment of trade %d before re-opening...", bId))
+					deadline := time.Now().Add(120 * time.Second)
+					for time.Now().Before(deadline) {
+						var status string
+						ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+						db.QueryRow(ctx2, "SELECT status FROM banker_trades WHERE id = $1", bId).Scan(&status)
+						cancel2()
+						if status == "completed" {
+							a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Payout fulfillment detected for trade %d.", bId))
+							break
+						}
+						time.Sleep(2 * time.Second)
+					}
+				} else {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					db.Exec(ctx, "UPDATE banker_trades SET status = 'completed' WHERE id = $1", bId)
+				}
+			}
+		}
+
+		awaitingTradeOpen = true
+		dealerAcceptingTrades = true
+		if shouldAnnounceDealerOpen() {
+			dealerTradeWindowOpen = true
+			openMsg := a.dealerOpenMessage()
+			a.AddLogMsg(fmt.Sprintf("[DEALER_REOPEN] shouting: %q", openMsg))
+			sendMessageWithDelay(openMsg)
+		} else {
+			dealerTradeWindowOpen = false
+			log.Printf("[DEALER_REOPEN] dealer open skipped (muted or no dice)")
+		}
+		startDealerOpenHeartbeat(a)
+	}(btID)
 }
 
 // handleStripPacket parses STRIPINFO_2 [140] to track items in the player's hand.
