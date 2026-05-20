@@ -119,11 +119,13 @@ func (a *App) startup(ctx context.Context) {
 	a.ext.Headers().Add("TRADE_CONFIRM_IN", g.Header{Dir: g.In, Value: 111})
 	a.ext.Headers().Add("TRADE_CLOSE_IN", g.Header{Dir: g.In, Value: 110})
 	a.ext.Headers().Add("TRADE_COMPLETED_IN", g.Header{Dir: g.In, Value: 112})
+	a.ext.Headers().Add("TRADE_ALREADY_OPEN_IN", g.Header{Dir: g.In, Value: 105})
 	
 	a.ext.Headers().Add("GETSTRIP_OUT", g.Header{Dir: g.Out, Value: 65})
 	a.ext.Headers().Add("TRADE_OPEN_OUT", g.Header{Dir: g.Out, Value: 71})
 	a.ext.Headers().Add("TRADE_ADDITEM_OUT", g.Header{Dir: g.Out, Value: 72})
 	a.ext.Headers().Add("TRADE_ACCEPT_OUT", g.Header{Dir: g.Out, Value: 69})
+	a.ext.Headers().Add("TRADE_CLOSE_OUT", g.Header{Dir: g.Out, Value: 70})
 	a.ext.Headers().Add("TRADE_CONFIRM_ACCEPT_OUT", g.Header{Dir: g.Out, Value: 402})
 	a.ext.Headers().Add("G_USRS_OUT", g.Header{Dir: g.Out, Value: 61})
 	a.ext.Headers().Add("GETSPACENODEUSERS_OUT", g.Header{Dir: g.Out, Value: 126})
@@ -131,6 +133,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext.Intercept(in.USERS, in.SPACENODEUSERS).With(a.handleRoomUsers)
 	a.ext.Intercept(g.In.Id("STRIPINFO_IN"), g.In.Id("STRIPINFO_98_IN")).With(a.handleStripInfo)
 	a.ext.Intercept(g.In.Id("TRADE_OPEN_IN")).With(a.handleTradeOpen)
+	a.ext.Intercept(g.In.Id("TRADE_ALREADY_OPEN_IN")).With(a.handleTradeAlreadyOpen)
 	a.ext.Intercept(g.In.Id("TRADE_ACCEPT_IN")).With(a.handlePartnerAccept)
 	a.ext.Intercept(g.In.Id("TRADE_CONFIRM_IN")).With(a.handlePartnerConfirm)
 	a.ext.Intercept(g.In.Id("TRADE_CLOSE_IN")).With(a.handleTradeClose)
@@ -139,6 +142,11 @@ func (a *App) startup(ctx context.Context) {
 	a.ext.Activated(func() {
 		a.AddLog("Extension activated via G-Earth.")
 		a.ShowWindow()
+		// Initial hand scan to populate inventory
+		go func() {
+			time.Sleep(1 * time.Second)
+			a.RefreshInventory()
+		}()
 	})
 
 	a.AddLog("Extension registered. Waiting for connection...")
@@ -172,9 +180,58 @@ func (a *App) GetLogs() []string {
 	return a.logs
 }
 
+func (a *App) normalizeName(raw string) (string, bool) {
+	name := strings.TrimSpace(strings.ToLower(raw))
+	name = strings.Trim(name, "\x00\r\n\t")
+
+	if name == "" {
+		return "", false
+	}
+
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '*' || r == '-' || r == '.' {
+			continue
+		}
+		return "", false
+	}
+
+	return name, true
+}
+
+func (a *App) normalizeClassKeyWithVariant(raw string) (string, bool) {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if raw == "" || raw == "null" {
+		return "", false
+	}
+
+	if star := strings.LastIndex(raw, "*"); star > 0 {
+		suffix := raw[star+1:]
+		if suffix == "" {
+			return "", false
+		}
+		for _, r := range suffix {
+			if r < '0' || r > '9' {
+				return "", false
+			}
+		}
+
+		base, ok := a.normalizeName(raw[:star])
+		if !ok {
+			return "", false
+		}
+		return base + "*" + suffix, true
+	}
+
+	return a.normalizeName(raw)
+}
+
 func (a *App) AddPayout(name, itemName string, qty int) {
-	a.AddLog(fmt.Sprintf("UI AddPayout: %s x %d %s", name, qty, itemName))
-	p := Payout{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Name: strings.TrimSpace(name), ItemName: strings.ToLower(itemName), Quantity: qty, Status: "Pending", CreatedAt: time.Now().Format("2006-01-02 15:04:05")}
+	normItem, ok := a.normalizeClassKeyWithVariant(itemName)
+	if !ok {
+		normItem = strings.TrimSpace(strings.ToLower(itemName))
+	}
+	a.AddLog(fmt.Sprintf("UI AddPayout: %s x %d %s", name, qty, normItem))
+	p := Payout{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Name: strings.TrimSpace(name), ItemName: normItem, Quantity: qty, Status: "Pending", CreatedAt: time.Now().Format("2006-01-02 15:04:05")}
 	if a.db != nil { 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -454,13 +511,39 @@ func (a *App) handleStripInfo(e *g.Intercept) {
 		extraCount, _ := readVL64()
 		extraIDs := make([]int, 0, extraCount)
 		for j := 0; j < extraCount; j++ { id, _ := readVL64(); extraIDs = append(extraIDs, id) }
-		readVL64(); typeChar := data[pos]; pos++; skipUntilDelim(); readVL64(); readVL64(); readVL64()
+		readVL64() // Pos
+		typeChar := data[pos]
+		pos++ // skip S|I char
+		skipUntilDelim() // End of Field 1
+
+		// Field 2
+		readVL64() // templateId
+		readVL64() // ?
+		readVL64() // ?
 		classStart := pos
 		for pos < len(data) && data[pos] != 0x02 { pos++ }
-		classRaw := strings.ToLower(string(data[classStart:pos]))
-		if pos < len(data) { pos++ }
-		switch typeChar { case 'S': readVL64(); readVL64(); skipUntilDelim(); case 'I': skipUntilDelim(); default: skipUntilDelim() }
-		if !pageRepeated { a.stripScanItemIDs[classRaw] = append(a.stripScanItemIDs[classRaw], mainID); a.stripScanItemIDs[classRaw] = append(a.stripScanItemIDs[classRaw], extraIDs...) }
+		classRaw, ok := a.normalizeClassKeyWithVariant(string(data[classStart:pos]))
+		if !ok {
+			classRaw, _ = a.normalizeName(string(data[classStart:pos]))
+		}
+		if pos < len(data) { pos++ } // skip \x02
+
+		// Field 3
+		switch typeChar {
+		case 'S':
+			readVL64() // DimX
+			readVL64() // DimY
+			skipUntilDelim() // Colors
+		case 'I':
+			skipUntilDelim() // Props
+		default:
+			skipUntilDelim()
+		}
+
+		if !pageRepeated {
+			a.stripScanItemIDs[classRaw] = append(a.stripScanItemIDs[classRaw], mainID)
+			a.stripScanItemIDs[classRaw] = append(a.stripScanItemIDs[classRaw], extraIDs...)
+		}
 	}
 	a.stripScanMu.Unlock()
 	if pageRepeated { a.finalizeStripScan(sessionID) } else { go func() { time.Sleep(200 * time.Millisecond); a.ext.Send(g.Out.Id("GETSTRIP_OUT"), "next") }() }
@@ -511,10 +594,45 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 		a.pMu.RUnlock()
 	}
 
+	// Lenient fallback: if partnerName is empty, but we are actively trying to payout someone,
+	// assume this is the server responding to our request (with a DB ID instead of room index).
+	if !authorized && partnerName == "" {
+		a.tradeMu.Lock()
+		isPending := a.payoutPending
+		a.tradeMu.Unlock()
+		if isPending {
+			authorized = true
+			a.AddLog(fmt.Sprintf("Leniently authorizing unidentified trade (id:%d) due to active pending payout.", partnerID))
+		}
+	}
+
+	// If still not authorized, check if the bot is completely idle
 	if !authorized {
-		a.AddLog(fmt.Sprintf("Blocked unauthorized incoming trade request from %s (id:%d).", partnerName, partnerID))
+		activePlayerName := ""
+		activeStatus := ""
+		if a.db != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			a.db.QueryRow(ctx, "SELECT player_name, status FROM banker_trades WHERE status IN ('pending', 'playing', 'paying') LIMIT 1").Scan(&activePlayerName, &activeStatus)
+		}
+
+		if activePlayerName != "" {
+			// There is an active game. We should only accept trades if it's the active player AND status is paying.
+			// If they are in banker_trades but NOT authorized above, they are likely trying to trade mid-game.
+			a.AddLog(fmt.Sprintf("Blocking trade from %s: session is currently locked to active player %s (status:%s).", partnerName, activePlayerName, activeStatus))
+		} else {
+			// No active games in banker_trades AND no active payouts in our queue.
+			// Bot is completely idle. Accept trades (e.g., for restocking).
+			authorized = true
+			a.AddLog(fmt.Sprintf("Authorizing trade from %s (id:%d): no active games or payouts.", partnerName, partnerID))
+		}
+	}
+
+	if !authorized {
+		a.AddLog(fmt.Sprintf("Rejecting unauthorized incoming trade request from %s (id:%d).", partnerName, partnerID))
 		e.Block()
-		a.ext.Send(g.In.Id("TRADE_CLOSE_IN"), []byte{0x40})
+		// Send server-side close to ensure the server knows we've rejected it.
+		a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
 		return
 	}
 
@@ -527,6 +645,16 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 	a.tradeMu.Unlock()
 
 	a.AddLog(fmt.Sprintf("Trade window opened with %s.", partnerName))
+}
+
+func (a *App) handleTradeAlreadyOpen(e *g.Intercept) {
+	a.AddLog("Server reports trade already open (105). Attempting server-side reset...")
+	a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+	
+	a.tradeMu.Lock()
+	a.tradeActive = false
+	a.payoutPending = false
+	a.tradeMu.Unlock()
 }
 
 func (a *App) handlePartnerAccept(e *g.Intercept) { a.AddLog("Partner accepted offer.") }
@@ -601,8 +729,8 @@ func (a *App) payoutMonitor() {
 		a.tradeMu.Unlock()
 
 		// Skip if already in a trade, if we just sent a request (pending),
-		// or if we've attempted a trade in the last 8 seconds (cooldown).
-		if active || pending || len(targets) == 0 || time.Since(lastTime) < 8*time.Second {
+		// or if we've attempted a trade in the last 4 seconds (cooldown).
+		if active || pending || len(targets) == 0 || time.Since(lastTime) < 4*time.Second {
 			continue
 		}
 
@@ -615,9 +743,10 @@ func (a *App) payoutMonitor() {
 			continue
 		}
 
-		// Pre-flight delay to allow Habbo client/server to settle
-		a.AddLog(fmt.Sprintf("Preparing payout for %s (waiting 4s)...", target.Name))
-		time.Sleep(4 * time.Second)
+		// Pre-flight delay and auto-refresh hand inventory to allow Habbo client/server to settle
+		a.AddLog(fmt.Sprintf("Preparing payout for %s (waiting 3s)...", target.Name))
+		a.RefreshInventory()
+		time.Sleep(3 * time.Second)
 
 		// Re-check state after delay
 		a.tradeMu.Lock()
@@ -642,12 +771,15 @@ func (a *App) payoutMonitor() {
 		a.emitUpdate()
 
 		a.registerOutgoing(user.ChatID)
+		if user.TradeID > 0 && user.TradeID != user.ChatID {
+			a.registerOutgoing(user.TradeID)
+		}
 		a.AddLog(fmt.Sprintf("Initiating payout trade for %s...", target.Name))
 		a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), user.ChatID)
 
 		// Start a timeout monitor to clear 'pending' if the trade never opens
 		go func(id string) {
-			time.Sleep(10 * time.Second)
+			time.Sleep(7 * time.Second)
 			a.tradeMu.Lock()
 			if a.payoutPending && !a.tradeActive {
 				a.AddLog("Payout trade request timed out. Resetting state.")
@@ -671,16 +803,47 @@ func (a *App) payoutMonitor() {
 }
 
 func (a *App) automateTrade(p *Payout) {
-	time.Sleep(2 * time.Second)
-	a.tradeMu.Lock(); active := a.tradeActive; a.tradeMu.Unlock()
-	if !active { return }
-	a.inventoryMu.RLock(); ids, ok := a.inventory[strings.ToLower(p.ItemName)]; a.inventoryMu.RUnlock()
-	if !ok || len(ids) == 0 { a.AddLog(fmt.Sprintf("ERROR: No inventory for %s.", p.ItemName)); return }
+	// Give the trade window time to stabilize and avoid collisions
+	time.Sleep(4500 * time.Millisecond)
+	a.tradeMu.Lock()
+	active := a.tradeActive
+	a.tradeMu.Unlock()
+	if !active {
+		return
+	}
+	a.inventoryMu.RLock()
+	searchKey, ok := a.normalizeClassKeyWithVariant(p.ItemName)
+	if !ok {
+		searchKey, _ = a.normalizeName(p.ItemName)
+	}
+	ids, ok := a.inventory[searchKey]
+	a.inventoryMu.RUnlock()
+	if !ok || len(ids) == 0 {
+		a.AddLog(fmt.Sprintf("ERROR: No inventory for %s.", p.ItemName))
+		// Diagnostic: log a few available keys
+		a.inventoryMu.RLock()
+		keys := []string{}
+		for k := range a.inventory {
+			keys = append(keys, k)
+			if len(keys) >= 5 { break }
+		}
+		a.inventoryMu.RUnlock()
+		a.AddLog(fmt.Sprintf("Diagnostic: Available items include: %s", strings.Join(keys, ", ")))
+		return
+	}
 	toAdd := p.Quantity
-	if len(ids) < toAdd { toAdd = len(ids) }
+	if len(ids) < toAdd {
+		toAdd = len(ids)
+	}
 	a.AddLog(fmt.Sprintf("Adding %d x %s to trade...", toAdd, p.ItemName))
-	for i := 0; i < toAdd; i++ { a.ext.Send(g.Out.Id("TRADE_ADDITEM_OUT"), ids[i]); time.Sleep(750 * time.Millisecond) }
-	for i := 0; i < 3; i++ { a.ext.Send(g.Out.Id("TRADE_ACCEPT_OUT")); time.Sleep(1500 * time.Millisecond) }
+	for i := 0; i < toAdd; i++ {
+		a.ext.Send(g.Out.Id("TRADE_ADDITEM_OUT"), ids[i])
+		time.Sleep(850 * time.Millisecond)
+	}
+	for i := 0; i < 3; i++ {
+		a.ext.Send(g.Out.Id("TRADE_ACCEPT_OUT"))
+		time.Sleep(1500 * time.Millisecond)
+	}
 	time.Sleep(4 * time.Second)
 	a.ext.Send(g.Out.Id("TRADE_CONFIRM_ACCEPT_OUT"))
 }
