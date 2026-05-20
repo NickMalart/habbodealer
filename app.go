@@ -13,17 +13,6 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-var ext = g.NewExt(g.ExtInfo{
-	Title:       "[RO] All In One Dealer",
-	Description: "A tool to assist with card games in RO, including poker and blackjack.",
-	Version:     "1.0.0",
-	Author:      "Dubbo",
-})
-
-var (
-	CurrentVersion = "1.0.0"
-)
-
 var app *App
 
 func (a *App) GetCurrentVersion() string {
