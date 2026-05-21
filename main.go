@@ -772,6 +772,7 @@ type App struct {
 	users28PythonExec     string
 	users28ParserScript   string
 	activeRaffleSessionID int64
+	activeBankerTradeID   int
 }
 
 type DBConfig struct {
@@ -2693,22 +2694,27 @@ func (a *App) startBankerTradePolling() {
 			}
 
 			// Start the game!
-			a.initGameFromBankerTrade(playerName, items, tradeID, chatID)
+			a.initGameFromBankerTrade(id, playerName, items, tradeID, chatID)
 
 			ctx3, cancel3 := context.WithTimeout(context.Background(), 5*time.Second)
-			_, err = db.Exec(ctx3, "UPDATE banker_trades SET status = 'accepted' WHERE id = $1", id)
+			_, err = db.Exec(ctx3, "UPDATE banker_trades SET status = 'playing' WHERE id = $1", id)
 			cancel3()
 			if err != nil {
-				a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] ERROR: failed to mark trade %d as accepted: %v", id, err))
+				a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] ERROR: failed to mark trade %d as playing: %v", id, err))
 			} else {
-				a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Successfully marked trade %d as accepted", id))
+				a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Successfully marked trade %d as playing", id))
 			}
 		}
 	}()
 }
 
-func (a *App) initGameFromBankerTrade(playerName string, items []TradeItem, tradeID int, chatID int) {
-	a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] Initiating game for %s (ChatID: %d, TradeID: %d)", playerName, chatID, tradeID))
+func (a *App) initGameFromBankerTrade(dbID int, playerName string, items []TradeItem, tradeID int, chatID int) {
+	a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] Initiating game for %s (ChatID: %d, TradeID: %d, DBID: %d)", playerName, chatID, tradeID, dbID))
+
+	// Track the active banker trade ID
+	a.historyDBMu.Lock()
+	a.activeBankerTradeID = dbID
+	a.historyDBMu.Unlock()
 
 	// Set global trade partner info
 	lastTradePartnerName = playerName
@@ -2728,6 +2734,43 @@ func (a *App) initGameFromBankerTrade(playerName string, items []TradeItem, trad
 
 	// Trigger the history and menu
 	a.sendTradeCompletionMessage()
+}
+
+func (a *App) finalizeBankerTrade() {
+	a.historyDBMu.Lock()
+	tradeID := a.activeBankerTradeID
+	db := a.historyDB
+	a.historyDBMu.Unlock()
+
+	if tradeID <= 0 || db == nil {
+		return
+	}
+
+	mutex.Lock()
+	risk := riskSessionActive
+	mutex.Unlock()
+
+	if risk {
+		a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] Skipping completion for trade %d: risk session active", tradeID))
+		return
+	}
+
+	// Proceed with completion: clear the active ID so we don't double-process
+	a.historyDBMu.Lock()
+	a.activeBankerTradeID = 0
+	a.historyDBMu.Unlock()
+
+	go func(id int) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		res, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'completed' WHERE id = $1 AND status = 'playing'", id)
+		if err != nil {
+			a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] ERROR: failed to mark trade %d as completed: %v", id, err))
+		} else {
+			affected := res.RowsAffected()
+			a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] Successfully marked trade %d as completed (rows affected: %d)", id, affected))
+		}
+	}(tradeID)
 }
 
 type RaffleSession struct {
@@ -3756,6 +3799,9 @@ func (a *App) setCurrentGameHistoryResults(playerResult string, dealerResult str
 		a.sendLiveDealerGames(5)
 		// Persist completed game record for later review
 		go LogEvent("game_complete", completedEntry, "Game completed", map[string]string{"player": completedEntry.PlayerName})
+
+		// Finalize the banker trade for completed games
+		a.finalizeBankerTrade()
 	}
 }
 
@@ -5595,6 +5641,19 @@ func startPayout(a *App, targetID int, targetName string) {
 			}
 		})
 		a.gameHistoryMu.Unlock()
+
+		mutex.Lock()
+		isRiskKeep := riskPayoutActive
+		mutex.Unlock()
+
+		// User said: "if the player says keep dont do anything right now"
+		if isRiskKeep {
+			a.AddLogMsg("[BANKER_GAME] Skipping database completion: player chose 'keep'")
+			return
+		}
+
+		// Finalize the banker trade for non-risk wins (or initial win when risk disabled)
+		a.finalizeBankerTrade()
 		return
 	}
 
@@ -6449,6 +6508,9 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			if completedEntry != nil {
 				go a.sendDiscordWebhookForGame(*completedEntry)
 				a.persistCurrentGameHistoryNow("game_completed")
+				
+				// Finalize the banker trade for completed risk loss
+				a.finalizeBankerTrade()
 			}
 
 			go a.openDealerAfterRound()
