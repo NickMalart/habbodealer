@@ -38,6 +38,14 @@ type Payout struct {
 	CreatedAt string `json:"createdAt"`
 }
 
+type StockedItem struct {
+	ID            int    `json:"id"`
+	RawName       string `json:"rawName"`
+	CanonicalName string `json:"canonicalName"`
+	DisplayName   string `json:"displayName"`
+	IsActive      bool   `json:"isActive"`
+}
+
 type ParsedUsers28User struct {
 	Username string `json:"username"`
 	TradeID  int    `json:"trade_id"`
@@ -75,6 +83,9 @@ type App struct {
 	activeTradeTarget  int
 	tradeActive        bool
 	tradeAccepted      bool
+	payoutTradeSent    bool
+	currentTradeItems  string
+	allowedNamesCache  []string
 	lastScreenshotPath string
 	tradeMu            sync.Mutex
 
@@ -88,13 +99,13 @@ type App struct {
 
 func NewApp() *App {
 	return &App{
-		payouts:      []Payout{},
-		logs:         []string{"Bot initialized..."},
-		roomUsers:    make(map[string]ParsedUsers28User),
-		inventory:    make(map[string][]int),
-		pythonExec:   "python",
-		dbConnString: "postgresql://neondb_owner:npg_Jx8ERGzK6eog@ep-small-thunder-a7ceewoj-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
-		discordWebhook: "https://discordapp.com/api/webhooks/1505787297696583800/aUE_M4-quy6wkFs0qVySjHgZq3zYOze5watr67D89e6O1V9VwmjNy24HzN-X7TI5G5k3",
+		payouts:              []Payout{},
+		logs:                 []string{"Bot initialized..."},
+		roomUsers:            make(map[string]ParsedUsers28User),
+		inventory:            make(map[string][]int),
+		pythonExec:           "python",
+		dbConnString:         "postgresql://neondb_owner:npg_S9jFTYzdQx3l@ep-aged-king-a77p1t8b-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
+		discordWebhook:       "https://discordapp.com/api/webhooks/1505787297696583800/aUE_M4-quy6wkFs0qVySjHgZq3zYOze5watr67D89e6O1V9VwmjNy24HzN-X7TI5G5k3",
 		stripScanSeenItemIDs: make(map[int]struct{}),
 		stripScanItemIDs:     make(map[string][]int),
 	}
@@ -108,16 +119,16 @@ func (a *App) takeScreenshot() string {
 	}
 	appDir := filepath.Dir(ex)
 	shotDir := filepath.Join(appDir, "screenshots")
-	
+
 	if _, err := os.Stat(shotDir); os.IsNotExist(err) {
 		os.MkdirAll(shotDir, 0755)
 	}
 
 	path := filepath.Join(shotDir, fmt.Sprintf("payout_%s_%d.png", time.Now().Format("20060102_150405"), time.Now().UnixNano()%1000))
-	
-	// PowerShell command to capture the primary screen. 
+
+	// PowerShell command to capture the primary screen.
 	psCommand := fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms, System.Drawing; $Screen = [System.Windows.Forms.Screen]::PrimaryScreen; $Bitmap = New-Object System.Drawing.Bitmap $Screen.Bounds.Width, $Screen.Bounds.Height; $Graphics = [System.Drawing.Graphics]::FromImage($Bitmap); $Graphics.CopyFromScreen($Screen.Bounds.X, $Screen.Bounds.Y, 0, 0, $Bitmap.Size); $Bitmap.Save('%s', [System.Drawing.Imaging.ImageFormat]::Png); $Graphics.Dispose(); $Bitmap.Dispose();`, path)
-	
+
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-Command", psCommand)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	if err := cmd.Run(); err != nil {
@@ -164,7 +175,7 @@ func (a *App) sendDiscordNotification(p Payout, screenshotPath string) {
 		var cmd *exec.Cmd
 		if screenshotPath != "" {
 			// Using payload_json with file attachment
-			cmd = exec.Command("curl", "-s", "-H", "Content-Type: multipart/form-data", 
+			cmd = exec.Command("curl", "-s", "-H", "Content-Type: multipart/form-data",
 				"-F", fmt.Sprintf("payload_json=%s", string(jsonPayload)),
 				"-F", fmt.Sprintf("screenshot.png=@%s", screenshotPath),
 				a.discordWebhook)
@@ -172,7 +183,7 @@ func (a *App) sendDiscordNotification(p Payout, screenshotPath string) {
 			// Standard JSON post
 			cmd = exec.Command("curl", "-s", "-H", "Content-Type: application/json", "-X", "POST", "-d", string(jsonPayload), a.discordWebhook)
 		}
-		
+
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 		if err := cmd.Run(); err != nil {
 			a.AddLog("ERROR: Discord notification failed: " + err.Error())
@@ -221,9 +232,11 @@ func (a *App) startup(ctx context.Context) {
 	a.ext.Headers().Add("TRADE_CONFIRM_IN", g.Header{Dir: g.In, Value: 111})
 	a.ext.Headers().Add("TRADE_CLOSE_IN", g.Header{Dir: g.In, Value: 110})
 	a.ext.Headers().Add("TRADE_COMPLETED_IN", g.Header{Dir: g.In, Value: 112})
-	
+	a.ext.Headers().Add("TRADE_ITEMS_IN", g.Header{Dir: g.In, Value: 108})
+
 	a.ext.Headers().Add("GETSTRIP_OUT", g.Header{Dir: g.Out, Value: 65})
 	a.ext.Headers().Add("TRADE_OPEN_OUT", g.Header{Dir: g.Out, Value: 71})
+	a.ext.Headers().Add("TRADE_CLOSE_OUT", g.Header{Dir: g.Out, Value: 70})
 	a.ext.Headers().Add("TRADE_ADDITEM_OUT", g.Header{Dir: g.Out, Value: 72})
 	a.ext.Headers().Add("TRADE_ACCEPT_OUT", g.Header{Dir: g.Out, Value: 69})
 	a.ext.Headers().Add("TRADE_CONFIRM_ACCEPT_OUT", g.Header{Dir: g.Out, Value: 402})
@@ -235,6 +248,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext.Intercept(g.In.Id("TRADE_CONFIRM_IN")).With(a.handlePartnerConfirm)
 	a.ext.Intercept(g.In.Id("TRADE_CLOSE_IN")).With(a.handleTradeClose)
 	a.ext.Intercept(g.In.Id("TRADE_COMPLETED_IN")).With(a.handleTradeCompleted)
+	a.ext.Intercept(g.In.Id("TRADE_ITEMS_IN")).With(a.handleTradeItems)
 
 	a.ext.Activated(func() {
 		a.ShowWindow()
@@ -247,7 +261,7 @@ func (a *App) startup(ctx context.Context) {
 
 func (a *App) initDatabase() {
 	a.AddLog("Connecting to database...")
-	
+
 	pool, err := pgxpool.New(context.Background(), a.dbConnString)
 	if err != nil {
 		a.AddLog("ERROR: Database connection failed: " + err.Error())
@@ -255,9 +269,12 @@ func (a *App) initDatabase() {
 	}
 
 	a.db = pool
-	
+
+	// Set search path and create tables with public qualification
+	_, _ = a.db.Exec(context.Background(), "SET search_path TO public;")
+
 	// Create table if not exists
-	query := `CREATE TABLE IF NOT EXISTS auto_payouts (
+	query := `CREATE TABLE IF NOT EXISTS public.auto_payouts (
 		id TEXT PRIMARY KEY,
 		player_name TEXT NOT NULL,
 		item_name TEXT NOT NULL,
@@ -268,6 +285,19 @@ func (a *App) initDatabase() {
 	_, err = a.db.Exec(context.Background(), query)
 	if err != nil {
 		a.AddLog("ERROR: Table creation failed: " + err.Error())
+	}
+
+	// Create public.stocked_items table
+	query = `CREATE TABLE IF NOT EXISTS public.stocked_items (
+		id SERIAL PRIMARY KEY,
+		raw_name TEXT NOT NULL,
+		canonical_name TEXT NOT NULL,
+		display_name TEXT NOT NULL,
+		is_active BOOLEAN NOT NULL DEFAULT TRUE
+	);`
+	_, err = a.db.Exec(context.Background(), query)
+	if err != nil {
+		a.AddLog("ERROR: public.stocked_items table creation failed: " + err.Error())
 	} else {
 		a.AddLog("Database connected and ready.")
 	}
@@ -360,7 +390,7 @@ func normalizeClassKeyWithVariant(raw string) (string, bool) {
 func (a *App) AddPayout(name, itemName string, qty int) {
 	id := fmt.Sprintf("%d", time.Now().UnixNano())
 	createdAt := time.Now().Format("2006-01-02 15:04:05")
-	
+
 	normItem, ok := normalizeClassKeyWithVariant(itemName)
 	if !ok {
 		normItem = strings.TrimSpace(strings.ToLower(itemName))
@@ -378,8 +408,8 @@ func (a *App) AddPayout(name, itemName string, qty int) {
 	a.AddLog(fmt.Sprintf("Adding payout: %s x %d %s", p.Name, p.Quantity, p.ItemName))
 
 	if a.db != nil {
-		_, err := a.db.Exec(context.Background(), 
-			"INSERT INTO auto_payouts (id, player_name, item_name, quantity, status, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+		_, err := a.db.Exec(context.Background(),
+			"INSERT INTO public.auto_payouts (id, player_name, item_name, quantity, status, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
 			p.ID, p.Name, p.ItemName, p.Quantity, p.Status, p.CreatedAt)
 		if err != nil {
 			a.AddLog("ERROR: DB Save failed: " + err.Error())
@@ -398,7 +428,7 @@ func normalizeName(raw string) string {
 
 func (a *App) DeletePayout(id string) {
 	if a.db != nil {
-		_, err := a.db.Exec(context.Background(), "DELETE FROM auto_payouts WHERE id = $1", id)
+		_, err := a.db.Exec(context.Background(), "DELETE FROM public.auto_payouts WHERE id = $1", id)
 		if err != nil {
 			a.AddLog("ERROR: DB Delete failed: " + err.Error())
 		}
@@ -427,7 +457,7 @@ func (a *App) DeletePayout(id string) {
 func (a *App) TogglePayoutStatus(id string) {
 	a.pMu.Lock()
 	defer a.pMu.Unlock()
-	
+
 	for i, p := range a.payouts {
 		if p.ID == id {
 			newStatus := "Pending"
@@ -435,9 +465,9 @@ func (a *App) TogglePayoutStatus(id string) {
 				newStatus = "Disabled"
 			}
 			a.payouts[i].Status = newStatus
-			
+
 			if a.db != nil {
-				a.db.Exec(context.Background(), "UPDATE auto_payouts SET status = $1 WHERE id = $2", newStatus, id)
+				a.db.Exec(context.Background(), "UPDATE public.auto_payouts SET status = $1 WHERE id = $2", newStatus, id)
 			}
 			break
 		}
@@ -447,7 +477,7 @@ func (a *App) TogglePayoutStatus(id string) {
 
 func (a *App) ClearCompleted() {
 	if a.db != nil {
-		a.db.Exec(context.Background(), "DELETE FROM auto_payouts WHERE status = 'Completed'")
+		a.db.Exec(context.Background(), "DELETE FROM public.auto_payouts WHERE status = 'Completed'")
 	}
 
 	a.pMu.Lock()
@@ -507,6 +537,87 @@ func (a *App) ReturnAllToOwner(ownerName string) {
 	}
 }
 
+// --- Stocked Items Methods ---
+
+func (a *App) GetStockedItems() []StockedItem {
+	if a.db == nil {
+		return []StockedItem{}
+	}
+	rows, err := a.db.Query(context.Background(), "SELECT id, raw_name, canonical_name, display_name, is_active FROM public.stocked_items ORDER BY display_name ASC")
+	if err != nil {
+		a.AddLog("ERROR: Failed to query public.stocked_items: " + err.Error())
+		return []StockedItem{}
+	}
+	defer rows.Close()
+
+	items := []StockedItem{}
+	for rows.Next() {
+		var i StockedItem
+		if err := rows.Scan(&i.ID, &i.RawName, &i.CanonicalName, &i.DisplayName, &i.IsActive); err == nil {
+			items = append(items, i)
+		}
+	}
+	return items
+}
+
+func (a *App) AddStockedItem(rawName, displayName string) {
+	if a.db == nil {
+		return
+	}
+	canonical, ok := normalizeClassKeyWithVariant(rawName)
+	if !ok {
+		canonical = strings.ToLower(strings.TrimSpace(rawName))
+	}
+	_, err := a.db.Exec(context.Background(),
+		"INSERT INTO public.stocked_items (raw_name, canonical_name, display_name, is_active) VALUES ($1, $2, $3, $4)",
+		rawName, canonical, displayName, true)
+	if err != nil {
+		a.AddLog("ERROR: Failed to add stocked item: " + err.Error())
+	} else {
+		a.AddLog(fmt.Sprintf("Stocked item added: %s (%s)", displayName, rawName))
+	}
+}
+
+func (a *App) DeleteStockedItem(id int) {
+	if a.db == nil {
+		return
+	}
+	_, err := a.db.Exec(context.Background(), "DELETE FROM public.stocked_items WHERE id = $1", id)
+	if err != nil {
+		a.AddLog("ERROR: Failed to delete stocked item: " + err.Error())
+	}
+}
+
+func (a *App) ToggleStockedItem(id int) {
+	if a.db == nil {
+		return
+	}
+	_, err := a.db.Exec(context.Background(), "UPDATE public.stocked_items SET is_active = NOT is_active WHERE id = $1", id)
+	if err != nil {
+		a.AddLog("ERROR: Failed to toggle stocked item: " + err.Error())
+	}
+}
+
+func (a *App) GetActiveStockedItemNames() []string {
+	if a.db == nil {
+		return []string{}
+	}
+	rows, err := a.db.Query(context.Background(), "SELECT raw_name FROM public.stocked_items WHERE is_active = TRUE")
+	if err != nil {
+		return []string{}
+	}
+	defer rows.Close()
+
+	names := []string{}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err == nil {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
 // --- Internal Logic ---
 
 func (a *App) loadPayoutsFromDB() {
@@ -514,13 +625,13 @@ func (a *App) loadPayoutsFromDB() {
 		a.AddLog("ERROR: Database not connected. Cannot load payouts.")
 		return
 	}
-	
-	a.AddLog("Querying auto_payouts records...")
+
+	a.AddLog("Querying public.auto_payouts records...")
 	payouts := []Payout{}
 	count := 0
 
-	// Manual entries from auto_payouts table
-	rows, err := a.db.Query(context.Background(), "SELECT id, player_name, item_name, quantity, status, created_at FROM auto_payouts WHERE status != 'Completed' ORDER BY created_at DESC")
+	// Manual entries from public.auto_payouts table
+	rows, err := a.db.Query(context.Background(), "SELECT id, player_name, item_name, quantity, status, created_at FROM public.auto_payouts WHERE status != 'Completed' ORDER BY created_at DESC")
 	if err == nil {
 		for rows.Next() {
 			var p Payout
@@ -534,12 +645,12 @@ func (a *App) loadPayoutsFromDB() {
 	} else {
 		a.AddLog("ERROR: DB Query failed: " + err.Error())
 	}
-	
+
 	a.pMu.Lock()
 	a.payouts = payouts
 	a.pMu.Unlock()
-	
-	a.AddLog(fmt.Sprintf("Sync complete. Found %d active records in auto_payouts.", count))
+
+	a.AddLog(fmt.Sprintf("Sync complete. Found %d active records in public.auto_payouts.", count))
 	a.emitUpdate()
 }
 
@@ -619,7 +730,7 @@ func (a *App) updatePayoutStatuses() {
 		if p.Status == "Completed" || p.Status == "Disabled" {
 			continue
 		}
-		
+
 		// Use consistent lower-case keys for room lookup
 		targetKey := strings.ToLower(normalizeName(p.Name))
 		user, ok := a.roomUsers[targetKey]
@@ -693,8 +804,10 @@ func (a *App) handleStripInfo(e *g.Intercept) {
 		}
 
 		mainID, ok := readVL64()
-		if !ok { break }
-		
+		if !ok {
+			break
+		}
+
 		if i == 0 {
 			if _, seen := a.stripScanSeenItemIDs[mainID]; seen {
 				pageRepeated = true
@@ -731,7 +844,9 @@ func (a *App) handleStripInfo(e *g.Intercept) {
 
 		switch typeChar {
 		case 'S':
-			readVL64(); readVL64(); skipUntilDelim()
+			readVL64()
+			readVL64()
+			skipUntilDelim()
 		case 'I':
 			skipUntilDelim()
 		default:
@@ -763,7 +878,7 @@ func (a *App) finalizeStripScan(sessionID int) {
 		a.stripScanMu.Unlock()
 		return
 	}
-	
+
 	finalInventory := make(map[string][]int)
 	totalItems := 0
 	details := []string{}
@@ -774,14 +889,14 @@ func (a *App) finalizeStripScan(sessionID int) {
 			details = append(details, fmt.Sprintf("%s:%d", name, len(ids)))
 		}
 	}
-	
+
 	a.stripScanActive = false
 	a.stripScanMu.Unlock()
 
 	a.inventoryMu.Lock()
 	a.inventory = finalInventory
 	a.inventoryMu.Unlock()
-	
+
 	a.AddLog(fmt.Sprintf("Hand scanning complete. Total: %d, Details: %s", totalItems, strings.Join(details, ", ")))
 }
 
@@ -789,12 +904,74 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 	a.tradeMu.Lock()
 	a.tradeActive = true
 	a.tradeAccepted = false
+	a.currentTradeItems = "" // Clear items from previous trade
+	a.allowedNamesCache = []string{}
 	a.tradeMu.Unlock()
+
+	// Fetch active stocked items immediately on trade open
+	go func() {
+		names := a.GetActiveStockedItemNames()
+		a.tradeMu.Lock()
+		a.allowedNamesCache = names
+		a.tradeMu.Unlock()
+		a.AddLog(fmt.Sprintf("[DEBUG] Stocked items cached for trade: %v", names))
+	}()
+
 	a.AddLog("Trade window opened.")
+}
+
+func (a *App) handleTradeItems(e *g.Intercept) {
+	a.tradeMu.Lock()
+	a.currentTradeItems = string(e.Packet.Data)
+	a.tradeMu.Unlock()
+	a.AddLog(fmt.Sprintf("[DEBUG] TRADE_ITEMS updated, packet len: %d", len(e.Packet.Data)))
 }
 
 func (a *App) handlePartnerAccept(e *g.Intercept) {
 	a.AddLog("Partner accepted offer (Stage 1).")
+
+	// Final validation for incoming trades
+	if !a.payoutTradeSent {
+		a.tradeMu.Lock()
+		allowedNames := a.allowedNamesCache
+		items := a.currentTradeItems
+		a.tradeMu.Unlock()
+
+		// Verbose debugging
+		a.AddLog(fmt.Sprintf("[DEBUG] Validating trade. Allowed items: %v", allowedNames))
+		// Log a safe version of the packet data (printable chars only)
+		safeItems := ""
+		for _, b := range []byte(items) {
+			if b >= 32 && b <= 126 {
+				safeItems += string(b)
+			} else {
+				safeItems += "."
+			}
+		}
+		a.AddLog(fmt.Sprintf("[DEBUG] Current trade packet data: %s", safeItems))
+
+		if len(allowedNames) > 0 {
+			matched := false
+			lowerItems := strings.ToLower(items)
+			for _, name := range allowedNames {
+				if strings.Contains(lowerItems, strings.ToLower(name)) {
+					matched = true
+					a.AddLog(fmt.Sprintf("[FILTER] Validated trade: matched stocked item '%s'", name))
+					break
+				}
+			}
+
+			if !matched {
+				a.AddLog("[FILTER] Blocking acceptance: no stocked items found in trade.")
+				e.Block()
+				// Send TRADE_CLOSE to force the window shut for them
+				a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+				return
+			}
+		} else {
+			a.AddLog("[DEBUG] No active stocked items found in cache. This might be because the database fetch failed or no items are active. Allowing trade by default to prevent lockout.")
+		}
+	}
 }
 
 func (a *App) handlePartnerConfirm(e *g.Intercept) {
@@ -807,6 +984,7 @@ func (a *App) handleTradeClose(e *g.Intercept) {
 	screenshotPath := a.lastScreenshotPath
 	a.tradeActive = false
 	a.activeTradePartner = ""
+	a.payoutTradeSent = false
 	a.lastScreenshotPath = ""
 	a.tradeMu.Unlock()
 
@@ -825,7 +1003,7 @@ func (a *App) handleTradeClose(e *g.Intercept) {
 			}
 		}
 		a.pMu.Unlock()
-		
+
 		if found {
 			a.AddLog(fmt.Sprintf("Trade with %s closed without completing. Re-queueing for retry...", partner))
 			// Trigger a status check immediately to see if they are still here
@@ -853,7 +1031,7 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 				a.payouts[i].Status = "Completed"
 				if a.db != nil {
 					// Mark as completed in DB
-					_, err := a.db.Exec(context.Background(), "UPDATE auto_payouts SET status = 'Completed' WHERE id = $1", p.ID)
+					_, err := a.db.Exec(context.Background(), "UPDATE public.auto_payouts SET status = 'Completed' WHERE id = $1", p.ID)
 					if err != nil {
 						a.AddLog("ERROR: Failed to update DB status: " + err.Error())
 					}
@@ -892,7 +1070,7 @@ func (a *App) payoutMonitor() {
 			continue
 		}
 
-		// Safety cleanup: If no trade is active and no partner is being tracked, 
+		// Safety cleanup: If no trade is active and no partner is being tracked,
 		// ensure no payouts are stuck in "Trading" status.
 		if partner == "" {
 			a.pMu.Lock()
@@ -945,8 +1123,9 @@ func (a *App) payoutMonitor() {
 		a.tradeMu.Lock()
 		a.activeTradePartner = targetName
 		a.activeTradeTarget = roomIndex
+		a.payoutTradeSent = true
 		a.tradeMu.Unlock()
-		
+
 		foundInSlice := false
 		a.pMu.Lock()
 		for i := range a.payouts {
@@ -969,11 +1148,11 @@ func (a *App) payoutMonitor() {
 		}
 
 		a.AddLog(fmt.Sprintf("Initiating auto-trade for %s (RoomIndex: %d) for %s...", targetName, roomIndex, targetItem))
-		
+
 		// Send both standard and raw fallback as seen in root app
 		a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), roomIndex)
 		a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), []byte(encodeVL64(roomIndex)))
-		
+
 		// Create a snapshot for the automation goroutine
 		pCopy := target
 		pCopy.Status = "Trading"
@@ -983,7 +1162,7 @@ func (a *App) payoutMonitor() {
 
 func (a *App) automateTrade(p *Payout) {
 	a.AddLog(fmt.Sprintf("Starting automation for %s: %d x %s (ID: %s)", p.Name, p.Quantity, p.ItemName, p.ID))
-	
+
 	// Wait up to 5 seconds for the trade window to open
 	tradeOpened := false
 	for i := 0; i < 50; i++ {
@@ -996,10 +1175,10 @@ func (a *App) automateTrade(p *Payout) {
 		}
 		a.tradeMu.Unlock()
 	}
-	
-	if !tradeOpened { 
+
+	if !tradeOpened {
 		a.AddLog("Automation aborted: trade window did not open. Re-queueing...")
-		
+
 		// Re-queue the payout so it can be retried
 		a.pMu.Lock()
 		for i, entry := range a.payouts {
@@ -1009,14 +1188,14 @@ func (a *App) automateTrade(p *Payout) {
 		}
 		a.pMu.Unlock()
 		a.emitUpdate()
-		
+
 		// Reset trade state so the monitor can pick it up again
 		a.tradeMu.Lock()
 		if a.activeTradePartner == p.Name {
 			a.activeTradePartner = ""
 		}
 		a.tradeMu.Unlock()
-		return 
+		return
 	}
 
 	a.inventoryMu.RLock()
@@ -1047,9 +1226,9 @@ func (a *App) automateTrade(p *Payout) {
 	a.AddLog(fmt.Sprintf("Adding %d x %s (Total available: %d)...", toAdd, p.ItemName, inventoryCount))
 	for i := 0; i < toAdd; i++ {
 		a.tradeMu.Lock()
-		if !a.tradeActive { 
+		if !a.tradeActive {
 			a.AddLog("Adding items aborted: trade closed unexpectedly.")
-			return 
+			return
 		}
 		a.tradeMu.Unlock()
 
@@ -1063,30 +1242,30 @@ func (a *App) automateTrade(p *Payout) {
 	for attempt := 1; attempt <= 3; attempt++ {
 		time.Sleep(1500 * time.Millisecond)
 		a.tradeMu.Lock()
-		if !a.tradeActive { 
+		if !a.tradeActive {
 			a.tradeMu.Unlock()
-			return 
+			return
 		}
 		a.tradeMu.Unlock()
-		
+
 		a.ext.Send(g.Out.Id("TRADE_ACCEPT_OUT"))
 		a.AddLog(fmt.Sprintf("Sent TRADE_ACCEPT_OUT attempt %d/3", attempt))
 	}
-	
+
 	a.AddLog("Waiting for partner to accept and then confirmation stage (attempting stage 2 in 4s)...")
-	
+
 	for attempt := 1; attempt <= 5; attempt++ {
 		time.Sleep(4000 * time.Millisecond)
-		
+
 		a.tradeMu.Lock()
 		active := a.tradeActive
 		a.tradeMu.Unlock()
-		
+
 		if !active {
 			a.AddLog("Stage 2 aborted: trade closed (likely completed or cancelled).")
 			return
 		}
-		
+
 		if attempt == 1 {
 			a.AddLog("Capturing trade confirmation screenshot...")
 			go func() {
@@ -1096,7 +1275,7 @@ func (a *App) automateTrade(p *Payout) {
 				a.tradeMu.Unlock()
 			}()
 		}
-		
+
 		a.AddLog(fmt.Sprintf("Finalizing stage 2 (Confirm Trade) attempt %d/5...", attempt))
 		a.ext.Send(g.Out.Id("TRADE_CONFIRM_ACCEPT_OUT"))
 	}

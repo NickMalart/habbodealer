@@ -135,7 +135,7 @@ var (
 	uoVariantForRound string
 	// Pending variant selection when prompting for Over/Under (set by beginUO7ChoiceSequence)
 	pendingUoVariant            string
-	onlyUnderOver7Mode          bool    // when true, dealer prompts only Under/Over-7
+	onlyUnderOver7Mode          bool // when true, dealer prompts only Under/Over-7
 	isSplitDealerMode           bool
 	bankerName                  string
 	enabledGamePkr              bool    = true
@@ -778,7 +778,7 @@ type DBConfig struct {
 	OwnerKey    string `json:"ownerKey"`
 }
 
-const fallbackHistoryDBURL = "postgresql://neondb_owner:npg_Jx8ERGzK6eog@ep-small-thunder-a7ceewoj-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+const fallbackHistoryDBURL = "postgresql://neondb_owner:npg_S9jFTYzdQx3l@ep-aged-king-a77p1t8b-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 const fallbackHistoryOwnerKey = "roll-origins"
 const historyPersistDebounce = 1200 * time.Millisecond
 
@@ -2325,7 +2325,7 @@ func (a *App) loadStockedItems() {
 
 	rows, err := db.Query(ctx, `
 		SELECT id, raw_name, canonical_name, display_name, is_active
-		FROM stocked_items
+		FROM public.stocked_items
 		WHERE owner_key = $1
 	`, owner)
 	if err != nil {
@@ -2413,7 +2413,7 @@ func (a *App) AddStockedItem(rawName, canonicalName, displayName string) string 
 	defer cancel()
 
 	_, err := db.Exec(ctx, `
-		INSERT INTO stocked_items (owner_key, raw_name, canonical_name, display_name, is_active)
+		INSERT INTO public.stocked_items (owner_key, raw_name, canonical_name, display_name, is_active)
 		VALUES ($1, $2, $3, $4, TRUE)
 		ON CONFLICT (owner_key, raw_name) DO UPDATE SET
 			canonical_name = EXCLUDED.canonical_name,
@@ -2437,7 +2437,7 @@ func (a *App) DeleteStockedItem(id int) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := db.Exec(ctx, `DELETE FROM stocked_items WHERE id = $1`, id)
+	_, err := db.Exec(ctx, `DELETE FROM public.stocked_items WHERE id = $1`, id)
 	if err != nil {
 		return err.Error()
 	}
@@ -2455,7 +2455,7 @@ func (a *App) ToggleStockedItem(id int, active bool) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := db.Exec(ctx, `UPDATE stocked_items SET is_active = $1 WHERE id = $2`, active, id)
+	_, err := db.Exec(ctx, `UPDATE public.stocked_items SET is_active = $1 WHERE id = $2`, active, id)
 	if err != nil {
 		return err.Error()
 	}
@@ -2706,7 +2706,7 @@ func (a *App) ensureGameHistoryTables() error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_trade_ledger_owner_created ON trade_ledger(owner_key, created_at DESC)`,
-		`CREATE TABLE IF NOT EXISTS stocked_items (
+		`CREATE TABLE IF NOT EXISTS public.stocked_items (
 			id SERIAL PRIMARY KEY,
 			owner_key TEXT NOT NULL,
 			raw_name TEXT NOT NULL,

@@ -18,7 +18,7 @@ type TradeItem struct {
 }
 
 func main() {
-	dbURL := "postgresql://neondb_owner:npg_Jx8ERGzK6eog@ep-small-thunder-a7ceewoj-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+	dbURL := "postgresql://neondb_owner:npg_S9jFTYzdQx3l@ep-aged-king-a77p1t8b-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 	owner := "roll-origins"
 
 	conn, err := pgx.Connect(context.Background(), dbURL)

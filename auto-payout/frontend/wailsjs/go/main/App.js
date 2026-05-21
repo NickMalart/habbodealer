@@ -10,6 +10,10 @@ export function AddPayout(arg1, arg2, arg3) {
   return window['go']['main']['App']['AddPayout'](arg1, arg2, arg3);
 }
 
+export function AddStockedItem(arg1, arg2) {
+  return window['go']['main']['App']['AddStockedItem'](arg1, arg2);
+}
+
 export function ClearCompleted() {
   return window['go']['main']['App']['ClearCompleted']();
 }
@@ -18,12 +22,24 @@ export function DeletePayout(arg1) {
   return window['go']['main']['App']['DeletePayout'](arg1);
 }
 
+export function DeleteStockedItem(arg1) {
+  return window['go']['main']['App']['DeleteStockedItem'](arg1);
+}
+
+export function GetActiveStockedItemNames() {
+  return window['go']['main']['App']['GetActiveStockedItemNames']();
+}
+
 export function GetLogs() {
   return window['go']['main']['App']['GetLogs']();
 }
 
 export function GetPayouts() {
   return window['go']['main']['App']['GetPayouts']();
+}
+
+export function GetStockedItems() {
+  return window['go']['main']['App']['GetStockedItems']();
 }
 
 export function RefreshInventory() {
@@ -44,4 +60,8 @@ export function ShowWindow() {
 
 export function TogglePayoutStatus(arg1) {
   return window['go']['main']['App']['TogglePayoutStatus'](arg1);
+}
+
+export function ToggleStockedItem(arg1) {
+  return window['go']['main']['App']['ToggleStockedItem'](arg1);
 }
