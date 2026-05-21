@@ -968,14 +968,56 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 				a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
 				return
 			}
+			
+			// Validated: Automatically accept the trade (Stage 1)
+			go func() {
+				time.Sleep(1500 * time.Millisecond) // Give the game a moment to process their accept
+				a.tradeMu.Lock()
+				active := a.tradeActive
+				a.tradeMu.Unlock()
+				if active {
+					a.AddLog("Automatically accepting trade (Stage 1)...")
+					a.ext.Send(g.Out.Id("TRADE_ACCEPT_OUT"))
+				}
+			}()
+			
 		} else {
 			a.AddLog("[DEBUG] No active stocked items found in cache. This might be because the database fetch failed or no items are active. Allowing trade by default to prevent lockout.")
+			// Automatically accept the trade if filter is essentially disabled
+			go func() {
+				time.Sleep(1500 * time.Millisecond)
+				a.tradeMu.Lock()
+				active := a.tradeActive
+				a.tradeMu.Unlock()
+				if active {
+					a.AddLog("Automatically accepting trade (Stage 1 - No Filter)...")
+					a.ext.Send(g.Out.Id("TRADE_ACCEPT_OUT"))
+				}
+			}()
 		}
 	}
 }
 
 func (a *App) handlePartnerConfirm(e *g.Intercept) {
 	a.AddLog("Partner confirmed trade (Stage 2).")
+
+	if !a.payoutTradeSent {
+		// Automatically confirm the trade after 4 seconds (Stage 2)
+		go func() {
+			time.Sleep(4000 * time.Millisecond)
+			
+			a.tradeMu.Lock()
+			active := a.tradeActive
+			a.tradeMu.Unlock()
+			
+			if active {
+				a.AddLog("Automatically confirming trade (Stage 2)...")
+				a.ext.Send(g.Out.Id("TRADE_CONFIRM_ACCEPT_OUT"))
+			} else {
+				a.AddLog("Stage 2 aborted: trade closed before automatic confirm.")
+			}
+		}()
+	}
 }
 
 func (a *App) handleTradeClose(e *g.Intercept) {
