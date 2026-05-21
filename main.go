@@ -6012,7 +6012,43 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 		// Limit dealer risk to stock relevant to this bet so unrelated hand
 		// items cannot inflate the player's allowed risk amount.
 		initialQty := 0
-		if riskHandSnapshotReady && len(riskHandSnapshot) > 0 {
+		if isSplitDealerMode {
+			// In Split Dealer Mode, we query the banker_inventory table
+			db, _ := a.getHistoryDB()
+			if db != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				// Query the sum of quantities for all items in this bet
+				itemNames := make([]string, 0, len(betItems))
+				for _, it := range betItems {
+					itemNames = append(itemNames, it.Name)
+				}
+
+				var stock int
+				err := db.QueryRow(ctx, `
+					SELECT COALESCE(SUM(quantity), 0)
+					FROM banker_inventory
+					WHERE LOWER(item_name) = ANY(
+						SELECT LOWER(unnest($1::text[]))
+					)
+				`, itemNames).Scan(&stock)
+				cancel()
+
+				if err != nil {
+					a.AddLogMsg(fmt.Sprintf("[RISK] ERROR: failed to query banker inventory: %v. Using virtual bank.", err))
+					initialQty = 10000
+				} else if stock <= 0 {
+					a.AddLogMsg("[RISK] WARNING: Banker inventory reported 0 stock. Using virtual bank fallback.")
+					initialQty = 10000
+				} else {
+					initialQty = stock
+					a.AddLogMsg(fmt.Sprintf("[RISK] Set dealer bank to %d based on real banker stock", initialQty))
+				}
+			} else {
+				initialQty = 10000
+			}
+			dealerSnapshotQty = initialQty
+			riskSnapshotTaken = true
+		} else if riskHandSnapshotReady && len(riskHandSnapshot) > 0 {
 			initialQty = riskRelevantHandQuantity(riskHandSnapshot, betItems)
 			dealerSnapshotQty = initialQty
 			riskSnapshotTaken = true
@@ -6020,10 +6056,25 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 			initialQty = dealerSnapshotQty
 		}
 		dealerRisk = initialQty
-		playerRisk = 0
+		playerRisk = betQty // Fix: Start stake at the bet amount so win adds to it correctly
 		riskInitialized = true
 		riskPartnerID = playerID
 		riskPartnerName = playerName
+
+		// Initialize DB state for Split Mode
+		if isSplitDealerMode {
+			a.historyDBMu.Lock()
+			dbID := a.activeBankerTradeID
+			db := a.historyDB
+			a.historyDBMu.Unlock()
+			if dbID > 0 && db != nil {
+				go func(id, qty int) {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					_, _ = db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1, risk_status = 'playing' WHERE id = $2", qty, id)
+				}(dbID, betQty)
+			}
+		}
 	}
 
 	// Compute payout multiplier: support UO7 configured multiplier when applicable.
@@ -6039,12 +6090,37 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 	}
 	// Record the per-risk-session multiplier so re-rolls and finalization honor it.
 	riskSessionPayoutMultiplier = mult
-	payout := betQty * mult
-	if payout > dealerRisk {
-		payout = dealerRisk
+	
+	// The player wins "betQty * mult" total items (e.g., bet 1 * 2 = 2 total items).
+	// Because playerRisk is already initialized to the bet amount (e.g., 1),
+	// the actual net winnings added to their bank is betQty * (mult - 1).
+	netWin := betQty * (mult - 1)
+	if netWin > dealerRisk {
+		netWin = dealerRisk
 	}
-	dealerRisk -= payout
-	playerRisk += payout
+	dealerRisk -= netWin
+	playerRisk += netWin
+
+	// Sync Split Mode Bank to DB
+	if isSplitDealerMode {
+		a.historyDBMu.Lock()
+		dbID := a.activeBankerTradeID
+		db := a.historyDB
+		a.historyDBMu.Unlock()
+		if dbID > 0 && db != nil {
+			// Update DB bank immediately
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_, _ = db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1 WHERE id = $2", playerRisk, dbID)
+			cancel()
+			
+			// Optional: verify/read back to ensure 100% accuracy before shouting
+			var dbBank int
+			_ = db.QueryRow(context.Background(), "SELECT risk_bank FROM banker_trades WHERE id = $1", dbID).Scan(&dbBank)
+			if dbBank > 0 {
+				playerRisk = dbBank
+			}
+		}
+	}
 
 	// Snapshot current risk state into the active game history entry.
 	rp := riskPendingBet
@@ -6101,7 +6177,7 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 	riskSessionParams = params
 	mutex.Unlock()
 
-	a.AddLogMsg(fmt.Sprintf("[RISK] win recorded bet=%d payout=%d dealerRisk=%d playerRisk=%d", betQty, payout, dealerRisk, playerRisk))
+	a.AddLogMsg(fmt.Sprintf("[RISK] win recorded bet=%d netWin=%d dealerRisk=%d playerRisk=%d", betQty, netWin, dealerRisk, playerRisk))
 
 	// Send initial prompt (mute-aware) and start the risk-decision reminder monitor
 	go func(player string) {
@@ -6119,19 +6195,21 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 		// Belt-and-suspenders: validate live snapshot covers dealerRisk before
 		// prompting. If the snapshot is short (e.g. stale from a prior trade),
 		// cap dealerRisk so we never over-promise.
-		handItemsMu.Lock()
-		snap := make([]TradeItem, len(riskHandSnapshot))
-		copy(snap, riskHandSnapshot)
-		handItemsMu.Unlock()
-		liveCover := riskRelevantHandQuantity(snap, gameBetItems)
-		totalCommitted := playerRisk + dealerRisk
-		if liveCover < totalCommitted {
-			diff := totalCommitted - liveCover
-			if diff > dealerRisk {
-				diff = dealerRisk
+		if !isSplitDealerMode {
+			handItemsMu.Lock()
+			snap := make([]TradeItem, len(riskHandSnapshot))
+			copy(snap, riskHandSnapshot)
+			handItemsMu.Unlock()
+			liveCover := riskRelevantHandQuantity(snap, gameBetItems)
+			totalCommitted := playerRisk + dealerRisk
+			if liveCover < totalCommitted {
+				diff := totalCommitted - liveCover
+				if diff > dealerRisk {
+					diff = dealerRisk
+				}
+				a.AddLogMsg(fmt.Sprintf("[RISK] live cover %d < committed %d; capping dealerRisk by %d", liveCover, totalCommitted, diff))
+				dealerRisk -= diff
 			}
-			a.AddLogMsg(fmt.Sprintf("[RISK] live cover %d < committed %d; capping dealerRisk by %d", liveCover, totalCommitted, diff))
-			dealerRisk -= diff
 		}
 		if dealerRisk <= 0 {
 			mutex.Unlock()

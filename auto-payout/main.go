@@ -109,6 +109,10 @@ type App struct {
 	db             *pgxpool.Pool
 	dbConnString   string
 	discordWebhook string
+
+	// Track last reported inventory to DB to avoid redundant updates
+	lastInventoryReport string
+	lastInventoryMu     sync.Mutex
 }
 
 func NewApp() *App {
@@ -213,9 +217,12 @@ func (a *App) AddLog(msg string) {
 	if len(a.logs) > 50 {
 		a.logs = a.logs[len(a.logs)-50:]
 	}
+	logsCopy := make([]string, len(a.logs))
+	copy(logsCopy, a.logs)
 	a.logsMu.Unlock()
+	
 	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "logsUpdate", a.GetLogs())
+		go runtime.EventsEmit(a.ctx, "logsUpdate", logsCopy)
 	}
 }
 
@@ -273,6 +280,25 @@ func (a *App) startup(ctx context.Context) {
 	a.AddLog("Extension registered. Waiting for connection...")
 	go a.ext.Run()
 	go a.payoutMonitor()
+	go a.inventoryRefreshLoop()
+}
+
+func (a *App) inventoryRefreshLoop() {
+	// Initial refresh on startup
+	time.Sleep(5 * time.Second) // Wait for connection
+	a.RefreshInventory()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			a.RefreshInventory()
+		case <-a.ctx.Done():
+			return
+		}
+	}
 }
 
 func (a *App) initDatabase() {
@@ -517,7 +543,19 @@ func (a *App) RefreshQueue() {
 
 func (a *App) RefreshInventory() {
 	if a.ext != nil {
+		a.tradeMu.Lock()
+		inTrade := a.tradeActive
+		a.tradeMu.Unlock()
+
+		if inTrade {
+			return
+		}
+
 		a.stripScanMu.Lock()
+		if a.stripScanActive {
+			a.stripScanMu.Unlock()
+			return
+		}
 		a.stripScanActive = true
 		sessionID := a.stripScanSessionID + 1
 		a.stripScanSessionID = sessionID
@@ -529,7 +567,7 @@ func (a *App) RefreshInventory() {
 		a.ext.Send(g.Out.Id("GETSTRIP_OUT"), "new")
 
 		go func() {
-			time.Sleep(2 * time.Second) // 2 second timeout for inventory scan
+			time.Sleep(2500 * time.Millisecond) // Wait for scan
 			a.finalizeStripScan(sessionID)
 		}()
 	}
@@ -909,11 +947,73 @@ func (a *App) finalizeStripScan(sessionID int) {
 	a.stripScanActive = false
 	a.stripScanMu.Unlock()
 
+	// Only update if we actually got items OR if we are sure we aren't in a trade
+	// (Prevents wiping inventory if scan is blocked by a trade window)
+	a.tradeMu.Lock()
+	inTrade := a.tradeActive
+	a.tradeMu.Unlock()
+
+	if totalItems == 0 && inTrade {
+		a.AddLog("Hand scan returned 0 items while in trade (ignoring to prevent state loss).")
+		return
+	}
+
 	a.inventoryMu.Lock()
 	a.inventory = finalInventory
 	a.inventoryMu.Unlock()
 
-	a.AddLog(fmt.Sprintf("Hand scanning complete. Total: %d, Details: %s", totalItems, strings.Join(details, ", ")))
+	if totalItems > 0 {
+		a.AddLog(fmt.Sprintf("Hand scanning complete. Total: %d, Details: %s", totalItems, strings.Join(details, ", ")))
+	} else {
+		a.AddLog("Hand scanning complete. Hand is empty.")
+	}
+
+	// Report inventory to database
+	if a.db != nil {
+		// Create a string representation for change detection
+		reportStr := strings.Join(details, "|")
+		
+		a.lastInventoryMu.Lock()
+		changed := reportStr != a.lastInventoryReport
+		a.lastInventoryMu.Unlock()
+
+		if !changed {
+			// Skip DB update if nothing changed
+			return
+		}
+
+		a.bankerNameMu.Lock()
+		bName := a.bankerName
+		a.bankerNameMu.Unlock()
+
+		if bName == "" {
+			bName = "Auto Payout Bot" // fallback
+		}
+
+		go func(name, report string, inv map[string][]int) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			for itemName, ids := range inv {
+				qty := len(ids)
+				_, err := a.db.Exec(ctx, `
+					INSERT INTO banker_inventory (banker_name, item_name, quantity, updated_at)
+					VALUES ($1, $2, $3, NOW())
+					ON CONFLICT (banker_name, item_name) 
+					DO UPDATE SET quantity = EXCLUDED.quantity, updated_at = NOW()
+				`, name, itemName, qty)
+				if err != nil {
+					log.Printf("[INVENTORY_DB] ERROR: failed to update %s for %s: %v", itemName, name, err)
+				}
+			}
+
+			a.lastInventoryMu.Lock()
+			a.lastInventoryReport = report
+			a.lastInventoryMu.Unlock()
+
+			log.Printf("[INVENTORY_DB] Successfully reported %d item types for %s", len(inv), name)
+		}(bName, reportStr, finalInventory)
+	}
 }
 
 func (a *App) handleUserObject(e *g.Intercept) {
@@ -960,14 +1060,21 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 
 		// Try to resolve name immediately
 		a.roomUsersMu.RLock()
+		found := false
 		for _, u := range a.roomUsers {
 			if u.TradeID == id {
 				a.lastTradePartner = u.Username
 				a.lastTradePartnerChatID = u.ChatID
+				a.AddLog(fmt.Sprintf("Trade window opened with %s (TradeID:%d, ChatID:%d).", u.Username, id, u.ChatID))
+				found = true
 				break
 			}
 		}
 		a.roomUsersMu.RUnlock()
+
+		if !found {
+			a.AddLog(fmt.Sprintf("Trade window opened with TradeID %d (resolving name...). Note: user might not be in room map yet.", id))
+		}
 	}
 	a.tradeMu.Unlock()
 
@@ -986,7 +1093,8 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 func (a *App) handleTradeItems(e *g.Intercept) {
 	a.tradeMu.Lock()
 	a.currentTradeItems = string(e.Packet.Data)
-	a.lastTradeItems = a.parseTradeItems(e.Packet.Data)
+	allowedCache := a.allowedNamesCache
+	a.lastTradeItems = a.parseTradeItems(e.Packet.Data, allowedCache)
 	a.tradeMu.Unlock()
 	a.AddLog(fmt.Sprintf("[DEBUG] TRADE_ITEMS updated, found %d items", len(a.lastTradeItems)))
 }
@@ -1002,9 +1110,15 @@ func decodeLeadingVL64(data []byte) (int, bool) {
 	return gencoding.VL64Decode(data[:n]), true
 }
 
-func (a *App) parseTradeItems(data []byte) []TradeItem {
+func (a *App) parseTradeItems(data []byte, allowedNamesCache []string) []TradeItem {
 	counts := map[string]int{}
 	fields := bytes.Split(data, []byte{0x02})
+
+	allowed := make(map[string]bool)
+	for _, n := range allowedNamesCache {
+		allowed[strings.ToLower(strings.TrimSpace(n))] = true
+	}
+
 	for _, field := range fields {
 		if len(field) == 0 {
 			continue
@@ -1014,42 +1128,29 @@ func (a *App) parseTradeItems(data []byte) []TradeItem {
 			continue
 		}
 
-		// Improved heuristic: allow uppercase and check for known patterns
+		lowName := strings.ToLower(s)
+
+		// Filter out known packet fragments/metadata that are NOT physical items
+		if lowName == "credit" || lowName == "pixel" || lowName == "shell" || 
+		   strings.HasPrefix(lowName, "ii") || strings.HasPrefix(lowName, "ih") ||
+		   len(lowName) < 3 {
+			continue
+		}
+
 		isItem := false
-		if strings.Contains(s, "*") {
-			isItem = true
-		} else if strings.Contains(s, "|") {
-			// Handle cases like "jXu|HYDHCF_50_goldbar"
-			parts := strings.Split(s, "|")
-			s = parts[len(parts)-1]
-			isItem = true
-		} else if strings.Contains(s, "{") {
-			parts := strings.Split(s, "{")
-			s = parts[len(parts)-1]
+		// 1. Check if it's in our allowed/stocked list
+		if allowed[lowName] {
 			isItem = true
 		} else {
-			// Check if it's all letters/underscores/numbers
-			allLetters := true
-			hasLetters := false
-			for _, r := range s {
-				if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
-					if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_' {
-						hasLetters = true
-					}
-					continue
-				}
-				allLetters = false
-				break
-			}
-			if allLetters && hasLetters && len(s) > 3 {
+			// 2. Fallback heuristic for Habbo class names
+			// Usually starts with cf_ (currency) or contains underscores and numbers
+			if strings.HasPrefix(lowName, "cf_") || strings.Contains(lowName, "_") {
 				isItem = true
 			}
 		}
 
 		if isItem {
-			// Normalize name for counting
-			name := strings.ToLower(s)
-			counts[name]++
+			counts[lowName]++
 		}
 	}
 
@@ -1127,8 +1228,9 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 		a.tradeMu.Unlock()
 
 		// SECURITY: Ensure we have a valid identified partner before accepting any items
-		if partnerName == "" || partnerTradeID == 0 {
-			a.AddLog("[SECURITY] Blocking trade: Partner identity (Name/TradeID) could not be verified from room data.")
+		// Note: Room index 0 is valid, so we only check if partnerName is resolved
+		if partnerName == "" {
+			a.AddLog("[SECURITY] Blocking trade: Partner identity (Name) could not be verified from room data.")
 			e.Block()
 			a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
 			return
