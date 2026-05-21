@@ -367,6 +367,17 @@ func (a *App) loadPayoutsFromDB() {
 		a.AddLog("ERROR: DB query failed: " + err.Error())
 	}
 	a.pMu.Lock()
+	existing := make(map[string]string)
+	for _, p := range a.payouts {
+		if p.Status == "Trading" || p.Status == "In Room" {
+			existing[p.ID] = p.Status
+		}
+	}
+	for i, p := range payouts {
+		if st, ok := existing[p.ID]; ok {
+			payouts[i].Status = st
+		}
+	}
 	a.payouts = payouts
 	a.pMu.Unlock()
 	a.emitUpdate()
@@ -700,8 +711,8 @@ func (a *App) handleTradeClose(e *g.Intercept) {
 		wasCompleted := a.tradeCompleted
 		a.tradeActive = false
 		a.payoutPending = false // Reset pending flag on close
-		a.tradeCompleted = false
 		a.activeTradePartner = ""
+		// Do NOT reset a.tradeCompleted here, otherwise it might be cleared before we check it
 		a.tradeMu.Unlock()
 
 		if partner != "" && !wasCompleted {
