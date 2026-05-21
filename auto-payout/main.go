@@ -53,6 +53,12 @@ type ParsedUsers28User struct {
 	TokenHex string `json:"token_hex"`
 }
 
+type TradeItem struct {
+	Name     string `json:"name"`
+	Quantity int    `json:"quantity"`
+	RawData  string `json:"raw_data,omitempty"`
+}
+
 type App struct {
 	ctx     context.Context
 	ext     *g.Ext
@@ -79,15 +85,23 @@ type App struct {
 	inventoryMu sync.RWMutex
 
 	// Trade state
-	activeTradePartner string
-	activeTradeTarget  int
-	tradeActive        bool
-	tradeAccepted      bool
-	payoutTradeSent    bool
-	currentTradeItems  string
-	allowedNamesCache  []string
-	lastScreenshotPath string
-	tradeMu            sync.Mutex
+	activeTradePartner     string
+	activeTradeTarget      int
+	tradeActive            bool
+	tradeAccepted          bool
+	payoutTradeSent        bool
+	currentTradeItems      string
+	lastTradeItems         []TradeItem
+	lastTradePartner       string
+	lastTradePartnerID     int
+	lastTradePartnerChatID int
+	allowedNamesCache      []string
+	lastScreenshotPath     string
+	tradeMu                sync.Mutex
+
+	// Banker state
+	bankerName   string
+	bankerNameMu sync.RWMutex
 
 	// Config & DB
 	pythonExec     string
@@ -233,6 +247,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext.Headers().Add("TRADE_CLOSE_IN", g.Header{Dir: g.In, Value: 110})
 	a.ext.Headers().Add("TRADE_COMPLETED_IN", g.Header{Dir: g.In, Value: 112})
 	a.ext.Headers().Add("TRADE_ITEMS_IN", g.Header{Dir: g.In, Value: 108})
+	a.ext.Headers().Add("USER_OBJECT_IN", g.Header{Dir: g.In, Value: 5})
 
 	a.ext.Headers().Add("GETSTRIP_OUT", g.Header{Dir: g.Out, Value: 65})
 	a.ext.Headers().Add("TRADE_OPEN_OUT", g.Header{Dir: g.Out, Value: 71})
@@ -242,6 +257,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext.Headers().Add("TRADE_CONFIRM_ACCEPT_OUT", g.Header{Dir: g.Out, Value: 402})
 
 	a.ext.Intercept(in.USERS, in.SPACENODEUSERS).With(a.handleRoomUsers)
+	a.ext.Intercept(g.In.Id("USER_OBJECT_IN")).With(a.handleUserObject)
 	a.ext.Intercept(g.In.Id("STRIPINFO_IN"), g.In.Id("STRIPINFO_98_IN")).With(a.handleStripInfo)
 	a.ext.Intercept(g.In.Id("TRADE_OPEN_IN")).With(a.handleTradeOpen)
 	a.ext.Intercept(g.In.Id("TRADE_ACCEPT_IN")).With(a.handlePartnerAccept)
@@ -900,12 +916,59 @@ func (a *App) finalizeStripScan(sessionID int) {
 	a.AddLog(fmt.Sprintf("Hand scanning complete. Total: %d, Details: %s", totalItems, strings.Join(details, ", ")))
 }
 
+func (a *App) handleUserObject(e *g.Intercept) {
+	data := e.Packet.Data
+	if len(data) < 2 {
+		return
+	}
+	// ID is first VL64
+	n := gencoding.VL64DecodeLen(data[0])
+	if n <= 0 || len(data) < n {
+		return
+	}
+	pos := n
+	// Name is next string
+	if pos >= len(data) {
+		return
+	}
+	nameLen := int(data[pos])
+	pos++
+	if pos+nameLen > len(data) {
+		return
+	}
+	name := string(data[pos : pos+nameLen])
+	a.bankerNameMu.Lock()
+	a.bankerName = name
+	a.bankerNameMu.Unlock()
+	a.AddLog(fmt.Sprintf("Banker identified: %s", name))
+}
+
 func (a *App) handleTradeOpen(e *g.Intercept) {
 	a.tradeMu.Lock()
 	a.tradeActive = true
 	a.tradeAccepted = false
-	a.currentTradeItems = "" // Clear items from previous trade
+	a.currentTradeItems = ""
+	a.lastTradeItems = nil
+	a.lastTradePartner = ""
+	a.lastTradePartnerID = 0
+	a.lastTradePartnerChatID = 0
 	a.allowedNamesCache = []string{}
+
+	if id, ok := decodeLeadingVL64(e.Packet.Data); ok {
+		a.activeTradeTarget = id
+		a.lastTradePartnerID = id
+
+		// Try to resolve name immediately
+		a.roomUsersMu.RLock()
+		for _, u := range a.roomUsers {
+			if u.TradeID == id {
+				a.lastTradePartner = u.Username
+				a.lastTradePartnerChatID = u.ChatID
+				break
+			}
+		}
+		a.roomUsersMu.RUnlock()
+	}
 	a.tradeMu.Unlock()
 
 	// Fetch active stocked items immediately on trade open
@@ -923,8 +986,131 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 func (a *App) handleTradeItems(e *g.Intercept) {
 	a.tradeMu.Lock()
 	a.currentTradeItems = string(e.Packet.Data)
+	a.lastTradeItems = a.parseTradeItems(e.Packet.Data)
 	a.tradeMu.Unlock()
-	a.AddLog(fmt.Sprintf("[DEBUG] TRADE_ITEMS updated, packet len: %d", len(e.Packet.Data)))
+	a.AddLog(fmt.Sprintf("[DEBUG] TRADE_ITEMS updated, found %d items", len(a.lastTradeItems)))
+}
+
+func decodeLeadingVL64(data []byte) (int, bool) {
+	if len(data) == 0 {
+		return 0, false
+	}
+	n := gencoding.VL64DecodeLen(data[0])
+	if n <= 0 || len(data) < n {
+		return 0, false
+	}
+	return gencoding.VL64Decode(data[:n]), true
+}
+
+func (a *App) parseTradeItems(data []byte) []TradeItem {
+	counts := map[string]int{}
+	fields := bytes.Split(data, []byte{0x02})
+	for _, field := range fields {
+		if len(field) == 0 {
+			continue
+		}
+		s := strings.TrimSpace(string(field))
+		if s == "" {
+			continue
+		}
+
+		// Improved heuristic: allow uppercase and check for known patterns
+		isItem := false
+		if strings.Contains(s, "*") {
+			isItem = true
+		} else if strings.Contains(s, "|") {
+			// Handle cases like "jXu|HYDHCF_50_goldbar"
+			parts := strings.Split(s, "|")
+			s = parts[len(parts)-1]
+			isItem = true
+		} else if strings.Contains(s, "{") {
+			parts := strings.Split(s, "{")
+			s = parts[len(parts)-1]
+			isItem = true
+		} else {
+			// Check if it's all letters/underscores/numbers
+			allLetters := true
+			hasLetters := false
+			for _, r := range s {
+				if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+					if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_' {
+						hasLetters = true
+					}
+					continue
+				}
+				allLetters = false
+				break
+			}
+			if allLetters && hasLetters && len(s) > 3 {
+				isItem = true
+			}
+		}
+
+		if isItem {
+			// Normalize name for counting
+			name := strings.ToLower(s)
+			counts[name]++
+		}
+	}
+
+	var items []TradeItem
+	for name, qty := range counts {
+		items = append(items, TradeItem{Name: name, Quantity: qty})
+	}
+	return items
+}
+
+func (a *App) recordBankerTrade(playerName string, items []TradeItem, tradeID int, chatID int) {
+	if a.db == nil {
+		a.AddLog("ERROR: recordBankerTrade failed - Database not connected")
+		return
+	}
+
+	if len(items) == 0 {
+		a.AddLog(fmt.Sprintf("WARNING: recordBankerTrade skipped for %s - no items parsed", playerName))
+		return
+	}
+
+	a.bankerNameMu.RLock()
+	banker := a.bankerName
+	a.bankerNameMu.RUnlock()
+	if banker == "" {
+		banker = "Auto Payout Bot"
+	}
+
+	type BankerBetItem struct {
+		RawName string `json:"raw_name"`
+		Qty     int    `json:"qty"`
+	}
+
+	bankerItems := make([]BankerBetItem, 0, len(items))
+	for _, it := range items {
+		bankerItems = append(bankerItems, BankerBetItem{
+			RawName: it.Name,
+			Qty:     it.Quantity,
+		})
+	}
+
+	itemsJSON, err := json.Marshal(bankerItems)
+	if err != nil {
+		a.AddLog(fmt.Sprintf("ERROR: failed to marshal bet items: %v", err))
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		_, err := a.db.Exec(ctx, `
+			INSERT INTO public.banker_trades (player_name, bet_items, banker_name, status, created_at, player_trade_id, player_chat_id)
+			VALUES ($1, $2, $3, $4, NOW(), $5, $6)
+		`, playerName, itemsJSON, banker, "pending", tradeID, chatID)
+		if err != nil {
+			a.AddLog(fmt.Sprintf("ERROR: [BANKER][DB] failed to record trade: %v", err))
+		} else {
+			a.AddLog(fmt.Sprintf("SUCCESS: [BANKER] recorded trade from %s with %d item(s)", playerName, len(items)))
+		}
+	}()
 }
 
 func (a *App) handlePartnerAccept(e *g.Intercept) {
@@ -935,10 +1121,21 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 		a.tradeMu.Lock()
 		allowedNames := a.allowedNamesCache
 		items := a.currentTradeItems
+		partnerName := a.lastTradePartner
+		partnerTradeID := a.lastTradePartnerID
+		partnerChatID := a.lastTradePartnerChatID
 		a.tradeMu.Unlock()
 
+		// SECURITY: Ensure we have a valid identified partner before accepting any items
+		if partnerName == "" || partnerTradeID == 0 {
+			a.AddLog("[SECURITY] Blocking trade: Partner identity (Name/TradeID) could not be verified from room data.")
+			e.Block()
+			a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+			return
+		}
+
 		// Verbose debugging
-		a.AddLog(fmt.Sprintf("[DEBUG] Validating trade. Allowed items: %v", allowedNames))
+		a.AddLog(fmt.Sprintf("[DEBUG] Validating trade for %s (ID:%d, ChatID:%d). Allowed items: %v", partnerName, partnerTradeID, partnerChatID, allowedNames))
 		// Log a safe version of the packet data (printable chars only)
 		safeItems := ""
 		for _, b := range []byte(items) {
@@ -1058,13 +1255,30 @@ func (a *App) handleTradeClose(e *g.Intercept) {
 }
 
 func (a *App) handleTradeCompleted(e *g.Intercept) {
+	a.AddLog("TRADE_COMPLETED packet intercepted.")
 	a.tradeMu.Lock()
 	partner := a.activeTradePartner
 	screenshotPath := a.lastScreenshotPath
+	payoutSent := a.payoutTradeSent
+	
+	lastPartner := a.lastTradePartner
+	lastItems := a.lastTradeItems
+	lastTradeID := a.lastTradePartnerID
+	lastChatID := a.lastTradePartnerChatID
+
 	a.tradeActive = false
 	a.activeTradePartner = ""
 	a.lastScreenshotPath = ""
 	a.tradeMu.Unlock()
+
+	// If it was a bet (incoming trade), record to banker_trades
+	if !payoutSent && len(lastItems) > 0 {
+		name := lastPartner
+		if name == "" {
+			name = "Unknown"
+		}
+		a.recordBankerTrade(name, lastItems, lastTradeID, lastChatID)
+	}
 
 	if partner != "" {
 		a.pMu.Lock()
