@@ -85,6 +85,10 @@ type App struct {
 
 	recentOutgoingMu sync.Mutex
 	recentOutgoing   []int
+
+	botName    string
+	ownChatID  int
+	ownTradeID int
 }
 
 func NewApp() *App {
@@ -567,8 +571,54 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 	}
 
 	// Authorize if we just opened this, or if the person has a pending payout
-	matchedID, authorized := a.matchesRecentOutgoing(e.Packet.Data)
-	
+	matchedID, matched := a.matchesRecentOutgoing(e.Packet.Data)
+	authorized := matched
+
+	// Auto-discovery of our own ID
+	if matched {
+		pos := 0
+		data := e.Packet.Data
+		for pos < len(data) {
+			vlen := gencoding.VL64DecodeLen(data[pos])
+			if vlen > 0 && pos+vlen <= len(data) {
+				id := gencoding.VL64Decode(data[pos : pos+vlen])
+				if id != matchedID {
+					a.ownChatID = id
+					if name := a.lookupNameByID(id); name != "" {
+						if a.botName == "" {
+							a.botName = name
+							a.AddLog(fmt.Sprintf("Auto-discovered bot identity: %s (id:%d)", a.botName, id))
+						}
+					}
+					break
+				}
+			}
+			pos += vlen
+		}
+	}
+
+	// Involved Check: Ignore trades that don't involve us
+	if a.ownChatID > 0 {
+		involved := false
+		pos := 0
+		data := e.Packet.Data
+		for pos < len(data) {
+			vlen := gencoding.VL64DecodeLen(data[pos])
+			if vlen > 0 && pos+vlen <= len(data) {
+				id := gencoding.VL64Decode(data[pos : pos+vlen])
+				if id == a.ownChatID || (a.ownTradeID > 0 && id == a.ownTradeID) {
+					involved = true
+					break
+				}
+			}
+			pos += vlen
+		}
+		if !involved && !matched {
+			// This trade is between two other people. Ignore it.
+			return
+		}
+	}
+
 	a.tradeMu.Lock()
 	pPending := a.payoutPending
 	pPartner := a.activeTradePartner
@@ -606,11 +656,17 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 	if !authorized {
 		a.AddLog(fmt.Sprintf("Blocked unauthorized incoming trade request from %s (id:%d).", partnerName, partnerID))
 		e.Block()
-		a.ext.Send(g.In.Id("TRADE_CLOSE_IN"), []byte{0x40})
+		// Do NOT send TRADE_CLOSE_IN here, as it will close an existing active trade
 		return
 	}
 
 	a.tradeMu.Lock()
+	if a.tradeActive {
+		a.tradeMu.Unlock()
+		a.AddLog(fmt.Sprintf("Ignored trade request from %s (id:%d) because a trade is already active.", partnerName, partnerID))
+		e.Block()
+		return
+	}
 	a.tradeActive = true
 	a.payoutPending = false // Reset pending flag as trade is now officially open
 	a.tradeAccepted = false
@@ -802,12 +858,13 @@ func (a *App) payoutMonitor() {
 		a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), user.ChatID)
 
 		// Start a timeout monitor to clear 'pending' if the trade never opens
-		go func(id string) {
+		go func(id string, expectedPartner string) {
 			time.Sleep(10 * time.Second)
 			a.tradeMu.Lock()
-			if a.payoutPending && !a.tradeActive {
+			if a.payoutPending && !a.tradeActive && a.activeTradePartner == expectedPartner {
 				a.AddLog("Payout trade request timed out. Resetting state.")
 				a.payoutPending = false
+				a.activeTradePartner = "" // Clear the expected partner since we failed
 				a.tradeMu.Unlock()
 				a.pMu.Lock()
 				for i, p := range a.payouts {
@@ -820,7 +877,7 @@ func (a *App) payoutMonitor() {
 				return
 			}
 			a.tradeMu.Unlock()
-		}(target.ID)
+		}(target.ID, target.Name)
 
 		go a.automateTrade(&target)
 	}

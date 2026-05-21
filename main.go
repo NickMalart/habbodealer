@@ -808,6 +808,9 @@ type App struct {
 	// currentBankerTradeID tracks the ID of the pending trade from the
 	// banker_trades table that this dealer instance is currently processing.
 	currentBankerTradeID int
+
+	ownChatID  int
+	ownTradeID int
 }
 
 type DBConfig struct {
@@ -4625,6 +4628,27 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 	// TRADE_OPEN incoming 104
 	if e.Packet.Header.Value == 104 {
+		// IGNORE trades that don't involve us (the bot).
+		// In Shockwave, the TRADE_OPEN packet contains the IDs of both participants.
+		// If neither ID matches our own known index/id, then this packet was broadcast
+		// to the whole room and we are merely an observer.
+		if a.ownChatID > 0 || a.ownTradeID > 0 {
+			involved := false
+			if a.ownChatID > 0 && packetContainsVL64Value(e.Packet.Data, a.ownChatID) {
+				involved = true
+			}
+			if !involved && a.ownTradeID > 0 && packetContainsVL64Value(e.Packet.Data, a.ownTradeID) {
+				involved = true
+			}
+
+			if !involved {
+				// We are not involved in this trade. Completely ignore it.
+				// We do NOT block it because that would stop other extensions from seeing it,
+				// and we definitely don't send TRADE_CLOSE because it's not our trade.
+				return
+			}
+		}
+
 		if fulfillmentMode {
 			// Identify incoming partner
 			partnerName := ""
@@ -7612,6 +7636,13 @@ func handleUsers28Packet(a *App, e *g.Intercept) {
 		canonical := strings.ToLower(strings.TrimSpace(normalizeUsers28Name(u.Username, u.TokenHex)))
 		if canonical == "" {
 			canonical = strings.ToLower(username)
+		}
+
+		// Identify if this is our own user
+		if strings.EqualFold(username, a.currentDealerName) {
+			a.ownChatID = u.ChatID
+			a.ownTradeID = u.TradeID
+			a.AddLogMsg(fmt.Sprintf("[ROOM_USERS] identified ourself: chat_id=%d trade_id=%d", a.ownChatID, a.ownTradeID))
 		}
 
 		oldUser, exists := users28Canonical[canonical]
