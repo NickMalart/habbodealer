@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"database/sql"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -36,6 +38,7 @@ type Payout struct {
 	Quantity  int    `json:"quantity"`
 	Status    string `json:"status"` // "Pending", "In Room", "Trading", "Completed", "Failed", "Disabled"
 	CreatedAt string `json:"createdAt"`
+	TradeID   int    `json:"playerTradeId,omitempty"`
 }
 
 type StockedItem struct {
@@ -322,7 +325,8 @@ func (a *App) initDatabase() {
 		item_name TEXT NOT NULL,
 		quantity INTEGER NOT NULL,
 		status TEXT NOT NULL,
-		created_at TEXT NOT NULL
+		created_at TEXT NOT NULL,
+		player_trade_id INTEGER NULL
 	);`
 	_, err = a.db.Exec(context.Background(), query)
 	if err != nil {
@@ -450,11 +454,29 @@ func (a *App) AddPayout(name, itemName string, qty int) {
 	a.AddLog(fmt.Sprintf("Adding payout: %s x %d %s", p.Name, p.Quantity, p.ItemName))
 
 	if a.db != nil {
-		_, err := a.db.Exec(context.Background(),
-			"INSERT INTO public.auto_payouts (id, player_name, item_name, quantity, status, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
-			p.ID, p.Name, p.ItemName, p.Quantity, p.Status, p.CreatedAt)
-		if err != nil {
-			a.AddLog("ERROR: DB Save failed: " + err.Error())
+		ctx := context.Background()
+		var playerTrade sql.NullInt64
+		// Prefer any banker_trades currently marked as 'paying'
+		err := a.db.QueryRow(ctx, "SELECT player_trade_id FROM public.banker_trades WHERE player_name = $1 AND status = 'paying' ORDER BY created_at DESC LIMIT 1", p.Name).Scan(&playerTrade)
+		if err != nil || !playerTrade.Valid {
+			// Fallback to the most recent banker_trades row for this player
+			_ = a.db.QueryRow(ctx, "SELECT player_trade_id FROM public.banker_trades WHERE player_name = $1 ORDER BY created_at DESC LIMIT 1", p.Name).Scan(&playerTrade)
+		}
+
+		var tradeParam interface{}
+		if playerTrade.Valid {
+			tradeParam = playerTrade.Int64
+			a.AddLog(fmt.Sprintf("DB: attaching player_trade_id=%d to new auto_payout for %s", playerTrade.Int64, p.Name))
+		} else {
+			tradeParam = nil
+			a.AddLog(fmt.Sprintf("DB: no player_trade_id found for %s; inserting NULL", p.Name))
+		}
+
+		_, err2 := a.db.Exec(ctx,
+			"INSERT INTO public.auto_payouts (id, player_name, item_name, quantity, status, created_at, player_trade_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+			p.ID, p.Name, p.ItemName, p.Quantity, p.Status, p.CreatedAt, tradeParam)
+		if err2 != nil {
+			a.AddLog("ERROR: DB Save failed: " + err2.Error())
 		}
 	}
 
@@ -685,11 +707,11 @@ func (a *App) loadPayoutsFromDB() {
 	count := 0
 
 	// Manual entries from public.auto_payouts table
-	rows, err := a.db.Query(context.Background(), "SELECT id, player_name, item_name, quantity, status, created_at FROM public.auto_payouts WHERE status != 'Completed' ORDER BY created_at DESC")
+	rows, err := a.db.Query(context.Background(), "SELECT id, player_name, item_name, quantity, status, created_at, COALESCE(player_trade_id,0) FROM public.auto_payouts WHERE status != 'Completed' ORDER BY created_at DESC")
 	if err == nil {
 		for rows.Next() {
 			var p Payout
-			if err := rows.Scan(&p.ID, &p.Name, &p.ItemName, &p.Quantity, &p.Status, &p.CreatedAt); err == nil {
+			if err := rows.Scan(&p.ID, &p.Name, &p.ItemName, &p.Quantity, &p.Status, &p.CreatedAt, &p.TradeID); err == nil {
 				p.Name = normalizeName(p.Name)
 				payouts = append(payouts, p)
 				count++
@@ -1415,11 +1437,16 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 				a.sendDiscordNotification(a.payouts[i], screenshotPath)
 				// Also mark any associated banker_trades as completed so the dealer bot re-opens
 				if a.db != nil {
-					_, err := a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE player_name = $1 AND status = 'paying'", p.Name)
-					if err != nil {
-						a.AddLog(fmt.Sprintf("ERROR: Failed to update banker_trades for %s: %v", p.Name, err))
+					var err error
+					if p.TradeID > 0 {
+						_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE player_trade_id = $1 AND status = 'paying'", p.TradeID)
 					} else {
-						a.AddLog(fmt.Sprintf("Marked banker_trades for %s as completed", p.Name))
+						_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE player_name = $1 AND status = 'paying'", p.Name)
+					}
+					if err != nil {
+						a.AddLog(fmt.Sprintf("ERROR: Failed to update banker_trades for %s/%d: %v", p.Name, p.TradeID, err))
+					} else {
+						a.AddLog(fmt.Sprintf("Marked banker_trades for %s/%d as completed", p.Name, p.TradeID))
 					}
 				}
 			}

@@ -5678,6 +5678,18 @@ func startPayout(a *App, targetID int, targetName string) {
 						a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] banker_trades %d marked as paying", id))
 					}
 
+					// Fetch player_trade_id from banker_trades so auto-payer knows who to trade with
+					var playerTradeID int
+					var dbBank int
+					if err := db.QueryRow(ctx, "SELECT COALESCE(player_trade_id,0), COALESCE(risk_bank,0) FROM banker_trades WHERE id = $1", id).Scan(&playerTradeID, &dbBank); err != nil {
+						// If not found or null, default to 0 and continue; log for visibility
+						a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] could not fetch player_trade_id/risk_bank for banker_trades %d: %v", id, err))
+						playerTradeID = 0
+						dbBank = 0
+					} else {
+						a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] fetched player_trade_id=%d risk_bank=%d for banker_trades %d", playerTradeID, dbBank, id))
+					}
+
 					// Insert auto_payouts entries (one per payout item)
 					for _, it := range items {
 						// Use the canonical parsed Name (which should match stocked_items.raw_name when available)
@@ -5685,11 +5697,11 @@ func startPayout(a *App, targetID int, targetName string) {
 						pid := fmt.Sprintf("%d", time.Now().UnixNano())
 						created := time.Now().Format("2006-01-02 15:04:05")
 						qty := it.Quantity
-						_, err := db.Exec(ctx, "INSERT INTO public.auto_payouts (id, player_name, item_name, quantity, status, created_at) VALUES ($1, $2, $3, $4, $5, $6)", pid, player, itemName, qty, "Pending", created)
+						_, err := db.Exec(ctx, "INSERT INTO public.auto_payouts (id, player_name, item_name, quantity, status, created_at, player_trade_id, banker_trade_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", pid, player, itemName, qty, "Pending", created, playerTradeID, id)
 						if err != nil {
 							a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] ERROR: failed to insert auto_payout for %s: %v", player, err))
 						} else {
-							a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] queued auto_payout for %s: %s x%d", player, itemName, qty))
+							a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] queued auto_payout for %s: %s x%d (trade_id=%d)", player, itemName, qty, playerTradeID))
 						}
 						// Small pause to avoid identical timestamps
 						time.Sleep(15 * time.Millisecond)
