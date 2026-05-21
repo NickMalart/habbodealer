@@ -220,7 +220,7 @@ func (a *App) AddLog(msg string) {
 	logsCopy := make([]string, len(a.logs))
 	copy(logsCopy, a.logs)
 	a.logsMu.Unlock()
-	
+
 	if a.ctx != nil {
 		go runtime.EventsEmit(a.ctx, "logsUpdate", logsCopy)
 	}
@@ -972,7 +972,7 @@ func (a *App) finalizeStripScan(sessionID int) {
 	if a.db != nil {
 		// Create a string representation for change detection
 		reportStr := strings.Join(details, "|")
-		
+
 		a.lastInventoryMu.Lock()
 		changed := reportStr != a.lastInventoryReport
 		a.lastInventoryMu.Unlock()
@@ -1130,10 +1130,27 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string) []TradeIt
 
 		lowName := strings.ToLower(s)
 
+		// Quick substring match against active stocked items (allowed map keys)
+		best := ""
+		for n := range allowed {
+			if n == "" {
+				continue
+			}
+			if strings.Contains(lowName, n) {
+				if len(n) > len(best) {
+					best = n
+				}
+			}
+		}
+		if best != "" {
+			counts[best]++
+			continue
+		}
+
 		// Filter out known packet fragments/metadata that are NOT physical items
-		if lowName == "credit" || lowName == "pixel" || lowName == "shell" || 
-		   strings.HasPrefix(lowName, "ii") || strings.HasPrefix(lowName, "ih") ||
-		   len(lowName) < 3 {
+		if lowName == "credit" || lowName == "pixel" || lowName == "shell" ||
+			strings.HasPrefix(lowName, "ii") || strings.HasPrefix(lowName, "ih") ||
+			len(lowName) < 3 {
 			continue
 		}
 
@@ -1267,7 +1284,7 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 				a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
 				return
 			}
-			
+
 			// Validated: Automatically accept the trade (Stage 1)
 			go func() {
 				time.Sleep(1500 * time.Millisecond) // Give the game a moment to process their accept
@@ -1279,7 +1296,7 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 					a.ext.Send(g.Out.Id("TRADE_ACCEPT_OUT"))
 				}
 			}()
-			
+
 		} else {
 			a.AddLog("[DEBUG] No active stocked items found in cache. This might be because the database fetch failed or no items are active. Allowing trade by default to prevent lockout.")
 			// Automatically accept the trade if filter is essentially disabled
@@ -1304,11 +1321,11 @@ func (a *App) handlePartnerConfirm(e *g.Intercept) {
 		// Automatically confirm the trade after 4 seconds (Stage 2)
 		go func() {
 			time.Sleep(4000 * time.Millisecond)
-			
+
 			a.tradeMu.Lock()
 			active := a.tradeActive
 			a.tradeMu.Unlock()
-			
+
 			if active {
 				a.AddLog("Automatically confirming trade (Stage 2)...")
 				a.ext.Send(g.Out.Id("TRADE_CONFIRM_ACCEPT_OUT"))
@@ -1362,7 +1379,7 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 	partner := a.activeTradePartner
 	screenshotPath := a.lastScreenshotPath
 	payoutSent := a.payoutTradeSent
-	
+
 	lastPartner := a.lastTradePartner
 	lastItems := a.lastTradeItems
 	lastTradeID := a.lastTradePartnerID
@@ -1396,6 +1413,15 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 				}
 				a.AddLog(fmt.Sprintf("Payout for %s SUCCESSFUL. Items delivered.", partner))
 				a.sendDiscordNotification(a.payouts[i], screenshotPath)
+				// Also mark any associated banker_trades as completed so the dealer bot re-opens
+				if a.db != nil {
+					_, err := a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE player_name = $1 AND status = 'paying'", p.Name)
+					if err != nil {
+						a.AddLog(fmt.Sprintf("ERROR: Failed to update banker_trades for %s: %v", p.Name, err))
+					} else {
+						a.AddLog(fmt.Sprintf("Marked banker_trades for %s as completed", p.Name))
+					}
+				}
 			}
 		}
 		a.pMu.Unlock()

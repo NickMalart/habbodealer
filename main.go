@@ -5647,9 +5647,58 @@ func startPayout(a *App, targetID int, targetName string) {
 		isRiskKeep := riskPayoutActive
 		mutex.Unlock()
 
-		// User said: "if the player says keep dont do anything right now"
+		// User said: "if the player says keep"
 		if isRiskKeep {
-			a.AddLogMsg("[BANKER_GAME] Skipping database completion: player chose 'keep'")
+			a.AddLogMsg("[BANKER_GAME] Player chose 'Keep' - scheduling auto-payout and marking banker trade as paying")
+
+			// Capture payout items from the current game history entry
+			var payoutItems []TradeItem
+			a.gameHistoryMu.Lock()
+			a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+				payoutItems = append(payoutItems, entry.PayoutItems...)
+			})
+			a.gameHistoryMu.Unlock()
+
+			// Read history DB and active banker trade ID
+			a.historyDBMu.Lock()
+			db := a.historyDB
+			btID := a.activeBankerTradeID
+			a.historyDBMu.Unlock()
+
+			if db != nil && btID > 0 {
+				go func(items []TradeItem, id int, player string) {
+					ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+					defer cancel()
+
+					// Mark the banker_trade as paying so external auto-payer can pick it up
+					_, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'paying', risk_status = 'paying' WHERE id = $1", id)
+					if err != nil {
+						a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] ERROR: failed to mark banker_trades %d as paying: %v", id, err))
+					} else {
+						a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] banker_trades %d marked as paying", id))
+					}
+
+					// Insert auto_payouts entries (one per payout item)
+					for _, it := range items {
+						// Use the canonical parsed Name (which should match stocked_items.raw_name when available)
+						itemName := it.Name
+						pid := fmt.Sprintf("%d", time.Now().UnixNano())
+						created := time.Now().Format("2006-01-02 15:04:05")
+						qty := it.Quantity
+						_, err := db.Exec(ctx, "INSERT INTO public.auto_payouts (id, player_name, item_name, quantity, status, created_at) VALUES ($1, $2, $3, $4, $5, $6)", pid, player, itemName, qty, "Pending", created)
+						if err != nil {
+							a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] ERROR: failed to insert auto_payout for %s: %v", player, err))
+						} else {
+							a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] queued auto_payout for %s: %s x%d", player, itemName, qty))
+						}
+						// Small pause to avoid identical timestamps
+						time.Sleep(15 * time.Millisecond)
+					}
+				}(payoutItems, btID, targetName)
+			} else {
+				a.AddLogMsg("[BANKER_PAY] Cannot schedule auto-payout: history DB not connected or no active banker trade")
+			}
+
 			return
 		}
 
@@ -8781,6 +8830,37 @@ func (a *App) parseTradeItemsPacket(data []byte) []TradeItem {
 			continue
 		}
 		a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] field=%q", fieldStr))
+
+		// Quick check: if any active stocked_items.raw_name is a substring
+		// of the incoming field, treat that as the canonical item name.
+		lowField := strings.ToLower(fieldStr)
+		stockedItemsMu.RLock()
+		bestStocked := ""
+		for raw := range stockedItemsCache {
+			if raw == "" {
+				continue
+			}
+			if strings.Contains(lowField, raw) {
+				if len(raw) > len(bestStocked) {
+					bestStocked = raw
+				}
+			}
+		}
+		stockedItemsMu.RUnlock()
+		if bestStocked != "" {
+			// Attempt to extract quantity (if present as *N)
+			qty := 1
+			if idx := strings.LastIndex(fieldStr, "*"); idx >= 0 && idx < len(fieldStr)-1 {
+				if q, err := strconv.Atoi(fieldStr[idx+1:]); err == nil {
+					qty = q
+				}
+			}
+			counts[bestStocked] += qty
+			if _, exists := rawByName[bestStocked]; !exists {
+				rawByName[bestStocked] = fieldStr
+			}
+			continue
+		}
 
 		itemName, qty, ok := a.extractTradeItemAndQuantity(fieldStr)
 		if !ok {
