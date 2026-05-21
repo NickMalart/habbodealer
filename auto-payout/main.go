@@ -609,8 +609,8 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 	}
 
 	// Involved Check: Ignore trades that don't involve us
+	involved := false
 	if a.ownChatID > 0 {
-		involved := false
 		pos := 0
 		data := e.Packet.Data
 		for pos < len(data) {
@@ -624,10 +624,14 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 			}
 			pos += vlen
 		}
-		if !involved && !matched {
-			// This trade is between two other people. Ignore it.
-			return
-		}
+	} else if matched {
+		involved = true
+	}
+
+	if !involved {
+		// This trade is between two other people, or we don't know our ID yet.
+		// Ignore to prevent accidentally blocking Dealer trades.
+		return
 	}
 
 	a.tradeMu.Lock()

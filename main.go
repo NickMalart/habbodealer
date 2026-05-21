@@ -574,13 +574,16 @@ func (a *App) getTradeLimitViolation(items []TradeItem) *tradeLimitViolation {
 	}
 	log.Printf("[TRADE_LIMIT_DEBUG] unique=%d maxUnique=%d tooManyUnique=%t tooMuchQuantity=%t hasUnknown=%t", v.UniqueCount, v.MaxUnique, v.TooManyUniqueItems, v.TooMuchQuantity, v.HasUnknownItems)
 
-	// For Banker (fulfillmentMode), we ignore HasUnknownItems violations
-	// to prevent parser noise from closing trades, but we still enforce max limits.
+	// For Banker (fulfillmentMode), we previously ignored HasUnknownItems violations.
+	// We now enforce it to ensure only allowed items are traded, as requested.
 	if silence {
+		if v.HasUnknownItems {
+			return v
+		}
 		if !v.TooManyUniqueItems && !v.TooMuchQuantity {
 			return nil
 		}
-		// If we are returning a violation for Banker, clear the UnknownItems flag
+		// If we are returning a violation for Banker (only limits), clear the UnknownItems flag
 		// so the message doesn't mention them.
 		v.HasUnknownItems = false
 		v.UnknownItems = nil
@@ -648,35 +651,45 @@ func (a *App) rejectTradeForLimitViolation(v *tradeLimitViolation) {
 	if v == nil {
 		return
 	}
-	msg := formatTradeLimitViolationMessage(v)
 
-	now := time.Now()
-	mutex.Lock()
-	cooldown := now.Sub(lastTradeLimitShoutAt) < 10*time.Second
-	isDuplicate := msg == lastTradeLimitNotice
-	if !isDuplicate {
-		lastTradeLimitNotice = msg
-	}
-	if !isDuplicate || !cooldown {
-		lastTradeLimitShoutAt = now
-		mutex.Unlock()
+	// Banker bot (fulfillmentMode) closes trade SILENTLY if an unknown item is detected.
+	silent := fulfillmentMode && v.HasUnknownItems
 
-		a.AddLogMsg("[TRADE_LIMIT] " + msg)
+	if !silent {
+		msg := formatTradeLimitViolationMessage(v)
 
-		// Shout to the partner about the limit violation.
-		if lastTradePartnerID > 0 {
-			sendShoutTargeted(lastTradePartnerID, msg)
+		now := time.Now()
+		mutex.Lock()
+		cooldown := now.Sub(lastTradeLimitShoutAt) < 10*time.Second
+		isDuplicate := msg == lastTradeLimitNotice
+		if !isDuplicate {
+			lastTradeLimitNotice = msg
+		}
+		if !isDuplicate || !cooldown {
+			lastTradeLimitShoutAt = now
+			mutex.Unlock()
+
+			a.AddLogMsg("[TRADE_LIMIT] " + msg)
+
+			// Shout to the partner about the limit violation.
+			if lastTradePartnerID > 0 {
+				sendShoutTargeted(lastTradePartnerID, msg)
+			} else {
+				sendShout(msg)
+			}
 		} else {
-			sendShout(msg)
+			mutex.Unlock()
 		}
 	} else {
-		mutex.Unlock()
+		a.AddLogMsg("[TRADE_LIMIT] silent immediate close due to unallowed items in Banker mode")
 	}
 
 	// Force close immediately per user request to ensure no accidental accepts.
-	// We use a tiny delay to ensure the shout is enqueued first.
+	// We use a tiny delay to ensure the shout (if any) is enqueued first.
 	go func() {
-		time.Sleep(500 * time.Millisecond)
+		if !silent {
+			time.Sleep(500 * time.Millisecond)
+		}
 		a.AddLogMsg("[TRADE_LIMIT] force-closing trade immediately due to violation")
 		ext.Send(out.TRADE_CLOSE)
 		stopTradeLimitMonitor()
@@ -4216,15 +4229,45 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 	// TRADE_ITEMS header 108 - incoming server echo of full trade state (always incoming)
 	if e.Packet.Header.Value == 108 {
+		// Identify if we are involved in this trade.
+		// In Shockwave, the 108 packet often contains the IDs of both participants.
+		// We use packetContainsVL64Value to check if our own ID is present.
+		identityKnown := a.ownChatID > 0 || a.ownTradeID > 0
+		involved := false
+		if identityKnown {
+			if a.ownChatID > 0 && packetContainsVL64Value(e.Packet.Data, a.ownChatID) {
+				involved = true
+			}
+			if !involved && a.ownTradeID > 0 && packetContainsVL64Value(e.Packet.Data, a.ownTradeID) {
+				involved = true
+			}
+		}
+
+		// If identity is known and we are NOT involved, completely ignore this packet.
+		// This prevents us from sabotaging other bots' trades.
+		if identityKnown && !involved {
+			return
+		}
+
+		// If identity is UNKNOWN, we proceed but we must be careful not to block.
+		// We'll also take this opportunity to learn our own ID if the packet 
+		// contains the ID of the person we are currently trading with.
+		if !identityKnown && lastTradePartnerID > 0 {
+			if packetContainsVL64Value(e.Packet.Data, lastTradePartnerID) {
+				// We found our partner in this packet! The other ID must be US.
+				// We'll try to find it in the next few turns using a more robust parser.
+			}
+		}
+
 		dataCopy := make([]byte, len(e.Packet.Data))
 		copy(dataCopy, e.Packet.Data)
 		isPayout := payoutTradeActive
 
-		go func(data []byte, payoutActive bool) {
+		go func(data []byte, payoutActive bool, isCurrentlyInvolved bool) {
 			allItems := a.parseTradeItemsPacket(data)
 
 			if !payoutActive {
-				// Non-payout mode: track partner vs own items
+				// ... (non-payout logic) ...
 				tradeItemsMu.Lock()
 				prevAllCopy := make([]TradeItem, len(lastAllTradeItems))
 				copy(prevAllCopy, lastAllTradeItems)
@@ -4444,10 +4487,25 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			tradeItemsMu.Unlock()
 
 			a.emitTradeItemsUpdate("both")
+
+			// SECURITY: If we are just an observer (bot interference guard), 
+			// do NOT enforce limits or auto-accept.
+			if !isCurrentlyInvolved {
+				return
+			}
+
+			if !payoutActive {
+				if v := a.getTradeLimitViolation(currentTradeItems); v != nil {
+					a.rejectTradeForLimitViolation(v)
+				} else {
+					scheduleAutoTradeAccept(a, string(data))
+				}
+			}
+
 			if len(data) > 0 {
 				extendTradeWindowTimeoutForPartnerActivity(a)
 			}
-		}(dataCopy, isPayout)
+		}(dataCopy, isPayout, involved)
 		return
 	}
 
@@ -4628,32 +4686,78 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 	// TRADE_OPEN incoming 104
 	if e.Packet.Header.Value == 104 {
-		// IGNORE trades that don't involve us (the bot).
-		// In Shockwave, the TRADE_OPEN packet contains the IDs of both participants.
-		// If neither ID matches our own known index/id, then this packet was broadcast
-		// to the whole room and we are merely an observer.
-		if a.ownChatID > 0 || a.ownTradeID > 0 {
-			involved := false
+		matched := matchesRecentOutgoingFunc(e.Packet.Data)
+		
+		id1, _ := decodeLeadingVL64(e.Packet.Data)
+		id2 := 0
+		vlen1 := gencoding.VL64DecodeLen(e.Packet.Data[0])
+		if len(e.Packet.Data) > vlen1 {
+			id2 = gencoding.VL64Decode(e.Packet.Data[vlen1:])
+		}
+
+		// 1. Auto-discovery of our own identity
+		if matched {
+			// Find the other ID in the packet (the one that isn't the target we just traded)
+			if id1 > 0 && id1 != lastOutgoingTradeOpenID {
+				a.ownChatID = id1
+			} else if id2 > 0 && id2 != lastOutgoingTradeOpenID {
+				a.ownChatID = id2
+			}
+			if a.ownChatID > 0 {
+				a.AddLogMsg(fmt.Sprintf("[ROOM_USERS] auto-discovered our own room index: %d (via matched trade)", a.ownChatID))
+			}
+		} else if id1 > 0 && id2 > 0 {
+			// If we don't know who we are, try to guess by looking at the names
+			name1, ok1 := lookupRoomEntityNameByIndex(id1)
+			name2, ok2 := lookupRoomEntityNameByIndex(id2)
+			
+			if ok1 && ok2 {
+				dealer := strings.ToLower(strings.TrimSpace(a.currentDealerName))
+				if strings.EqualFold(name1, dealer) || strings.ToLower(name1) == "tomadachi" {
+					a.ownChatID = id1
+				} else if strings.EqualFold(name2, dealer) || strings.ToLower(name2) == "tomadachi" {
+					a.ownChatID = id2
+				}
+			}
+			if a.ownChatID > 0 {
+				a.AddLogMsg(fmt.Sprintf("[ROOM_USERS] auto-discovered our own room index: %d (via name lookup)", a.ownChatID))
+			}
+		}
+
+		// 2. Involved Check: Ignore trades that don't involve us.
+		involved := false
+		identityKnown := a.ownChatID > 0 || a.ownTradeID > 0
+		if identityKnown {
 			if a.ownChatID > 0 && packetContainsVL64Value(e.Packet.Data, a.ownChatID) {
 				involved = true
 			}
 			if !involved && a.ownTradeID > 0 && packetContainsVL64Value(e.Packet.Data, a.ownTradeID) {
 				involved = true
 			}
+		} else if matched {
+			involved = true
+		}
 
-			if !involved {
-				// We are not involved in this trade. Completely ignore it.
-				// We do NOT block it because that would stop other extensions from seeing it,
-				// and we definitely don't send TRADE_CLOSE because it's not our trade.
-				return
-			}
+		if identityKnown && !involved {
+			// We know who we are, and this trade is definitely NOT for us.
+			// Completely ignore it to avoid interfering with other bots.
+			return
+		}
+
+		// Resolution: Which of the two IDs is the partner?
+		partnerID := id1
+		if id1 == a.ownChatID || id1 == a.ownTradeID {
+			partnerID = id2
+		}
+		if partnerID > 0 {
+			lastTradePartnerID = partnerID
+			tradeStarterTradeID = partnerID
 		}
 
 		if fulfillmentMode {
-			// Identify incoming partner
+			// Identify incoming partner name
 			partnerName := ""
-			partnerID, ok := decodeLeadingVL64(e.Packet.Data)
-			if ok {
+			if partnerID > 0 {
 				if name, ok := lookupUsers28Index(partnerID); ok {
 					partnerName = name
 				} else if name, ok := lookupUsers28TradeID(partnerID); ok {
@@ -4663,10 +4767,17 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				}
 			}
 
+			// If we don't know our ID yet, and we didn't initiate this, 
+			// we MUST NOT block it or process it, as it's likely for another bot.
+			if !involved && !identityKnown {
+				a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Observed trade with id:%d (%s); identity unknown, allowing as observer.", partnerID, partnerName))
+				return
+			}
+
 			a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Incoming trade from id:%d (%s). Checking authorization...", partnerID, partnerName))
 
 			// AUTHORIZATION 1: Did we (the bot) just open this trade?
-			if matchesRecentOutgoingFunc(e.Packet.Data) {
+			if matched {
 				a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Allowing trade with %s: matched recent outgoing request.", partnerName))
 			} else {
 				// AUTHORIZATION 2: Session Isolation
@@ -7272,9 +7383,6 @@ func stopDealerOpenHeartbeat() {
 }
 
 func scheduleAutoTradeAccept(a *App, payload string) {
-	if strings.TrimSpace(lastTradePartnerToken) == "" {
-		return
-	}
 	if tradeAutoAccepted || tradeAutoAcceptPending {
 		return
 	}
@@ -7293,8 +7401,6 @@ func scheduleAutoTradeAccept(a *App, payload string) {
 			a.AddLogMsg("[TRADE_ACCEPT] skipped auto-accept due to active trade limit violation")
 			return
 		}
-		// If snapshot not ready (s == nil) allow scheduling and perform a
-		// short wait inside the confirm loop before sending each confirm.
 	}
 
 	tradeAutoAcceptPending = true
@@ -7304,7 +7410,7 @@ func scheduleAutoTradeAccept(a *App, payload string) {
 	go func(flow int) {
 		time.Sleep(2 * time.Second)
 
-		if flow != tradeAutoFlowID || strings.TrimSpace(lastTradePartnerToken) == "" {
+		if flow != tradeAutoFlowID {
 			tradeAutoAcceptPending = false
 			return
 		}
@@ -7316,7 +7422,7 @@ func scheduleAutoTradeAccept(a *App, payload string) {
 		if !payoutTradeActive {
 			deadline := time.Now().Add(1 * time.Second)
 			for {
-				if flow != tradeAutoFlowID || strings.TrimSpace(lastTradePartnerToken) == "" {
+				if flow != tradeAutoFlowID {
 					tradeAutoAcceptPending = false
 					return
 				}
@@ -8366,6 +8472,29 @@ func (a *App) parseTradeItemsPacket(data []byte) []TradeItem {
 			}
 			stockedItemsMu.RUnlock()
 
+			// Heuristic: filter out common binary/metadata fragments in Shockwave packets
+			isMetadata := false
+			if strings.HasPrefix(fieldStr, "cizMI") || strings.HasPrefix(fieldStr, "PGIZ") || strings.HasPrefix(fieldStr, "RCKZ") || strings.HasPrefix(fieldStr, "QFRA") || strings.HasPrefix(fieldStr, "QERAX") {
+				isMetadata = true
+			}
+			// Also skip if it contains many non-alphanumeric chars (item names are usually clean)
+			if !isMetadata && !whitelisted {
+				cleanChars := 0
+				for _, r := range fieldStr {
+					if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '*' {
+						cleanChars++
+					}
+				}
+				if cleanChars < len(fieldStr)-2 { // Allow some slack
+					isMetadata = true
+				}
+			}
+
+			if isMetadata && !whitelisted {
+				a.AddLogMsg(fmt.Sprintf("[TRADE_PARSE_DEBUG] skipping field recognized as metadata=%q", fieldStr))
+				continue
+			}
+
 			// Use normalizeTradeItemName as a heuristic to see if this string
 			// even COULD be an item name. This filters out the binary junk/metadata
 			// (like "cizMIf|I~s") that is present in initial trade packets.
@@ -8558,6 +8687,11 @@ func isKnownTradeClassName(a *App, name string) bool {
 	stockedItemsMu.RLock()
 	registryItem, exists := stockedItemsRegistry[name]
 	if !exists {
+		// Try canonical name check against registry
+		canon := a.getCanonicalName(name)
+		registryItem, exists = stockedItemsRegistry[canon]
+	}
+	if !exists {
 		if star := strings.LastIndex(name, "*"); star > 0 {
 			registryItem, exists = stockedItemsRegistry[name[:star]]
 		}
@@ -8587,7 +8721,15 @@ func isKnownTradeClassName(a *App, name string) bool {
 		}
 	}
 
-	// 3. Last resort: items currently observed in the dealer's scanned hand (ONLY used if Stocked Items is empty).
+	// 3. Currency fallback: always allow standard Habbo currencies if not in catalog.
+	currencies := []string{"cf_50_goldbar", "cf_10_goldbar", "cf_20_goldbar", "cf_5_goldbar", "cf_1_coin", "cf_1_platinum_bar", "cf_5_platinum_bar", "cf_10_platinum_bar", "goldbar", "coin", "credit"}
+	for _, c := range currencies {
+		if name == c || baseName == c {
+			return true
+		}
+	}
+
+	// 4. Last resort: items currently observed in the dealer's scanned hand.
 	handItemsMu.Lock()
 	itemsToCheck := currentHandItems
 	if tradeHandSnapshotReady && len(tradeHandSnapshot) > 0 {
@@ -11586,6 +11728,18 @@ func packetContainsVL64Value(data []byte, value int) bool {
 	}
 
 	return false
+}
+
+func (a *App) isRecentTradeOpenTarget(id int) bool {
+	tradeOpenStateMu.Lock()
+	targetID := lastOutgoingTradeOpenID
+	at := lastOutgoingTradeOpenAt
+	tradeOpenStateMu.Unlock()
+
+	if targetID <= 0 || id != targetID {
+		return false
+	}
+	return time.Since(at) <= 8*time.Second
 }
 
 func rememberOutgoingTradeOpenTarget(targetID int) {
