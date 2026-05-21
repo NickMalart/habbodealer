@@ -117,6 +117,14 @@ func (a *App) evaluatePokerHand() {
 		} else {
 			a.setCurrentGameHistoryResults(playerHand, hand, a.getCurrentDealerName(), "Completed", true)
 			a.noteCurrentGameHistory(winnerMsg)
+
+			mutex.Lock()
+			splitEnabled := isSplitDealerMode
+			mutex.Unlock()
+			if splitEnabled {
+				a.finalizeBankerTrade()
+			}
+
 			if isRiskEnabled && riskSessionActive {
 				go a.applyRiskOutcome(false)
 				return
@@ -383,6 +391,14 @@ func (a *App) finalizeBlackjackRound(playerWins bool, reason string) {
 
 	a.setCurrentGameHistoryResults(playerHand, dealerHand, a.getCurrentDealerName(), "Completed", true)
 	a.noteCurrentGameHistory(winnerMsg)
+
+	mutex.Lock()
+	splitEnabled := isSplitDealerMode
+	mutex.Unlock()
+	if splitEnabled {
+		a.finalizeBankerTrade()
+	}
+
 	if isRiskEnabled && riskSessionActive {
 		go a.applyRiskOutcome(false)
 		return
@@ -703,7 +719,6 @@ func (a *App) evaluateSixHand() {
 	isSixRolling = false
 	isSixHitting = false
 }
-
 
 // Wait for all dice results and evaluate the tri hand
 func (a *App) evaluateTriRound() {

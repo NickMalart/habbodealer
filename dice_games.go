@@ -109,6 +109,14 @@ func (a *App) evaluateDoubleTroubleRound() {
 	}
 	a.setCurrentGameHistoryResults(resultText, "", a.getCurrentDealerName(), "Completed", true)
 	a.noteCurrentGameHistory(winnerMsg)
+
+	mutex.Lock()
+	splitEnabled := isSplitDealerMode
+	mutex.Unlock()
+	if splitEnabled {
+		a.finalizeBankerTrade()
+	}
+
 	if isRiskEnabled && riskSessionActive {
 		go a.applyRiskOutcome(false)
 		return
@@ -248,6 +256,13 @@ func (a *App) evaluateBanditRound() {
 	isBanditRolling = false
 	mutex.Unlock()
 
+	mutex.Lock()
+	splitEnabled := isSplitDealerMode
+	mutex.Unlock()
+	if splitEnabled {
+		a.finalizeBankerTrade()
+	}
+
 	go a.openDealerAfterRound()
 }
 
@@ -333,6 +348,14 @@ func (a *App) evaluateMidHouseRound() {
 	} else {
 		a.setCurrentGameHistoryResults(fmt.Sprintf("%d", total), "", "Dealer", "Completed", true)
 		a.noteCurrentGameHistory(msg)
+
+		mutex.Lock()
+		splitEnabled := isSplitDealerMode
+		mutex.Unlock()
+		if splitEnabled {
+			a.finalizeBankerTrade()
+		}
+
 		if isRiskEnabled && riskSessionActive {
 			go a.applyRiskOutcome(false)
 			return

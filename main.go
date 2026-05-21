@@ -2747,11 +2747,14 @@ func (a *App) finalizeBankerTrade() {
 	}
 
 	mutex.Lock()
-	risk := riskSessionActive
+	riskActive := riskSessionActive
+	pBank := playerRisk
 	mutex.Unlock()
 
-	if risk {
-		a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] Skipping completion for trade %d: risk session active", tradeID))
+	// Only skip if there's an active risk session AND the player still has bank to play with.
+	// If the bank is 0, they've lost everything, so we MUST finalize.
+	if riskActive && pBank > 0 {
+		a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] Skipping completion for trade %d: risk session active with bank %d", tradeID, pBank))
 		return
 	}
 
@@ -2763,7 +2766,8 @@ func (a *App) finalizeBankerTrade() {
 	go func(id int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		res, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'completed' WHERE id = $1 AND status = 'playing'", id)
+		// Update status to completed and ensure bank is 0 if it was a loss
+		res, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'completed', risk_status = 'completed' WHERE id = $1", id)
 		if err != nil {
 			a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] ERROR: failed to mark trade %d as completed: %v", id, err))
 		} else {
@@ -3799,9 +3803,6 @@ func (a *App) setCurrentGameHistoryResults(playerResult string, dealerResult str
 		a.sendLiveDealerGames(5)
 		// Persist completed game record for later review
 		go LogEvent("game_complete", completedEntry, "Game completed", map[string]string{"player": completedEntry.PlayerName})
-
-		// Finalize the banker trade for completed games
-		a.finalizeBankerTrade()
 	}
 }
 
@@ -6090,7 +6091,7 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 	}
 	// Record the per-risk-session multiplier so re-rolls and finalization honor it.
 	riskSessionPayoutMultiplier = mult
-	
+
 	// The player wins "betQty * mult" total items (e.g., bet 1 * 2 = 2 total items).
 	// Because playerRisk is already initialized to the bet amount (e.g., 1),
 	// the actual net winnings added to their bank is betQty * (mult - 1).
@@ -6112,7 +6113,7 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			_, _ = db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1 WHERE id = $2", playerRisk, dbID)
 			cancel()
-			
+
 			// Optional: verify/read back to ensure 100% accuracy before shouting
 			var dbBank int
 			_ = db.QueryRow(context.Background(), "SELECT risk_bank FROM banker_trades WHERE id = $1", dbID).Scan(&dbBank)
@@ -6217,7 +6218,7 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 			return
 		}
 
-		msg, ok := buildRiskPromptLocked()
+		msg, ok := a.buildRiskPromptLocked()
 		mutex.Unlock()
 		if !canPrompt || !ok {
 			return
@@ -6247,19 +6248,13 @@ func (a *App) handleRiskBet(n int, sender string, userID int) {
 		return
 	}
 
-	// Defensive guards: reject if player's internal bank is empty or dealer reopened.
+	// Defensive guards: reject if player's internal bank is empty.
 	if playerRisk <= 0 {
 		mutex.Unlock()
 		sendShoutTargeted(userID, "No bank available to risk.")
 		a.AddLogMsg(fmt.Sprintf("[RISK] rejected r%d from %s: no player bank", n, sender))
 		// If there's no bank left, ensure dealer reopens cleanly.
 		go a.openDealerAfterRound()
-		return
-	}
-	if dealerAcceptingTrades || awaitingTradeOpen {
-		mutex.Unlock()
-		sendShoutTargeted(userID, "Risk unavailable while dealer is open.")
-		a.AddLogMsg(fmt.Sprintf("[RISK] rejected r%d from %s: dealer open", n, sender))
 		return
 	}
 
@@ -6279,6 +6274,22 @@ func (a *App) handleRiskBet(n int, sender string, userID int) {
 	playerRisk -= n
 	dealerRisk += n
 	riskPendingBet = n
+
+	// Sync Split Mode Bank to DB on risk bet
+	if isSplitDealerMode {
+		a.historyDBMu.Lock()
+		dbID := a.activeBankerTradeID
+		db := a.historyDB
+		a.historyDBMu.Unlock()
+		if dbID > 0 && db != nil {
+			go func(id, qty int) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_, _ = db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1, risk_status = 'risk_active' WHERE id = $2", qty, id)
+			}(dbID, playerRisk)
+		}
+	}
+
 	// capture snapshot values under lock to avoid races
 	rp := riskPendingBet
 	rb := playerRisk
@@ -6534,6 +6545,21 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		a.gameHistoryMu.Unlock()
 		mutex.Lock()
 
+		// Sync Split Mode Bank to DB on loss
+		if isSplitDealerMode {
+			a.historyDBMu.Lock()
+			dbID := a.activeBankerTradeID
+			db := a.historyDB
+			a.historyDBMu.Unlock()
+			if dbID > 0 && db != nil {
+				go func(id, qty int) {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					_, _ = db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1 WHERE id = $2", qty, id)
+				}(dbID, playerRisk)
+			}
+		}
+
 		// compute usable max including per-item cap
 		displayMax := maxTradeQuantityPerItem
 		if playerRisk < displayMax {
@@ -6574,7 +6600,7 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 				entry.Status = "Completed"
 				entry.CompletedAt = gameHistoryTimestamp()
 				entry.PayoutItems = nil
-				if strings.TrimSpace(entry.Notes[len(entry.Notes)-1]) != "Risk session lost" {
+				if len(entry.Notes) == 0 || strings.TrimSpace(entry.Notes[len(entry.Notes)-1]) != "Risk session lost" {
 					entry.Notes = append(entry.Notes, "Risk session lost")
 				}
 				e := *entry
@@ -6583,26 +6609,21 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 				a.currentGameHistoryID = ""
 			}
 			a.gameHistoryMu.Unlock()
+
+			// Finalize the banker trade for completed risk loss
+			a.finalizeBankerTrade()
+
 			if completedEntry != nil {
 				go a.sendDiscordWebhookForGame(*completedEntry)
 				a.persistCurrentGameHistoryNow("game_completed")
-				
-				// Finalize the banker trade for completed risk loss
-				a.finalizeBankerTrade()
 			}
 
 			go a.openDealerAfterRound()
 			return
 		}
 
-		// Player still has bank left: keep session and re-prompt, unless dealer
-		// can no longer cover additional risk.
-		shouldFinalize := dealerRisk <= 0
+		// Player still has bank left: keep session and re-prompt.
 		mutex.Unlock()
-		if shouldFinalize {
-			go a.finalizeRiskKeep()
-			return
-		}
 
 		a.AddLogMsg(fmt.Sprintf("[RISK] %s lost risk round; bank remains playerRisk=%d dealerRisk=%d", partner, playerRisk, dealerRisk))
 
@@ -6625,19 +6646,21 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			// prompting. If the snapshot is short (e.g. stale from a prior trade),
 			// cap dealerRisk so we never over-promise.
 			mutex.Lock()
-			handItemsMu.Lock()
-			snap := make([]TradeItem, len(riskHandSnapshot))
-			copy(snap, riskHandSnapshot)
-			handItemsMu.Unlock()
-			liveCover := riskRelevantHandQuantity(snap, gameBetItems)
-			totalCommitted := playerRisk + dealerRisk
-			if liveCover < totalCommitted {
-				diff := totalCommitted - liveCover
-				if diff > dealerRisk {
-					diff = dealerRisk
+			if !isSplitDealerMode {
+				handItemsMu.Lock()
+				snap := make([]TradeItem, len(riskHandSnapshot))
+				copy(snap, riskHandSnapshot)
+				handItemsMu.Unlock()
+				liveCover := riskRelevantHandQuantity(snap, gameBetItems)
+				totalCommitted := playerRisk + dealerRisk
+				if liveCover < totalCommitted {
+					diff := totalCommitted - liveCover
+					if diff > dealerRisk {
+						diff = dealerRisk
+					}
+					a.AddLogMsg(fmt.Sprintf("[RISK] live cover %d < committed %d; capping dealerRisk by %d", liveCover, totalCommitted, diff))
+					dealerRisk -= diff
 				}
-				a.AddLogMsg(fmt.Sprintf("[RISK] live cover %d < committed %d; capping dealerRisk by %d", liveCover, totalCommitted, diff))
-				dealerRisk -= diff
 			}
 			if dealerRisk <= 0 {
 				mutex.Unlock()
@@ -6667,6 +6690,21 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 	dealerRisk -= pay
 	playerRisk += pay
 	riskPendingBet = 0
+
+	// Sync Split Mode Bank to DB on win
+	if isSplitDealerMode {
+		a.historyDBMu.Lock()
+		dbID := a.activeBankerTradeID
+		db := a.historyDB
+		a.historyDBMu.Unlock()
+		if dbID > 0 && db != nil {
+			go func(id, qty int) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_, _ = db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1 WHERE id = $2", qty, id)
+			}(dbID, playerRisk)
+		}
+	}
 
 	// Snapshot post-win risk state for history before releasing main mutex.
 	rp2 := riskPendingBet
@@ -6757,19 +6795,21 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		// prompting. If the snapshot is short (e.g. stale from a prior trade),
 		// cap dealerRisk so we never over-promise.
 		mutex.Lock()
-		handItemsMu.Lock()
-		snap := make([]TradeItem, len(riskHandSnapshot))
-		copy(snap, riskHandSnapshot)
-		handItemsMu.Unlock()
-		liveCover := riskRelevantHandQuantity(snap, gameBetItems)
-		totalCommitted := playerRisk + dealerRisk
-		if liveCover < totalCommitted {
-			diff := totalCommitted - liveCover
-			if diff > dealerRisk {
-				diff = dealerRisk
+		if !isSplitDealerMode {
+			handItemsMu.Lock()
+			snap := make([]TradeItem, len(riskHandSnapshot))
+			copy(snap, riskHandSnapshot)
+			handItemsMu.Unlock()
+			liveCover := riskRelevantHandQuantity(snap, gameBetItems)
+			totalCommitted := playerRisk + dealerRisk
+			if liveCover < totalCommitted {
+				diff := totalCommitted - liveCover
+				if diff > dealerRisk {
+					diff = dealerRisk
+				}
+				a.AddLogMsg(fmt.Sprintf("[RISK] live cover %d < committed %d; capping dealerRisk by %d", liveCover, totalCommitted, diff))
+				dealerRisk -= diff
 			}
-			a.AddLogMsg(fmt.Sprintf("[RISK] live cover %d < committed %d; capping dealerRisk by %d", liveCover, totalCommitted, diff))
-			dealerRisk -= diff
 		}
 		if dealerRisk <= 0 {
 			mutex.Unlock()
@@ -6790,7 +6830,7 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 	}(displayMax, partner)
 }
 
-func buildRiskPromptLocked() (string, bool) {
+func (a *App) buildRiskPromptLocked() (string, bool) {
 	if !riskSessionActive || playerRisk <= 0 || dealerRisk <= 0 {
 		return "", false
 	}
@@ -7261,7 +7301,7 @@ func (a *App) startRiskDecisionTimeoutMonitor(player string) {
 				mutex.Unlock()
 				return
 			}
-			reminder, ok := buildRiskPromptLocked()
+			reminder, ok := a.buildRiskPromptLocked()
 			mutex.Unlock()
 			if !ok {
 				return
@@ -12722,6 +12762,13 @@ func (a *App) evaluateUnderOverRound() {
 	a.setCurrentGameHistoryResults(strconv.Itoa(total), "", a.getCurrentDealerName(), "Completed", true)
 	a.noteCurrentGameHistory(winnerMsg)
 
+	mutex.Lock()
+	splitEnabled := isSplitDealerMode
+	mutex.Unlock()
+	if splitEnabled {
+		a.finalizeBankerTrade()
+	}
+
 	// If a risk session is active, route this loss through the risk logic
 	// so only the pending bet is lost and the player can be re-prompted.
 	// Do NOT route UO7 rounds into Risk.
@@ -12801,6 +12848,10 @@ func (a *App) finalize13Round(playerWins bool, reason string) {
 
 	a.setCurrentGameHistoryResults(playerHand, dealerHand, a.getCurrentDealerName(), "Completed", true)
 	a.noteCurrentGameHistory(winnerMsg)
+
+	// Finalize banker trade on dealer win
+	a.finalizeBankerTrade()
+
 	if isRiskEnabled && riskSessionActive {
 		go a.applyRiskOutcome(false)
 		return
@@ -12872,6 +12923,10 @@ func (a *App) finalizeSixRound(playerWins bool, reason string) {
 
 	a.setCurrentGameHistoryResults(playerHand, dealerHand, a.getCurrentDealerName(), "Completed", true)
 	a.noteCurrentGameHistory(winnerMsg)
+
+	// Finalize banker trade on dealer win
+	a.finalizeBankerTrade()
+
 	if isRiskEnabled && riskSessionActive {
 		go a.applyRiskOutcome(false)
 		return
@@ -12968,6 +13023,14 @@ func (a *App) finalizeTriRound() {
 
 	a.setCurrentGameHistoryResults(playerHand, dealerHand, "Dealer", "Completed", true)
 	a.noteCurrentGameHistory(winnerMsg)
+
+	mutex.Lock()
+	splitEnabled := isSplitDealerMode
+	mutex.Unlock()
+	if splitEnabled {
+		a.finalizeBankerTrade()
+	}
+
 	if isRiskEnabled && riskSessionActive {
 		go a.applyRiskOutcome(false)
 		return
@@ -13101,6 +13164,14 @@ func (a *App) evaluateH18Round() {
 	} else {
 		a.setCurrentGameHistoryResults(strconv.Itoa(total), "", "Dealer", "Completed", true)
 		a.noteCurrentGameHistory(msg)
+
+		mutex.Lock()
+		splitEnabled := isSplitDealerMode
+		mutex.Unlock()
+		if splitEnabled {
+			a.finalizeBankerTrade()
+		}
+
 		if isRiskEnabled && riskSessionActive {
 			go a.applyRiskOutcome(false)
 			return
