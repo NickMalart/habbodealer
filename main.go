@@ -11570,17 +11570,11 @@ func rememberOutgoingTradeOpenTarget(targetID int) {
 // matchesRecentOutgoingFunc is a convenience wrapper used by the block-all guard.
 // Returns true if the packet looks like a response to our own recent TRADE_OPEN.
 func matchesRecentOutgoingFunc(data []byte) bool {
-	id := 0
-	if len(data) > 0 {
-		if v, ok := decodeLeadingVL64(data); ok {
-			id = v
-		}
-	}
-	_, matched := matchesRecentOutgoingTradeOpen(data, id)
+	_, matched := matchesRecentOutgoingTradeOpen(data)
 	return matched
 }
 
-func matchesRecentOutgoingTradeOpen(data []byte, leadingIncomingID int) (int, bool) {
+func matchesRecentOutgoingTradeOpen(data []byte) (int, bool) {
 	tradeOpenStateMu.Lock()
 	targetID := lastOutgoingTradeOpenID
 	at := lastOutgoingTradeOpenAt
@@ -11594,12 +11588,19 @@ func matchesRecentOutgoingTradeOpen(data []byte, leadingIncomingID int) (int, bo
 		return targetID, false
 	}
 
-	if leadingIncomingID > 0 && leadingIncomingID == targetID {
-		return targetID, true
-	}
+	// Scan all VL64 IDs in the packet to see if any match the targetID
+	pos := 0
+	for pos < len(data) {
+		vlen := gencoding.VL64DecodeLen(data[pos])
+		if vlen <= 0 || pos+vlen > len(data) {
+			break
+		}
+		id := gencoding.VL64Decode(data[pos : pos+vlen])
+		pos += vlen
 
-	if packetContainsVL64Value(data, targetID) {
-		return targetID, true
+		if id == targetID {
+			return targetID, true
+		}
 	}
 
 	return targetID, false

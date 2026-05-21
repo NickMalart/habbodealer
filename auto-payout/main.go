@@ -443,17 +443,27 @@ func (a *App) registerOutgoing(roomIndex int) {
 	if len(a.recentOutgoing) > 5 { a.recentOutgoing = a.recentOutgoing[len(a.recentOutgoing)-5:] }
 }
 
-func (a *App) matchesRecentOutgoing(data []byte) bool {
-	target := gencoding.VL64Decode(data)
+func (a *App) matchesRecentOutgoing(data []byte) (int, bool) {
 	a.recentOutgoingMu.Lock()
 	defer a.recentOutgoingMu.Unlock()
-	for i, val := range a.recentOutgoing {
-		if val == target {
-			a.recentOutgoing = append(a.recentOutgoing[:i], a.recentOutgoing[i+1:]...)
-			return true
+	
+	pos := 0
+	for pos < len(data) {
+		vlen := gencoding.VL64DecodeLen(data[pos])
+		if vlen <= 0 || pos+vlen > len(data) {
+			break
+		}
+		id := gencoding.VL64Decode(data[pos : pos+vlen])
+		pos += vlen
+		
+		for i, val := range a.recentOutgoing {
+			if val == id {
+				a.recentOutgoing = append(a.recentOutgoing[:i], a.recentOutgoing[i+1:]...)
+				return id, true
+			}
 		}
 	}
-	return false
+	return 0, false
 }
 
 func (a *App) handleStripInfo(e *g.Intercept) {
@@ -557,12 +567,17 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 	}
 
 	// Authorize if we just opened this, or if the person has a pending payout
-	authorized := a.matchesRecentOutgoing(e.Packet.Data)
+	matchedID, authorized := a.matchesRecentOutgoing(e.Packet.Data)
 	
 	a.tradeMu.Lock()
 	pPending := a.payoutPending
 	pPartner := a.activeTradePartner
 	a.tradeMu.Unlock()
+
+	if authorized {
+		partnerID = matchedID
+		partnerName = a.lookupNameByID(matchedID)
+	}
 
 	if !authorized && partnerName != "" {
 		a.pMu.RLock()
@@ -728,9 +743,26 @@ func (a *App) payoutMonitor() {
 		}
 
 		// Pre-flight delay to allow Habbo client/server to settle and refresh inventory
-		a.AddLog(fmt.Sprintf("Preparing payout for %s (waiting 6s and scanning hand)...", target.Name))
+		a.AddLog(fmt.Sprintf("Preparing payout for %s (initiating hand scan)...", target.Name))
 		a.RefreshInventory()
-		time.Sleep(6 * time.Second)
+		
+		// Wait for scan to complete (up to 5 seconds)
+		scanDone := false
+		for i := 0; i < 25; i++ {
+			time.Sleep(200 * time.Millisecond)
+			a.stripScanMu.Lock()
+			active := a.stripScanActive
+			a.stripScanMu.Unlock()
+			if !active {
+				scanDone = true
+				break
+			}
+		}
+		
+		if !scanDone {
+			a.AddLog("ERROR: Hand scan timed out. Retrying next cycle.")
+			continue
+		}
 
 		// Verify inventory AFTER the scan but BEFORE opening the trade
 		a.inventoryMu.RLock()
