@@ -4762,7 +4762,9 @@ func handleTradePacket(a *App, e *g.Intercept) {
 					partnerName = name
 				} else if name, ok := lookupUsers28TradeID(partnerID); ok {
 					partnerName = name
-				} else if name, ok := waitForUsers28IndexName(partnerID, 300*time.Millisecond); ok {
+				} else if name, ok := waitForUsers28IndexName(partnerID, 200*time.Millisecond); ok {
+					partnerName = name
+				} else if name, ok := waitForUsers28TradeIDName(partnerID, 200*time.Millisecond); ok {
 					partnerName = name
 				}
 			}
@@ -4770,8 +4772,28 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			// If we don't know our ID yet, and we didn't initiate this, 
 			// we MUST NOT block it or process it, as it's likely for another bot.
 			if !involved && !identityKnown {
-				a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Observed trade with id:%d (%s); identity unknown, allowing as observer.", partnerID, partnerName))
-				return
+				// EXCEPTION: If fulfillmentMode is active and there's an active payout for this partner, assume we are involved.
+				assumeInvolved := false
+				if partnerName != "" && partnerName != "Unknown" {
+					db, _ := a.getHistoryDB()
+					if db != nil {
+						var exists bool
+						err := db.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM auto_payouts WHERE LOWER(player_name) = LOWER($1) AND status != 'Completed')", partnerName).Scan(&exists)
+						if err == nil && exists {
+							assumeInvolved = true
+						} else {
+							err = db.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM banker_trades WHERE LOWER(player_name) = LOWER($1) AND status = 'paying' AND LOWER(banker_name) = LOWER($2))", partnerName, a.currentDealerName).Scan(&exists)
+							if err == nil && exists {
+								assumeInvolved = true
+							}
+						}
+					}
+				}
+				if !assumeInvolved {
+					a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Observed trade with id:%d (%s); identity unknown, allowing as observer.", partnerID, partnerName))
+					return
+				}
+				a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Assumed involvement in trade with %s due to pending payout.", partnerName))
 			}
 
 			a.AddLogMsg(fmt.Sprintf("[FULFILLMENT] Incoming trade from id:%d (%s). Checking authorization...", partnerID, partnerName))
