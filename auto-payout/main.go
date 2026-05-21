@@ -581,6 +581,11 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 		partnerID = gencoding.VL64Decode(data)
 	}
 
+	a.tradeMu.Lock()
+	pPending := a.payoutPending
+	pPartner := a.activeTradePartner
+	a.tradeMu.Unlock()
+
 	// Authorize if we just opened this, or if the person has a pending payout
 	matchedID, matched := a.matchesRecentOutgoing(e.Packet.Data)
 	authorized := matched
@@ -627,17 +632,32 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 	} else if matched {
 		involved = true
 	}
+	
+	// Extra safety for involved check: if we are expecting a payout, and the partner is in this packet
+	if !involved && pPending && pPartner != "" {
+		pos := 0
+		data := e.Packet.Data
+		for pos < len(data) {
+			vlen := gencoding.VL64DecodeLen(data[pos])
+			if vlen > 0 && pos+vlen <= len(data) {
+				id := gencoding.VL64Decode(data[pos : pos+vlen])
+				if name := a.lookupNameByID(id); strings.EqualFold(name, pPartner) {
+					involved = true
+					break
+				}
+			}
+			pos += vlen
+		}
+	}
 
 	if !involved {
 		// This trade is between two other people, or we don't know our ID yet.
 		// Ignore to prevent accidentally blocking Dealer trades.
+		if pPending {
+			a.AddLog(fmt.Sprintf("Ignoring trade packet while payout pending (no match for %s or self).", pPartner))
+		}
 		return
 	}
-
-	a.tradeMu.Lock()
-	pPending := a.payoutPending
-	pPartner := a.activeTradePartner
-	a.tradeMu.Unlock()
 
 	if authorized {
 		partnerID = matchedID
@@ -869,6 +889,9 @@ func (a *App) payoutMonitor() {
 		a.emitUpdate()
 
 		a.registerOutgoing(user.ChatID)
+		if user.TradeID != user.ChatID {
+			a.registerOutgoing(user.TradeID)
+		}
 		a.AddLog(fmt.Sprintf("Initiating payout trade for %s...", target.Name))
 		a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), user.ChatID)
 
@@ -899,18 +922,79 @@ func (a *App) payoutMonitor() {
 }
 
 func (a *App) automateTrade(p *Payout) {
-	time.Sleep(2 * time.Second)
-	a.tradeMu.Lock(); active := a.tradeActive; a.tradeMu.Unlock()
-	if !active { return }
-	a.inventoryMu.RLock(); ids, ok := a.inventory[strings.ToLower(p.ItemName)]; a.inventoryMu.RUnlock()
-	if !ok || len(ids) == 0 { a.AddLog(fmt.Sprintf("ERROR: No inventory for %s.", p.ItemName)); return }
+	// Wait up to 5 seconds for the trade window to officially open (handled by TRADE_OPEN_IN)
+	tradeOpened := false
+	for i := 0; i < 50; i++ {
+		time.Sleep(100 * time.Millisecond)
+		a.tradeMu.Lock()
+		if a.tradeActive {
+			tradeOpened = true
+			a.tradeMu.Unlock()
+			break
+		}
+		a.tradeMu.Unlock()
+	}
+
+	if !tradeOpened {
+		a.AddLog(fmt.Sprintf("Automation for %s aborted: trade window never opened.", p.Name))
+		return
+	}
+
+	// Wait a moment for the window to stabilize
+	time.Sleep(1 * time.Second)
+
+	// Refresh inventory IDs just in case they changed since the scan
+	a.inventoryMu.RLock()
+	ids, ok := a.inventory[strings.ToLower(p.ItemName)]
+	a.inventoryMu.RUnlock()
+
+	if !ok || len(ids) == 0 {
+		a.AddLog(fmt.Sprintf("ERROR: No inventory for %s.", p.ItemName))
+		return
+	}
+
 	toAdd := p.Quantity
-	if len(ids) < toAdd { toAdd = len(ids) }
+	if len(ids) < toAdd {
+		toAdd = len(ids)
+	}
+
 	a.AddLog(fmt.Sprintf("Adding %d x %s to trade...", toAdd, p.ItemName))
-	for i := 0; i < toAdd; i++ { a.ext.Send(g.Out.Id("TRADE_ADDITEM_OUT"), ids[i]); time.Sleep(750 * time.Millisecond) }
-	for i := 0; i < 3; i++ { a.ext.Send(g.Out.Id("TRADE_ACCEPT_OUT")); time.Sleep(1500 * time.Millisecond) }
+	for i := 0; i < toAdd; i++ {
+		a.tradeMu.Lock()
+		if !a.tradeActive {
+			a.tradeMu.Unlock()
+			a.AddLog("Adding items aborted: trade closed.")
+			return
+		}
+		a.tradeMu.Unlock()
+
+		a.ext.Send(g.Out.Id("TRADE_ADDITEM_OUT"), ids[i])
+		time.Sleep(750 * time.Millisecond)
+	}
+
+	a.AddLog("Offering items (Accept)...")
+	for i := 0; i < 3; i++ {
+		a.tradeMu.Lock()
+		if !a.tradeActive {
+			a.tradeMu.Unlock()
+			return
+		}
+		a.tradeMu.Unlock()
+		a.ext.Send(g.Out.Id("TRADE_ACCEPT_OUT"))
+		time.Sleep(1500 * time.Millisecond)
+	}
+
+	a.AddLog("Waiting for partner confirmation (Stage 2)...")
 	time.Sleep(4 * time.Second)
-	a.ext.Send(g.Out.Id("TRADE_CONFIRM_ACCEPT_OUT"))
+	
+	a.tradeMu.Lock()
+	if a.tradeActive {
+		a.tradeMu.Unlock()
+		a.AddLog("Confirming trade (Final)...")
+		a.ext.Send(g.Out.Id("TRADE_CONFIRM_ACCEPT_OUT"))
+	} else {
+		a.tradeMu.Unlock()
+	}
 }
 
 func main() {
