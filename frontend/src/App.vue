@@ -270,6 +270,22 @@
                 Enable Risk Mode
               </label>
             </div>
+            <div class="game-guide-block" style="margin-top:12px; border-top: 1px solid #333; padding-top: 12px;">
+              <div class="game-guide-label">Split Dealer Mode</div>
+              <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px;">
+                <input type="checkbox" v-model="splitDealerModeEnabledInput" />
+                Enable Split Dealer Mode (Decline trades and redirect to banker)
+              </label>
+              <div v-if="splitDealerModeEnabledInput" style="margin-top:8px;padding-left:24px;">
+                <div class="game-guide-label">Banker Name</div>
+                <input
+                  v-model="bankerNameInput"
+                  type="text"
+                  placeholder="Banker's Habbo username"
+                  style="width:100%;padding:8px;border-radius:4px;border:1px solid #ccc;max-width:396px;background:#2e2e2e;color:#fff;"
+                />
+              </div>
+            </div>
             <div class="game-guide-block">
               <div class="game-guide-label">Raffle Session (Optional)</div>
               <select v-model="selectedRaffleID" style="width:100%;padding:8px;border-radius:4px;border:1px solid #ccc;max-width:420px;background:#2e2e2e;color:#fff;">
@@ -887,6 +903,9 @@ export default {
       enableGameMH: false,
       // Risk mode: when true, enable Risk banking mechanic
       riskModeEnabledInput: false,
+      // Split Dealer mode
+      splitDealerModeEnabledInput: false,
+      bankerNameInput: '',
       // Block recommended-rooms packet
       blockRecommendedRooms: true,
       // Block slide-object-bundle packet
@@ -1109,6 +1128,10 @@ export default {
             await window.go.main.App.SetBanditJackpotPayout(Number(this.banditJackpotPayout || 20));
             await window.go.main.App.SetBanditTriplesPayout(Number(this.banditTriplesPayout || 5));
           }
+
+          // Set Split Dealer Mode
+          await window.go.main.App.SetSplitDealerMode(!!this.splitDealerModeEnabledInput);
+          await window.go.main.App.SetBankerName(this.bankerNameInput || '');
 
           await window.go.main.App.StartCasinoSetup(name, roomName, maxUnique, maxPer, this.riskModeEnabledInput, selectedGames);
 

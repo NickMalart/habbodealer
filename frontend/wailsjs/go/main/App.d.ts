@@ -28,6 +28,8 @@ export function GetAutoShoutConfig():Promise<main.AutoShoutConfig>;
 
 export function GetAutoShoutConfig2():Promise<main.AutoShoutConfig>;
 
+export function GetBankerName():Promise<string>;
+
 export function GetBlockArticlesPageConfig():Promise<main.BlockSlideObjectConfig>;
 
 export function GetBlockCalendarEventsConfig():Promise<main.BlockSlideObjectConfig>;
@@ -82,6 +84,8 @@ export function GetRiskEnabled():Promise<boolean>;
 
 export function GetShoutSpacingMs():Promise<number>;
 
+export function GetSplitDealerMode():Promise<boolean>;
+
 export function GetStockedItems():Promise<Array<main.StockedItem>>;
 
 export function GetTradeItemsJSON():Promise<string>;
@@ -122,9 +126,13 @@ export function SetBanditJackpotPayout(arg1:number):Promise<void>;
 
 export function SetBanditTriplesPayout(arg1:number):Promise<void>;
 
+export function SetBankerName(arg1:string):Promise<void>;
+
 export function SetOnlyUnderOver(arg1:boolean):Promise<void>;
 
 export function SetRiskEnabled(arg1:boolean):Promise<void>;
+
+export function SetSplitDealerMode(arg1:boolean):Promise<void>;
 
 export function SetUnderOver7Mode(arg1:boolean):Promise<void>;
 

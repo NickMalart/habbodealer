@@ -136,6 +136,8 @@ var (
 	// Pending variant selection when prompting for Over/Under (set by beginUO7ChoiceSequence)
 	pendingUoVariant            string
 	onlyUnderOver7Mode          bool    // when true, dealer prompts only Under/Over-7
+	isSplitDealerMode           bool
+	bankerName                  string
 	enabledGamePkr              bool    = true
 	enabledGame21               bool    = true
 	enabledGame13               bool    = true
@@ -1674,6 +1676,38 @@ func (a *App) SetRiskEnabled(enabled bool) {
 func (a *App) GetRiskEnabled() bool {
 	mutex.Lock()
 	v := isRiskEnabled
+	mutex.Unlock()
+	return v
+}
+
+// SetSplitDealerMode enables or disables the split dealer mode.
+func (a *App) SetSplitDealerMode(enabled bool) {
+	mutex.Lock()
+	isSplitDealerMode = enabled
+	mutex.Unlock()
+	a.AddLogMsg(fmt.Sprintf("[CONFIG] Split Dealer Mode = %t", enabled))
+}
+
+// SetBankerName sets the name of the banker to redirect players to.
+func (a *App) SetBankerName(name string) {
+	mutex.Lock()
+	bankerName = strings.TrimSpace(name)
+	mutex.Unlock()
+	a.AddLogMsg(fmt.Sprintf("[CONFIG] Banker Name set to %s", bankerName))
+}
+
+// GetSplitDealerMode returns whether split dealer mode is enabled.
+func (a *App) GetSplitDealerMode() bool {
+	mutex.Lock()
+	v := isSplitDealerMode
+	mutex.Unlock()
+	return v
+}
+
+// GetBankerName returns the configured banker name.
+func (a *App) GetBankerName() string {
+	mutex.Lock()
+	v := bankerName
 	mutex.Unlock()
 	return v
 }
@@ -4564,6 +4598,18 @@ func handleTradePacket(a *App, e *g.Intercept) {
 	}
 
 	if e.Packet.Header.Value == 104 {
+		// Split Dealer mode: decline all trades and redirect to banker
+		if isSplitDealerMode && !payoutTradeSent && !matchesRecentOutgoingFunc(e.Packet.Data) {
+			a.AddLogMsg(fmt.Sprintf("[SPLIT_DEALER] blocking trade, redirecting to banker: %s", bankerName))
+			e.Block()
+			ext.Send(out.TRADE_CLOSE)
+			if bankerName != "" {
+				sendShout(fmt.Sprintf("Please trade %s", bankerName))
+			} else {
+				sendShout("Please trade the banker.")
+			}
+			return
+		}
 		// Manual block-all-trades toggle — skip if we just sent our own payout trade open
 		if !payoutTradeSent && !matchesRecentOutgoingFunc(e.Packet.Data) {
 			activeRound := awaitingGameChoice || dealerGameActive() || payoutActive || payoutTradeActive

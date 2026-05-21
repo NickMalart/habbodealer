@@ -54,6 +54,10 @@ export function GetAutoShoutConfig2() {
   return window['go']['main']['App']['GetAutoShoutConfig2']();
 }
 
+export function GetBankerName() {
+  return window['go']['main']['App']['GetBankerName']();
+}
+
 export function GetBlockArticlesPageConfig() {
   return window['go']['main']['App']['GetBlockArticlesPageConfig']();
 }
@@ -162,6 +166,10 @@ export function GetShoutSpacingMs() {
   return window['go']['main']['App']['GetShoutSpacingMs']();
 }
 
+export function GetSplitDealerMode() {
+  return window['go']['main']['App']['GetSplitDealerMode']();
+}
+
 export function GetStockedItems() {
   return window['go']['main']['App']['GetStockedItems']();
 }
@@ -242,12 +250,20 @@ export function SetBanditTriplesPayout(arg1) {
   return window['go']['main']['App']['SetBanditTriplesPayout'](arg1);
 }
 
+export function SetBankerName(arg1) {
+  return window['go']['main']['App']['SetBankerName'](arg1);
+}
+
 export function SetOnlyUnderOver(arg1) {
   return window['go']['main']['App']['SetOnlyUnderOver'](arg1);
 }
 
 export function SetRiskEnabled(arg1) {
   return window['go']['main']['App']['SetRiskEnabled'](arg1);
+}
+
+export function SetSplitDealerMode(arg1) {
+  return window['go']['main']['App']['SetSplitDealerMode'](arg1);
 }
 
 export function SetUnderOver7Mode(arg1) {
