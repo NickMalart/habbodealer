@@ -47,6 +47,7 @@ var (
 	tradeOpenCount                       int
 	tradeCloseCount                      int
 	lastTradePartnerID                   int
+	lastTradePartnerChatID               int
 	lastTradePartnerName                 string
 	lastTradePartnerToken                string
 	stableTradePartnerID                 int
@@ -899,6 +900,7 @@ func (a *App) startup(ctx context.Context) {
 	go func() {
 		a.initHistoryDatabase()
 		a.loadGameHistory()
+		a.startBankerTradePolling()
 	}()
 	rand.Seed(time.Now().UnixNano())
 	a.setupExt()
@@ -2598,6 +2600,134 @@ func (a *App) ensureHistoryDatabaseConnected() error {
 	}
 
 	return fmt.Errorf("history database not connected")
+}
+
+func (a *App) startBankerTradePolling() {
+	a.AddLogMsg("[BANKER_POLL] starting background worker")
+	go func() {
+		for {
+			time.Sleep(3 * time.Second)
+
+			db, _ := a.getHistoryDB()
+			if db == nil {
+				continue
+			}
+
+			mutex.Lock()
+			splitMode := isSplitDealerMode
+			bName := bankerName
+			mutex.Unlock()
+
+			if !splitMode {
+				continue
+			}
+
+			targetBanker := strings.ToLower(strings.TrimSpace(bName))
+			if targetBanker == "" {
+				targetBanker = strings.ToLower(strings.TrimSpace(a.getCurrentDealerName()))
+			}
+
+			if dealerGameActive() {
+				// We don't want to spam logs here, but let's log if there's a pending trade we're ignoring
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				var id int
+				err := db.QueryRow(ctx, "SELECT id FROM banker_trades WHERE status = 'pending' LIMIT 1").Scan(&id)
+				cancel()
+				if err == nil {
+					a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] IGNORED: trade %d is pending but dealerGameActive() is true", id))
+				}
+				continue
+			}
+
+			a.AddLogMsg("[BANKER_POLL] Polling for any pending trade...")
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			var id int
+			var playerName string
+			var betItemsJSON []byte
+			var tradeID, chatID int
+
+			err := db.QueryRow(ctx, `
+				SELECT id, player_name, bet_items, player_trade_id, player_chat_id
+				FROM banker_trades
+				WHERE status = 'pending'
+				ORDER BY created_at ASC
+				LIMIT 1
+			`).Scan(&id, &playerName, &betItemsJSON, &tradeID, &chatID)
+			cancel()
+
+			if err != nil {
+				// No pending trades found
+				continue
+			}
+
+			a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Detected new pending trade! ID: %d, Player: %s, TradeID: %d, ChatID: %d", id, playerName, tradeID, chatID))
+
+			// Mark as 'processing' immediately to avoid duplicate triggers
+			ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+			_, err = db.Exec(ctx2, "UPDATE banker_trades SET status = 'processing' WHERE id = $1", id)
+			cancel2()
+			if err != nil {
+				a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] ERROR: failed to mark trade %d as processing: %v", id, err))
+				continue
+			}
+
+			// Parse bet items
+			var bItems []struct {
+				RawName string `json:"raw_name"`
+				Qty     int    `json:"qty"`
+			}
+			if err := json.Unmarshal(betItemsJSON, &bItems); err != nil {
+				a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] ERROR: failed to parse bet items for trade %d: %v", id, err))
+				continue
+			}
+
+			a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Parsed %d items for %s", len(bItems), playerName))
+
+			items := make([]TradeItem, 0, len(bItems))
+			for _, bi := range bItems {
+				items = append(items, TradeItem{
+					Name:     bi.RawName,
+					Quantity: bi.Qty,
+				})
+			}
+
+			// Start the game!
+			a.initGameFromBankerTrade(playerName, items, tradeID, chatID)
+
+			ctx3, cancel3 := context.WithTimeout(context.Background(), 5*time.Second)
+			_, err = db.Exec(ctx3, "UPDATE banker_trades SET status = 'accepted' WHERE id = $1", id)
+			cancel3()
+			if err != nil {
+				a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] ERROR: failed to mark trade %d as accepted: %v", id, err))
+			} else {
+				a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Successfully marked trade %d as accepted", id))
+			}
+		}
+	}()
+}
+
+func (a *App) initGameFromBankerTrade(playerName string, items []TradeItem, tradeID int, chatID int) {
+	a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] Initiating game for %s (ChatID: %d, TradeID: %d)", playerName, chatID, tradeID))
+
+	// Set global trade partner info
+	lastTradePartnerName = playerName
+	lastTradePartnerID = tradeID
+	lastTradePartnerChatID = chatID
+	stableTradePartnerName = playerName
+	stableTradePartnerID = tradeID
+	tradeStarterName = playerName
+	tradeStarterTradeID = tradeID
+	tradeStarterChatID = chatID
+
+	// Populate gameBetItems
+	gameBetItems = items
+	a.emitActiveGameBetItemsUpdate()
+
+	a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] Items set, calling sendTradeCompletionMessage for %s", playerName))
+
+	// Trigger the history and menu
+	a.sendTradeCompletionMessage()
 }
 
 type RaffleSession struct {
@@ -5422,6 +5552,52 @@ func waitForHiddenBlockedTradeCleanup(timeout time.Duration) bool {
 
 func startPayout(a *App, targetID int, targetName string) {
 	stopPayout()
+
+	mutex.Lock()
+	splitEnabled := isSplitDealerMode
+	mutex.Unlock()
+
+	if splitEnabled {
+		a.AddLogMsg(fmt.Sprintf("[BANKER_SPLIT] Skipping automated payout for %s (Dealer in Split Mode)", targetName))
+		a.noteCurrentGameHistory(fmt.Sprintf("Payout skipped (Banker Split enabled) for %s", targetName))
+
+		// Even though we don't pay out, we still need to finalize the history state
+		a.gameHistoryMu.Lock()
+		a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+			if strings.TrimSpace(entry.RiskDecision) == "" {
+				entry.RiskDecision = "Keep"
+			}
+			// Pre-populate payout items for history/discord visibility
+			if len(entry.PayoutItems) == 0 {
+				mutex.Lock()
+				isRisk := riskPayoutActive
+				riskReq := riskPayoutRequired
+				mutex.Unlock()
+
+				if isRisk && len(riskReq) > 0 {
+					for name, qty := range riskReq {
+						entry.PayoutItems = append(entry.PayoutItems, TradeItem{Name: name, Quantity: qty})
+					}
+					sort.Slice(entry.PayoutItems, func(i, j int) bool { return entry.PayoutItems[i].Name < entry.PayoutItems[j].Name })
+				} else if len(entry.BetItems) > 0 {
+					mult := entry.PayoutMultiplier
+					if mult <= 0 {
+						mult = 2.0 // fallback
+					}
+					for _, it := range entry.BetItems {
+						entry.PayoutItems = append(entry.PayoutItems, TradeItem{
+							Name:     it.Name,
+							Quantity: int(float64(it.Quantity) * mult),
+							RawData:  it.RawData,
+						})
+					}
+				}
+			}
+		})
+		a.gameHistoryMu.Unlock()
+		return
+	}
+
 	payoutActive = true
 	payoutTargetID = targetID
 	payoutTargetName = targetName
