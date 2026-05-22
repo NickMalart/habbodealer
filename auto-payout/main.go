@@ -1345,6 +1345,34 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 		}
 		a.roomUsersMu.Unlock()
 
+		// Attempt to resolve any pending active trade target to avoid a race where
+		// a TRADE_OPEN arrives before the USERS/SPACENODEUSERS packet is parsed.
+		// If we can match the active trade target to a newly parsed user (by
+		// trade_id or chat_id), populate the trade tracking fields so
+		// accept-time validation in handlePartnerAccept will succeed.
+		a.tradeMu.Lock()
+		activeTarget := a.activeTradeTarget
+		needResolve := a.lastTradePartner == ""
+		a.tradeMu.Unlock()
+		if activeTarget != 0 && needResolve {
+			a.roomUsersMu.RLock()
+			for _, u := range a.roomUsers {
+				if u.TradeID == activeTarget || u.ChatID == activeTarget {
+					a.tradeMu.Lock()
+					a.lastTradePartner = u.Username
+					a.lastTradePartnerID = u.TradeID
+					a.lastTradePartnerChatID = u.ChatID
+					if a.activeTradePartner == "" {
+						a.activeTradePartner = u.Username
+					}
+					a.tradeMu.Unlock()
+					a.AddLog(fmt.Sprintf("[ROOM] Resolved active trade target %d -> %s (chat=%d trade=%d)", activeTarget, u.Username, u.ChatID, u.TradeID))
+					break
+				}
+			}
+			a.roomUsersMu.RUnlock()
+		}
+
 		a.updatePayoutStatuses()
 	}(tmpPath)
 }
