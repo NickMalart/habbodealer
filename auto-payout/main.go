@@ -933,6 +933,54 @@ func (a *App) sendPayoutNotAcceptedWebhook(p Payout, attempts int) {
 	}()
 }
 
+// sendSimpleFailureWebhook posts a concise failure message (always) so the
+// operator is notified when automation exhausts retries. It marks the DB
+// notified flag and the in-memory map to avoid duplicates after sending.
+func (a *App) sendSimpleFailureWebhook(p Payout) {
+	go func() {
+		webhook := "https://discordapp.com/api/webhooks/1502209413065343086/lV-mzQvSRCqc-HkjKZWXOrmX0McP1HU47_fBjthixU2IdO0Bh18j-FBkIjGCDDjgAbo4"
+
+		embed := map[string]interface{}{
+			"title": "⚠️ Payout — Issue",
+			"color": 16711680,
+			"fields": []map[string]interface{}{
+				{"name": "Payout To", "value": p.Name, "inline": true},
+				{"name": "Payout Decision", "value": "Keep", "inline": true},
+				{"name": "Payout Items", "value": fmt.Sprintf("%s x%d", p.ItemName, p.Quantity), "inline": true},
+				{"name": "Notes", "value": "Payout trade failed to open after all retry attempts", "inline": false},
+				{"name": "Payout ID", "value": p.ID, "inline": false},
+			},
+			"timestamp": time.Now().Format(time.RFC3339),
+			"footer":    map[string]string{"text": "Auto Payout Bot"},
+		}
+
+		payload := map[string]interface{}{"embeds": []map[string]interface{}{embed}}
+		body, _ := json.Marshal(payload)
+
+		resp, err := http.Post(webhook, "application/json", bytes.NewReader(body))
+		if err != nil {
+			a.AddLog("ERROR: Failed to send simple failure webhook: " + err.Error())
+			return
+		}
+		resp.Body.Close()
+
+		// Mark in-memory and DB as notified to avoid repeated alerts.
+		a.notifiedMu.Lock()
+		a.notified[p.ID] = struct{}{}
+		a.notifiedMu.Unlock()
+
+		if a.db != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if _, err := a.db.Exec(ctx, "UPDATE public.auto_payouts SET notified = TRUE WHERE id = $1", p.ID); err != nil {
+				a.AddLog("ERROR: Failed to mark notified in DB: " + err.Error())
+			}
+		}
+
+		a.AddLog("Sent failure webhook for payout " + p.ID)
+	}()
+}
+
 func (a *App) handleRoomUsers(e *g.Intercept) {
 	headerName := "USERS"
 	if e.Packet.Header.Value != 28 {
@@ -998,8 +1046,8 @@ func (a *App) updatePayoutStatuses() {
 	// then persist them after unlocking to avoid blocking the hot path.
 	a.pMu.Lock()
 	changed := false
-	type changeRec struct{
-		id string
+	type changeRec struct {
+		id     string
 		status string
 	}
 	changes := make([]changeRec, 0)
@@ -2291,8 +2339,8 @@ func (a *App) automateTrade(p *Payout) {
 		}
 	}
 
-	// Send webhook notifying of unaccepted payout
-	a.sendPayoutNotAcceptedWebhook(*p, maxAttempts)
+	// Send concise webhook notifying of unaccepted payout (always attempts to send)
+	a.sendSimpleFailureWebhook(*p)
 }
 
 func main() {
