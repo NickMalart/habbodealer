@@ -1823,11 +1823,11 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 			if a.db != nil {
 				var err error
 				if p.BankerTradeID > 0 {
-					_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE id = $1 AND status = 'paying'", p.BankerTradeID)
+					_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE id = $1 AND status = 'paying'", p.BankerTradeID)
 				} else if p.TradeID > 0 {
-					_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE player_trade_id = $1 AND status = 'paying'", p.TradeID)
+					_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_trade_id = $1 AND status = 'paying'", p.TradeID)
 				} else {
-					_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE player_name = $1 AND status = 'paying'", p.Name)
+					_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_name = $1 AND status = 'paying'", p.Name)
 				}
 				if err != nil {
 					a.AddLog(fmt.Sprintf("ERROR: Failed to update banker_trades for %s/%d (banker_id=%d): %v", p.Name, p.TradeID, p.BankerTradeID, err))
@@ -2331,13 +2331,21 @@ func (a *App) automateTrade(p *Payout) {
 		for confirmAttempt := 1; confirmAttempt <= 5; confirmAttempt++ {
 			time.Sleep(4000 * time.Millisecond)
 
+			// Quick DB check: if payout already Completed in DB, abort immediately
+			if a.db != nil {
+				if completedDB, err := a.isPayoutCompletedInDB(p.ID); err == nil && completedDB {
+					a.AddLog(fmt.Sprintf("Payout %s already completed in DB; aborting confirm loop.", p.ID))
+					return
+				}
+			}
+
 			a.tradeMu.Lock()
 			active := a.tradeActive
 			a.tradeMu.Unlock()
 
 			if !active {
 				a.AddLog("Trade closed during confirmation stage.")
-				// See if handler already marked Completed
+				// See if handler already marked Completed (check both memory and DB)
 				a.pMu.RLock()
 				for _, pp := range a.payouts {
 					if pp.ID == p.ID && pp.Status == "Completed" {
@@ -2346,6 +2354,11 @@ func (a *App) automateTrade(p *Payout) {
 					}
 				}
 				a.pMu.RUnlock()
+				if !completed && a.db != nil {
+					if completedDB, err := a.isPayoutCompletedInDB(p.ID); err == nil && completedDB {
+						completed = true
+					}
+				}
 				break
 			}
 
@@ -2360,9 +2373,18 @@ func (a *App) automateTrade(p *Payout) {
 			}
 
 			a.AddLog(fmt.Sprintf("Finalizing stage 2 (Confirm Trade) attempt %d/5...", confirmAttempt))
+
+			// Before sending confirm, re-check DB to avoid racing with handler
+			if a.db != nil {
+				if completedDB, err := a.isPayoutCompletedInDB(p.ID); err == nil && completedDB {
+					a.AddLog(fmt.Sprintf("Payout %s already completed in DB; skipping confirm send.", p.ID))
+					return
+				}
+			}
+
 			a.ext.Send(g.Out.Id("TRADE_CONFIRM_ACCEPT_OUT"))
 
-			// Check if the payout was marked Completed by the intercepted handler
+			// Check if the payout was marked Completed by the intercepted handler (memory)
 			a.pMu.RLock()
 			for _, pp := range a.payouts {
 				if pp.ID == p.ID && pp.Status == "Completed" {
@@ -2371,6 +2393,13 @@ func (a *App) automateTrade(p *Payout) {
 				}
 			}
 			a.pMu.RUnlock()
+
+			// Also check DB after send in case completion happened concurrently
+			if !completed && a.db != nil {
+				if completedDB, err := a.isPayoutCompletedInDB(p.ID); err == nil && completedDB {
+					completed = true
+				}
+			}
 
 			if completed {
 				a.AddLog("Payout marked completed by handler.")
@@ -2410,11 +2439,11 @@ func (a *App) automateTrade(p *Payout) {
 	if a.db != nil {
 		var err error
 		if p.BankerTradeID > 0 {
-			_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE id = $1 AND status = 'paying'", p.BankerTradeID)
+			_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE id = $1 AND status = 'paying'", p.BankerTradeID)
 		} else if p.TradeID > 0 {
-			_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE player_trade_id = $1 AND status = 'paying'", p.TradeID)
+			_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_trade_id = $1 AND status = 'paying'", p.TradeID)
 		} else {
-			_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE player_name = $1 AND status = 'paying'", p.Name)
+			_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_name = $1 AND status = 'paying'", p.Name)
 		}
 		if err != nil {
 			a.AddLog(fmt.Sprintf("ERROR: Failed to update banker_trades for %s/%d (banker_id=%d): %v", p.Name, p.TradeID, p.BankerTradeID, err))

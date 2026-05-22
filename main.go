@@ -1994,7 +1994,20 @@ func canAnnounceDealerOpen() bool {
 }
 
 func shouldAnnounceDealerOpen() bool {
-	return dealerAnnouncementsEnabled && canAnnounceDealerOpen() && !dealerGameActive()
+	if !dealerAnnouncementsEnabled || !canAnnounceDealerOpen() || dealerGameActive() {
+		return false
+	}
+
+	// In split-dealer mode, suppress the public "dealer open" announce
+	// when there are any non-completed banker_trades for this banker.
+	if isSplitDealerMode && app != nil {
+		if app.hasActiveBankerTrades() {
+			app.AddLogMsg("[TRADE_REOPEN] suppressed dealer-open announce due to active banker_trades")
+			return false
+		}
+	}
+
+	return true
 }
 
 func getConfigFilePath() string {
@@ -2009,6 +2022,32 @@ func getGameHistoryFilePath() string {
 	configPath := filepath.Join(configDir, "roll-origins")
 	os.MkdirAll(configPath, 0700)
 	return filepath.Join(configPath, "game_history.json")
+}
+
+// hasActiveBankerTrades checks whether there are any non-completed rows in
+// public.banker_trades for this dealer. Returns false if DB unavailable.
+func (a *App) hasActiveBankerTrades() bool {
+	db, _ := a.getHistoryDB()
+	if db == nil {
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	dealerName := strings.TrimSpace(a.getCurrentDealerName())
+	var exists bool
+	var err error
+	if dealerName != "" {
+		err = db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM public.banker_trades WHERE lower(banker_name) = lower($1) AND COALESCE(status,'') != 'completed')`, dealerName).Scan(&exists)
+	} else {
+		err = db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM public.banker_trades WHERE COALESCE(status,'') != 'completed')`).Scan(&exists)
+	}
+	if err != nil {
+		a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] hasActiveBankerTrades query failed: %v", err))
+		return false
+	}
+	return exists
 }
 
 func getGameHistoryDBSpoolPath() string {
@@ -4188,11 +4227,26 @@ func handleMuteEnd() {
 
 		// Ensure the dealer open flags reflect that we'll be announcing now.
 		if dealerOpenQueued {
-			awaitingTradeOpen = true
-			dealerAcceptingTrades = true
-			if shouldAnnounceDealerOpen() {
-				dealerTradeWindowOpen = true
-				startDealerOpenHeartbeat(nil)
+			// If there are active banker_trades in progress, skip reopening dealer
+			// and remove the queued dealer-open message so we don't announce.
+			if app != nil && app.hasActiveBankerTrades() {
+				app.AddLogMsg("[TRADE_REOPEN] suppressed queued dealer-open due to active banker_trades")
+				filtered := make([]string, 0, len(messageQueue))
+				for _, m := range messageQueue {
+					if strings.TrimSpace(m) == dealerOpenMsg {
+						continue
+					}
+					filtered = append(filtered, m)
+				}
+				messageQueue = filtered
+				dealerOpenQueued = false
+			} else {
+				awaitingTradeOpen = true
+				dealerAcceptingTrades = true
+				if shouldAnnounceDealerOpen() {
+					dealerTradeWindowOpen = true
+					startDealerOpenHeartbeat(nil)
+				}
 			}
 		}
 
@@ -5859,14 +5913,23 @@ func startPayout(a *App, targetID int, targetName string) {
 			a.markCurrentGameHistoryIssue("Payout trade failed to open after all retry attempts", true)
 			sendMessageWithDelay(msg)
 			stopPayout()
-			// Resume normal dealer-open cycle
-			awaitingTradeOpen = true
-			dealerAcceptingTrades = true
-			if shouldAnnounceDealerOpen() {
-				dealerTradeWindowOpen = true
-				go sendMessageWithDelay(a.dealerOpenMessage())
+			// Resume normal dealer-open cycle unless there are active banker_trades.
+			if a.hasActiveBankerTrades() {
+				a.AddLogMsg("[TRADE_REOPEN] skipping dealer reopen due to active banker_trades")
+				awaitingTradeOpen = false
+				dealerAcceptingTrades = false
+				dealerTradeWindowOpen = false
+			} else {
+				awaitingTradeOpen = true
+				dealerAcceptingTrades = true
+				if shouldAnnounceDealerOpen() {
+					dealerTradeWindowOpen = true
+					go sendMessageWithDelay(a.dealerOpenMessage())
+				} else {
+					dealerTradeWindowOpen = false
+				}
+				startDealerOpenHeartbeat(a)
 			}
-			startDealerOpenHeartbeat(a)
 		}
 	}()
 }
@@ -9445,6 +9508,11 @@ func (a *App) resyncHandThenOpenDealer() {
 		return
 	}
 
+	// If banker_trades are in progress, do not reopen the dealer now.
+	if a.hasActiveBankerTrades() {
+		a.AddLogMsg("[TRADE_REOPEN] refusing to reopen dealer because active banker_trades exist")
+		return
+	}
 	awaitingTradeOpen = true
 	dealerAcceptingTrades = true
 	if shouldAnnounceDealerOpen() {
@@ -9517,6 +9585,15 @@ func (a *App) reopenDealerIdle(reason string) {
 		dealerAcceptingTrades = false
 		dealerTradeWindowOpen = false
 		a.AddLogMsg(fmt.Sprintf("[TRADE_REOPEN] refusing to announce dealer open because forced hand refresh failed (%s)", reason))
+		return
+	}
+
+	// If banker_trades are in progress, do not reopen dealer now.
+	if a.hasActiveBankerTrades() {
+		a.AddLogMsg(fmt.Sprintf("[TRADE_REOPEN] refusing to reopen idle dealer because active banker_trades exist (%s)", reason))
+		awaitingTradeOpen = false
+		dealerAcceptingTrades = false
+		dealerTradeWindowOpen = false
 		return
 	}
 
@@ -9657,18 +9734,26 @@ func (a *App) openDealerAfterRound() {
 	}()
 
 	dealerResyncInProgress = false
-	awaitingTradeOpen = true
-	dealerAcceptingTrades = true
-	if shouldAnnounceDealerOpen() {
-		dealerTradeWindowOpen = true
-		openMsg := a.dealerOpenMessage()
-		a.AddLogMsg(fmt.Sprintf("[DEALER_REOPEN] shouting: %q", openMsg))
-		go sendMessageWithDelay(openMsg)
-	} else {
+	// Do not open dealer if banker_trades are currently active.
+	if a.hasActiveBankerTrades() {
+		a.AddLogMsg("[DEALER_REOPEN] skipping dealer reopen due to active banker_trades")
+		awaitingTradeOpen = false
+		dealerAcceptingTrades = false
 		dealerTradeWindowOpen = false
-		log.Printf("[DEALER_REOPEN] dealer open skipped (muted or no dice)")
+	} else {
+		awaitingTradeOpen = true
+		dealerAcceptingTrades = true
+		if shouldAnnounceDealerOpen() {
+			dealerTradeWindowOpen = true
+			openMsg := a.dealerOpenMessage()
+			a.AddLogMsg(fmt.Sprintf("[DEALER_REOPEN] shouting: %q", openMsg))
+			go sendMessageWithDelay(openMsg)
+		} else {
+			dealerTradeWindowOpen = false
+			log.Printf("[DEALER_REOPEN] dealer open skipped (muted or no dice)")
+		}
+		startDealerOpenHeartbeat(a)
 	}
-	startDealerOpenHeartbeat(a)
 }
 
 // handleStripPacket parses STRIPINFO_2 [140] to track items in the player's hand.
@@ -13562,6 +13647,16 @@ func (a *App) openDealerAfterSetup(reason string) {
 		dealerAcceptingTrades = false
 		dealerTradeWindowOpen = false
 		a.AddLogMsg(fmt.Sprintf("[DEALER_SETUP] refusing to announce dealer open because forced hand refresh failed (%s)", reason))
+		a.sendLiveDealerStatus(false, a.getCurrentDealerName())
+		return
+	}
+
+	// Prevent opening when banker_trades are in progress.
+	if a.hasActiveBankerTrades() {
+		a.AddLogMsg(fmt.Sprintf("[DEALER_SETUP] refusing to open dealer because active banker_trades exist (%s)", reason))
+		awaitingTradeOpen = false
+		dealerAcceptingTrades = false
+		dealerTradeWindowOpen = false
 		a.sendLiveDealerStatus(false, a.getCurrentDealerName())
 		return
 	}
