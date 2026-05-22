@@ -432,22 +432,28 @@ func (a *App) initParser() {
 	} else if p, err := exec.LookPath("python"); err == nil {
 		a.pythonExec = p
 	}
-
+	// Resolve relative to the executable so the script is found regardless
+	// of the current working directory (useful when launched from app-launcher
+	// or packaged builds).
+	exePath, _ := os.Executable()
+	exeDir := filepath.Dir(exePath)
 	candidates := []string{
-		filepath.Join("scripts", "parse_users28.py"),
+		// Primary: exe is at build/bin/ -> two levels up = workspace root
+		filepath.Join(exeDir, "..", "..", "scripts", "parse_users28.py"),
+		// Fallbacks for development / go run workflows
 		filepath.Join("..", "scripts", "parse_users28.py"),
-		"C:\\Users\\Dubbo\\habbodealer\\habbodealer\\scripts\\parse_users28.py",
+		filepath.Join("scripts", "parse_users28.py"),
 	}
 
 	for _, cand := range candidates {
-		if _, err := os.Stat(cand); err != nil {
-			continue
-		}
 		abs, _ := filepath.Abs(cand)
-		a.parserScript = abs
-		a.AddLog("Parser found: " + abs)
-		return
+		if _, err := os.Stat(abs); err == nil {
+			a.parserScript = abs
+			a.AddLog("Parser found: " + abs)
+			return
+		}
 	}
+
 	a.AddLog("ERROR: parse_users28.py NOT FOUND. Detection will not work.")
 }
 
