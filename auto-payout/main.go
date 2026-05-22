@@ -451,6 +451,68 @@ func (a *App) initParser() {
 	a.AddLog("ERROR: parse_users28.py NOT FOUND. Detection will not work.")
 }
 
+func (a *App) getOwnerKey() string {
+	if v := strings.TrimSpace(os.Getenv("TRADE_TRACKER_OWNER_KEY")); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv("ROLL_ORIGINS_OWNER_KEY")); v != "" {
+		return v
+	}
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return h
+	}
+	return "local"
+}
+
+func (a *App) recordTradeLedger(partnerName string, tradeType string, items []TradeItem) {
+	if a.db == nil {
+		return
+	}
+
+	totalQty := 0
+	for _, it := range items {
+		if it.Quantity > 0 {
+			totalQty += it.Quantity
+		}
+	}
+	if totalQty <= 0 && len(items) > 0 {
+		totalQty = len(items)
+	}
+	if totalQty == 0 {
+		return
+	}
+
+	type LedgerItem struct {
+		Name     string `json:"name"`
+		Quantity int    `json:"quantity"`
+		RawName  string `json:"raw_name,omitempty"`
+		Qty      int    `json:"qty,omitempty"`
+	}
+
+	ledgerItems := make([]LedgerItem, 0, len(items))
+	for _, it := range items {
+		ledgerItems = append(ledgerItems, LedgerItem{
+			Name:     it.Name,
+			Quantity: it.Quantity,
+			RawName:  it.Name,
+			Qty:      it.Quantity,
+		})
+	}
+
+	itemsJSON, _ := json.Marshal(ledgerItems)
+	owner := a.getOwnerKey()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		if _, err := a.db.Exec(ctx, `INSERT INTO public.trade_ledger (owner_key, partner_name, trade_type, total_quantity, items) VALUES ($1, $2, $3, $4, $5)`, owner, partnerName, tradeType, totalQty, itemsJSON); err != nil {
+			a.AddLog(fmt.Sprintf("ERROR: failed to write trade_ledger: %v", err))
+		} else {
+			a.AddLog(fmt.Sprintf("LEDGER: recorded %s for %s (%d)", tradeType, partnerName, totalQty))
+		}
+	}()
+}
+
 // --- Wails Methods ---
 
 func (a *App) GetPayouts() []Payout {
@@ -1779,6 +1841,8 @@ func (a *App) recordBankerTrade(playerName string, items []TradeItem, tradeID in
 			a.AddLog(fmt.Sprintf("ERROR: [BANKER][DB] failed to record trade: %v", err))
 		} else {
 			a.AddLog(fmt.Sprintf("SUCCESS: [BANKER] recorded trade from %s with %d item(s)", playerName, len(items)))
+			// Also record to global trade_ledger as an IN (banker received items)
+			a.recordTradeLedger(playerName, "IN", items)
 		}
 	}()
 }
@@ -2188,6 +2252,16 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 					a.AddLog(fmt.Sprintf("ERROR: Failed to update banker_trades for %s/%d (banker_id=%d): %v", p.Name, p.TradeID, p.BankerTradeID, err))
 				} else {
 					a.AddLog(fmt.Sprintf("Marked banker_trades for %s/%d (banker_id=%d) as completed", p.Name, p.TradeID, p.BankerTradeID))
+
+					// Record payout to trade_ledger as OUT. Prefer the intercepted trade items when available,
+					// otherwise fall back to the queued payout item/quantity.
+					var outItems []TradeItem
+					if len(lastItems) > 0 {
+						outItems = lastItems
+					} else {
+						outItems = []TradeItem{{Name: p.ItemName, Quantity: p.Quantity}}
+					}
+					a.recordTradeLedger(p.Name, "OUT", outItems)
 				}
 			}
 		}
@@ -2804,6 +2878,9 @@ func (a *App) automateTrade(p *Payout) {
 			a.AddLog(fmt.Sprintf("ERROR: Failed to update banker_trades for %s/%d (banker_id=%d): %v", p.Name, p.TradeID, p.BankerTradeID, err))
 		} else {
 			a.AddLog(fmt.Sprintf("Marked banker_trades for %s/%d (banker_id=%d) as completed", p.Name, p.TradeID, p.BankerTradeID))
+
+			// Record the payout to trade_ledger as an OUT entry
+			a.recordTradeLedger(p.Name, "OUT", []TradeItem{{Name: p.ItemName, Quantity: p.Quantity}})
 		}
 	}
 
