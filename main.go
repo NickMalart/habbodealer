@@ -5737,13 +5737,47 @@ func startPayout(a *App, targetID int, targetName string) {
 		if isRiskKeep {
 			a.AddLogMsg("[BANKER_GAME] Player chose 'Keep' - scheduling auto-payout and marking banker trade as paying")
 
-			// Capture payout items from the current game history entry
+			// Capture payout items from the current game history entry. If the
+			// current game entry is unavailable or has no PayoutItems, fall
+			// back to the one-shot `riskPayoutRequired` map (set by
+			// finalizeRiskKeep) or infer from `gameBetItems` so the auto-payer
+			// is always given something to work with.
 			var payoutItems []TradeItem
 			a.gameHistoryMu.Lock()
-			a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+			ok := a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
 				payoutItems = append(payoutItems, entry.PayoutItems...)
 			})
 			a.gameHistoryMu.Unlock()
+
+			if !ok || len(payoutItems) == 0 {
+				// Try one-shot override built during finalizeRiskKeep
+				mutex.Lock()
+				overrideReq := riskPayoutRequired
+				mutex.Unlock()
+
+				if len(overrideReq) > 0 {
+					for name, qty := range overrideReq {
+						payoutItems = append(payoutItems, TradeItem{Name: name, Quantity: qty})
+					}
+					a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] fallback: built payout items from riskPayoutRequired (%d types)", len(payoutItems)))
+				} else if len(gameBetItems) > 0 {
+					// Infer payout items from recorded bet items and the
+					// current payout multiplier so we still queue something.
+					mult := payoutMultiplierForRound
+					if mult <= 0 {
+						mult = 2.0
+					}
+					for _, it := range gameBetItems {
+						if it.Quantity <= 0 {
+							continue
+						}
+						payoutItems = append(payoutItems, TradeItem{Name: it.Name, Quantity: int(float64(it.Quantity) * mult), RawData: it.RawData})
+					}
+					a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] fallback: built payout items from gameBetItems (%d types)", len(payoutItems)))
+				} else {
+					a.AddLogMsg("[BANKER_PAY] WARNING: no payout items found for auto-payout; aborting schedule")
+				}
+			}
 
 			// Read history DB and active banker trade ID
 			a.historyDBMu.Lock()
