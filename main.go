@@ -5719,50 +5719,98 @@ func startPayout(a *App, targetID int, targetName string) {
 			btID := a.activeBankerTradeID
 			a.historyDBMu.Unlock()
 
-			if db != nil && btID > 0 {
+			if db != nil {
+				// Ensure we have payout items to schedule - fallback to risk requirements or bet items if empty
+				if len(payoutItems) == 0 {
+					mutex.Lock()
+					isRisk := riskPayoutActive
+					riskReq := riskPayoutRequired
+					mutex.Unlock()
+
+					if isRisk && len(riskReq) > 0 {
+						for name, qty := range riskReq {
+							payoutItems = append(payoutItems, TradeItem{Name: name, Quantity: qty})
+						}
+						sort.Slice(payoutItems, func(i, j int) bool { return payoutItems[i].Name < payoutItems[j].Name })
+					} else {
+						// Fallback to using bet items from current history entry
+						a.gameHistoryMu.Lock()
+						a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+							mult := entry.PayoutMultiplier
+							if mult <= 0 {
+								mult = 2.0
+							}
+							if len(entry.BetItems) > 0 {
+								for _, it := range entry.BetItems {
+									payoutItems = append(payoutItems, TradeItem{Name: it.Name, Quantity: int(float64(it.Quantity) * mult)})
+								}
+							}
+						})
+						a.gameHistoryMu.Unlock()
+					}
+				}
+
 				go func(items []TradeItem, id int, player string) {
 					ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 					defer cancel()
 
-					// Mark the banker_trade as paying so external auto-payer can pick it up
-					_, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'paying', risk_status = 'paying' WHERE id = $1", id)
-					if err != nil {
-						a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] ERROR: failed to mark banker_trades %d as paying: %v", id, err))
-					} else {
-						a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] banker_trades %d marked as paying", id))
+					if len(items) == 0 {
+						a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] no payout items determined for %s; skipping DB insert", player))
+						return
 					}
 
-					// Fetch player_trade_id from banker_trades so auto-payer knows who to trade with
 					var playerTradeID int
 					var dbBank int
-					if err := db.QueryRow(ctx, "SELECT COALESCE(player_trade_id,0), COALESCE(risk_bank,0) FROM banker_trades WHERE id = $1", id).Scan(&playerTradeID, &dbBank); err != nil {
-						// If not found or null, default to 0 and continue; log for visibility
-						a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] could not fetch player_trade_id/risk_bank for banker_trades %d: %v", id, err))
+
+					if id > 0 {
+						// Mark the banker_trade as paying so external auto-payer can pick it up
+						_, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'paying', risk_status = 'paying' WHERE id = $1", id)
+						if err != nil {
+							a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] ERROR: failed to mark banker_trades %d as paying: %v", id, err))
+						} else {
+							a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] banker_trades %d marked as paying", id))
+						}
+
+						// Fetch player_trade_id from banker_trades so auto-payer knows who to trade with
+						if err := db.QueryRow(ctx, "SELECT COALESCE(player_trade_id,0), COALESCE(risk_bank,0) FROM banker_trades WHERE id = $1", id).Scan(&playerTradeID, &dbBank); err != nil {
+							a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] could not fetch player_trade_id/risk_bank for banker_trades %d: %v", id, err))
+							playerTradeID = 0
+							dbBank = 0
+						} else {
+							a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] fetched player_trade_id=%d risk_bank=%d for banker_trades %d", playerTradeID, dbBank, id))
+						}
+					} else {
+						a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] No active banker_trade_id for %s; inserting auto_payout without banker_trade_id", player))
 						playerTradeID = 0
 						dbBank = 0
+					}
+
+					var bankerParam interface{}
+					if id > 0 {
+						bankerParam = id
 					} else {
-						a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] fetched player_trade_id=%d risk_bank=%d for banker_trades %d", playerTradeID, dbBank, id))
+						bankerParam = nil
 					}
 
 					// Insert auto_payouts entries (one per payout item)
 					for _, it := range items {
-						// Use the canonical parsed Name (which should match stocked_items.raw_name when available)
 						itemName := it.Name
 						pid := fmt.Sprintf("%d", time.Now().UnixNano())
 						created := time.Now().Format("2006-01-02 15:04:05")
 						qty := it.Quantity
-						_, err := db.Exec(ctx, "INSERT INTO public.auto_payouts (id, player_name, item_name, quantity, status, created_at, player_trade_id, banker_trade_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", pid, player, itemName, qty, "Pending", created, playerTradeID, id)
+
+						_, err := db.Exec(ctx, "INSERT INTO public.auto_payouts (id, player_name, item_name, quantity, status, created_at, player_trade_id, banker_trade_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", pid, player, itemName, qty, "Pending", created, playerTradeID, bankerParam)
 						if err != nil {
 							a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] ERROR: failed to insert auto_payout for %s: %v", player, err))
 						} else {
-							a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] queued auto_payout for %s: %s x%d (trade_id=%d)", player, itemName, qty, playerTradeID))
+							a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] queued auto_payout for %s: %s x%d (trade_id=%d banker_id=%v)", player, itemName, qty, playerTradeID, bankerParam))
 						}
 						// Small pause to avoid identical timestamps
 						time.Sleep(15 * time.Millisecond)
 					}
 				}(payoutItems, btID, targetName)
 			} else {
-				a.AddLogMsg("[BANKER_PAY] Cannot schedule auto-payout: history DB not connected or no active banker trade")
+				a.AddLogMsg("[BANKER_PAY] Cannot schedule auto-payout: history DB not connected")
 			}
 
 			return
