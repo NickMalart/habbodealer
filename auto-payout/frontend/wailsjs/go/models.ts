@@ -9,6 +9,7 @@ export namespace main {
 	    createdAt: string;
 	    playerTradeId?: number;
 	    bankerTradeId?: number;
+	    notified?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Payout(source);
@@ -24,6 +25,7 @@ export namespace main {
 	        this.createdAt = source["createdAt"];
 	        this.playerTradeId = source["playerTradeId"];
 	        this.bankerTradeId = source["bankerTradeId"];
+	        this.notified = source["notified"];
 	    }
 	}
 	export class StockedItem {

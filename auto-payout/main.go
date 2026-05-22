@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,6 +41,7 @@ type Payout struct {
 	CreatedAt     string `json:"createdAt"`
 	TradeID       int    `json:"playerTradeId,omitempty"`
 	BankerTradeID int    `json:"bankerTradeId,omitempty"`
+	Notified      bool   `json:"notified,omitempty"`
 }
 
 type StockedItem struct {
@@ -121,6 +123,14 @@ type App struct {
 	// Track last reported inventory to DB to avoid redundant updates
 	lastInventoryReport string
 	lastInventoryMu     sync.Mutex
+
+	// Inflight payouts being actively automated (name -> payout id)
+	inflight   map[string]string
+	inflightMu sync.RWMutex
+
+	// Notified map to avoid duplicate failure webhooks in-memory
+	notified   map[string]struct{}
+	notifiedMu sync.RWMutex
 }
 
 func NewApp() *App {
@@ -134,6 +144,8 @@ func NewApp() *App {
 		discordWebhook:       "https://discordapp.com/api/webhooks/1505787297696583800/aUE_M4-quy6wkFs0qVySjHgZq3zYOze5watr67D89e6O1V9VwmjNy24HzN-X7TI5G5k3",
 		stripScanSeenItemIDs: make(map[int]struct{}),
 		stripScanItemIDs:     make(map[string][]int),
+		inflight:             make(map[string]string),
+		notified:             make(map[string]struct{}),
 	}
 }
 
@@ -284,6 +296,23 @@ func (a *App) startup(ctx context.Context) {
 	a.ext.Intercept(g.In.Id("TRADE_COMPLETED_IN")).With(a.handleTradeCompleted)
 	a.ext.Intercept(g.In.Id("TRADE_ITEMS_IN")).With(a.handleTradeItems)
 
+	// Selective packet sniffing for debugging: log TRADE_OPEN/TRADE_CLOSE/TRADE_ACCEPT/COMPLETED packets
+	a.ext.InterceptAll(func(e *g.Intercept) {
+		h := e.Packet.Header.Value
+		// Interested headers: TRADE_OPEN_OUT(71), TRADE_OPEN_IN(104), TRADE_CLOSE_OUT(70), TRADE_ACCEPT_IN(109), TRADE_CONFIRM_IN(111), TRADE_COMPLETED_IN(112), TRADE_ITEMS_IN(108)
+		switch h {
+		case 71, 104, 70, 109, 111, 112, 108:
+			dir := "out"
+			if e.Packet.Header.Dir == g.In {
+				dir = "in"
+			}
+			// Log short hex of payload to help debug open/response
+			a.AddLog(fmt.Sprintf("PACKET_SNIFF header=%d dir=%s len=%d payload=% X", h, dir, len(e.Packet.Data), e.Packet.Data))
+		default:
+			// ignore
+		}
+	})
+
 	a.ext.Activated(func() {
 		a.ShowWindow()
 	})
@@ -359,6 +388,9 @@ func (a *App) initDatabase() {
 	if err != nil {
 		a.AddLog("ERROR: Table creation failed: " + err.Error())
 	}
+
+	// Ensure notified column exists for failure webhooks
+	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS notified BOOLEAN DEFAULT FALSE;")
 
 	// Create public.stocked_items table
 	query = `CREATE TABLE IF NOT EXISTS public.stocked_items (
@@ -734,11 +766,11 @@ func (a *App) loadPayoutsFromDB() {
 	count := 0
 
 	// Manual entries from public.auto_payouts table
-	rows, err := a.db.Query(context.Background(), "SELECT id, player_name, item_name, quantity, status, created_at, COALESCE(player_trade_id,0), COALESCE(banker_trade_id,0) FROM public.auto_payouts WHERE status != 'Completed' ORDER BY created_at DESC")
+	rows, err := a.db.Query(context.Background(), "SELECT id, player_name, item_name, quantity, status, created_at, COALESCE(player_trade_id,0), COALESCE(banker_trade_id,0), COALESCE(notified,false) FROM public.auto_payouts WHERE status != 'Completed' ORDER BY created_at DESC")
 	if err == nil {
 		for rows.Next() {
 			var p Payout
-			if err := rows.Scan(&p.ID, &p.Name, &p.ItemName, &p.Quantity, &p.Status, &p.CreatedAt, &p.TradeID, &p.BankerTradeID); err == nil {
+			if err := rows.Scan(&p.ID, &p.Name, &p.ItemName, &p.Quantity, &p.Status, &p.CreatedAt, &p.TradeID, &p.BankerTradeID, &p.Notified); err == nil {
 				p.Name = normalizeName(p.Name)
 				payouts = append(payouts, p)
 				count++
@@ -812,6 +844,95 @@ func (a *App) persistPayoutStatus(id string, status string) {
 	}
 }
 
+func (a *App) markInflight(name, id string) {
+	a.inflightMu.Lock()
+	a.inflight[strings.ToLower(name)] = id
+	a.inflightMu.Unlock()
+}
+
+func (a *App) unmarkInflight(name string) {
+	a.inflightMu.Lock()
+	delete(a.inflight, strings.ToLower(name))
+	a.inflightMu.Unlock()
+}
+
+func (a *App) getInflight(name string) (string, bool) {
+	a.inflightMu.RLock()
+	id, ok := a.inflight[strings.ToLower(name)]
+	a.inflightMu.RUnlock()
+	return id, ok
+}
+
+func (a *App) sendPayoutNotAcceptedWebhook(p Payout, attempts int) {
+	// Non-blocking webhook notify about failed payout acceptance
+	go func() {
+		webhook := "https://discordapp.com/api/webhooks/1502209413065343086/lV-mzQvSRCqc-HkjKZWXOrmX0McP1HU47_fBjthixU2IdO0Bh18j-FBkIjGCDDjgAbo4"
+
+		// In-memory dedupe
+		a.notifiedMu.RLock()
+		if _, ok := a.notified[p.ID]; ok {
+			a.notifiedMu.RUnlock()
+			a.AddLog("Skipping webhook: already sent in this session for " + p.ID)
+			return
+		}
+		a.notifiedMu.RUnlock()
+
+		// If DB reports already notified, skip
+		if a.db != nil {
+			var already bool
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := a.db.QueryRow(ctx, "SELECT COALESCE(notified,false) FROM public.auto_payouts WHERE id = $1", p.ID).Scan(&already); err == nil {
+				if already {
+					a.notifiedMu.Lock()
+					a.notified[p.ID] = struct{}{}
+					a.notifiedMu.Unlock()
+					a.AddLog("Skipping webhook: already notified in DB for " + p.ID)
+					return
+				}
+			}
+		}
+
+		embed := map[string]interface{}{
+			"title": "⚠️ Payout Not Accepted",
+			"color": 16711680, // red
+			"fields": []map[string]interface{}{
+				{"name": "Payout To", "value": p.Name, "inline": true},
+				{"name": "Item", "value": p.ItemName, "inline": true},
+				{"name": "Quantity", "value": fmt.Sprintf("%d", p.Quantity), "inline": true},
+				{"name": "Attempts", "value": fmt.Sprintf("%d", attempts), "inline": true},
+				{"name": "Note", "value": "Trade attempts exhausted; marking payout completed forcibly.", "inline": false},
+			},
+			"timestamp": time.Now().Format(time.RFC3339),
+		}
+
+		payload := map[string]interface{}{"embeds": []map[string]interface{}{embed}}
+		body, _ := json.Marshal(payload)
+
+		resp, err := http.Post(webhook, "application/json", bytes.NewReader(body))
+		if err != nil {
+			a.AddLog("ERROR: Failed to send failure webhook: " + err.Error())
+			return
+		}
+		resp.Body.Close()
+
+		// Mark in-memory and in DB
+		a.notifiedMu.Lock()
+		a.notified[p.ID] = struct{}{}
+		a.notifiedMu.Unlock()
+
+		if a.db != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if _, err := a.db.Exec(ctx, "UPDATE public.auto_payouts SET notified = TRUE WHERE id = $1", p.ID); err != nil {
+				a.AddLog("ERROR: Failed to mark notified in DB: " + err.Error())
+			}
+		}
+
+		a.AddLog("Sent failure webhook for payout " + p.ID)
+	}()
+}
+
 func (a *App) handleRoomUsers(e *g.Intercept) {
 	headerName := "USERS"
 	if e.Packet.Header.Value != 28 {
@@ -873,12 +994,17 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 }
 
 func (a *App) updatePayoutStatuses() {
+	// We collect changed IDs and their new statuses while holding the in-memory lock,
+	// then persist them after unlocking to avoid blocking the hot path.
 	a.pMu.Lock()
-	defer a.pMu.Unlock()
-	a.roomUsersMu.RLock()
-	defer a.roomUsersMu.RUnlock()
-
 	changed := false
+	type changeRec struct{
+		id string
+		status string
+	}
+	changes := make([]changeRec, 0)
+
+	a.roomUsersMu.RLock()
 	for i, p := range a.payouts {
 		if p.Status == "Completed" || p.Status == "Disabled" {
 			continue
@@ -891,12 +1017,14 @@ func (a *App) updatePayoutStatuses() {
 			if p.Status == "Pending" || p.Status == "Failed" || p.Status == "Payout Pending" {
 				a.AddLog(fmt.Sprintf("Target detected: %s (RoomIndex: %d)", p.Name, user.ChatID))
 				a.payouts[i].Status = "In Room"
+				changes = append(changes, changeRec{id: p.ID, status: "In Room"})
 				changed = true
 			}
 		} else {
 			if p.Status == "In Room" {
 				a.AddLog(fmt.Sprintf("Target left room: %s", p.Name))
 				a.payouts[i].Status = "Pending"
+				changes = append(changes, changeRec{id: p.ID, status: "Pending"})
 				changed = true
 			} else {
 				// Debug: target not present in current room users snapshot
@@ -904,7 +1032,14 @@ func (a *App) updatePayoutStatuses() {
 			}
 		}
 	}
+	a.roomUsersMu.RUnlock()
+	a.pMu.Unlock()
+
 	if changed {
+		// Persist status changes to DB to prevent the dbPoller from overwriting
+		for _, c := range changes {
+			go a.persistPayoutStatus(c.id, c.status)
+		}
 		go a.emitUpdate()
 	}
 }
@@ -1336,6 +1471,13 @@ func (a *App) recordBankerTrade(playerName string, items []TradeItem, tradeID in
 func (a *App) handlePartnerAccept(e *g.Intercept) {
 	a.AddLog("Partner accepted offer (Stage 1).")
 
+	// Track partner acceptance for outgoing payout trades so automation can proceed
+	a.tradeMu.Lock()
+	if a.payoutTradeSent {
+		a.tradeAccepted = true
+	}
+	a.tradeMu.Unlock()
+
 	// Final validation for incoming trades
 	if !a.payoutTradeSent {
 		a.tradeMu.Lock()
@@ -1443,8 +1585,7 @@ func (a *App) handleTradeClose(e *g.Intercept) {
 	partner := a.activeTradePartner
 	screenshotPath := a.lastScreenshotPath
 	a.tradeActive = false
-	a.activeTradePartner = ""
-	a.payoutTradeSent = false
+	// Do not immediately clear activeTradePartner/payoutTradeSent; let automation retry if inflight
 	a.lastScreenshotPath = ""
 	a.tradeMu.Unlock()
 
@@ -1453,6 +1594,20 @@ func (a *App) handleTradeClose(e *g.Intercept) {
 	}
 
 	if partner != "" {
+		// If there's an inflight automation for this partner, do not re-queue; let automation reopen
+		if id, ok := a.getInflight(partner); ok {
+			// Clear any stale activeTradeTarget (often set by inbound TRADE_OPEN) so retries
+			// re-resolve the player's current room index (ChatID) from parse28.
+			a.AddLog(fmt.Sprintf("Trade with %s closed during automation (inflight id=%s). Clearing active target, refreshing room users and will retry shortly.", partner, id))
+			a.tradeMu.Lock()
+			a.activeTradeTarget = 0
+			a.payoutTradeSent = false
+			a.tradeMu.Unlock()
+			go a.requestRoomUsers()
+			a.emitUpdate()
+			return
+		}
+
 		a.pMu.Lock()
 		changedIDs := []string{}
 		for i, p := range a.payouts {
@@ -1491,9 +1646,13 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 	lastChatID := a.lastTradePartnerChatID
 
 	a.tradeActive = false
-	a.activeTradePartner = ""
 	a.lastScreenshotPath = ""
 	a.tradeMu.Unlock()
+
+	// If this was an automated payout, clear inflight mapping for partner
+	if partner != "" {
+		a.unmarkInflight(partner)
+	}
 
 	// If it was a bet (incoming trade), record to banker_trades
 	if !payoutSent && len(lastItems) > 0 {
@@ -1714,16 +1873,28 @@ func (a *App) payoutMonitor() {
 			continue
 		}
 
-		// Use ChatID (Room Index) for trading
+		// Prefer trading by the player's room ChatID when they're present in-room.
+		// Use TradeID only when ChatID is not available (player not in room).
 		roomIndex := user.ChatID
-		if roomIndex < 0 {
-			a.AddLog(fmt.Sprintf("ERROR: %s has invalid RoomIndex %d", targetName, roomIndex))
+		selectedTarget := roomIndex
+		usingTradeID := false
+		if roomIndex > 0 {
+			// Use room index for outgoing trade opens (works reliably)
+			selectedTarget = roomIndex
+			usingTradeID = false
+		} else if user.TradeID > 0 {
+			// Fallback to TradeID when no room index is present
+			selectedTarget = user.TradeID
+			usingTradeID = true
+		}
+		if selectedTarget < 0 {
+			a.AddLog(fmt.Sprintf("ERROR: %s has invalid target %d", targetName, selectedTarget))
 			continue
 		}
 
 		a.tradeMu.Lock()
 		a.activeTradePartner = targetName
-		a.activeTradeTarget = roomIndex
+		a.activeTradeTarget = selectedTarget
 		a.payoutTradeSent = true
 		a.tradeMu.Unlock()
 
@@ -1751,17 +1922,28 @@ func (a *App) payoutMonitor() {
 			continue
 		}
 
-		a.AddLog(fmt.Sprintf("Initiating auto-trade for %s (RoomIndex: %d) for %s...", targetName, roomIndex, targetItem))
+		if usingTradeID {
+			a.AddLog(fmt.Sprintf("Initiating auto-trade for %s (TradeID: %d) for %s...", targetName, selectedTarget, targetItem))
+			// Many servers reliably accept VL64-encoded TradeID opens. Try VL64-only first.
+			vl := []byte(encodeVL64(selectedTarget))
+			a.AddLog(fmt.Sprintf("Sending TRADE_OPEN_OUT by TradeID %d (vl=%x)", selectedTarget, vl))
+			a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), vl)
+			// small delay then try integer form as a fallback
+			time.Sleep(150 * time.Millisecond)
+			a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), selectedTarget)
+		} else {
+			a.AddLog(fmt.Sprintf("Initiating auto-trade for %s (RoomIndex: %d) for %s...", targetName, selectedTarget, targetItem))
+			a.AddLog(fmt.Sprintf("Sending TRADE_OPEN_OUT to RoomIndex %d (both forms)", selectedTarget))
+			a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), selectedTarget)
+			a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), []byte(encodeVL64(selectedTarget)))
+		}
 
-		// Debug: log that we are about to send trade-open packets
-		a.AddLog(fmt.Sprintf("Sending TRADE_OPEN_OUT to RoomIndex %d (both forms)", roomIndex))
-		// Send both standard and raw fallback as seen in root app
-		a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), roomIndex)
-		a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), []byte(encodeVL64(roomIndex)))
-
-		// Create a snapshot for the automation goroutine
+		// Create a snapshot for the automation goroutine; ensure it has the most-recent trade id
 		pCopy := target
 		pCopy.Status = "Trading"
+		if usingTradeID {
+			pCopy.TradeID = selectedTarget
+		}
 		go a.automateTrade(&pCopy)
 	}
 }
@@ -1769,130 +1951,348 @@ func (a *App) payoutMonitor() {
 func (a *App) automateTrade(p *Payout) {
 	a.AddLog(fmt.Sprintf("Starting automation for %s: %d x %s (ID: %s)", p.Name, p.Quantity, p.ItemName, p.ID))
 
-	// Wait up to 5 seconds for the trade window to open
-	tradeOpened := false
-	for i := 0; i < 50; i++ {
-		time.Sleep(100 * time.Millisecond)
-		a.tradeMu.Lock()
-		if a.tradeActive {
-			tradeOpened = true
-			a.tradeMu.Unlock()
-			break
-		}
-		a.tradeMu.Unlock()
-	}
-
-	if tradeOpened {
-		a.AddLog(fmt.Sprintf("Automation: trade window detected open for %s", p.Name))
-	}
-
-	if !tradeOpened {
-		a.AddLog("Automation aborted: trade window did not open. Re-queueing...")
-
-		// Re-queue the payout so it can be retried
-		a.pMu.Lock()
-		for i, entry := range a.payouts {
-			if entry.ID == p.ID && entry.Status == "Trading" {
-				a.payouts[i].Status = "Pending"
-			}
-		}
-		a.pMu.Unlock()
-		// Persist re-queue to DB
-		a.persistPayoutStatus(p.ID, "Pending")
-		a.emitUpdate()
-
-		// Reset trade state so the monitor can pick it up again
+	// Mark this payout as inflight so other handlers know not to re-queue it
+	a.markInflight(p.Name, p.ID)
+	defer func() {
+		a.unmarkInflight(p.Name)
 		a.tradeMu.Lock()
 		if a.activeTradePartner == p.Name {
 			a.activeTradePartner = ""
 		}
+		a.payoutTradeSent = false
 		a.tradeMu.Unlock()
-		return
-	}
+	}()
 
-	a.inventoryMu.RLock()
-	ids, ok := a.inventory[strings.ToLower(p.ItemName)]
-	inventoryCount := len(ids)
-	a.inventoryMu.RUnlock()
+	maxAttempts := 5
 
-	if !ok || inventoryCount == 0 {
-		a.AddLog(fmt.Sprintf("ERROR: Inventory shortage for '%s'. Scanned hand has 0.", p.ItemName))
-		// We re-queue it by changing status back to Pending
+	// Capture initial target if set by monitor
+	a.tradeMu.Lock()
+	initialTarget := a.activeTradeTarget
+	a.tradeMu.Unlock()
+
+	for attemptNum := 1; attemptNum <= maxAttempts; attemptNum++ {
+		a.AddLog(fmt.Sprintf("Automation attempt %d/%d for %s", attemptNum, maxAttempts, p.Name))
+
+		// Ensure in-memory state shows Trading and persist it
 		a.pMu.Lock()
-		for i, entry := range a.payouts {
-			if entry.ID == p.ID && entry.Status == "Trading" {
-				a.payouts[i].Status = "Pending"
+		for i := range a.payouts {
+			if a.payouts[i].ID == p.ID {
+				a.payouts[i].Status = "Trading"
+				break
 			}
 		}
 		a.pMu.Unlock()
-		// Persist re-queue to DB
-		a.persistPayoutStatus(p.ID, "Pending")
+		a.persistPayoutStatus(p.ID, "Trading")
 		a.emitUpdate()
-		return
-	}
 
-	toAdd := p.Quantity
-	if inventoryCount < toAdd {
-		a.AddLog(fmt.Sprintf("WARNING: Requesting %d but only have %d of %s. Trading available amount.", toAdd, inventoryCount, p.ItemName))
-		toAdd = inventoryCount
-	}
-
-	a.AddLog(fmt.Sprintf("Adding %d x %s (Total available: %d)...", toAdd, p.ItemName, inventoryCount))
-	for i := 0; i < toAdd; i++ {
+		// Ensure active trade partner/target are set so reopen attempts work
 		a.tradeMu.Lock()
-		if !a.tradeActive {
-			a.AddLog("Adding items aborted: trade closed unexpectedly.")
-			return
+		a.activeTradePartner = p.Name
+		if a.activeTradeTarget == 0 {
+			a.activeTradeTarget = initialTarget
 		}
+		// Mark that this is a payout trade
+		a.payoutTradeSent = true
+		openTarget := a.activeTradeTarget
 		a.tradeMu.Unlock()
 
-		itemID := ids[i]
-		a.ext.Send(g.Out.Id("TRADE_ADDITEM_OUT"), itemID)
-		a.AddLog(fmt.Sprintf("Sent TRADE_ADDITEM_OUT for ID: %d (%d/%d)", itemID, i+1, toAdd))
-		time.Sleep(750 * time.Millisecond)
-	}
-
-	a.AddLog("Finalizing stage 1 (Accept Offer)...")
-	for attempt := 1; attempt <= 3; attempt++ {
-		time.Sleep(1500 * time.Millisecond)
-		a.tradeMu.Lock()
-		if !a.tradeActive {
-			a.tradeMu.Unlock()
-			return
-		}
-		a.tradeMu.Unlock()
-
-		a.ext.Send(g.Out.Id("TRADE_ACCEPT_OUT"))
-		a.AddLog(fmt.Sprintf("Sent TRADE_ACCEPT_OUT attempt %d/3", attempt))
-	}
-
-	a.AddLog("Waiting for partner to accept and then confirmation stage (attempting stage 2 in 4s)...")
-
-	for attempt := 1; attempt <= 5; attempt++ {
-		time.Sleep(4000 * time.Millisecond)
-
-		a.tradeMu.Lock()
-		active := a.tradeActive
-		a.tradeMu.Unlock()
-
-		if !active {
-			a.AddLog("Stage 2 aborted: trade closed (likely completed or cancelled).")
-			return
-		}
-
-		if attempt == 1 {
-			a.AddLog("Capturing trade confirmation screenshot...")
-			go func() {
-				path := a.takeScreenshot()
+		// Re-resolve the player's current room index (ChatID) from the latest parse28
+		// snapshot - prefer ChatID when available to avoid using stale inbound trade ids.
+		a.roomUsersMu.RLock()
+		if u, ok := a.roomUsers[strings.ToLower(normalizeName(p.Name))]; ok {
+			if u.ChatID > 0 {
+				openTarget = u.ChatID
+				// also update the activeTradeTarget so future attempts use the room index
 				a.tradeMu.Lock()
-				a.lastScreenshotPath = path
+				a.activeTradeTarget = openTarget
 				a.tradeMu.Unlock()
-			}()
+			} else if u.TradeID > 0 {
+				openTarget = u.TradeID
+				a.tradeMu.Lock()
+				a.activeTradeTarget = openTarget
+				a.tradeMu.Unlock()
+			}
+		}
+		a.roomUsersMu.RUnlock()
+
+		// If we don't have a target, fall back to DB trade id
+		if openTarget == 0 && p.TradeID > 0 {
+			openTarget = p.TradeID
 		}
 
-		a.AddLog(fmt.Sprintf("Finalizing stage 2 (Confirm Trade) attempt %d/5...", attempt))
-		a.ext.Send(g.Out.Id("TRADE_CONFIRM_ACCEPT_OUT"))
+		// Attempt to open trade
+		if openTarget != 0 {
+			vl := []byte(encodeVL64(openTarget))
+			// If this openTarget matches the DB TradeID for this payout, prefer VL64-first
+			isTradeID := p.TradeID > 0 && openTarget == p.TradeID
+			if isTradeID {
+				a.AddLog(fmt.Sprintf("Initiating TRADE_OPEN (attempt %d) for %s TradeID=%d vl=%x (VL64-first)", attemptNum, p.Name, openTarget, vl))
+				a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), vl)
+				time.Sleep(150 * time.Millisecond)
+				a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), openTarget)
+			} else {
+				a.AddLog(fmt.Sprintf("Initiating TRADE_OPEN (attempt %d) for %s target=%d vl=%x", attemptNum, p.Name, openTarget, vl))
+				// Send both integer and VL64 forms; repeat a couple times to improve reliability
+				for s := 0; s < 2; s++ {
+					a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), openTarget)
+					a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), vl)
+					time.Sleep(120 * time.Millisecond)
+				}
+			}
+		} else {
+			// Try to resolve from room users
+			a.roomUsersMu.RLock()
+			u, ok := a.roomUsers[strings.ToLower(normalizeName(p.Name))]
+			a.roomUsersMu.RUnlock()
+			if !ok {
+				a.AddLog("No known room target to open trade for " + p.Name + " - will retry shortly")
+				time.Sleep(1 * time.Second)
+				continue
+			}
+			a.tradeMu.Lock()
+			a.activeTradeTarget = u.ChatID
+			a.tradeMu.Unlock()
+			a.AddLog(fmt.Sprintf("Initiating TRADE_OPEN to RoomIndex %d for %s", u.ChatID, p.Name))
+			a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), u.ChatID)
+			a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), []byte(encodeVL64(u.ChatID)))
+		}
+
+		// Wait up to 5s for the trade window to open
+		tradeOpened := false
+		for i := 0; i < 50; i++ {
+			time.Sleep(100 * time.Millisecond)
+			a.tradeMu.Lock()
+			if a.tradeActive {
+				tradeOpened = true
+				a.tradeMu.Unlock()
+				break
+			}
+			a.tradeMu.Unlock()
+		}
+
+		if !tradeOpened {
+			a.AddLog("Trade did not open; will retry.")
+			a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+			a.tradeMu.Lock()
+			a.payoutTradeSent = false
+			a.tradeMu.Unlock()
+			// Refresh room user list before retrying so we can resolve ChatID again
+			go a.requestRoomUsers()
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		a.AddLog(fmt.Sprintf("Automation: trade window detected open for %s (attempt %d)", p.Name, attemptNum))
+
+		// Refresh inventory snapshot for each attempt
+		a.inventoryMu.RLock()
+		ids, ok := a.inventory[strings.ToLower(p.ItemName)]
+		inventoryCount := len(ids)
+		a.inventoryMu.RUnlock()
+
+		if !ok || inventoryCount == 0 {
+			a.AddLog(fmt.Sprintf("ERROR: Inventory shortage for '%s'. Scanned hand has 0.", p.ItemName))
+			// Re-queue as Pending
+			a.pMu.Lock()
+			for i, entry := range a.payouts {
+				if entry.ID == p.ID && entry.Status == "Trading" {
+					a.payouts[i].Status = "Pending"
+				}
+			}
+			a.pMu.Unlock()
+			a.persistPayoutStatus(p.ID, "Pending")
+			a.emitUpdate()
+			return
+		}
+
+		toAdd := p.Quantity
+		if inventoryCount < toAdd {
+			a.AddLog(fmt.Sprintf("WARNING: Requesting %d but only have %d of %s. Trading available amount.", toAdd, inventoryCount, p.ItemName))
+			toAdd = inventoryCount
+		}
+
+		// Add items
+		a.AddLog(fmt.Sprintf("Adding %d x %s (Total available: %d)...", toAdd, p.ItemName, inventoryCount))
+		itemsAdded := 0
+		aborted := false
+		for i := 0; i < toAdd; i++ {
+			a.tradeMu.Lock()
+			if !a.tradeActive {
+				a.tradeMu.Unlock()
+				a.AddLog("Adding items aborted: trade closed unexpectedly.")
+				aborted = true
+				break
+			}
+			a.tradeMu.Unlock()
+
+			itemID := ids[i]
+			a.ext.Send(g.Out.Id("TRADE_ADDITEM_OUT"), itemID)
+			a.AddLog(fmt.Sprintf("Sent TRADE_ADDITEM_OUT for ID: %d (%d/%d)", itemID, i+1, toAdd))
+			itemsAdded++
+			time.Sleep(750 * time.Millisecond)
+		}
+
+		if aborted {
+			// Closed during item add; try again
+			a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+			a.tradeMu.Lock()
+			a.payoutTradeSent = false
+			a.tradeMu.Unlock()
+			// Let the room index refresh and give the client time to settle
+			go a.requestRoomUsers()
+			time.Sleep(1500 * time.Millisecond)
+			continue
+		}
+
+		// Stage 1: accept offer (ours)
+		a.AddLog("Finalizing stage 1 (Accept Offer)...")
+		for acc := 1; acc <= 3; acc++ {
+			time.Sleep(1500 * time.Millisecond)
+			a.tradeMu.Lock()
+			if !a.tradeActive {
+				a.tradeMu.Unlock()
+				break
+			}
+			a.tradeMu.Unlock()
+
+			a.ext.Send(g.Out.Id("TRADE_ACCEPT_OUT"))
+			a.AddLog(fmt.Sprintf("Sent TRADE_ACCEPT_OUT attempt %d/3", acc))
+		}
+
+		// Wait up to 30s for the partner to accept (Stage 1)
+		a.tradeMu.Lock()
+		a.tradeAccepted = false
+		a.tradeMu.Unlock()
+
+		accepted := false
+		waitStart := time.Now()
+		for time.Since(waitStart) < 30*time.Second {
+			time.Sleep(500 * time.Millisecond)
+			a.tradeMu.Lock()
+			if !a.tradeActive {
+				a.tradeMu.Unlock()
+				break
+			}
+			if a.tradeAccepted {
+				accepted = true
+				a.tradeMu.Unlock()
+				break
+			}
+			a.tradeMu.Unlock()
+		}
+
+		if !accepted {
+			a.AddLog("Partner did not accept within 30s; closing trade and retrying...")
+			a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+			a.tradeMu.Lock()
+			a.payoutTradeSent = false
+			a.tradeMu.Unlock()
+			// Refresh room users and wait a short period before retrying
+			go a.requestRoomUsers()
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		// Partner accepted; proceed to confirmation stage and wait for completion
+		a.AddLog("Partner accepted. Entering confirmation stage.")
+		completed := false
+		for confirmAttempt := 1; confirmAttempt <= 5; confirmAttempt++ {
+			time.Sleep(4000 * time.Millisecond)
+
+			a.tradeMu.Lock()
+			active := a.tradeActive
+			a.tradeMu.Unlock()
+
+			if !active {
+				a.AddLog("Trade closed during confirmation stage.")
+				// See if handler already marked Completed
+				a.pMu.RLock()
+				for _, pp := range a.payouts {
+					if pp.ID == p.ID && pp.Status == "Completed" {
+						completed = true
+						break
+					}
+				}
+				a.pMu.RUnlock()
+				break
+			}
+
+			if confirmAttempt == 1 {
+				a.AddLog("Capturing trade confirmation screenshot...")
+				go func() {
+					path := a.takeScreenshot()
+					a.tradeMu.Lock()
+					a.lastScreenshotPath = path
+					a.tradeMu.Unlock()
+				}()
+			}
+
+			a.AddLog(fmt.Sprintf("Finalizing stage 2 (Confirm Trade) attempt %d/5...", confirmAttempt))
+			a.ext.Send(g.Out.Id("TRADE_CONFIRM_ACCEPT_OUT"))
+
+			// Check if the payout was marked Completed by the intercepted handler
+			a.pMu.RLock()
+			for _, pp := range a.payouts {
+				if pp.ID == p.ID && pp.Status == "Completed" {
+					completed = true
+					break
+				}
+			}
+			a.pMu.RUnlock()
+
+			if completed {
+				a.AddLog("Payout marked completed by handler.")
+				return
+			}
+		}
+
+		if completed {
+			return
+		}
+
+		a.AddLog(fmt.Sprintf("Attempt %d/%d did not complete; will retry.", attemptNum, maxAttempts))
+		// Close and retry
+		a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+		a.tradeMu.Lock()
+		a.payoutTradeSent = false
+		a.tradeMu.Unlock()
+		// Refresh room users and wait before retrying to avoid immediate reopen failures
+		go a.requestRoomUsers()
+		time.Sleep(2 * time.Second)
 	}
+
+	// Exhausted attempts: force-complete and notify
+	a.AddLog(fmt.Sprintf("Payout %s failed after %d attempts; forcing completion and notifying.", p.ID, maxAttempts))
+	a.pMu.Lock()
+	for i := range a.payouts {
+		if a.payouts[i].ID == p.ID {
+			a.payouts[i].Status = "Completed"
+			break
+		}
+	}
+	a.pMu.Unlock()
+	a.persistPayoutStatus(p.ID, "Completed")
+	a.emitUpdate()
+
+	// Also mark banker_trades as completed to keep the flow consistent
+	if a.db != nil {
+		var err error
+		if p.BankerTradeID > 0 {
+			_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE id = $1 AND status = 'paying'", p.BankerTradeID)
+		} else if p.TradeID > 0 {
+			_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE player_trade_id = $1 AND status = 'paying'", p.TradeID)
+		} else {
+			_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE player_name = $1 AND status = 'paying'", p.Name)
+		}
+		if err != nil {
+			a.AddLog(fmt.Sprintf("ERROR: Failed to update banker_trades for %s/%d (banker_id=%d): %v", p.Name, p.TradeID, p.BankerTradeID, err))
+		} else {
+			a.AddLog(fmt.Sprintf("Marked banker_trades for %s/%d (banker_id=%d) as completed", p.Name, p.TradeID, p.BankerTradeID))
+		}
+	}
+
+	// Send webhook notifying of unaccepted payout
+	a.sendPayoutNotAcceptedWebhook(*p, maxAttempts)
 }
 
 func main() {
