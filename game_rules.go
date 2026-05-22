@@ -97,8 +97,10 @@ func comparePokerHands(player PokerHandResult, dealer PokerHandResult) PokerWinn
 	cmp := comparePokerTiebreaks(player.Tiebreaks, dealer.Tiebreaks)
 	if cmp > 0 {
 		return PokerWinnerPlayer
+	} else if cmp < 0 {
+		return PokerWinnerDealer
 	}
-	// Dealer wins ties (exact tie) or when dealer tiebreaks are higher
+	// Exact tie: dealer wins ties by rule
 	return PokerWinnerDealer
 }
 
