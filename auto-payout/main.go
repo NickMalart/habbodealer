@@ -1970,6 +1970,40 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 				}
 			}
 
+			// SECURITY: If any parsed trade item is not matched to an allowed stocked
+			// item, block the trade. Previously we only required at least one
+			// matched item which allowed mixed trades (allowed + disallowed).
+			// Now we enforce that ALL parsed items must map to the allowed set.
+			if len(lastItems) > 0 {
+				unallowed := []string{}
+				for _, it := range lastItems {
+					low := strings.ToLower(strings.TrimSpace(it.Name))
+					matchedKey := ""
+					if allowedSet[low] {
+						matchedKey = low
+					} else {
+						for k := range allowedSet {
+							if k != "" && strings.Contains(low, k) {
+								matchedKey = k
+								break
+							}
+						}
+					}
+					if matchedKey == "" {
+						unallowed = append(unallowed, low)
+					}
+				}
+				if len(unallowed) > 0 {
+					a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: trade contains unallowed items: %v", unallowed))
+					if a.ctx != nil {
+						go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "unallowed_items", "player": partnerName, "items": unallowed})
+					}
+					e.Block()
+					a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+					return
+				}
+			}
+
 			// If we couldn't parse items, fallback to previous substring check
 			if len(matchedItems) == 0 {
 				matched := false
