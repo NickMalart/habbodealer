@@ -3888,6 +3888,30 @@ func (a *App) markCurrentGameHistoryIssue(reason string, complete bool) {
 			go a.sendDiscordWebhookForPayout(*completedEntry)
 			a.persistCurrentGameHistoryNow("payout_issue")
 			a.dumpPayoutIssue(*completedEntry)
+
+			// If this was a payout issue, ensure any active banker_trade is
+			// finalized so the banker re-opens and auto-payer can accept bets.
+			// Clear the local active ID and update the DB row (risk_bank -> 0,
+			// status/risk_status -> 'completed').
+			a.historyDBMu.Lock()
+			btID := a.activeBankerTradeID
+			db := a.historyDB
+			// clear active ID locally so we don't block reopen logic
+			a.activeBankerTradeID = 0
+			a.historyDBMu.Unlock()
+
+			if btID > 0 && db != nil {
+				go func(id int) {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					_, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE id = $1", id)
+					if err != nil {
+						a.AddLogMsg(fmt.Sprintf("[ISSUES] ERROR: failed to finalize banker_trades %d after payout issue: %v", id, err))
+						return
+					}
+					a.AddLogMsg(fmt.Sprintf("[ISSUES] finalized banker_trades %d (status=completed, risk_bank=0) after payout issue", id))
+				}(btID)
+			}
 		} else {
 			go a.sendDiscordWebhookForGame(*completedEntry)
 			a.persistCurrentGameHistoryNow("game_issue")
