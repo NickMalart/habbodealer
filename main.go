@@ -6196,7 +6196,13 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 				go func(id, qty int) {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
-					_, _ = db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1, risk_status = 'playing' WHERE id = $2", qty, id)
+					// Use GREATEST so an async init write cannot reduce a later, larger bank value.
+					_, err := db.Exec(ctx, "UPDATE banker_trades SET risk_bank = GREATEST(COALESCE(risk_bank,0), $1), risk_status = 'playing' WHERE id = $2", qty, id)
+					if err != nil {
+						a.AddLogMsg(fmt.Sprintf("[RISK] ERROR: failed to init banker_trades %d: %v", id, err))
+					} else {
+						a.AddLogMsg(fmt.Sprintf("[RISK] init DB banker_trades %d risk_status=playing (min_bank=%d)", id, qty))
+					}
 				}(dbID, betQty)
 			}
 		}
@@ -7043,6 +7049,23 @@ func (a *App) finalizeRiskKeep() {
 			required[names[i%len(names)]]++
 			rem--
 			i++
+		}
+	}
+
+	// Persist the finalized bank amount into banker_trades so any external
+	// auto-payer reads the correct risk_bank before we start payout.
+	a.historyDBMu.Lock()
+	db := a.historyDB
+	btID := a.activeBankerTradeID
+	a.historyDBMu.Unlock()
+	if db != nil && btID > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1 WHERE id = $2", total, btID)
+		cancel()
+		if err != nil {
+			a.AddLogMsg(fmt.Sprintf("[RISK] ERROR: failed to update banker_trades risk_bank for %d: %v", btID, err))
+		} else {
+			a.AddLogMsg(fmt.Sprintf("[RISK] updated banker_trades %d risk_bank=%d before payout", btID, total))
 		}
 	}
 
