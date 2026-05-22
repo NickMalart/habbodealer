@@ -1,5 +1,33 @@
 export namespace main {
 	
+	export class AddPayoutCheckResult {
+	    allowed: boolean;
+	    reason: string;
+	    uniqueCount: number;
+	    exists: boolean;
+	    maxUnique: number;
+	    maxQty: number;
+	    chunks: number[];
+	    player: string;
+	    item: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AddPayoutCheckResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.allowed = source["allowed"];
+	        this.reason = source["reason"];
+	        this.uniqueCount = source["uniqueCount"];
+	        this.exists = source["exists"];
+	        this.maxUnique = source["maxUnique"];
+	        this.maxQty = source["maxQty"];
+	        this.chunks = source["chunks"];
+	        this.player = source["player"];
+	        this.item = source["item"];
+	    }
+	}
 	export class Payout {
 	    id: string;
 	    name: string;
@@ -26,6 +54,20 @@ export namespace main {
 	        this.playerTradeId = source["playerTradeId"];
 	        this.bankerTradeId = source["bankerTradeId"];
 	        this.notified = source["notified"];
+	    }
+	}
+	export class PayoutSettings {
+	    maxUniqueItems: number;
+	    maxQtyPerUnique: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PayoutSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.maxUniqueItems = source["maxUniqueItems"];
+	        this.maxQtyPerUnique = source["maxQtyPerUnique"];
 	    }
 	}
 	export class StockedItem {

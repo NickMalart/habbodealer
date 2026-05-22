@@ -14,6 +14,10 @@ export function AddStockedItem(arg1, arg2) {
   return window['go']['main']['App']['AddStockedItem'](arg1, arg2);
 }
 
+export function CheckAddPayout(arg1, arg2, arg3) {
+  return window['go']['main']['App']['CheckAddPayout'](arg1, arg2, arg3);
+}
+
 export function ClearCompleted() {
   return window['go']['main']['App']['ClearCompleted']();
 }
@@ -38,6 +42,10 @@ export function GetPayouts() {
   return window['go']['main']['App']['GetPayouts']();
 }
 
+export function GetSettings() {
+  return window['go']['main']['App']['GetSettings']();
+}
+
 export function GetStockedItems() {
   return window['go']['main']['App']['GetStockedItems']();
 }
@@ -52,6 +60,10 @@ export function RefreshQueue() {
 
 export function ReturnAllToOwner(arg1) {
   return window['go']['main']['App']['ReturnAllToOwner'](arg1);
+}
+
+export function SaveSettings(arg1, arg2) {
+  return window['go']['main']['App']['SaveSettings'](arg1, arg2);
 }
 
 export function ShowWindow() {

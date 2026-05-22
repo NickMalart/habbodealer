@@ -8,6 +8,8 @@ export function AddPayout(arg1:string,arg2:string,arg3:number):Promise<void>;
 
 export function AddStockedItem(arg1:string,arg2:string):Promise<void>;
 
+export function CheckAddPayout(arg1:string,arg2:string,arg3:number):Promise<main.AddPayoutCheckResult>;
+
 export function ClearCompleted():Promise<void>;
 
 export function DeletePayout(arg1:string):Promise<void>;
@@ -20,6 +22,8 @@ export function GetLogs():Promise<Array<string>>;
 
 export function GetPayouts():Promise<Array<main.Payout>>;
 
+export function GetSettings():Promise<main.PayoutSettings>;
+
 export function GetStockedItems():Promise<Array<main.StockedItem>>;
 
 export function RefreshInventory():Promise<void>;
@@ -27,6 +31,8 @@ export function RefreshInventory():Promise<void>;
 export function RefreshQueue():Promise<void>;
 
 export function ReturnAllToOwner(arg1:string):Promise<void>;
+
+export function SaveSettings(arg1:number,arg2:number):Promise<void>;
 
 export function ShowWindow():Promise<void>;
 

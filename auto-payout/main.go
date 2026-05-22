@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -403,9 +404,20 @@ func (a *App) initDatabase() {
 	_, err = a.db.Exec(context.Background(), query)
 	if err != nil {
 		a.AddLog("ERROR: public.stocked_items table creation failed: " + err.Error())
-	} else {
-		a.AddLog("Database connected and ready.")
 	}
+
+	// Create settings table for auto-payout configuration (key/value)
+	query = `CREATE TABLE IF NOT EXISTS public.auto_payout_settings (
+		setting_key TEXT PRIMARY KEY,
+		setting_value TEXT NOT NULL
+	);`
+	_, err = a.db.Exec(context.Background(), query)
+	if err != nil {
+		a.AddLog("ERROR: auto_payout_settings table creation failed: " + err.Error())
+	}
+
+	a.AddLog("Database connected and ready.")
+
 }
 
 func (a *App) ShowWindow() {
@@ -493,56 +505,185 @@ func normalizeClassKeyWithVariant(raw string) (string, bool) {
 }
 
 func (a *App) AddPayout(name, itemName string, qty int) {
-	id := fmt.Sprintf("%d", time.Now().UnixNano())
-	createdAt := time.Now().Format("2006-01-02 15:04:05")
+	if qty <= 0 {
+		a.AddLog("Ignoring AddPayout with non-positive quantity")
+		return
+	}
 
 	normItem, ok := normalizeClassKeyWithVariant(itemName)
 	if !ok {
 		normItem = strings.TrimSpace(strings.ToLower(itemName))
 	}
 
-	p := Payout{
-		ID:        id,
-		Name:      normalizeName(name),
-		ItemName:  normItem,
-		Quantity:  qty,
-		Status:    "Pending",
-		CreatedAt: createdAt,
+	player := normalizeName(name)
+
+	// Load configured limits (defaults are applied when missing)
+	maxQty := a.getIntSetting("max_qty_per_unique", 10)
+	maxUnique := a.getIntSetting("max_unique_items", 6)
+
+	// If DB present, enforce max unique items per player (only when adding a new unique)
+	if a.db != nil {
+		ctx := context.Background()
+		var exists bool
+		if err := a.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM public.auto_payouts WHERE lower(player_name)=lower($1) AND lower(item_name)=lower($2) AND status != 'Completed')", player, normItem).Scan(&exists); err == nil {
+			if !exists {
+				var uniqueCount int
+				if err := a.db.QueryRow(ctx, "SELECT COUNT(DISTINCT item_name) FROM public.auto_payouts WHERE lower(player_name)=lower($1) AND status != 'Completed'", player).Scan(&uniqueCount); err == nil {
+					if uniqueCount >= maxUnique {
+						a.AddLog(fmt.Sprintf("Player %s already has %d unique items queued (limit %d). Not adding %s", player, uniqueCount, maxUnique, normItem))
+						return
+					}
+				}
+			}
+		}
 	}
 
-	a.AddLog(fmt.Sprintf("Adding payout: %s x %d %s", p.Name, p.Quantity, p.ItemName))
-
+	// Resolve optional player_trade id to attach to new rows (do once)
+	var tradeParam interface{}
 	if a.db != nil {
 		ctx := context.Background()
 		var playerTrade sql.NullInt64
-		// Prefer any banker_trades currently marked as 'paying'
-		err := a.db.QueryRow(ctx, "SELECT player_trade_id FROM public.banker_trades WHERE player_name = $1 AND status = 'paying' ORDER BY created_at DESC LIMIT 1", p.Name).Scan(&playerTrade)
+		err := a.db.QueryRow(ctx, "SELECT player_trade_id FROM public.banker_trades WHERE player_name = $1 AND status = 'paying' ORDER BY created_at DESC LIMIT 1", player).Scan(&playerTrade)
 		if err != nil || !playerTrade.Valid {
-			// Fallback to the most recent banker_trades row for this player
-			_ = a.db.QueryRow(ctx, "SELECT player_trade_id FROM public.banker_trades WHERE player_name = $1 ORDER BY created_at DESC LIMIT 1", p.Name).Scan(&playerTrade)
+			_ = a.db.QueryRow(ctx, "SELECT player_trade_id FROM public.banker_trades WHERE player_name = $1 ORDER BY created_at DESC LIMIT 1", player).Scan(&playerTrade)
 		}
-
-		var tradeParam interface{}
 		if playerTrade.Valid {
 			tradeParam = playerTrade.Int64
-			a.AddLog(fmt.Sprintf("DB: attaching player_trade_id=%d to new auto_payout for %s", playerTrade.Int64, p.Name))
+			a.AddLog(fmt.Sprintf("DB: attaching player_trade_id=%d to new auto_payout for %s", playerTrade.Int64, player))
 		} else {
 			tradeParam = nil
-			a.AddLog(fmt.Sprintf("DB: no player_trade_id found for %s; inserting NULL", p.Name))
-		}
-
-		_, err2 := a.db.Exec(ctx,
-			"INSERT INTO public.auto_payouts (id, player_name, item_name, quantity, status, created_at, player_trade_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-			p.ID, p.Name, p.ItemName, p.Quantity, p.Status, p.CreatedAt, tradeParam)
-		if err2 != nil {
-			a.AddLog("ERROR: DB Save failed: " + err2.Error())
+			a.AddLog(fmt.Sprintf("DB: no player_trade_id found for %s; inserting NULL", player))
 		}
 	}
 
-	a.pMu.Lock()
-	a.payouts = append(a.payouts, p)
-	a.pMu.Unlock()
-	a.emitUpdate()
+	createdAt := time.Now().Format("2006-01-02 15:04:05")
+
+	// If configured, split large quantities into multiple DB rows each capped by maxQty
+	remain := qty
+	created := make([]Payout, 0)
+	chunkIdx := 0
+	for remain > 0 {
+		chunk := remain
+		if maxQty > 0 && chunk > maxQty {
+			chunk = maxQty
+		}
+
+		id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), chunkIdx)
+		p := Payout{
+			ID:        id,
+			Name:      player,
+			ItemName:  normItem,
+			Quantity:  chunk,
+			Status:    "Pending",
+			CreatedAt: createdAt,
+		}
+
+		a.AddLog(fmt.Sprintf("Adding payout: %s x %d %s", p.Name, p.Quantity, p.ItemName))
+
+		if a.db != nil {
+			ctx := context.Background()
+			if _, err := a.db.Exec(ctx,
+				"INSERT INTO public.auto_payouts (id, player_name, item_name, quantity, status, created_at, player_trade_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+				p.ID, p.Name, p.ItemName, p.Quantity, p.Status, p.CreatedAt, tradeParam); err != nil {
+				a.AddLog("ERROR: DB Save failed: " + err.Error())
+			}
+		}
+
+		created = append(created, p)
+		remain -= chunk
+		chunkIdx++
+	}
+
+	if len(created) > 0 {
+		a.pMu.Lock()
+		a.payouts = append(a.payouts, created...)
+		a.pMu.Unlock()
+		a.emitUpdate()
+	}
+}
+
+// AddPayoutCheckResult describes the server-side validation outcome for a proposed AddPayout
+type AddPayoutCheckResult struct {
+	Allowed     bool   `json:"allowed"`
+	Reason      string `json:"reason"`
+	UniqueCount int    `json:"uniqueCount"`
+	Exists      bool   `json:"exists"`
+	MaxUnique   int    `json:"maxUnique"`
+	MaxQty      int    `json:"maxQty"`
+	Chunks      []int  `json:"chunks"`
+	Player      string `json:"player"`
+	Item        string `json:"item"`
+}
+
+// CheckAddPayout runs the same checks AddPayout uses but does not persist anything.
+// Returns a structured result explaining whether the server would accept the add
+// and any chunking that would occur.
+func (a *App) CheckAddPayout(name, itemName string, qty int) (AddPayoutCheckResult, error) {
+	res := AddPayoutCheckResult{Allowed: true, Reason: "", Player: name, Item: itemName}
+
+	if qty <= 0 {
+		res.Allowed = false
+		res.Reason = "Quantity must be positive"
+		return res, nil
+	}
+
+	normItem, ok := normalizeClassKeyWithVariant(itemName)
+	if !ok {
+		normItem = strings.TrimSpace(strings.ToLower(itemName))
+	}
+
+	player := normalizeName(name)
+
+	maxQty := a.getIntSetting("max_qty_per_unique", 10)
+	maxUnique := a.getIntSetting("max_unique_items", 6)
+	res.MaxQty = maxQty
+	res.MaxUnique = maxUnique
+	res.Player = player
+	res.Item = normItem
+
+	if a.db != nil {
+		ctx := context.Background()
+		// Check if an existing non-completed row for this player+item exists
+		var exists bool
+		if err := a.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM public.auto_payouts WHERE lower(player_name)=lower($1) AND lower(item_name)=lower($2) AND status != 'Completed')", player, normItem).Scan(&exists); err == nil {
+			res.Exists = exists
+		}
+
+		if !res.Exists {
+			var uniqueCount int
+			if err := a.db.QueryRow(ctx, "SELECT COUNT(DISTINCT item_name) FROM public.auto_payouts WHERE lower(player_name)=lower($1) AND status != 'Completed'", player).Scan(&uniqueCount); err == nil {
+				res.UniqueCount = uniqueCount
+				if uniqueCount >= maxUnique {
+					res.Allowed = false
+					res.Reason = fmt.Sprintf("Player %s already has %d unique item(s) queued (limit %d)", player, uniqueCount, maxUnique)
+				}
+			}
+		}
+	}
+
+	// Compute chunking plan
+	remain := qty
+	chunks := []int{}
+	if maxQty <= 0 {
+		chunks = append(chunks, remain)
+	} else {
+		for remain > 0 {
+			take := remain
+			if take > maxQty {
+				take = maxQty
+			}
+			chunks = append(chunks, take)
+			remain -= take
+		}
+	}
+	res.Chunks = chunks
+
+	// If not already rejected, set a descriptive reason
+	if res.Allowed && len(chunks) > 1 {
+		res.Reason = fmt.Sprintf("Will split quantity into %d chunk(s)", len(chunks))
+	}
+
+	return res, nil
 }
 
 func normalizeName(raw string) string {
@@ -751,6 +892,66 @@ func (a *App) GetActiveStockedItemNames() []string {
 		}
 	}
 	return names
+}
+
+// PayoutSettings holds persisted UI settings for auto-payout
+type PayoutSettings struct {
+	MaxUniqueItems  int `json:"maxUniqueItems"`
+	MaxQtyPerUnique int `json:"maxQtyPerUnique"`
+}
+
+// getIntSetting reads an integer setting from the DB and falls back to def when missing
+func (a *App) getIntSetting(key string, def int) int {
+	if a.db == nil {
+		return def
+	}
+	var v string
+	ctx := context.Background()
+	if err := a.db.QueryRow(ctx, "SELECT setting_value FROM public.auto_payout_settings WHERE setting_key = $1", key).Scan(&v); err == nil {
+		if iv, err := strconv.Atoi(v); err == nil {
+			return iv
+		}
+	}
+	return def
+}
+
+// GetSettings returns current auto-payout settings (with defaults when missing)
+func (a *App) GetSettings() PayoutSettings {
+	s := PayoutSettings{MaxUniqueItems: 6, MaxQtyPerUnique: 10}
+	if a.db == nil {
+		return s
+	}
+	ctx := context.Background()
+	var v string
+	if err := a.db.QueryRow(ctx, "SELECT setting_value FROM public.auto_payout_settings WHERE setting_key = $1", "max_unique_items").Scan(&v); err == nil {
+		if iv, err := strconv.Atoi(v); err == nil {
+			s.MaxUniqueItems = iv
+		}
+	}
+	if err := a.db.QueryRow(ctx, "SELECT setting_value FROM public.auto_payout_settings WHERE setting_key = $1", "max_qty_per_unique").Scan(&v); err == nil {
+		if iv, err := strconv.Atoi(v); err == nil {
+			s.MaxQtyPerUnique = iv
+		}
+	}
+	return s
+}
+
+// SaveSettings persists provided settings to the DB.
+func (a *App) SaveSettings(maxUnique int, maxQty int) error {
+	if a.db == nil {
+		return nil
+	}
+	ctx := context.Background()
+	if _, err := a.db.Exec(ctx, `INSERT INTO public.auto_payout_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value`, "max_unique_items", fmt.Sprintf("%d", maxUnique)); err != nil {
+		a.AddLog("ERROR: Failed to save max_unique_items: " + err.Error())
+		return err
+	}
+	if _, err := a.db.Exec(ctx, `INSERT INTO public.auto_payout_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value`, "max_qty_per_unique", fmt.Sprintf("%d", maxQty)); err != nil {
+		a.AddLog("ERROR: Failed to save max_qty_per_unique: " + err.Error())
+		return err
+	}
+	a.AddLog(fmt.Sprintf("Settings saved: max_unique=%d, max_qty=%d", maxUnique, maxQty))
+	return nil
 }
 
 // --- Internal Logic ---
@@ -1625,22 +1826,108 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 		a.AddLog(fmt.Sprintf("[DEBUG] Current trade packet data: %s", safeItems))
 
 		if len(allowedNames) > 0 {
-			matched := false
-			lowerItems := strings.ToLower(items)
-			for _, name := range allowedNames {
-				if strings.Contains(lowerItems, strings.ToLower(name)) {
-					matched = true
-					a.AddLog(fmt.Sprintf("[FILTER] Validated trade: matched stocked item '%s'", name))
-					break
+			// Build allowed name set
+			allowedSet := make(map[string]bool)
+			for _, n := range allowedNames {
+				allowedSet[strings.ToLower(strings.TrimSpace(n))] = true
+			}
+
+			// Snapshot last parsed items (if any)
+			a.tradeMu.Lock()
+			lastItems := a.lastTradeItems
+			a.tradeMu.Unlock()
+
+			// Map of matched allowed item -> qty
+			matchedItems := make(map[string]int)
+			for _, it := range lastItems {
+				low := strings.ToLower(strings.TrimSpace(it.Name))
+				matchedKey := ""
+				if allowedSet[low] {
+					matchedKey = low
+				} else {
+					for k := range allowedSet {
+						if k != "" && strings.Contains(low, k) {
+							matchedKey = k
+							break
+						}
+					}
+				}
+				if matchedKey != "" {
+					matchedItems[matchedKey] += it.Quantity
 				}
 			}
 
-			if !matched {
-				a.AddLog("[FILTER] Blocking acceptance: no stocked items found in trade.")
+			// If we couldn't parse items, fallback to previous substring check
+			if len(matchedItems) == 0 {
+				matched := false
+				lowerItems := strings.ToLower(items)
+				for _, name := range allowedNames {
+					if strings.Contains(lowerItems, strings.ToLower(name)) {
+						matched = true
+						a.AddLog(fmt.Sprintf("[FILTER] Validated trade: matched stocked item '%s' (fallback)", name))
+						break
+					}
+				}
+				if !matched {
+					a.AddLog("[FILTER] Blocking acceptance: no stocked items found in trade.")
+					if a.ctx != nil {
+						go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "no_stocked_items", "player": partnerName, "allowed": allowedNames})
+					}
+					e.Block()
+					// Send TRADE_CLOSE to force the window shut for them
+					a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+					return
+				}
+
+				// Accept by fallback since we can't determine counts
+				go func() {
+					time.Sleep(1500 * time.Millisecond)
+					a.tradeMu.Lock()
+					active := a.tradeActive
+					a.tradeMu.Unlock()
+					if active {
+						a.AddLog("Automatically accepting trade (Stage 1 - fallback)...")
+						a.ext.Send(g.Out.Id("TRADE_ACCEPT_OUT"))
+						if a.ctx != nil {
+							go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "accepted", "reason": "fallback_no_counts", "player": partnerName, "allowed": allowedNames})
+						}
+					}
+				}()
+				return
+			}
+
+			// Enforce configured limits per-settings
+			maxQty := a.getIntSetting("max_qty_per_unique", 10)
+			maxUnique := a.getIntSetting("max_unique_items", 6)
+
+			// Check per-item qty
+			for itName, qty := range matchedItems {
+				if maxQty > 0 && qty > maxQty {
+					a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: %s offered %d which exceeds max per-unique %d", itName, qty, maxQty))
+					if a.ctx != nil {
+						go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "max_qty_exceeded", "player": partnerName, "item": itName, "qty": qty, "max_qty": maxQty})
+					}
+					e.Block()
+					a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+					return
+				}
+			}
+
+			// Check unique count
+			if maxUnique > 0 && len(matchedItems) > maxUnique {
+				a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: player offered %d unique stocked items (limit %d)", len(matchedItems), maxUnique))
+				if a.ctx != nil {
+					go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "max_unique_exceeded", "player": partnerName, "unique_offered": len(matchedItems), "max_unique": maxUnique, "items": matchedItems})
+				}
 				e.Block()
-				// Send TRADE_CLOSE to force the window shut for them
 				a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
 				return
+			}
+
+			// Allowed: accept and emit debug
+			a.AddLog(fmt.Sprintf("[FILTER] Validated trade: matched items %v", matchedItems))
+			if a.ctx != nil {
+				go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "accepted", "player": partnerName, "items": matchedItems, "max_qty": maxQty, "max_unique": maxUnique})
 			}
 
 			// Validated: Automatically accept the trade (Stage 1)
@@ -1666,6 +1953,9 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 				if active {
 					a.AddLog("Automatically accepting trade (Stage 1 - No Filter)...")
 					a.ext.Send(g.Out.Id("TRADE_ACCEPT_OUT"))
+					if a.ctx != nil {
+						go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "accepted", "reason": "no_filter", "player": partnerName})
+					}
 				}
 			}()
 		}

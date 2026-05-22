@@ -73,13 +73,58 @@
         </div>
       </div>
 
-      <div class="logs-section">
-        <h3>Activity Log</h3>
+      <div class="controls-panel">
+        <div class="settings-panel">
+          <h4>Auto-Payout Settings</h4>
+          <div class="input-group small">
+            <label>Max Unique Items</label>
+            <input v-model.number="maxUniqueItems" type="number" />
+          </div>
+          <div class="input-group small">
+            <label>Max Qty per Unique</label>
+            <input v-model.number="maxQtyPerUnique" type="number" />
+          </div>
+          <div style="margin-top:8px; display:flex; gap:8px;">
+            <button @click="saveSettings" class="btn-small">Save Settings</button>
+            <button @click="refreshQueue" class="btn-small">Refresh Queue</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom panel: Logs / Debug tabs -->
+  <div class="bottom-panel">
+    <div class="tabs">
+      <button :class="{ active: selectedTab === 'logs' }" @click="selectedTab = 'logs'">Logs</button>
+      <button :class="{ active: selectedTab === 'debug' }" @click="selectedTab = 'debug'">Debug</button>
+    </div>
+
+    <div class="tab-content">
+      <div v-if="selectedTab === 'logs'">
+        <div class="log-actions">
+          <button @click="copyAllLogs" class="btn-small">Copy All</button>
+          <button v-if="!autoScrollEnabled" @click="scrollToBottom" class="btn-small">Jump to latest</button>
+        </div>
         <div class="logs-container" ref="logContainer">
           <div v-for="(log, idx) in logs" :key="idx" class="log-entry" :class="{ 'log-err': log.includes('ERROR'), 'log-warn': log.includes('WARNING') }">
             {{ log }}
           </div>
           <div v-if="logs.length === 0" class="empty-logs">Waiting for activity...</div>
+        </div>
+      </div>
+
+      <div v-if="selectedTab === 'debug'">
+        <div class="debug-actions" style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+          <button @click="copyAllDebug" class="btn-small">Copy All Debug</button>
+          <button @click="clearDebug" class="btn-small">Clear Debug</button>
+        </div>
+        <div class="debug-list">
+          <div v-for="(d, idx) in debugEvents" :key="idx" class="debug-entry">
+            <div class="debug-header">{{ d.ts }} — {{ d.type }} <button @click="copyDebug(d)" class="btn-small" style="margin-left:8px;">Copy</button></div>
+            <pre class="debug-body">{{ JSON.stringify(d.data, null, 2) }}</pre>
+          </div>
+          <div v-if="debugEvents.length === 0" class="empty-logs">No debug events yet.</div>
         </div>
       </div>
     </div>
@@ -96,26 +141,77 @@ const newItem = ref('')
 const newQty = ref(1)
 const isConnected = ref(false)
 const logContainer = ref(null)
+const maxUniqueItems = ref(6)
+const maxQtyPerUnique = ref(10)
+
+const selectedTab = ref('logs')
+const debugEvents = ref([])
+const autoScrollEnabled = ref(true)
 
 const loadInitialData = async () => {
   if (window.go?.main?.App) {
     payouts.value = await window.go.main.App.GetPayouts()
     logs.value = await window.go.main.App.GetLogs()
     isConnected.value = true
+    // Load persisted settings
+    if (window.go.main.App.GetSettings) {
+      try {
+        const s = await window.go.main.App.GetSettings()
+        if (s && typeof s.maxUniqueItems !== 'undefined') maxUniqueItems.value = s.maxUniqueItems
+        if (s && typeof s.maxQtyPerUnique !== 'undefined') maxQtyPerUnique.value = s.maxQtyPerUnique
+      } catch (e) {
+        console.warn('Failed to load settings', e)
+      }
+    }
   }
 }
 
 const addPayout = async () => {
   if (!newName.value || !newItem.value) return
   if (!window.go?.main?.App) return
-  
+
+  // Basic client-side validation
+  if (!Number.isFinite(newQty.value) || newQty.value <= 0) {
+    alert('Quantity must be a positive number')
+    return
+  }
+
+  // Call server to check how it would handle this add (authoritative)
+  let serverCheck = null
+  try {
+    serverCheck = await window.go.main.App.CheckAddPayout(newName.value, newItem.value, newQty.value)
+    debugEvents.value.unshift({ ts: new Date().toLocaleString(), type: 'server-check', data: serverCheck })
+    // Keep debug tab open when checks appear
+    selectedTab.value = 'debug'
+  } catch (e) {
+    debugEvents.value.unshift({ ts: new Date().toLocaleString(), type: 'server-error', data: String(e) })
+    selectedTab.value = 'debug'
+    alert('Failed to run server-side validation: ' + e)
+    return
+  }
+
+  if (!serverCheck || !serverCheck.allowed) {
+    const reason = serverCheck && serverCheck.reason ? serverCheck.reason : 'Rejected by server rules.'
+    alert('Server validation: ' + reason)
+    return
+  }
+
+  // If server intends to split into chunks, confirm before proceeding
+  if (serverCheck.chunks && serverCheck.chunks.length > 1) {
+    const ok = confirm(`Server will split into chunks: ${serverCheck.chunks.join(', ')}. Proceed?`)
+    if (!ok) return
+  }
+
   try {
     await window.go.main.App.AddPayout(newName.value, newItem.value, newQty.value)
+    debugEvents.value.unshift({ ts: new Date().toLocaleString(), type: 'added', data: serverCheck })
     newName.value = ''
     newItem.value = ''
     newQty.value = 1
+    // After adding, refresh queue and logs
+    await refreshQueue()
   } catch (err) {
-    alert("Database error: " + err)
+    alert('Database error: ' + err)
   }
 }
 
@@ -158,7 +254,7 @@ const returnToOwner = async () => {
 
 watch(logs, () => {
   nextTick(() => {
-    if (logContainer.value) {
+    if (logContainer.value && autoScrollEnabled.value) {
       logContainer.value.scrollTop = logContainer.value.scrollHeight
     }
   })
@@ -174,8 +270,91 @@ onMounted(() => {
     window.runtime.EventsOn('logsUpdate', (data) => {
       logs.value = data
     })
+    window.runtime.EventsOn('debugEvent', (data) => {
+      // Normalize server-emitted event into {ts,type,data}
+      const entry = { ts: data.ts || new Date().toLocaleString(), type: data.type || 'debug', data: data }
+      debugEvents.value.unshift(entry)
+      selectedTab.value = 'debug'
+    })
   }
+  // Attach scroll listener to detect user scrolling up
+  nextTick(() => {
+    if (logContainer.value) {
+      logContainer.value.addEventListener('scroll', () => {
+        const el = logContainer.value
+        if (!el) return
+        const atBottom = (el.scrollTop + el.clientHeight) >= (el.scrollHeight - 8)
+        autoScrollEnabled.value = atBottom
+      })
+    }
+  })
 })
+
+const scrollToBottom = () => {
+  nextTick(() => {
+    if (logContainer.value) {
+      logContainer.value.scrollTop = logContainer.value.scrollHeight
+      autoScrollEnabled.value = true
+    }
+  })
+}
+
+const copyAllLogs = async () => {
+  try {
+    const text = logs.value.join('\n')
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text)
+      alert('Logs copied to clipboard')
+    } else {
+      // fallback
+      const ta = document.createElement('textarea')
+      ta.value = text
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      alert('Logs copied to clipboard')
+    }
+  } catch (e) {
+    alert('Failed to copy logs: ' + e)
+  }
+}
+
+const copyDebug = async (d) => {
+  try {
+    const text = JSON.stringify(d.data, null, 2)
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text)
+      alert('Debug copied')
+    }
+  } catch (e) {
+    alert('Failed to copy debug: ' + e)
+  }
+}
+
+const copyAllDebug = async () => {
+  try {
+    const text = debugEvents.value.map(d => `${d.ts} ${d.type}\n${JSON.stringify(d.data, null, 2)}`).join('\n\n')
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text)
+      alert('All debug copied')
+    }
+  } catch (e) {
+    alert('Failed to copy debug: ' + e)
+  }
+}
+
+const clearDebug = () => { debugEvents.value = [] }
+
+const saveSettings = async () => {
+  if (!window.go?.main?.App) return
+  try {
+    await window.go.main.App.SaveSettings(parseInt(maxUniqueItems.value), parseInt(maxQtyPerUnique.value))
+    alert('Settings saved')
+  } catch (e) {
+    alert('Failed to save settings: ' + e)
+  }
+}
 </script>
 
 <style>
@@ -345,9 +524,42 @@ td { padding: 1rem; border-bottom: 1px solid #222; font-size: 0.9rem; }
   flex: 1;
 }
 
+.settings-panel {
+  padding: 0.8rem;
+  border-bottom: 1px solid #333;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: #111;
+}
+.input-group.small { gap: 0.2rem; }
+.input-group.small input { width: 120px; }
+
 .log-entry { color: #00cc00; margin-bottom: 4px; border-left: 2px solid #222; padding-left: 8px; }
 .log-err { color: #ff4444; }
 .log-warn { color: #ffaa00; }
 
 .btn-highlight { background: #3a3a3a !important; color: #44ff44 !important; font-weight: bold; }
+
+.bottom-panel {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 260px;
+  background: #0b0b0b;
+  border-top: 1px solid #222;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+.tabs { display:flex; gap:8px; padding:8px; background:#0f0f0f; border-bottom:1px solid #222; }
+.tabs button { background:transparent; border:1px solid #222; color:#ccc; padding:6px 10px; border-radius:4px; cursor:pointer }
+.tabs button.active { background:#222; color:#fff; }
+.tab-content { padding:8px; display:flex; gap:12px; flex:1; min-height:0 }
+.log-actions { display:flex; gap:8px; margin-bottom:8px }
+.debug-list { overflow-y:auto; flex:1; padding:8px; font-family:Consolas, monospace }
+.debug-entry { border-bottom:1px solid #222; padding:8px 0; }
+.debug-header { font-weight:bold; color:#ddd }
+.debug-body { background:#071; color:#eee; padding:8px; border-radius:4px; white-space:pre-wrap; font-family:Consolas, monospace; }
 </style>
