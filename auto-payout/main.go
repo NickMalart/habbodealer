@@ -32,6 +32,9 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+//go:embed scripts/parse_users28.py
+var embeddedParseUsers28 string
+
 // Payout represents a single delivery task
 type Payout struct {
 	ID            string `json:"id"`
@@ -433,11 +436,28 @@ func (a *App) initParser() {
 		a.pythonExec = p
 	}
 
-	candidates := []string{
+	// Build candidate locations to find the parser script. Prefer paths
+	// relative to the running executable so packaged binaries can find
+	// the script regardless of the current working directory.
+	exePath, _ := os.Executable()
+	exeDir := ""
+	if exePath != "" {
+		exeDir = filepath.Dir(exePath)
+	}
+
+	candidates := []string{}
+	if exeDir != "" {
+		candidates = append(candidates,
+			filepath.Join(exeDir, "scripts", "parse_users28.py"),
+			filepath.Join(exeDir, "..", "scripts", "parse_users28.py"),
+			filepath.Join(exeDir, "..", "..", "scripts", "parse_users28.py"),
+		)
+	}
+	candidates = append(candidates,
 		filepath.Join("scripts", "parse_users28.py"),
 		filepath.Join("..", "scripts", "parse_users28.py"),
 		"C:\\Users\\Dubbo\\habbodealer\\habbodealer\\scripts\\parse_users28.py",
-	}
+	)
 
 	for _, cand := range candidates {
 		if _, err := os.Stat(cand); err != nil {
@@ -448,6 +468,24 @@ func (a *App) initParser() {
 		a.AddLog("Parser found: " + abs)
 		return
 	}
+
+	// Fallback: if we have an embedded copy of the parser (compiled into
+	// the binary via go:embed), write it to a temp file and use that.
+	if strings.TrimSpace(embeddedParseUsers28) != "" {
+		tmp, err := os.CreateTemp("", "parse_users28_*.py")
+		if err == nil {
+			if _, err := tmp.WriteString(embeddedParseUsers28); err == nil {
+				tmp.Close()
+				abs, _ := filepath.Abs(tmp.Name())
+				a.parserScript = abs
+				a.AddLog("Parser not found on disk; using embedded parser at: " + abs)
+				return
+			}
+			tmp.Close()
+			os.Remove(tmp.Name())
+		}
+	}
+
 	a.AddLog("ERROR: parse_users28.py NOT FOUND. Detection will not work.")
 }
 

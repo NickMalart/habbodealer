@@ -5327,10 +5327,18 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		suppressNextTradeCloseAnnouncement = false
 
 		if !tradeCompleted && !tradeCloseAnnounced && !suppressCloseAnnouncement {
-			closeMsg := fmt.Sprintf("T-Closed: %s", partnerName)
-			a.AddLogMsg(fmt.Sprintf("[TRADE_CLOSE] shouting: %q", closeMsg))
-			sendShout(closeMsg)
-			tradeCloseAnnounced = true
+			// Suppress announcing a trade close when we don't have a real
+			// partner name (common in split-dealer mode). The partnerName
+			// may be set to "Unknown" when empty — skip shouting in that
+			// case to avoid messages like: T-Closed: "Unknown".
+			if partnerName == "" || strings.EqualFold(partnerName, "Unknown") {
+				a.AddLogMsg("[TRADE_CLOSE] partner name unknown; suppressing T-Closed shout")
+			} else {
+				closeMsg := fmt.Sprintf("T-Closed: %s", partnerName)
+				a.AddLogMsg(fmt.Sprintf("[TRADE_CLOSE] shouting: %q", closeMsg))
+				sendShout(closeMsg)
+				tradeCloseAnnounced = true
+			}
 		} else if suppressCloseAnnouncement {
 			a.AddLogMsg("[TRADE_GUARD] suppressed trade closed announcement for forced guard-close")
 		}
