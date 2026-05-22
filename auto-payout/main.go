@@ -32,6 +32,9 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+//go:embed scripts/parse_users28.py
+var users28Parser []byte
+
 // Payout represents a single delivery task
 type Payout struct {
 	ID            string `json:"id"`
@@ -447,6 +450,24 @@ func (a *App) initParser() {
 		a.parserScript = abs
 		a.AddLog("Parser found: " + abs)
 		return
+	}
+	// If not found on disk, try to use an embedded copy (packaged builds).
+	if len(users28Parser) > 0 {
+		ex, err := os.Executable()
+		dest := ""
+		if err == nil {
+			dest = filepath.Join(filepath.Dir(ex), "parse_users28.py")
+		} else {
+			dest = filepath.Join(os.TempDir(), "parse_users28.py")
+		}
+		// Write embedded parser to dest (overwrite if necessary)
+		if err := os.WriteFile(dest, users28Parser, 0644); err != nil {
+			a.AddLog("ERROR: Failed to write embedded parser: " + err.Error())
+		} else {
+			a.parserScript = dest
+			a.AddLog("Using embedded parser at: " + dest)
+			return
+		}
 	}
 	a.AddLog("ERROR: parse_users28.py NOT FOUND. Detection will not work.")
 }
