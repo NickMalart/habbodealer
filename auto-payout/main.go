@@ -1896,6 +1896,71 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 				return
 			}
 
+			// Check payout coverage: ensure dealer hand + incoming items can cover
+			// the required payout assuming a 2x multiplier. If not, block the trade.
+			{
+				mult := 2
+				// Snapshot last parsed items (incoming counts)
+				a.tradeMu.Lock()
+				lastItemsCopy := make([]TradeItem, len(a.lastTradeItems))
+				copy(lastItemsCopy, a.lastTradeItems)
+				a.tradeMu.Unlock()
+
+				// Build hand map from current inventory (base name -> qty)
+				handMap := make(map[string]int)
+				a.inventoryMu.RLock()
+				for name, ids := range a.inventory {
+					base := name
+					if star := strings.LastIndex(name, "*"); star > 0 {
+						base = name[:star]
+					}
+					handMap[base] += len(ids)
+				}
+				a.inventoryMu.RUnlock()
+
+				// Build incoming map from observed partner items
+				incomingMap := make(map[string]int)
+				for _, it := range lastItemsCopy {
+					n := strings.ToLower(strings.TrimSpace(it.Name))
+					base := n
+					if star := strings.LastIndex(n, "*"); star > 0 {
+						base = n[:star]
+					}
+					incomingMap[base] += it.Quantity
+				}
+
+				// Compute required payouts from matchedItems
+				required := make(map[string]int)
+				for k, q := range matchedItems {
+					base := k
+					if star := strings.LastIndex(k, "*"); star > 0 {
+						base = k[:star]
+					}
+					required[base] += q * mult
+				}
+
+				// Detect shortages
+				short := false
+				for name, need := range required {
+					have := handMap[name]
+					inc := incomingMap[name]
+					available := have + inc
+					if available < need {
+						short = true
+						a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: insufficient payout stock for %s required=%d available=%d (hand=%d incoming=%d)", name, need, available, have, inc))
+						if a.ctx != nil {
+							go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "insufficient_payout_stock", "player": partnerName, "item": name, "required": need, "available": available, "hand": have, "incoming": inc})
+						}
+						break
+					}
+				}
+				if short {
+					e.Block()
+					a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+					return
+				}
+			}
+
 			// Enforce configured limits per-settings
 			maxQty := a.getIntSetting("max_qty_per_unique", 10)
 			maxUnique := a.getIntSetting("max_unique_items", 6)
@@ -1965,23 +2030,23 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 func (a *App) handlePartnerConfirm(e *g.Intercept) {
 	a.AddLog("Partner confirmed trade (Stage 2).")
 
-	if !a.payoutTradeSent {
-		// Automatically confirm the trade after 4 seconds (Stage 2)
-		go func() {
-			time.Sleep(4000 * time.Millisecond)
+	// Always schedule an automatic confirm after 4 seconds (Stage 2).
+	// This mirrors the behavior in the main app so outgoing payout flows
+	// are confirmed reliably even when the partner confirms quickly.
+	go func() {
+		time.Sleep(4000 * time.Millisecond)
 
-			a.tradeMu.Lock()
-			active := a.tradeActive
-			a.tradeMu.Unlock()
+		a.tradeMu.Lock()
+		active := a.tradeActive
+		a.tradeMu.Unlock()
 
-			if active {
-				a.AddLog("Automatically confirming trade (Stage 2)...")
-				a.ext.Send(g.Out.Id("TRADE_CONFIRM_ACCEPT_OUT"))
-			} else {
-				a.AddLog("Stage 2 aborted: trade closed before automatic confirm.")
-			}
-		}()
-	}
+		if active {
+			a.AddLog("Automatically confirming trade (Stage 2)...")
+			a.ext.Send(g.Out.Id("TRADE_CONFIRM_ACCEPT_OUT"))
+		} else {
+			a.AddLog("Stage 2 aborted: trade closed before automatic confirm.")
+		}
+	}()
 }
 
 func (a *App) handleTradeClose(e *g.Intercept) {
