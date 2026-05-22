@@ -32,13 +32,14 @@ var assets embed.FS
 
 // Payout represents a single delivery task
 type Payout struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	ItemName  string `json:"itemName"`
-	Quantity  int    `json:"quantity"`
-	Status    string `json:"status"` // "Pending", "In Room", "Trading", "Completed", "Failed", "Disabled"
-	CreatedAt string `json:"createdAt"`
-	TradeID   int    `json:"playerTradeId,omitempty"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	ItemName      string `json:"itemName"`
+	Quantity      int    `json:"quantity"`
+	Status        string `json:"status"` // "Pending", "In Room", "Trading", "Completed", "Failed", "Disabled"
+	CreatedAt     string `json:"createdAt"`
+	TradeID       int    `json:"playerTradeId,omitempty"`
+	BankerTradeID int    `json:"bankerTradeId,omitempty"`
 }
 
 type StockedItem struct {
@@ -112,6 +113,10 @@ type App struct {
 	db             *pgxpool.Pool
 	dbConnString   string
 	discordWebhook string
+
+	// Room users request throttling
+	lastUsersRequestAt time.Time
+	usersReqMu         sync.Mutex
 
 	// Track last reported inventory to DB to avoid redundant updates
 	lastInventoryReport string
@@ -260,6 +265,9 @@ func (a *App) startup(ctx context.Context) {
 	a.ext.Headers().Add("USER_OBJECT_IN", g.Header{Dir: g.In, Value: 5})
 
 	a.ext.Headers().Add("GETSTRIP_OUT", g.Header{Dir: g.Out, Value: 65})
+	// Outgoing room user requests
+	a.ext.Headers().Add("G_USRS", g.Header{Dir: g.Out, Value: 61})
+	a.ext.Headers().Add("GETSPACENODEUSERS", g.Header{Dir: g.Out, Value: 154})
 	a.ext.Headers().Add("TRADE_OPEN_OUT", g.Header{Dir: g.Out, Value: 71})
 	a.ext.Headers().Add("TRADE_CLOSE_OUT", g.Header{Dir: g.Out, Value: 70})
 	a.ext.Headers().Add("TRADE_ADDITEM_OUT", g.Header{Dir: g.Out, Value: 72})
@@ -283,7 +291,26 @@ func (a *App) startup(ctx context.Context) {
 	a.AddLog("Extension registered. Waiting for connection...")
 	go a.ext.Run()
 	go a.payoutMonitor()
+	go a.dbPoller()
 	go a.inventoryRefreshLoop()
+}
+
+// dbPoller periodically reloads pending payouts from the database so new rows
+// inserted by the dealer app are picked up automatically.
+func (a *App) dbPoller() {
+	if a.db == nil {
+		return
+	}
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			a.loadPayoutsFromDB()
+		case <-a.ctx.Done():
+			return
+		}
+	}
 }
 
 func (a *App) inventoryRefreshLoop() {
@@ -707,11 +734,11 @@ func (a *App) loadPayoutsFromDB() {
 	count := 0
 
 	// Manual entries from public.auto_payouts table
-	rows, err := a.db.Query(context.Background(), "SELECT id, player_name, item_name, quantity, status, created_at, COALESCE(player_trade_id,0) FROM public.auto_payouts WHERE status != 'Completed' ORDER BY created_at DESC")
+	rows, err := a.db.Query(context.Background(), "SELECT id, player_name, item_name, quantity, status, created_at, COALESCE(player_trade_id,0), COALESCE(banker_trade_id,0) FROM public.auto_payouts WHERE status != 'Completed' ORDER BY created_at DESC")
 	if err == nil {
 		for rows.Next() {
 			var p Payout
-			if err := rows.Scan(&p.ID, &p.Name, &p.ItemName, &p.Quantity, &p.Status, &p.CreatedAt, &p.TradeID); err == nil {
+			if err := rows.Scan(&p.ID, &p.Name, &p.ItemName, &p.Quantity, &p.Status, &p.CreatedAt, &p.TradeID, &p.BankerTradeID); err == nil {
 				p.Name = normalizeName(p.Name)
 				payouts = append(payouts, p)
 				count++
@@ -726,8 +753,44 @@ func (a *App) loadPayoutsFromDB() {
 	a.payouts = payouts
 	a.pMu.Unlock()
 
+	// Debug: log each loaded payout for easier tracing
+	for _, p := range payouts {
+		a.AddLog(fmt.Sprintf("[DB] loaded payout id=%s name=%s item=%s qty=%d status=%s tradeid=%d bankerid=%d",
+			p.ID, p.Name, p.ItemName, p.Quantity, p.Status, p.TradeID, p.BankerTradeID))
+	}
+
 	a.AddLog(fmt.Sprintf("Sync complete. Found %d active records in public.auto_payouts.", count))
 	a.emitUpdate()
+
+	// If we have any pending payouts, request a room users refresh so parse28
+	// can populate the current room map immediately.
+	for _, p := range payouts {
+		if p.Status == "Pending" {
+			go a.requestRoomUsers()
+			break
+		}
+	}
+}
+
+// requestRoomUsers asks the client to refresh the current room user list by
+// sending G_USRS + GETSPACENODEUSERS. Calls are rate-limited to once per 5s.
+func (a *App) requestRoomUsers() {
+	a.usersReqMu.Lock()
+	if time.Since(a.lastUsersRequestAt) < 5*time.Second {
+		a.usersReqMu.Unlock()
+		return
+	}
+	a.lastUsersRequestAt = time.Now()
+	a.usersReqMu.Unlock()
+
+	if a.ext == nil {
+		a.AddLog("ERROR: Extension not connected; cannot request room users")
+		return
+	}
+
+	a.AddLog("[ROOM] requesting current room users via G_USRS + GETSPACENODEUSERS")
+	a.ext.Send(g.Out.Id("G_USRS"))
+	a.ext.Send(g.Out.Id("GETSPACENODEUSERS"))
 }
 
 func (a *App) emitUpdate() {
@@ -787,7 +850,9 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 
 		a.roomUsersMu.Lock()
 		for _, u := range users {
-			a.roomUsers[strings.ToLower(u.Username)] = u
+			key := strings.ToLower(normalizeName(u.Username))
+			a.roomUsers[key] = u
+			a.AddLog(fmt.Sprintf("[ROOM] parsed user: username=%s tradeid=%d chatid=%d key=%s", u.Username, u.TradeID, u.ChatID, key))
 		}
 		a.roomUsersMu.Unlock()
 
@@ -821,6 +886,9 @@ func (a *App) updatePayoutStatuses() {
 				a.AddLog(fmt.Sprintf("Target left room: %s", p.Name))
 				a.payouts[i].Status = "Pending"
 				changed = true
+			} else {
+				// Debug: target not present in current room users snapshot
+				a.AddLog(fmt.Sprintf("Target not in room: %s (key='%s') known_room_users=%d", p.Name, targetKey, len(a.roomUsers)))
 			}
 		}
 	}
@@ -1438,15 +1506,17 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 				// Also mark any associated banker_trades as completed so the dealer bot re-opens
 				if a.db != nil {
 					var err error
-					if p.TradeID > 0 {
+					if p.BankerTradeID > 0 {
+						_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE id = $1 AND status = 'paying'", p.BankerTradeID)
+					} else if p.TradeID > 0 {
 						_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE player_trade_id = $1 AND status = 'paying'", p.TradeID)
 					} else {
 						_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE player_name = $1 AND status = 'paying'", p.Name)
 					}
 					if err != nil {
-						a.AddLog(fmt.Sprintf("ERROR: Failed to update banker_trades for %s/%d: %v", p.Name, p.TradeID, err))
+						a.AddLog(fmt.Sprintf("ERROR: Failed to update banker_trades for %s/%d (banker_id=%d): %v", p.Name, p.TradeID, p.BankerTradeID, err))
 					} else {
-						a.AddLog(fmt.Sprintf("Marked banker_trades for %s/%d as completed", p.Name, p.TradeID))
+						a.AddLog(fmt.Sprintf("Marked banker_trades for %s/%d (banker_id=%d) as completed", p.Name, p.TradeID, p.BankerTradeID))
 					}
 				}
 			}
@@ -1516,10 +1586,78 @@ func (a *App) payoutMonitor() {
 		time.Sleep(3 * time.Second) // Wait for scan to finish
 
 		a.roomUsersMu.RLock()
+		roomCount := len(a.roomUsers)
+		a.roomUsersMu.RUnlock()
+		a.AddLog(fmt.Sprintf("DEBUG: roomUsers=%d looking up '%s'", roomCount, strings.ToLower(normalizeName(targetName))))
+
+		a.roomUsersMu.RLock()
 		user, ok := a.roomUsers[strings.ToLower(normalizeName(targetName))]
 		a.roomUsersMu.RUnlock()
 
 		if !ok {
+			a.AddLog(fmt.Sprintf("DEBUG: %s not in room map; requesting fresh room scan before fallback", targetName))
+
+			// Request an immediate room users refresh and wait briefly for parse28 to populate
+			go a.requestRoomUsers()
+			for i := 0; i < 8; i++ {
+				time.Sleep(100 * time.Millisecond)
+				a.roomUsersMu.RLock()
+				u, ok2 := a.roomUsers[strings.ToLower(normalizeName(targetName))]
+				a.roomUsersMu.RUnlock()
+				if ok2 {
+					user = u
+					ok = true
+					break
+				}
+			}
+
+			if ok {
+				// allow normal flow to continue using found user
+			} else {
+				// Fallback: if we have a player_trade_id from the DB, attempt to open a trade by that id
+				if target.TradeID > 0 {
+					a.AddLog(fmt.Sprintf("Attempting trade by player_trade_id=%d for %s", target.TradeID, targetName))
+
+					// Set trade state to indicate we're attempting a trade
+					a.tradeMu.Lock()
+					a.activeTradePartner = targetName
+					a.activeTradeTarget = target.TradeID
+					a.payoutTradeSent = true
+					a.tradeMu.Unlock()
+
+					// Mark payout as Trading in the in-memory slice
+					foundInSlice := false
+					a.pMu.Lock()
+					for i := range a.payouts {
+						if a.payouts[i].ID == targetID {
+							a.payouts[i].Status = "Trading"
+							foundInSlice = true
+							break
+						}
+					}
+					a.pMu.Unlock()
+					go a.emitUpdate()
+
+					if !foundInSlice {
+						a.AddLog("ERROR: Target record lost during trade setup (fallback)")
+						a.tradeMu.Lock()
+						a.activeTradePartner = ""
+						a.tradeMu.Unlock()
+						continue
+					}
+
+					a.AddLog(fmt.Sprintf("Initiating auto-trade by TradeID for %s (TradeID: %d) for %s...", targetName, target.TradeID, targetItem))
+					a.AddLog(fmt.Sprintf("Sending TRADE_OPEN_OUT by TradeID %d (both forms)", target.TradeID))
+					a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), target.TradeID)
+					a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), []byte(encodeVL64(target.TradeID)))
+
+					pCopy := target
+					pCopy.Status = "Trading"
+					go a.automateTrade(&pCopy)
+					continue
+				}
+			}
+
 			a.AddLog(fmt.Sprintf("DEBUG: Monitor waiting for %s to be re-indexed in room map...", targetName))
 			continue
 		}
@@ -1560,6 +1698,8 @@ func (a *App) payoutMonitor() {
 
 		a.AddLog(fmt.Sprintf("Initiating auto-trade for %s (RoomIndex: %d) for %s...", targetName, roomIndex, targetItem))
 
+		// Debug: log that we are about to send trade-open packets
+		a.AddLog(fmt.Sprintf("Sending TRADE_OPEN_OUT to RoomIndex %d (both forms)", roomIndex))
 		// Send both standard and raw fallback as seen in root app
 		a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), roomIndex)
 		a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), []byte(encodeVL64(roomIndex)))
@@ -1585,6 +1725,10 @@ func (a *App) automateTrade(p *Payout) {
 			break
 		}
 		a.tradeMu.Unlock()
+	}
+
+	if tradeOpened {
+		a.AddLog(fmt.Sprintf("Automation: trade window detected open for %s", p.Name))
 	}
 
 	if !tradeOpened {
