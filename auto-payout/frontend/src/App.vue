@@ -1,167 +1,190 @@
 <template>
-  <div class="container">
-    <div class="header-section">
-      <div class="title-area">
+  <div class="app-root">
+    <header class="app-header">
+      <div class="brand">
         <h1>Auto Payout Bot</h1>
-        <p class="subtitle">Postgres Connected | Tracking Room Entry</p>
+        <div class="subtitle">Lightweight automated payouts</div>
       </div>
-      <div class="bot-status" :class="{ 'connected': isConnected }">
-        {{ isConnected ? '● Bot Active' : '○ Waiting for Connection' }}
-      </div>
-    </div>
+      <div class="status" :class="{ connected: isConnected }">{{ isConnected ? '● Connected' : '○ Disconnected' }}</div>
+    </header>
 
-    <div class="payout-form">
-      <div class="input-group">
-        <label>Habbo Name</label>
-        <input v-model="newName" placeholder="Player name" @keyup.enter="addPayout" />
-      </div>
-      <div class="input-group">
-        <label>Raw Item Name</label>
-        <input v-model="newItem" placeholder="e.g. club_sofa" @keyup.enter="addPayout" />
-      </div>
-      <div class="input-group">
-        <label>Quantity</label>
-        <input v-model.number="newQty" type="number" placeholder="Qty" style="width: 80px;" @keyup.enter="addPayout" />
-      </div>
-      <button @click="addPayout" class="btn-primary">Add to DB Queue</button>
-    </div>
+    <nav class="primary-nav">
+      <button :class="{ active: topTab === 'main' }" @click="topTab = 'main'">Main</button>
+      <button :class="{ active: topTab === 'logs' }" @click="topTab = 'logs'">Logs</button>
+      <div class="nav-spacer"></div>
+      <button class="btn" @click="refreshQueue">Refresh</button>
+    </nav>
 
-    <div class="main-content">
-      <div class="payouts-table">
-        <div class="table-header">
-          <h3>Payout Queue</h3>
-          <div class="table-actions">
-            <button @click="refreshQueue" class="btn-small">Sync with DB</button>
-            <button @click="clearCompleted" class="btn-small">Clear Finished</button>
-            <button @click="refreshInventory" class="btn-small btn-highlight">Refresh My Hand</button>
-            <button @click="returnToOwner" class="btn-danger btn-small">Empty Hand to Owner</button>
+    <main class="content">
+      <!-- Main Dashboard -->
+      <section v-if="topTab === 'main'" class="dashboard">
+        <div class="left-col">
+          <div class="card add-payout">
+            <h3>Add Payout</h3>
+            <div class="row">
+              <input v-model="newName" placeholder="Player name" />
+              <input v-model="newItem" placeholder="Item (raw name)" />
+              <input v-model.number="newQty" type="number" min="1" style="width:80px" />
+              <button class="btn-primary" @click="addPayout">Add</button>
+            </div>
+          </div>
+
+          <div class="card payouts-card">
+            <h3>Payout Queue</h3>
+            <div class="table-actions">
+              <button @click="clearCompleted" class="btn-small">Clear Completed</button>
+              <button @click="refreshInventory" class="btn-small">Refresh Hand</button>
+            </div>
+            <div class="table-wrap">
+              <table class="payouts-table">
+                <thead>
+                  <tr><th>Player</th><th>Item</th><th>Qty</th><th>Status</th><th></th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="p in payouts" :key="p.id">
+                    <td>{{ p.name }}</td>
+                    <td class="mono">{{ p.itemName }}</td>
+                    <td>{{ p.quantity }}</td>
+                    <td>{{ p.status }}</td>
+                    <td class="actions">
+                      <button @click="toggleStatus(p.id)" class="btn-small">{{ p.status === 'Disabled' ? 'Enable' : 'Pause' }}</button>
+                      <button @click="deletePayout(p.id)" class="btn-small danger">Delete</button>
+                    </td>
+                  </tr>
+                  <tr v-if="payouts.length === 0"><td colspan="5" class="empty">No payouts queued</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
-        <div class="table-container">
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Item</th>
-                <th>Qty</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="p in payouts" :key="p.id" :class="{ 'row-disabled': p.status === 'Disabled' }">
-                <td class="player-name">{{ p.name }}</td>
-                <td class="item-name">{{ p.itemName }}</td>
-                <td>{{ p.quantity }}</td>
-                <td>
-                  <span :class="'status-' + p.status.toLowerCase().replace(' ', '-')">
-                    {{ p.status }}
-                  </span>
-                </td>
-                <td class="action-col">
-                  <button @click="toggleStatus(p.id)" class="btn-icon" :title="p.status === 'Disabled' ? 'Enable' : 'Pause'">
-                    {{ p.status === 'Disabled' ? '▶' : '⏸' }}
-                  </button>
-                  <button @click="deletePayout(p.id)" class="btn-delete" title="Remove">×</button>
-                </td>
-              </tr>
-              <tr v-if="payouts.length === 0">
-                <td colspan="5" class="empty-row">No payouts in queue. Items are saved to Postgres automatically.</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
 
-      <div class="controls-panel">
-        <div class="settings-panel">
-          <h4>Auto-Payout Settings</h4>
-          <div class="input-group small">
+        <aside class="right-col">
+          <div class="card active-trade">
+            <h3>Active Trade</h3>
+            <div v-if="tradeInfo.active">
+              <div><strong>Partner:</strong> {{ tradeInfo.partner || 'Unknown' }} ({{ tradeInfo.partnerId || '-' }})</div>
+              <div style="margin-top:8px;"><strong>Elapsed:</strong> {{ formatSeconds(tradeInfo.elapsedSeconds) }}</div>
+              <div><strong>Remaining:</strong> {{ formatSeconds(tradeInfo.remainingSeconds) }}</div>
+              <div class="progress" style="margin-top:8px; background:#0b0c0d; height:8px; border-radius:6px; overflow:hidden;">
+                <div :style="{ width: (100 - Math.max(0, (tradeInfo.remainingSeconds*100)/Math.max(1, tradeInfo.maxOpenSeconds))) + '%', background: '#646cff', height: '100%' }"></div>
+              </div>
+            </div>
+            <div v-else class="empty">No active trade</div>
+          </div>
+
+          <div class="card banlist-card">
+            <h3>Ban List</h3>
+            <div v-if="banList.length">
+              <div v-for="b in banList" :key="b.key" class="ban-entry" style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #222">
+                <div>
+                  <div style="font-weight:600">{{ b.label }}</div>
+                  <div style="font-size:0.85rem;color:var(--muted)">{{ formatSeconds(b.remainingSeconds) }} left (expires {{ new Date(b.expiresAt).toLocaleString() }})</div>
+                </div>
+                <div>
+                  <button @click="clearBan(b.key)" class="btn-small">Unban</button>
+                </div>
+              </div>
+            </div>
+            <div v-else class="empty">No active bans</div>
+          </div>
+          <div class="card">
+            <h3>Settings</h3>
             <label>Max Unique Items</label>
             <input v-model.number="maxUniqueItems" type="number" />
-          </div>
-          <div class="input-group small">
-            <label>Max Qty per Unique</label>
+            <label>Max Qty / Unique</label>
             <input v-model.number="maxQtyPerUnique" type="number" />
+            <div style="margin-top:8px"><button @click="saveSettings" class="btn">Save</button></div>
           </div>
-          <div style="margin-top:8px; display:flex; gap:8px;">
-            <button @click="saveSettings" class="btn-small">Save Settings</button>
-            <button @click="refreshQueue" class="btn-small">Refresh Queue</button>
+          <div class="card">
+            <h3>Quick Actions</h3>
+            <button @click="returnToOwner" class="btn-small">Return All To Owner</button>
           </div>
-        </div>
-      </div>
-    </div>
-  </div>
+        </aside>
+      </section>
 
-  <!-- Bottom panel: Logs / Debug tabs -->
-  <div class="bottom-panel">
-    <div class="tabs">
-      <button :class="{ active: selectedTab === 'logs' }" @click="selectedTab = 'logs'">Logs</button>
-      <button :class="{ active: selectedTab === 'debug' }" @click="selectedTab = 'debug'">Debug</button>
-    </div>
-
-    <div class="tab-content">
-      <div v-if="selectedTab === 'logs'">
-        <div class="log-actions">
-          <button @click="copyAllLogs" class="btn-small">Copy All</button>
-          <button v-if="!autoScrollEnabled" @click="scrollToBottom" class="btn-small">Jump to latest</button>
-        </div>
-        <div class="logs-container" ref="logContainer">
-          <div v-for="(log, idx) in logs" :key="idx" class="log-entry" :class="{ 'log-err': log.includes('ERROR'), 'log-warn': log.includes('WARNING') }">
-            {{ log }}
+      <!-- Logs / Debug View -->
+      <section v-else class="logs-view">
+        <div class="logs-top">
+          <div class="tabs">
+            <button :class="{ active: subTab === 'logs' }" @click="subTab = 'logs'">Logs</button>
+            <button :class="{ active: subTab === 'debug' }" @click="subTab = 'debug'">Debug</button>
+            <div class="spacer"></div>
+            <input v-model="logFilter" placeholder="Filter logs" class="filter" />
+            <button @click="copyAllLogs" class="btn-small">Copy</button>
+            <button @click="clearAllLogs" class="btn-small">Clear</button>
           </div>
-          <div v-if="logs.length === 0" class="empty-logs">Waiting for activity...</div>
         </div>
-      </div>
 
-      <div v-if="selectedTab === 'debug'">
-        <div class="debug-actions" style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
-          <button @click="copyAllDebug" class="btn-small">Copy All Debug</button>
-          <button @click="clearDebug" class="btn-small">Clear Debug</button>
-        </div>
-        <div class="debug-list">
-          <div v-for="(d, idx) in debugEvents" :key="idx" class="debug-entry">
-            <div class="debug-header">{{ d.ts }} — {{ d.type }} <button @click="copyDebug(d)" class="btn-small" style="margin-left:8px;">Copy</button></div>
-            <pre class="debug-body">{{ JSON.stringify(d.data, null, 2) }}</pre>
+        <div class="logs-body">
+          <div v-show="subTab === 'logs'" class="logs-panel">
+            <div class="logs-list" ref="logContainer">
+              <div v-for="(l, i) in filteredLogs" :key="i" class="log-line" :class="{ err: l.includes('ERROR'), warn: l.includes('WARNING') }">{{ l }}</div>
+              <div v-if="filteredLogs.length === 0" class="empty">No logs</div>
+            </div>
           </div>
-          <div v-if="debugEvents.length === 0" class="empty-logs">No debug events yet.</div>
+
+          <div v-show="subTab === 'debug'" class="debug-panel">
+            <div v-for="(d, idx) in debugEvents" :key="idx" class="debug-entry">
+              <div class="meta">{{ d.ts }} — {{ d.type }}</div>
+              <pre class="debug-pre">{{ JSON.stringify(d.data, null, 2) }}</pre>
+            </div>
+            <div v-if="debugEvents.length === 0" class="empty">No debug events</div>
+          </div>
         </div>
-      </div>
-    </div>
+      </section>
+    </main>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, watch, nextTick } from 'vue'
+import { ref, onMounted, watch, nextTick, computed } from 'vue'
+
+const topTab = ref('main')
+const subTab = ref('logs')
 
 const payouts = ref([])
 const logs = ref([])
+const debugEvents = ref([])
+
+const tradeInfo = ref({ active: false, partner: '', partnerId: 0, elapsedSeconds: 0, remainingSeconds: 0, maxOpenSeconds: 0, banDurationSeconds: 0 })
+const banList = ref([])
+
 const newName = ref('')
 const newItem = ref('')
 const newQty = ref(1)
 const isConnected = ref(false)
 const logContainer = ref(null)
+const logFilter = ref('')
+
 const maxUniqueItems = ref(6)
 const maxQtyPerUnique = ref(10)
 
-const selectedTab = ref('logs')
-const debugEvents = ref([])
-const autoScrollEnabled = ref(true)
+const filteredLogs = computed(() => {
+  if (!logFilter.value) return logs.value
+  const f = logFilter.value.toLowerCase()
+  return logs.value.filter(l => l.toLowerCase().includes(f))
+})
 
-const loadInitialData = async () => {
+const loadInitial = async () => {
   if (window.go?.main?.App) {
-    payouts.value = await window.go.main.App.GetPayouts()
-    logs.value = await window.go.main.App.GetLogs()
-    isConnected.value = true
-    // Load persisted settings
-    if (window.go.main.App.GetSettings) {
+    try {
+      payouts.value = await window.go.main.App.GetPayouts()
+      logs.value = await window.go.main.App.GetLogs()
+      isConnected.value = true
+      const s = await window.go.main.App.GetSettings()
+      if (s) { maxUniqueItems.value = s.maxUniqueItems || 6; maxQtyPerUnique.value = s.maxQtyPerUnique || 10 }
       try {
-        const s = await window.go.main.App.GetSettings()
-        if (s && typeof s.maxUniqueItems !== 'undefined') maxUniqueItems.value = s.maxUniqueItems
-        if (s && typeof s.maxQtyPerUnique !== 'undefined') maxQtyPerUnique.value = s.maxQtyPerUnique
+        tradeInfo.value = await window.go.main.App.GetTradeInfo()
       } catch (e) {
-        console.warn('Failed to load settings', e)
+        // ignore
       }
+      try {
+        banList.value = await window.go.main.App.GetBanList()
+      } catch (e) {
+        // ignore
+      }
+    } catch (e) {
+      console.warn('initial load failed', e)
     }
   }
 }
@@ -169,397 +192,104 @@ const loadInitialData = async () => {
 const addPayout = async () => {
   if (!newName.value || !newItem.value) return
   if (!window.go?.main?.App) return
-
-  // Basic client-side validation
-  if (!Number.isFinite(newQty.value) || newQty.value <= 0) {
-    alert('Quantity must be a positive number')
-    return
-  }
-
-  // Call server to check how it would handle this add (authoritative)
-  let serverCheck = null
-  try {
-    serverCheck = await window.go.main.App.CheckAddPayout(newName.value, newItem.value, newQty.value)
-    debugEvents.value.unshift({ ts: new Date().toLocaleString(), type: 'server-check', data: serverCheck })
-    // Keep debug tab open when checks appear
-    selectedTab.value = 'debug'
-  } catch (e) {
-    debugEvents.value.unshift({ ts: new Date().toLocaleString(), type: 'server-error', data: String(e) })
-    selectedTab.value = 'debug'
-    alert('Failed to run server-side validation: ' + e)
-    return
-  }
-
-  if (!serverCheck || !serverCheck.allowed) {
-    const reason = serverCheck && serverCheck.reason ? serverCheck.reason : 'Rejected by server rules.'
-    alert('Server validation: ' + reason)
-    return
-  }
-
-  // If server intends to split into chunks, confirm before proceeding
-  if (serverCheck.chunks && serverCheck.chunks.length > 1) {
-    const ok = confirm(`Server will split into chunks: ${serverCheck.chunks.join(', ')}. Proceed?`)
-    if (!ok) return
-  }
-
+  if (!Number.isFinite(newQty.value) || newQty.value <= 0) return
   try {
     await window.go.main.App.AddPayout(newName.value, newItem.value, newQty.value)
-    debugEvents.value.unshift({ ts: new Date().toLocaleString(), type: 'added', data: serverCheck })
     newName.value = ''
     newItem.value = ''
     newQty.value = 1
-    // After adding, refresh queue and logs
     await refreshQueue()
-  } catch (err) {
-    alert('Database error: ' + err)
-  }
+  } catch (e) { alert('Add failed: ' + e) }
 }
 
-const deletePayout = async (id) => {
-  if (window.go?.main?.App) {
-    await window.go.main.App.DeletePayout(id)
-  }
-}
+const deletePayout = async (id) => { if (window.go?.main?.App) await window.go.main.App.DeletePayout(id) }
+const toggleStatus = async (id) => { if (window.go?.main?.App) await window.go.main.App.TogglePayoutStatus(id) }
+const refreshQueue = async () => { if (window.go?.main?.App) { await window.go.main.App.RefreshQueue(); payouts.value = await window.go.main.App.GetPayouts() } }
+const clearCompleted = async () => { if (window.go?.main?.App) await window.go.main.App.ClearCompleted(); await refreshQueue() }
+const refreshInventory = async () => { if (window.go?.main?.App) await window.go.main.App.RefreshInventory() }
+const returnToOwner = async () => { const name = prompt('Owner name:'); if (name && window.go?.main?.App) await window.go.main.App.ReturnAllToOwner(name) }
 
-const toggleStatus = async (id) => {
-  if (window.go?.main?.App) {
-    await window.go.main.App.TogglePayoutStatus(id)
-  }
-}
+const copyAllLogs = async () => { try { const text = logs.value.join('\n'); await navigator.clipboard.writeText(text); alert('Logs copied') } catch (e) { alert('Copy failed') } }
+const clearAllLogs = async () => { logs.value = []; if (window.go?.main?.App) { /* no API to clear server logs */ } }
 
-const refreshQueue = async () => {
-  if (window.go?.main?.App) {
-    await window.go.main.App.RefreshQueue()
-  }
-}
-
-const clearCompleted = async () => {
-  if (window.go?.main?.App) {
-    await window.go.main.App.ClearCompleted()
-  }
-}
-
-const refreshInventory = async () => {
-  if (window.go?.main?.App) {
-    await window.go.main.App.RefreshInventory()
-  }
-}
-
-const returnToOwner = async () => {
-  const name = prompt("Enter owner name to return all hand items to:")
-  if (name && window.go?.main?.App) {
-    await window.go.main.App.ReturnAllToOwner(name)
-  }
-}
-
-watch(logs, () => {
-  nextTick(() => {
-    if (logContainer.value && autoScrollEnabled.value) {
-      logContainer.value.scrollTop = logContainer.value.scrollHeight
-    }
-  })
-}, { deep: true })
-
-onMounted(() => {
-  loadInitialData()
-  
-  if (window.runtime) {
-    window.runtime.EventsOn('payoutsUpdate', (data) => {
-      payouts.value = data
-    })
-    window.runtime.EventsOn('logsUpdate', (data) => {
-      logs.value = data
-    })
-    window.runtime.EventsOn('debugEvent', (data) => {
-      // Normalize server-emitted event into {ts,type,data}
-      const entry = { ts: data.ts || new Date().toLocaleString(), type: data.type || 'debug', data: data }
-      debugEvents.value.unshift(entry)
-      selectedTab.value = 'debug'
-    })
-  }
-  // Attach scroll listener to detect user scrolling up
-  nextTick(() => {
-    if (logContainer.value) {
-      logContainer.value.addEventListener('scroll', () => {
-        const el = logContainer.value
-        if (!el) return
-        const atBottom = (el.scrollTop + el.clientHeight) >= (el.scrollHeight - 8)
-        autoScrollEnabled.value = atBottom
-      })
-    }
-  })
-})
-
-const scrollToBottom = () => {
-  nextTick(() => {
-    if (logContainer.value) {
-      logContainer.value.scrollTop = logContainer.value.scrollHeight
-      autoScrollEnabled.value = true
-    }
-  })
-}
-
-const copyAllLogs = async () => {
-  try {
-    const text = logs.value.join('\n')
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text)
-      alert('Logs copied to clipboard')
-    } else {
-      // fallback
-      const ta = document.createElement('textarea')
-      ta.value = text
-      document.body.appendChild(ta)
-      ta.select()
-      document.execCommand('copy')
-      document.body.removeChild(ta)
-      alert('Logs copied to clipboard')
-    }
-  } catch (e) {
-    alert('Failed to copy logs: ' + e)
-  }
-}
-
-const copyDebug = async (d) => {
-  try {
-    const text = JSON.stringify(d.data, null, 2)
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text)
-      alert('Debug copied')
-    }
-  } catch (e) {
-    alert('Failed to copy debug: ' + e)
-  }
-}
-
-const copyAllDebug = async () => {
-  try {
-    const text = debugEvents.value.map(d => `${d.ts} ${d.type}\n${JSON.stringify(d.data, null, 2)}`).join('\n\n')
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text)
-      alert('All debug copied')
-    }
-  } catch (e) {
-    alert('Failed to copy debug: ' + e)
-  }
-}
-
+const copyAllDebug = async () => { try { const text = debugEvents.value.map(d => `${d.ts} ${d.type}\n${JSON.stringify(d.data, null, 2)}`).join('\n\n'); await navigator.clipboard.writeText(text); alert('Copied') } catch (e) { alert('Copy failed') } }
 const clearDebug = () => { debugEvents.value = [] }
 
-const saveSettings = async () => {
+const saveSettings = async () => { if (!window.go?.main?.App) return; await window.go.main.App.SaveSettings(maxUniqueItems.value, maxQtyPerUnique.value); alert('Saved') }
+
+watch(logs, () => { nextTick(() => { if (logContainer.value) logContainer.value.scrollTop = logContainer.value.scrollHeight }) })
+
+onMounted(() => {
+  loadInitial()
+  if (window.runtime) {
+    window.runtime.EventsOn('payoutsUpdate', data => { payouts.value = data })
+    window.runtime.EventsOn('logsUpdate', data => { logs.value = data })
+    window.runtime.EventsOn('debugEvent', data => { debugEvents.value.unshift({ ts: data.ts || new Date().toLocaleString(), type: data.type || 'debug', data }); topTab.value = 'logs'; subTab.value = 'debug' })
+    window.runtime.EventsOn('tradeUpdate', data => { tradeInfo.value = data })
+    window.runtime.EventsOn('banListUpdate', data => { banList.value = data })
+  }
+})
+
+const clearBan = async (key) => {
   if (!window.go?.main?.App) return
   try {
-    await window.go.main.App.SaveSettings(parseInt(maxUniqueItems.value), parseInt(maxQtyPerUnique.value))
-    alert('Settings saved')
-  } catch (e) {
-    alert('Failed to save settings: ' + e)
-  }
+    await window.go.main.App.ClearBan(key)
+    // rely on event emission to update banList
+  } catch (e) { alert('Unban failed: ' + e) }
+}
+
+const formatSeconds = (s) => {
+  const m = Math.floor(s / 60)
+  const sec = Math.floor(s % 60)
+  return `${m}:${sec.toString().padStart(2,'0')}`
 }
 </script>
 
-<style>
-.container {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 1.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-  height: 95vh;
-  box-sizing: border-box;
-}
-
-.header-section {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-bottom: 1px solid #333;
-  padding-bottom: 1rem;
-}
-
-.subtitle { margin: 0; font-size: 0.8rem; color: #555; }
-
-.bot-status {
-  font-size: 0.9rem;
-  color: #ff4444;
-  background: #2a1a1a;
-  padding: 6px 16px;
-  border-radius: 20px;
-  border: 1px solid #442222;
-  font-weight: bold;
-}
-.bot-status.connected {
-  color: #44ff44;
-  background: #1a2a1a;
-  border-color: #224422;
-}
-
-.payout-form {
-  display: flex;
-  gap: 1rem;
-  background: #202020;
-  padding: 1.2rem;
-  border-radius: 8px;
-  align-items: flex-end;
-  border: 1px solid #333;
-}
-
-.input-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  flex: 1;
-}
-
-.input-group label {
-  font-size: 0.75rem;
-  color: #666;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-input {
-  background: #101010;
-  border: 1px solid #333;
-  color: #fff;
-  padding: 0.6rem;
-  border-radius: 4px;
-  outline: none;
-  font-size: 0.9rem;
-}
-input:focus { border-color: #646cff; background: #000; }
-
-.btn-primary {
-  background: #646cff;
-  color: white;
-  border: none;
-  padding: 0.6rem 1.5rem;
-  border-radius: 4px;
-  cursor: pointer;
-  font-weight: bold;
-  height: 38px;
-}
-.btn-primary:hover { background: #747bff; transform: translateY(-1px); }
-
-.main-content {
-  display: grid;
-  grid-template-columns: 1.8fr 1fr;
-  gap: 1.5rem;
-  flex: 1;
-  min-height: 0;
-}
-
-.payouts-table {
-  background: #181818;
-  border-radius: 8px;
-  border: 1px solid #333;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.table-header {
-  padding: 1rem;
-  border-bottom: 1px solid #333;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: #202020;
-}
-
-.table-container {
-  overflow-y: auto;
-  flex: 1;
-}
-
-table { width: 100%; border-collapse: collapse; }
-th { text-align: left; padding: 1rem; font-size: 0.75rem; color: #444; background: #1a1a1a; position: sticky; top: 0; }
-td { padding: 1rem; border-bottom: 1px solid #222; font-size: 0.9rem; }
-
-.player-name { font-weight: bold; color: #fff; }
-.item-name { font-family: 'Consolas', monospace; color: #888; font-size: 0.85rem; }
-
-.row-disabled { opacity: 0.4; }
-
-.status-pending { color: #666; }
-.status-disabled { color: #ff4444; font-style: italic; }
-.status-in-room { color: #44ff44; font-weight: bold; }
-.status-trading { color: #ffaa00; font-weight: bold; }
-.status-completed { color: #44aaff; text-decoration: line-through; }
-
-.btn-icon {
-  background: transparent;
-  border: 1px solid #333;
-  color: #888;
-  padding: 4px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  margin-right: 8px;
-}
-.btn-icon:hover { border-color: #646cff; color: #fff; }
-
-.btn-delete {
-  background: transparent;
-  border: none;
-  color: #ff4444;
-  font-size: 1.2rem;
-  cursor: pointer;
-}
-.btn-delete:hover { color: #ff8888; transform: scale(1.1); }
-
-.logs-section {
-  background: #0f0f0f;
-  border-radius: 8px;
-  border: 1px solid #333;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.logs-container {
-  padding: 1rem;
-  overflow-y: auto;
-  font-family: 'Consolas', monospace;
-  font-size: 0.8rem;
-  flex: 1;
-}
-
-.settings-panel {
-  padding: 0.8rem;
-  border-bottom: 1px solid #333;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  background: #111;
-}
-.input-group.small { gap: 0.2rem; }
-.input-group.small input { width: 120px; }
-
-.log-entry { color: #00cc00; margin-bottom: 4px; border-left: 2px solid #222; padding-left: 8px; }
-.log-err { color: #ff4444; }
-.log-warn { color: #ffaa00; }
-
-.btn-highlight { background: #3a3a3a !important; color: #44ff44 !important; font-weight: bold; }
-
-.bottom-panel {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 260px;
-  background: #0b0b0b;
-  border-top: 1px solid #222;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-}
-.tabs { display:flex; gap:8px; padding:8px; background:#0f0f0f; border-bottom:1px solid #222; }
-.tabs button { background:transparent; border:1px solid #222; color:#ccc; padding:6px 10px; border-radius:4px; cursor:pointer }
-.tabs button.active { background:#222; color:#fff; }
-.tab-content { padding:8px; display:flex; gap:12px; flex:1; min-height:0 }
-.log-actions { display:flex; gap:8px; margin-bottom:8px }
-.debug-list { overflow-y:auto; flex:1; padding:8px; font-family:Consolas, monospace }
-.debug-entry { border-bottom:1px solid #222; padding:8px 0; }
-.debug-header { font-weight:bold; color:#ddd }
-.debug-body { background:#071; color:#eee; padding:8px; border-radius:4px; white-space:pre-wrap; font-family:Consolas, monospace; }
+<style scoped>
+:root{--bg:#0f1113;--card:#15171a;--muted:#999;--accent:#6b7bff}
+*{box-sizing:border-box}
+.app-root{font-family:Inter,Segoe UI,Arial;background:var(--bg);color:#e6eef6;min-height:100vh;padding:12px}
+.app-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.brand h1{margin:0;font-size:1.2rem}
+.subtitle{font-size:0.85rem;color:var(--muted)}
+.status{font-weight:700}
+.status.connected{color:#44ff44}
+.primary-nav{display:flex;gap:8px;align-items:center;padding:8px 0;margin-bottom:12px}
+.primary-nav button{background:transparent;border:1px solid #2a2a2a;color:#ddd;padding:6px 10px;border-radius:6px;cursor:pointer}
+.primary-nav button.active{background:var(--card);border-color:var(--accent);color:#fff}
+.nav-spacer{flex:1}
+.content{display:block}
+.dashboard{display:flex;gap:12px}
+.left-col{flex:2}
+.right-col{width:320px}
+.card{background:var(--card);padding:12px;border-radius:8px;margin-bottom:12px}
+.add-payout .row{display:flex;gap:8px}
+.add-payout input{background:#0b0c0e;border:1px solid #222;padding:8px;border-radius:6px;color:#fff}
+.btn-primary{background:var(--accent);color:#fff;border:none;padding:8px 12px;border-radius:6px}
+.table-wrap{max-height:50vh;overflow:auto}
+.payouts-table{width:100%;border-collapse:collapse}
+.payouts-table th,.payouts-table td{padding:8px;border-bottom:1px solid #222;text-align:left}
+.mono{font-family:monospace;color:#9ab}
+.actions button{margin-left:6px}
+.logs-view{margin-top:8px}
+.tabs{display:flex;gap:8px;align-items:center}
+.tabs button{padding:6px 10px;border-radius:6px;border:1px solid #222;background:transparent;color:#ddd}
+.tabs button.active{background:#1b1d20;border-color:var(--accent)}
+.logs-top{margin-bottom:8px}
+.logs-body{background:#0b0c0d;padding:8px;border-radius:6px}
+.logs-list{max-height:65vh;overflow:auto;padding:8px}
+.log-line{font-family:monospace;padding:4px;border-left:3px solid transparent}
+.log-line.err{color:#ff8888;border-left-color:#ff4444}
+.log-line.warn{color:#ffcc66;border-left-color:#ffaa00}
+.debug-pre{background:#0e0f10;padding:10px;border-radius:6px;overflow:auto}
+.empty{color:var(--muted);padding:12px}
+.filter{background:#0b0c0d;border:1px solid #222;padding:6px;border-radius:6px;color:#ddd}
+.btn-small{padding:6px 8px;border-radius:6px;background:#1a1b1d;border:1px solid #222;color:#ddd}
+.btn-small.danger{background:#3a0d0d}
+.danger{background:#441111;color:#fff}
+label{display:block;margin-top:8px;font-size:0.85rem;color:var(--muted)}
+input[type=number]{padding:8px;border-radius:6px;background:#0b0c0d;border:1px solid #222;color:#fff}
+.active-trade .progress { background: #0b0c0d; border-radius: 6px; overflow: hidden }
+.ban-entry { padding: 6px 0 }
 </style>
+ 

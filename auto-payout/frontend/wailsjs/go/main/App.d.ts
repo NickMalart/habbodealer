@@ -10,6 +10,8 @@ export function AddStockedItem(arg1:string,arg2:string):Promise<void>;
 
 export function CheckAddPayout(arg1:string,arg2:string,arg3:number):Promise<main.AddPayoutCheckResult>;
 
+export function ClearBan(arg1:string):Promise<void>;
+
 export function ClearCompleted():Promise<void>;
 
 export function DeletePayout(arg1:string):Promise<void>;
@@ -18,6 +20,8 @@ export function DeleteStockedItem(arg1:number):Promise<void>;
 
 export function GetActiveStockedItemNames():Promise<Array<string>>;
 
+export function GetBanList():Promise<Array<main.BanEntry>>;
+
 export function GetLogs():Promise<Array<string>>;
 
 export function GetPayouts():Promise<Array<main.Payout>>;
@@ -25,6 +29,8 @@ export function GetPayouts():Promise<Array<main.Payout>>;
 export function GetSettings():Promise<main.PayoutSettings>;
 
 export function GetStockedItems():Promise<Array<main.StockedItem>>;
+
+export function GetTradeInfo():Promise<main.TradeState>;
 
 export function RefreshInventory():Promise<void>;
 

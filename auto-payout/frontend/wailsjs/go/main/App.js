@@ -18,6 +18,10 @@ export function CheckAddPayout(arg1, arg2, arg3) {
   return window['go']['main']['App']['CheckAddPayout'](arg1, arg2, arg3);
 }
 
+export function ClearBan(arg1) {
+  return window['go']['main']['App']['ClearBan'](arg1);
+}
+
 export function ClearCompleted() {
   return window['go']['main']['App']['ClearCompleted']();
 }
@@ -34,6 +38,10 @@ export function GetActiveStockedItemNames() {
   return window['go']['main']['App']['GetActiveStockedItemNames']();
 }
 
+export function GetBanList() {
+  return window['go']['main']['App']['GetBanList']();
+}
+
 export function GetLogs() {
   return window['go']['main']['App']['GetLogs']();
 }
@@ -48,6 +56,10 @@ export function GetSettings() {
 
 export function GetStockedItems() {
   return window['go']['main']['App']['GetStockedItems']();
+}
+
+export function GetTradeInfo() {
+  return window['go']['main']['App']['GetTradeInfo']();
 }
 
 export function RefreshInventory() {

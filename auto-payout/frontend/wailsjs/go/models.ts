@@ -28,6 +28,24 @@ export namespace main {
 	        this.item = source["item"];
 	    }
 	}
+	export class BanEntry {
+	    key: string;
+	    label: string;
+	    expiresAt: string;
+	    remainingSeconds: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new BanEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.label = source["label"];
+	        this.expiresAt = source["expiresAt"];
+	        this.remainingSeconds = source["remainingSeconds"];
+	    }
+	}
 	export class Payout {
 	    id: string;
 	    name: string;
@@ -88,6 +106,30 @@ export namespace main {
 	        this.canonicalName = source["canonicalName"];
 	        this.displayName = source["displayName"];
 	        this.isActive = source["isActive"];
+	    }
+	}
+	export class TradeState {
+	    active: boolean;
+	    partner: string;
+	    partnerId: number;
+	    elapsedSeconds: number;
+	    remainingSeconds: number;
+	    maxOpenSeconds: number;
+	    banDurationSeconds: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TradeState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.active = source["active"];
+	        this.partner = source["partner"];
+	        this.partnerId = source["partnerId"];
+	        this.elapsedSeconds = source["elapsedSeconds"];
+	        this.remainingSeconds = source["remainingSeconds"];
+	        this.maxOpenSeconds = source["maxOpenSeconds"];
+	        this.banDurationSeconds = source["banDurationSeconds"];
 	    }
 	}
 

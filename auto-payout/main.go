@@ -35,6 +35,12 @@ var assets embed.FS
 //go:embed scripts/parse_users28.py
 var users28Parser []byte
 
+const (
+	maxOpenTradeDuration = 2 * time.Minute
+	banDuration          = 5 * time.Minute
+	banMonitorInterval   = 5 * time.Second
+)
+
 // Payout represents a single delivery task
 type Payout struct {
 	ID            string `json:"id"`
@@ -67,6 +73,26 @@ type TradeItem struct {
 	Name     string `json:"name"`
 	Quantity int    `json:"quantity"`
 	RawData  string `json:"raw_data,omitempty"`
+}
+
+// TradeState represents brief information about the currently active trade
+// including elapsed/remaining seconds so the UI can render a live countdown.
+type TradeState struct {
+	Active             bool   `json:"active"`
+	Partner            string `json:"partner"`
+	PartnerID          int    `json:"partnerId"`
+	ElapsedSeconds     int64  `json:"elapsedSeconds"`
+	RemainingSeconds   int64  `json:"remainingSeconds"`
+	MaxOpenSeconds     int64  `json:"maxOpenSeconds"`
+	BanDurationSeconds int64  `json:"banDurationSeconds"`
+}
+
+// BanEntry is a UI-friendly representation of an active ban key.
+type BanEntry struct {
+	Key              string `json:"key"`
+	Label            string `json:"label"`
+	ExpiresAt        string `json:"expiresAt"`
+	RemainingSeconds int64  `json:"remainingSeconds"`
 }
 
 type App struct {
@@ -108,6 +134,7 @@ type App struct {
 	allowedNamesCache      []string
 	lastScreenshotPath     string
 	tradeMu                sync.Mutex
+	tradeStartedAt         time.Time
 
 	// Banker state
 	bankerName   string
@@ -132,6 +159,9 @@ type App struct {
 	inflight   map[string]string
 	inflightMu sync.RWMutex
 
+	// In-memory ban list to block abusive partners (keyed by name:lower or tradeid:<id>)
+	banList *BanList
+
 	// Notified map to avoid duplicate failure webhooks in-memory
 	notified   map[string]struct{}
 	notifiedMu sync.RWMutex
@@ -150,6 +180,151 @@ func NewApp() *App {
 		stripScanItemIDs:     make(map[string][]int),
 		inflight:             make(map[string]string),
 		notified:             make(map[string]struct{}),
+		banList:              NewBanList(),
+	}
+}
+
+// BanList is a simple in-memory ban store keyed by arbitrary string keys
+// (we use "name:<lower>" and "tradeid:<id>"). Expirations are stored as time.Time.
+type BanList struct {
+	mu   sync.RWMutex
+	bans map[string]time.Time
+}
+
+func NewBanList() *BanList {
+	return &BanList{bans: make(map[string]time.Time)}
+}
+
+func (b *BanList) Add(key string, d time.Duration) {
+	b.mu.Lock()
+	b.bans[key] = time.Now().Add(d)
+	b.mu.Unlock()
+}
+
+func (b *BanList) IsBanned(key string) bool {
+	b.mu.RLock()
+	exp, ok := b.bans[key]
+	b.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	if time.Now().After(exp) {
+		b.mu.Lock()
+		// only remove if unchanged
+		if cur, ok2 := b.bans[key]; ok2 && cur.Equal(exp) {
+			delete(b.bans, key)
+		}
+		b.mu.Unlock()
+		return false
+	}
+	return true
+}
+
+// Remove deletes a ban key immediately.
+func (b *BanList) Remove(key string) {
+	b.mu.Lock()
+	delete(b.bans, key)
+	b.mu.Unlock()
+}
+
+// List returns a snapshot copy of the ban map.
+func (b *BanList) List() map[string]time.Time {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	out := make(map[string]time.Time, len(b.bans))
+	for k, v := range b.bans {
+		out[k] = v
+	}
+	return out
+}
+
+// isPartnerBanned checks both name and trade-id variants for an active ban.
+func (a *App) isPartnerBanned(name string, tradeID int) bool {
+	if a.banList == nil {
+		return false
+	}
+	if name != "" {
+		key := "name:" + strings.ToLower(normalizeName(name))
+		if a.banList.IsBanned(key) {
+			return true
+		}
+	}
+	if tradeID > 0 {
+		key := fmt.Sprintf("tradeid:%d", tradeID)
+		if a.banList.IsBanned(key) {
+			return true
+		}
+	}
+	return false
+}
+
+// banMonitor watches the currently active trade and bans the partner if the
+// trade remains open longer than maxOpenTradeDuration. It will attempt to
+// close the trade and reset local state when banning occurs.
+func (a *App) banMonitor() {
+	a.AddLog("Ban monitor started.")
+	ticker := time.NewTicker(banMonitorInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			a.tradeMu.Lock()
+			active := a.tradeActive
+			start := a.tradeStartedAt
+			name := a.lastTradePartner
+			id := a.lastTradePartnerID
+			target := a.activeTradeTarget
+			a.tradeMu.Unlock()
+
+			if !active {
+				continue
+			}
+
+			if id == 0 && target > 0 {
+				id = target
+			}
+
+			if start.IsZero() {
+				// If we didn't record a start time for some reason, set it now
+				a.tradeMu.Lock()
+				if a.tradeStartedAt.IsZero() {
+					a.tradeStartedAt = time.Now()
+				}
+				a.tradeMu.Unlock()
+				continue
+			}
+
+			if time.Since(start) > maxOpenTradeDuration {
+				a.AddLog(fmt.Sprintf("[BAN] Trade with %s (id=%d) open > %s — banning for %s", name, id, maxOpenTradeDuration, banDuration))
+				if name != "" {
+					a.banList.Add("name:"+strings.ToLower(normalizeName(name)), banDuration)
+				}
+				if id > 0 {
+					a.banList.Add(fmt.Sprintf("tradeid:%d", id), banDuration)
+				}
+
+				// Notify frontend of updated banlist
+				if a.ctx != nil {
+					go runtime.EventsEmit(a.ctx, "banListUpdate", a.GetBanList())
+				}
+				// Attempt to close the trade window immediately
+				if a.ext != nil {
+					a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+				}
+				// Reset local trade state conservatively
+				a.tradeMu.Lock()
+				a.tradeActive = false
+				a.payoutTradeSent = false
+				a.activeTradePartner = ""
+				a.activeTradeTarget = 0
+				a.lastTradePartner = ""
+				a.lastTradePartnerID = 0
+				a.tradeStartedAt = time.Time{}
+				a.tradeMu.Unlock()
+			}
+		case <-a.ctx.Done():
+			return
+		}
 	}
 }
 
@@ -323,9 +498,91 @@ func (a *App) startup(ctx context.Context) {
 
 	a.AddLog("Extension registered. Waiting for connection...")
 	go a.ext.Run()
+	go a.banMonitor()
+	go a.tradeTicker()
 	go a.payoutMonitor()
 	go a.dbPoller()
 	go a.inventoryRefreshLoop()
+}
+
+// tradeTicker emits a compact trade state every second so the frontend can
+// render a smooth countdown without polling.
+func (a *App) tradeTicker() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if a.ctx == nil {
+				continue
+			}
+			// Emit current trade info
+			info := a.GetTradeInfo()
+			go runtime.EventsEmit(a.ctx, "tradeUpdate", info)
+		case <-a.ctx.Done():
+			return
+		}
+	}
+}
+
+// GetTradeInfo returns a snapshot of the current trade state for the UI.
+func (a *App) GetTradeInfo() TradeState {
+	a.tradeMu.Lock()
+	defer a.tradeMu.Unlock()
+	ts := TradeState{Active: a.tradeActive, Partner: a.lastTradePartner, PartnerID: a.lastTradePartnerID}
+	if a.tradeStartedAt.IsZero() || !a.tradeActive {
+		ts.ElapsedSeconds = 0
+		ts.RemainingSeconds = int64(maxOpenTradeDuration.Seconds())
+	} else {
+		elapsed := int64(time.Since(a.tradeStartedAt).Seconds())
+		maxSec := int64(maxOpenTradeDuration.Seconds())
+		rem := maxSec - elapsed
+		if rem < 0 {
+			rem = 0
+		}
+		ts.ElapsedSeconds = elapsed
+		ts.RemainingSeconds = rem
+	}
+	ts.MaxOpenSeconds = int64(maxOpenTradeDuration.Seconds())
+	ts.BanDurationSeconds = int64(banDuration.Seconds())
+	return ts
+}
+
+// GetBanList returns a UI-friendly list of active bans.
+func (a *App) GetBanList() []BanEntry {
+	if a.banList == nil {
+		return []BanEntry{}
+	}
+	now := time.Now()
+	snapshot := a.banList.List()
+	out := make([]BanEntry, 0, len(snapshot))
+	for k, exp := range snapshot {
+		rem := int64(exp.Sub(now).Seconds())
+		if rem < 0 {
+			rem = 0
+		}
+		label := k
+		if strings.HasPrefix(k, "name:") {
+			label = "Name: " + strings.TrimPrefix(k, "name:")
+		} else if strings.HasPrefix(k, "tradeid:") {
+			label = "TradeID: " + strings.TrimPrefix(k, "tradeid:")
+		}
+		out = append(out, BanEntry{Key: k, Label: label, ExpiresAt: exp.Format(time.RFC3339), RemainingSeconds: rem})
+	}
+	return out
+}
+
+// ClearBan removes a ban by key (exact key as returned by GetBanList).
+func (a *App) ClearBan(key string) error {
+	if a.banList == nil {
+		return nil
+	}
+	a.banList.Remove(key)
+	a.AddLog(fmt.Sprintf("Ban cleared: %s", key))
+	if a.ctx != nil {
+		go runtime.EventsEmit(a.ctx, "banListUpdate", a.GetBanList())
+	}
+	return nil
 }
 
 // dbPoller periodically reloads pending payouts from the database so new rows
@@ -1739,7 +1996,23 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 			a.AddLog(fmt.Sprintf("Trade window opened with TradeID %d (resolving name...). Note: user might not be in room map yet.", id))
 		}
 	}
+
+	// Record start time for this active trade so the banMonitor can detect long-holds
+	a.tradeStartedAt = time.Now()
+	// Capture identity snapshot for immediate ban check
+	ownerName := a.lastTradePartner
+	ownerID := a.lastTradePartnerID
 	a.tradeMu.Unlock()
+
+	// If we can identify the partner immediately and they are banned, block now
+	if a.isPartnerBanned(ownerName, ownerID) {
+		a.AddLog(fmt.Sprintf("[BAN] Blocking incoming trade open from banned partner %s (id=%d)", ownerName, ownerID))
+		e.Block()
+		if a.ext != nil {
+			a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+		}
+		return
+	}
 
 	// Fetch active stocked items immediately on trade open
 	go func() {
@@ -1915,6 +2188,16 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 		partnerTradeID := a.lastTradePartnerID
 		partnerChatID := a.lastTradePartnerChatID
 		a.tradeMu.Unlock()
+
+		// If this partner is currently banned, block the acceptance immediately
+		if a.isPartnerBanned(partnerName, partnerTradeID) {
+			a.AddLog(fmt.Sprintf("[BAN] Blocking acceptance from banned partner %s (id=%d)", partnerName, partnerTradeID))
+			e.Block()
+			if a.ext != nil {
+				a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+			}
+			return
+		}
 
 		// SECURITY: Ensure we have a valid identified partner before accepting any items
 		// Note: Room index 0 is valid, so we only check if partnerName is resolved
@@ -2201,6 +2484,7 @@ func (a *App) handleTradeClose(e *g.Intercept) {
 	partner := a.activeTradePartner
 	screenshotPath := a.lastScreenshotPath
 	a.tradeActive = false
+	a.tradeStartedAt = time.Time{}
 	// Do not immediately clear activeTradePartner/payoutTradeSent; let automation retry if inflight
 	a.lastScreenshotPath = ""
 	a.tradeMu.Unlock()
@@ -2262,6 +2546,7 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 	lastChatID := a.lastTradePartnerChatID
 
 	a.tradeActive = false
+	a.tradeStartedAt = time.Time{}
 	a.lastScreenshotPath = ""
 	a.tradeMu.Unlock()
 
@@ -2371,6 +2656,21 @@ func (a *App) payoutMonitor() {
 			}
 		}
 		a.pMu.RUnlock()
+
+		// Filter out banned targets so we do not attempt trades with them
+		filtered := make([]Payout, 0, len(targets))
+		for _, t := range targets {
+			if a.isPartnerBanned(t.Name, t.TradeID) {
+				a.AddLog(fmt.Sprintf("[BAN] Skipping target %s (tradeid=%d) due to active ban", t.Name, t.TradeID))
+				continue
+			}
+			filtered = append(filtered, t)
+		}
+		if len(filtered) == 0 {
+			// No non-banned targets this cycle
+			continue
+		}
+		targets = filtered
 
 		a.tradeMu.Lock()
 		tradeActive := a.tradeActive
@@ -2576,6 +2876,22 @@ func (a *App) payoutMonitor() {
 
 func (a *App) automateTrade(p *Payout) {
 	a.AddLog(fmt.Sprintf("Starting automation for %s: %d x %s (ID: %s)", p.Name, p.Quantity, p.ItemName, p.ID))
+
+	// Abort early if partner is currently banned
+	if a.isPartnerBanned(p.Name, p.TradeID) {
+		a.AddLog(fmt.Sprintf("Aborting automation for %s: partner currently banned", p.Name))
+		a.pMu.Lock()
+		for i := range a.payouts {
+			if a.payouts[i].ID == p.ID {
+				a.payouts[i].Status = "Pending"
+				break
+			}
+		}
+		a.pMu.Unlock()
+		a.persistPayoutStatus(p.ID, "Pending")
+		a.emitUpdate()
+		return
+	}
 
 	// Mark this payout as inflight so other handlers know not to re-queue it
 	a.markInflight(p.Name, p.ID)
