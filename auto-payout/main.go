@@ -863,6 +863,51 @@ func (a *App) getInflight(name string) (string, bool) {
 	return id, ok
 }
 
+// hasActiveBankerTrades checks whether there are any non-completed rows in
+// public.banker_trades for this banker. When true, the banker should not
+// accept incoming trades (outgoing opens for payouts are still allowed).
+func (a *App) hasActiveBankerTrades() bool {
+	if a.db == nil {
+		return false
+	}
+
+	a.bankerNameMu.RLock()
+	bname := strings.TrimSpace(a.bankerName)
+	a.bankerNameMu.RUnlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	var exists bool
+	var err error
+	if bname != "" {
+		err = a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM public.banker_trades WHERE lower(banker_name) = lower($1) AND COALESCE(status,'') != 'completed')`, bname).Scan(&exists)
+	} else {
+		err = a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM public.banker_trades WHERE COALESCE(status,'') != 'completed')`).Scan(&exists)
+	}
+	if err != nil {
+		a.AddLog("ERROR: hasActiveBankerTrades query failed: " + err.Error())
+		return false
+	}
+	return exists
+}
+
+// isPayoutCompletedInDB returns true when the auto_payout row is marked
+// as Completed or Disabled in the DB. Returns an error if the query fails.
+func (a *App) isPayoutCompletedInDB(id string) (bool, error) {
+	if a.db == nil {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var status string
+	if err := a.db.QueryRow(ctx, "SELECT status FROM public.auto_payouts WHERE id = $1", id).Scan(&status); err != nil {
+		return false, err
+	}
+	s := strings.TrimSpace(strings.ToLower(status))
+	return s == "completed" || s == "disabled", nil
+}
+
 func (a *App) sendPayoutNotAcceptedWebhook(p Payout, attempts int) {
 	// Non-blocking webhook notify about failed payout acceptance
 	go func() {
@@ -1329,6 +1374,27 @@ func (a *App) handleUserObject(e *g.Intercept) {
 }
 
 func (a *App) handleTradeOpen(e *g.Intercept) {
+	// Determine incoming trader id (if any) so we can allow opens that match
+	// an outgoing payout attempt while still blocking unsolicited incoming
+	// trades when the banker has active banker_trades in the DB.
+
+	if a.hasActiveBankerTrades() {
+		// If we're currently driving an outgoing payout flow, allow the
+		// incoming trade open so the payout can complete. Otherwise block
+		// unsolicited incoming opens while banker_trades are active.
+		a.tradeMu.Lock()
+		allow := a.payoutTradeSent
+		a.tradeMu.Unlock()
+		if !allow {
+			a.AddLog("Blocking incoming trade open: active banker_trades present")
+			e.Block()
+			if a.ext != nil {
+				a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+			}
+			return
+		}
+	}
+
 	a.tradeMu.Lock()
 	a.tradeActive = true
 	a.tradeAccepted = false
@@ -2020,6 +2086,24 @@ func (a *App) automateTrade(p *Payout) {
 
 	for attemptNum := 1; attemptNum <= maxAttempts; attemptNum++ {
 		a.AddLog(fmt.Sprintf("Automation attempt %d/%d for %s", attemptNum, maxAttempts, p.Name))
+
+		// Check DB first: if the payout was marked Completed/Disabled there,
+		// abort automation to avoid re-trading a finished entry.
+		if a.db != nil {
+			if completed, err := a.isPayoutCompletedInDB(p.ID); err == nil && completed {
+				a.AddLog(fmt.Sprintf("Payout %s already completed in DB; aborting automation.", p.ID))
+				a.pMu.Lock()
+				for i := range a.payouts {
+					if a.payouts[i].ID == p.ID {
+						a.payouts[i].Status = "Completed"
+						break
+					}
+				}
+				a.pMu.Unlock()
+				go a.emitUpdate()
+				return
+			}
+		}
 
 		// Ensure in-memory state shows Trading and persist it
 		a.pMu.Lock()
