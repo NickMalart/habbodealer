@@ -800,6 +800,18 @@ func (a *App) emitUpdate() {
 	}
 }
 
+func (a *App) persistPayoutStatus(id string, status string) {
+	if a.db == nil {
+		return
+	}
+	ctx := context.Background()
+	if _, err := a.db.Exec(ctx, "UPDATE public.auto_payouts SET status = $1 WHERE id = $2", status, id); err != nil {
+		a.AddLog("ERROR: Failed to persist payout status: " + err.Error())
+	} else {
+		a.AddLog(fmt.Sprintf("DB: set payout %s status=%s", id, status))
+	}
+}
+
 func (a *App) handleRoomUsers(e *g.Intercept) {
 	headerName := "USERS"
 	if e.Packet.Header.Value != 28 {
@@ -1442,17 +1454,20 @@ func (a *App) handleTradeClose(e *g.Intercept) {
 
 	if partner != "" {
 		a.pMu.Lock()
-		found := false
+		changedIDs := []string{}
 		for i, p := range a.payouts {
 			if strings.EqualFold(normalizeName(p.Name), normalizeName(partner)) && p.Status == "Trading" {
 				// Re-queue it. If they are still in room, the monitor will pick it up again in 2s.
 				a.payouts[i].Status = "Pending"
-				found = true
+				changedIDs = append(changedIDs, p.ID)
 			}
 		}
 		a.pMu.Unlock()
 
-		if found {
+		if len(changedIDs) > 0 {
+			for _, id := range changedIDs {
+				a.persistPayoutStatus(id, "Pending")
+			}
 			a.AddLog(fmt.Sprintf("Trade with %s closed without completing. Re-queueing for retry...", partner))
 			// Trigger a status check immediately to see if they are still here
 			a.updatePayoutStatuses()
@@ -1489,39 +1504,69 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 		a.recordBankerTrade(name, lastItems, lastTradeID, lastChatID)
 	}
 
-	if partner != "" {
-		a.pMu.Lock()
-		for i, p := range a.payouts {
-			if strings.EqualFold(normalizeName(p.Name), normalizeName(partner)) && p.Status == "Trading" {
-				a.payouts[i].Status = "Completed"
-				if a.db != nil {
-					// Mark as completed in DB
-					_, err := a.db.Exec(context.Background(), "UPDATE public.auto_payouts SET status = 'Completed' WHERE id = $1", p.ID)
-					if err != nil {
-						a.AddLog("ERROR: Failed to update DB status: " + err.Error())
-					}
+	// Attempt to mark any matching payout(s) as completed. Prefer active partner name match,
+	// but also fall back to matching by the last trade id or last partner name when available.
+	foundCompleted := false
+
+	a.pMu.Lock()
+	for i, p := range a.payouts {
+		// Skip entries that are already finished
+		if p.Status == "Completed" || p.Status == "Disabled" {
+			continue
+		}
+
+		match := false
+
+		// 1) If we have an active partner name, match by that (preferred)
+		if partner != "" && strings.EqualFold(normalizeName(p.Name), normalizeName(partner)) && p.Status == "Trading" {
+			match = true
+		}
+
+		// 2) Fallback: match by lastTradeID if available
+		if !match && lastTradeID > 0 && p.TradeID > 0 && p.TradeID == lastTradeID {
+			match = true
+		}
+
+		// 3) Fallback: match by lastPartner name (case-insensitive)
+		if !match && lastPartner != "" && strings.EqualFold(normalizeName(p.Name), normalizeName(lastPartner)) {
+			match = true
+		}
+
+		if match {
+			a.payouts[i].Status = "Completed"
+			foundCompleted = true
+
+			if a.db != nil {
+				// Persist payout completion
+				if _, err := a.db.Exec(context.Background(), "UPDATE public.auto_payouts SET status = 'Completed' WHERE id = $1", p.ID); err != nil {
+					a.AddLog("ERROR: Failed to update DB status: " + err.Error())
 				}
-				a.AddLog(fmt.Sprintf("Payout for %s SUCCESSFUL. Items delivered.", partner))
-				a.sendDiscordNotification(a.payouts[i], screenshotPath)
-				// Also mark any associated banker_trades as completed so the dealer bot re-opens
-				if a.db != nil {
-					var err error
-					if p.BankerTradeID > 0 {
-						_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE id = $1 AND status = 'paying'", p.BankerTradeID)
-					} else if p.TradeID > 0 {
-						_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE player_trade_id = $1 AND status = 'paying'", p.TradeID)
-					} else {
-						_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE player_name = $1 AND status = 'paying'", p.Name)
-					}
-					if err != nil {
-						a.AddLog(fmt.Sprintf("ERROR: Failed to update banker_trades for %s/%d (banker_id=%d): %v", p.Name, p.TradeID, p.BankerTradeID, err))
-					} else {
-						a.AddLog(fmt.Sprintf("Marked banker_trades for %s/%d (banker_id=%d) as completed", p.Name, p.TradeID, p.BankerTradeID))
-					}
+			}
+
+			a.AddLog(fmt.Sprintf("Payout for %s SUCCESSFUL. Items delivered.", p.Name))
+			a.sendDiscordNotification(a.payouts[i], screenshotPath)
+
+			// Also mark any associated banker_trades as completed so the dealer bot re-opens
+			if a.db != nil {
+				var err error
+				if p.BankerTradeID > 0 {
+					_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE id = $1 AND status = 'paying'", p.BankerTradeID)
+				} else if p.TradeID > 0 {
+					_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE player_trade_id = $1 AND status = 'paying'", p.TradeID)
+				} else {
+					_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed' WHERE player_name = $1 AND status = 'paying'", p.Name)
+				}
+				if err != nil {
+					a.AddLog(fmt.Sprintf("ERROR: Failed to update banker_trades for %s/%d (banker_id=%d): %v", p.Name, p.TradeID, p.BankerTradeID, err))
+				} else {
+					a.AddLog(fmt.Sprintf("Marked banker_trades for %s/%d (banker_id=%d) as completed", p.Name, p.TradeID, p.BankerTradeID))
 				}
 			}
 		}
-		a.pMu.Unlock()
+	}
+	a.pMu.Unlock()
+
+	if foundCompleted {
 		a.emitUpdate()
 	}
 }
@@ -1555,15 +1600,19 @@ func (a *App) payoutMonitor() {
 		// ensure no payouts are stuck in "Trading" status.
 		if partner == "" {
 			a.pMu.Lock()
-			stuckFound := false
+			changedIDs := []string{}
 			for i, p := range a.payouts {
 				if p.Status == "Trading" {
 					a.payouts[i].Status = "Pending"
-					stuckFound = true
+					changedIDs = append(changedIDs, p.ID)
 				}
 			}
 			a.pMu.Unlock()
-			if stuckFound {
+			if len(changedIDs) > 0 {
+				for _, id := range changedIDs {
+					// Best-effort persist to DB
+					a.persistPayoutStatus(id, "Pending")
+				}
 				a.AddLog("Safety: Reset stuck 'Trading' status for payouts.")
 				go a.emitUpdate()
 			}
@@ -1625,7 +1674,7 @@ func (a *App) payoutMonitor() {
 					a.payoutTradeSent = true
 					a.tradeMu.Unlock()
 
-					// Mark payout as Trading in the in-memory slice
+					// Mark payout as Trading in the in-memory slice and persist to DB
 					foundInSlice := false
 					a.pMu.Lock()
 					for i := range a.payouts {
@@ -1636,6 +1685,9 @@ func (a *App) payoutMonitor() {
 						}
 					}
 					a.pMu.Unlock()
+					if foundInSlice {
+						a.persistPayoutStatus(targetID, "Trading")
+					}
 					go a.emitUpdate()
 
 					if !foundInSlice {
@@ -1685,6 +1737,9 @@ func (a *App) payoutMonitor() {
 			}
 		}
 		a.pMu.Unlock()
+		if foundInSlice {
+			a.persistPayoutStatus(targetID, "Trading")
+		}
 		go a.emitUpdate()
 
 		if !foundInSlice {
@@ -1742,6 +1797,8 @@ func (a *App) automateTrade(p *Payout) {
 			}
 		}
 		a.pMu.Unlock()
+		// Persist re-queue to DB
+		a.persistPayoutStatus(p.ID, "Pending")
 		a.emitUpdate()
 
 		// Reset trade state so the monitor can pick it up again
@@ -1768,6 +1825,8 @@ func (a *App) automateTrade(p *Payout) {
 			}
 		}
 		a.pMu.Unlock()
+		// Persist re-queue to DB
+		a.persistPayoutStatus(p.ID, "Pending")
 		a.emitUpdate()
 		return
 	}
