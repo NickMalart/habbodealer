@@ -636,7 +636,7 @@ func (a *App) rejectTradeForLimitViolation(v *tradeLimitViolation) {
 		if lastTradePartnerID > 0 {
 			sendShoutTargeted(lastTradePartnerID, msg)
 		} else {
-			sendShout(msg)
+			sendPublicShout(msg)
 		}
 	} else {
 		mutex.Unlock()
@@ -4180,6 +4180,23 @@ func sendShout(msg string) {
 	shoutQueue <- trimmed
 }
 
+// sendPublicShout will only emit a public/background shout when the dealer
+// is not in an active game. This prevents background messages (auto-shouts,
+// dealer open/close, trade notices, etc.) from cluttering chat during
+// gameplay. Game-related shouts (winner prompts, choice prompts, etc.) use
+// sendShout directly and are not suppressed.
+func sendPublicShout(msg string) {
+	trimmed := strings.TrimSpace(msg)
+	if trimmed == "" {
+		return
+	}
+	if dealerGameActive() {
+		log.Printf("[SHOUT_SUPPRESSED] suppressed during active game: %q", trimmed)
+		return
+	}
+	sendShout(trimmed)
+}
+
 func registerCustomTradeHeaders(a *App) {
 	confirmID := g.Out.Id("TRADE_CONFIRM_ACCEPT")
 	if _, ok := a.ext.Headers().TryGet(confirmID); !ok {
@@ -4252,7 +4269,7 @@ func handleMuteEnd() {
 
 		// Enqueue queued messages and let the shout worker apply spacing.
 		for _, message := range messageQueue {
-			sendShout(message)
+			sendPublicShout(message)
 		}
 
 		// Clear the queue
@@ -4566,7 +4583,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 					lastTradeLimitNotice = ""
 					tradeLimitWasActive = false
 					a.AddLogMsg("[TRADE_LIMIT] violation resolved; trade is valid again")
-					sendShout("Trade is back within limits, accept again if needed")
+					sendPublicShout("Trade is back within limits, accept again if needed")
 				}
 
 				if !wasValidPrev {
@@ -4751,7 +4768,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 
 			completeMsg := fmt.Sprintf("T-Done: %s", partnerName)
 			a.AddLogMsg(fmt.Sprintf("[TRADE_COMPLETED] shouting: %q", completeMsg))
-			sendShout(completeMsg)
+			sendPublicShout(completeMsg)
 
 			// NOTE: do not call stopPayout() here; we must wait for the TRADE_CLOSE (110)
 			// to arrive so the payoutTradeActive flag is still visible to the close-handler
@@ -4835,9 +4852,9 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			e.Block()
 			ext.Send(out.TRADE_CLOSE)
 			if bankerName != "" {
-				sendShout(fmt.Sprintf("Please trade %s", bankerName))
+				sendPublicShout(fmt.Sprintf("Please trade %s", bankerName))
 			} else {
-				sendShout("Please trade the banker.")
+				sendPublicShout("Please trade the banker.")
 			}
 			return
 		}
@@ -5202,7 +5219,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN] unresolved partner from strict parsed USERS28 state, cancelling trade: %s", notify))
 				e.Block()
 				ext.Send(out.TRADE_CLOSE)
-				sendShout(notify)
+				sendPublicShout(notify)
 				return
 			}
 		}
@@ -5211,9 +5228,13 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		if payoutActive || payoutTradeSent || payoutTradeActive {
 			shouldAnnounceTradeOpen = false
 		}
+		// Suppress trade-open public shouts while a game is active.
+		if dealerGameActive() {
+			shouldAnnounceTradeOpen = false
+		}
 		if shouldAnnounceTradeOpen {
 			a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN] shouting: %q", openMsg))
-			sendShout(openMsg)
+			sendPublicShout(openMsg)
 		} else {
 			a.AddLogMsg(fmt.Sprintf("[TRADE_OPEN] suppressed public shout during payout flow: %q", openMsg))
 		}
@@ -5305,7 +5326,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		if !tradeCompleted && !tradeCloseAnnounced && !suppressCloseAnnouncement {
 			closeMsg := fmt.Sprintf("T-Closed: %s", partnerName)
 			a.AddLogMsg(fmt.Sprintf("[TRADE_CLOSE] shouting: %q", closeMsg))
-			sendShout(closeMsg)
+			sendPublicShout(closeMsg)
 			tradeCloseAnnounced = true
 		} else if suppressCloseAnnouncement {
 			a.AddLogMsg("[TRADE_GUARD] suppressed trade closed announcement for forced guard-close")
@@ -5364,7 +5385,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 					} else {
 						msg = fmt.Sprintf("%q closed trade", playerName)
 					}
-					sendShout(msg)
+					sendPublicShout(msg)
 					markPayoutCancelNoticeSent()
 				}
 
@@ -5375,7 +5396,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 					resetTradeAutoFlow()
 
 					flagMsg := "User have cancelled trade too many times, flagged issue please go to rollorigins.club."
-					sendShout(flagMsg)
+					sendPublicShout(flagMsg)
 
 					a.markCurrentGameHistoryIssue(
 						fmt.Sprintf("Payout trade cancelled too many times by %s", retryTargetName),
@@ -5608,7 +5629,7 @@ func (a *App) startPayoutResponseTimeoutMonitor(playerName string, targetID int,
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT_TIMEOUT] payout response timeout %d/5 for %s", payoutResponseTimeoutAttempts, player))
 
 		timeoutMsg := fmt.Sprintf("%q did not accept trade", player)
-		sendShout(timeoutMsg)
+		sendPublicShout(timeoutMsg)
 
 		time.Sleep(1200 * time.Millisecond)
 		// Mark this as a forced/local close so incoming TRADE_CLOSE isn't
@@ -5622,7 +5643,7 @@ func (a *App) startPayoutResponseTimeoutMonitor(playerName string, targetID int,
 		if payoutResponseTimeoutAttempts >= 5 {
 			flagMsg := "We have flagged the issues, Please go to rollorigins.club to resolve."
 			time.Sleep(1200 * time.Millisecond)
-			sendShout(flagMsg)
+			sendPublicShout(flagMsg)
 
 			a.markCurrentGameHistoryIssue(
 				fmt.Sprintf("Payout trade timed out 5 times waiting for %s to accept", player),
@@ -7420,7 +7441,7 @@ func startTradeWindowTimeoutMonitor(a *App) {
 			msg := "closing trade window opened for too long"
 			a.AddLogMsg("[TRADE_TIMEOUT] " + msg)
 			a.markCurrentGameHistoryIssue("Trade window stayed open too long and was force closed", true)
-			sendShout(msg)
+			sendPublicShout(msg)
 			ext.Send(out.TRADE_CLOSE)
 			return
 		}
