@@ -774,6 +774,7 @@ type App struct {
 	users28ParserScript   string
 	activeRaffleSessionID int64
 	activeBankerTradeID   int
+	chatBuf               *ChatBuffer
 }
 
 type DBConfig struct {
@@ -817,6 +818,8 @@ func NewApp(ext *g.Ext, assets embed.FS) *App {
 		assets: assets,
 	}
 	a.initUsers28ParserCommand()
+	// initialize chat buffer for early-player shout capture
+	a.chatBuf = NewChatBuffer(6 * time.Second)
 	return a
 }
 
@@ -11436,10 +11439,179 @@ func (a *App) sendTradeCompletionMessage() {
 	a.AddLogMsg(fmt.Sprintf("[TRADE_MESSAGE_DEBUG] starter=%q starterTradeID=%d starterChatID=%d awaitingGameChoicePartnerID=%d stableTradePartnerID=%d",
 		awaitingGameChoicePartnerName, tradeStarterTradeID, tradeStarterChatID, awaitingGameChoicePartnerID, stableTradePartnerID))
 
+	// If we have a recent buffered shout from the partner, try to apply it immediately
+	if a.chatBuf != nil && awaitingGameChoicePartnerID > 0 {
+		if bufMsg, ok := a.chatBuf.PopMostRecent(awaitingGameChoicePartnerID, 6*time.Second); ok {
+			a.AddLogMsg(fmt.Sprintf("[CHAT_BUFFER] replaying buffered shout from %d: %q", awaitingGameChoicePartnerID, bufMsg))
+			if a.applyBufferedGameChoice(awaitingGameChoicePartnerID, bufMsg) {
+				a.AddLogMsg("[CHAT_BUFFER] applied early buffered choice; skipping prompt")
+				return
+			}
+		}
+	}
+
 	a.startGameChoiceTimeoutMonitor()
 
 	a.AddLogMsg(fmt.Sprintf("[TRADE_MESSAGE] shouting: %q", msg))
 	sendShout(msg)
+}
+
+// applyBufferedGameChoice attempts to parse and apply a buffered shout as an immediate
+// game choice. Returns true if the buffered message was accepted and processed.
+func (a *App) applyBufferedGameChoice(index int, msg string) bool {
+	// Normalize choice using existing helpers
+	choice, ok := normalizeIncomingGameChoice(msg)
+	if !ok {
+		if c, ok2 := normalizeLooseGameChoice(msg); ok2 {
+			choice = c
+			ok = true
+		} else {
+			cleaned := strings.ToLower(strings.TrimSpace(msg))
+			cleaned = gameChoiceCleanupRe.ReplaceAllString(cleaned, "")
+			if underOver7GameModeEnabled && (cleaned == "7" || cleaned == "seven") {
+				choice = "uo7"
+				ok = true
+			}
+		}
+	}
+	if !ok {
+		return false
+	}
+
+	// Ensure the buffered shout is from the locked starter (if set)
+	if awaitingGameChoicePartnerID > 0 && index != awaitingGameChoicePartnerID {
+		return false
+	}
+
+	// Check enabled games (best-effort)
+	if !underOver7GameModeEnabled && !onlyUnderOver7Mode {
+		mutex.Lock()
+		enabled := isGameChoiceEnabledLocked(choice)
+		prompt := buildGameChoicePromptLocked()
+		mutex.Unlock()
+		if !enabled {
+			a.AddLogMsg(fmt.Sprintf("[CHAT_BUFFER] buffered choice %q is disabled; prompt: %q", choice, prompt))
+			return false
+		}
+	}
+
+	// Accept and execute the choice similar to live chat handler
+	stopGameChoiceTimeoutMonitor()
+	awaitingGameChoice = false
+	gameChoiceUnreadableWarned = false
+	awaitingGameChoicePartnerID = 0
+	awaitingGameChoicePartnerName = ""
+
+	// Record history and start the appropriate round
+	if choice != "tri" && choice != "uo" && choice != "uo7" {
+		var ack string
+		switch choice {
+		case "pairup":
+			ack = "PU! If you roll a double or triple you Win! Player Roll"
+		case "h18":
+			ack = "H18! 19+ Win / 17- Lose / 18 House! Player Roll"
+		case "6":
+			ack = "6! Starting, Player Roll"
+		case "dt":
+			ack = fmt.Sprintf("%s! Player Roll — Double Trouble: land on even to win", gameChoiceDisplay(choice))
+		default:
+			ack = fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay(choice))
+		}
+
+		if riskSessionActive {
+			a.beginRiskRoundHistory(choice, msg, gameChoiceDisplay(choice))
+		} else {
+			a.setCurrentGameHistoryChoice(choice, msg)
+			a.setCurrentGameHistoryGame(gameChoiceDisplay(choice))
+		}
+
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", ack))
+		sendShout(ack)
+	} else {
+		if choice == "tri" {
+			a.AddLogMsg("[GAME_SELECT] Tri selected via buffer; prompting for High/Low")
+		} else {
+			a.AddLogMsg("[GAME_SELECT] Under/Over selected via buffer; prompting for Over/Under/7")
+		}
+	}
+
+	switch choice {
+	case "pkr":
+		resetBlackjackSequence()
+		a.AddLogMsg("[GAME_SELECT] buffered Pkr start")
+		a.beginPokerSequence()
+	case "21":
+		a.AddLogMsg("[GAME_SELECT] buffered 21 start")
+		a.beginBlackjackSequence()
+	case "13":
+		a.AddLogMsg("[GAME_SELECT] buffered 13 start")
+		a.begin13Sequence()
+	case "6":
+		a.AddLogMsg("[GAME_SELECT] buffered 6 start")
+		a.beginSixSequence()
+	case "pairup":
+		a.AddLogMsg("[GAME_SELECT] buffered PairUp start")
+		a.beginPairUpRound()
+	case "h18":
+		a.AddLogMsg("[GAME_SELECT] buffered H18 start")
+		a.beginH18Round()
+	case "dt":
+		a.AddLogMsg("[GAME_SELECT] buffered DT start")
+		a.beginDoubleTroubleRound()
+	case "tri":
+		a.AddLogMsg("[GAME_SELECT] buffered Tri -> prompting High/Low")
+		a.beginTriChoiceSequence()
+	case "uo7":
+		if !underOver7GameModeEnabled {
+			pendingUoVariant = "uo"
+			a.noteCurrentGameHistory("Mixed-mode UO7 selected via buffer - forcing Over/Under (no 7)")
+			a.beginUOChoiceSequence()
+			return true
+		}
+		// try to start UO7 immediately; if coverage later blocks it will fallback in game logic
+		a.AddLogMsg("[GAME_SELECT] buffered UO7 start -> attempting Under/Over7")
+		a.beginUO7ChoiceSequence()
+	case "uo":
+		a.AddLogMsg("[GAME_SELECT] buffered UO -> prompting Over/Under")
+		a.beginUOChoiceSequence()
+	case "uo_over":
+		if riskSessionActive {
+			go func() {
+				time.Sleep(1400 * time.Millisecond)
+				a.executeRiskRound()
+			}()
+		} else {
+			a.setCurrentGameHistoryGame("UO7")
+			a.beginUnderOverRound("over")
+		}
+	case "uo_under":
+		if riskSessionActive {
+			go func() {
+				time.Sleep(1400 * time.Millisecond)
+				a.executeRiskRound()
+			}()
+		} else {
+			a.setCurrentGameHistoryGame("UO7")
+			a.beginUnderOverRound("under")
+		}
+	case "trihigh":
+		a.AddLogMsg("[GAME_SELECT] buffered TriH start")
+		a.beginTriRound("high")
+	case "trilow":
+		a.AddLogMsg("[GAME_SELECT] buffered TriL start")
+		a.beginTriRound("low")
+	case "mh":
+		a.AddLogMsg("[GAME_SELECT] buffered MidHouse -> prompting u10/o11")
+		a.beginMidHouseChoiceSequence()
+	case "mh_u10":
+		a.AddLogMsg("[GAME_SELECT] buffered u10 start")
+		a.beginMidHouseRound("u10")
+	case "mh_o11":
+		a.AddLogMsg("[GAME_SELECT] buffered o11 start")
+		a.beginMidHouseRound("o11")
+	}
+
+	return true
 }
 
 func setEnabledGamesFromSelection(codes []string) {
@@ -15031,6 +15203,17 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		log.Printf("[INCOMING %s] %d -> %s", chatType, index, msg)
 		a.AddChatLog(fmt.Sprintf("[IN %s] %d -> %s", chatType, index, msg))
 		go LogEvent("chat_incoming", map[string]interface{}{"type": chatType, "sender_index": index, "text": msg}, fmt.Sprintf("Incoming %s (index=%d)", chatType, index), nil)
+	}
+
+	// Buffer potential early game-choice shouts if we're not currently awaiting a choice
+	if a.chatBuf != nil && !awaitingGameChoice && !awaitingBlackjackDecision && !awaiting13Decision && !awaitingUOChoice && !awaitingTriChoice && !awaitingMHChoice {
+		if _, ok := normalizeIncomingGameChoice(msg); ok {
+			a.chatBuf.Add(index, msg)
+		} else if _, ok := normalizeLooseGameChoice(msg); ok {
+			a.chatBuf.Add(index, msg)
+		} else if looksLikeUnreadableGameChoiceAttempt(msg) {
+			a.chatBuf.Add(index, msg)
+		}
 	}
 
 	// Risk command parsing: case-insensitive, supports "r2", "r 2", "risk 2", and "keep"
