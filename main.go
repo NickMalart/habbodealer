@@ -10197,11 +10197,17 @@ func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 				db, _ := a.getHistoryDB()
 				if db != nil {
 					ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+					defer cancel()
+					// Try canonical column names first, fall back to alternate names if needed.
 					rows, err := db.Query(ctx, `SELECT item_name, quantity FROM banker_inventory WHERE lower(banker_name)=lower($1)`, bn)
-					cancel()
 					if err != nil {
-						a.AddLogMsg(fmt.Sprintf("[TRADE_HAND_SNAPSHOT] banker_inventory query failed: %v", err))
-					} else {
+						// try alternate schema (raw_name / qty)
+						rows, err = db.Query(ctx, `SELECT raw_name, qty FROM banker_inventory WHERE lower(banker_name)=lower($1)`, bn)
+						if err != nil {
+							a.AddLogMsg(fmt.Sprintf("[TRADE_HAND_SNAPSHOT] banker_inventory query failed (tried item_name/quantity and raw_name/qty): %v", err))
+						}
+					}
+					if err == nil {
 						defer rows.Close()
 						// Merge existing snapshot items into a map keyed by lower(name).
 						m := make(map[string]TradeItem, len(snapshot))
@@ -10212,6 +10218,7 @@ func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 							}
 							m[key] = TradeItem{Name: it.Name, Quantity: it.Quantity, RawData: it.RawData}
 						}
+						merged := 0
 						for rows.Next() {
 							var itemName string
 							var qty int
@@ -10229,6 +10236,7 @@ func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 							} else {
 								m[key] = TradeItem{Name: itemName, Quantity: qty, RawData: itemName}
 							}
+							merged += qty
 						}
 						// Rebuild deterministic slice
 						newSnap := make([]TradeItem, 0, len(m))
@@ -10237,6 +10245,7 @@ func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 						}
 						sort.Slice(newSnap, func(i, j int) bool { return newSnap[i].Name < newSnap[j].Name })
 						snapshot = newSnap
+						a.AddLogMsg(fmt.Sprintf("[TRADE_HAND_SNAPSHOT] merged banker_inventory items=%d banker=%s", merged, bn))
 					}
 				} else {
 					a.AddLogMsg("[TRADE_HAND_SNAPSHOT] no history DB configured; skipping banker inventory merge")
