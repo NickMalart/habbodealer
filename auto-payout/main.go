@@ -1366,6 +1366,27 @@ func (a *App) requestRoomUsers() {
 	a.ext.Send(g.Out.Id("GETSPACENODEUSERS"))
 }
 
+// waitForRoomUserByTradeOrChat attempts to resolve a room user by tradeID or chatID
+// within the provided timeout by polling the in-memory `roomUsers` map.
+func (a *App) waitForRoomUserByTradeOrChat(id int, timeout time.Duration) (ParsedUsers28User, bool) {
+	if id <= 0 {
+		return ParsedUsers28User{}, false
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		a.roomUsersMu.RLock()
+		for _, u := range a.roomUsers {
+			if u.TradeID == id || u.ChatID == id {
+				a.roomUsersMu.RUnlock()
+				return u, true
+			}
+		}
+		a.roomUsersMu.RUnlock()
+		time.Sleep(75 * time.Millisecond)
+	}
+	return ParsedUsers28User{}, false
+}
+
 func (a *App) emitUpdate() {
 	p := a.GetPayouts()
 	if a.ctx != nil {
@@ -1994,6 +2015,10 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 
 		if !found {
 			a.AddLog(fmt.Sprintf("Trade window opened with TradeID %d (resolving name...). Note: user might not be in room map yet.", id))
+			// Prompt the client to refresh room users immediately to avoid a
+			// race where TRADE_ACCEPT arrives before the USERS packet is
+			// parsed. This is rate-limited by requestRoomUsers.
+			go a.requestRoomUsers()
 		}
 	}
 
@@ -2200,12 +2225,30 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 		}
 
 		// SECURITY: Ensure we have a valid identified partner before accepting any items
-		// Note: Room index 0 is valid, so we only check if partnerName is resolved
+		// Note: Room index 0 is valid, so we only check if partnerName is resolved.
+		// Try to resolve briefly by requesting room users if the name is unknown
 		if partnerName == "" {
-			a.AddLog("[SECURITY] Blocking trade: Partner identity (Name) could not be verified from room data.")
-			e.Block()
-			a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
-			return
+			if partnerTradeID > 0 {
+				a.AddLog("[SECURITY] Partner name unknown. Requesting room users and attempting quick resolve...")
+				// Request a fresh room users packet (rate-limited inside)
+				a.requestRoomUsers()
+				if u, ok := a.waitForRoomUserByTradeOrChat(partnerTradeID, 800*time.Millisecond); ok {
+					a.tradeMu.Lock()
+					a.lastTradePartner = u.Username
+					a.lastTradePartnerID = u.TradeID
+					a.lastTradePartnerChatID = u.ChatID
+					partnerName = u.Username
+					a.tradeMu.Unlock()
+					a.AddLog(fmt.Sprintf("[ROOM] Resolved partner %d -> %s (accept-time)", partnerTradeID, partnerName))
+				}
+			}
+
+			if partnerName == "" {
+				a.AddLog("[SECURITY] Blocking trade: Partner identity (Name) could not be verified from room data.")
+				e.Block()
+				a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+				return
+			}
 		}
 
 		// Verbose debugging
