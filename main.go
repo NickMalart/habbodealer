@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sirupsen/logrus"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -1715,74 +1716,6 @@ func (a *App) GetBankerName() string {
 	return v
 }
 
-// runAutoShoutLoop shouts the configured phrase on a jittered interval.
-// Each cycle waits the configured duration ±20% to avoid a perfectly
-// mechanical cadence that looks bot-like.
-func (a *App) runAutoShoutLoop(stopChan chan struct{}, phrase string, seconds int) {
-	base := time.Duration(seconds) * time.Second
-	a.AddLogMsg(fmt.Sprintf("[AUTO_SHOUT] started: ~every %ds -> %q", seconds, phrase))
-
-	for {
-		// ±20% jitter around the base interval
-		jitter := time.Duration(rand.Int63n(int64(base/5)*2) - int64(base/5))
-		wait := base + jitter
-		nextAt := time.Now().Add(wait).Format("15:04:05")
-		a.AddLogMsg(fmt.Sprintf("[AUTO_SHOUT] next shout in %ds (at %s)", int(wait.Seconds()), nextAt))
-		if a.ctx != nil {
-			b, _ := json.Marshal(map[string]interface{}{"slot": 1, "secsAway": int(wait.Seconds()), "nextAt": nextAt})
-			runtime.EventsEmit(a.ctx, "autoShoutNextUpdate", string(b))
-		}
-		select {
-		case <-stopChan:
-			a.AddLogMsg("[AUTO_SHOUT] stopped")
-			if a.ctx != nil {
-				b, _ := json.Marshal(map[string]interface{}{"slot": 1, "secsAway": 0, "nextAt": ""})
-				runtime.EventsEmit(a.ctx, "autoShoutNextUpdate", string(b))
-			}
-			return
-		case <-time.After(wait):
-		}
-
-		autoShoutMu.Lock()
-		enabled := autoShoutEnabled
-		currentPhrase := strings.TrimSpace(autoShoutPhrase)
-		autoShoutMu.Unlock()
-
-		if !enabled || currentPhrase == "" {
-			continue
-		}
-
-		if ChatIsDisabled {
-			a.AddLogMsg("[AUTO_SHOUT] skipped because chat is disabled")
-			continue
-		}
-
-		if isMuted {
-			a.AddLogMsg("[AUTO_SHOUT] skipped because muted")
-			continue
-		}
-
-		if dealerGameActive() {
-			a.AddLogMsg("[AUTO_SHOUT] suppressed because game is active")
-			continue
-		}
-
-		sendMessageWithDelay(currentPhrase)
-	}
-}
-
-// GetAutoShoutConfig2 returns the current auto-shout configuration for slot 2.
-func (a *App) GetAutoShoutConfig2() AutoShoutConfig {
-	autoShout2Mu.Lock()
-	defer autoShout2Mu.Unlock()
-
-	return AutoShoutConfig{
-		Enabled: autoShout2Enabled,
-		Phrase:  autoShout2Phrase,
-		Seconds: autoShout2Seconds,
-	}
-}
-
 // SaveAutoShoutConfig2 updates phrase and seconds for slot 2. If auto-shout is
 // currently enabled, the loop is restarted to apply interval changes.
 func (a *App) SaveAutoShoutConfig2(phrase string, seconds int) AutoShoutConfig {
@@ -1904,6 +1837,62 @@ func (a *App) runAutoShoutLoop2(stopChan chan struct{}, phrase string, seconds i
 
 		if dealerGameActive() {
 			a.AddLogMsg("[AUTO_SHOUT 2] suppressed because game is active")
+			continue
+		}
+
+		sendMessageWithDelay(currentPhrase)
+	}
+}
+
+// runAutoShoutLoop shouts the configured phrase (slot 1) on a jittered interval.
+// Each cycle waits the configured duration ±20% to avoid a perfectly
+// mechanical cadence that looks bot-like.
+func (a *App) runAutoShoutLoop(stopChan chan struct{}, phrase string, seconds int) {
+	base := time.Duration(seconds) * time.Second
+	a.AddLogMsg(fmt.Sprintf("[AUTO_SHOUT] started: ~every %ds -> %q", seconds, phrase))
+
+	for {
+		// ±20% jitter around the base interval
+		jitter := time.Duration(rand.Int63n(int64(base/5)*2) - int64(base/5))
+		wait := base + jitter
+		nextAt := time.Now().Add(wait).Format("15:04:05")
+		a.AddLogMsg(fmt.Sprintf("[AUTO_SHOUT] next shout in %ds (at %s)", int(wait.Seconds()), nextAt))
+		if a.ctx != nil {
+			b, _ := json.Marshal(map[string]interface{}{"slot": 1, "secsAway": int(wait.Seconds()), "nextAt": nextAt})
+			runtime.EventsEmit(a.ctx, "autoShoutNextUpdate", string(b))
+		}
+		select {
+		case <-stopChan:
+			a.AddLogMsg("[AUTO_SHOUT] stopped")
+			if a.ctx != nil {
+				b, _ := json.Marshal(map[string]interface{}{"slot": 1, "secsAway": 0, "nextAt": ""})
+				runtime.EventsEmit(a.ctx, "autoShoutNextUpdate", string(b))
+			}
+			return
+		case <-time.After(wait):
+		}
+
+		autoShoutMu.Lock()
+		enabled := autoShoutEnabled
+		currentPhrase := strings.TrimSpace(autoShoutPhrase)
+		autoShoutMu.Unlock()
+
+		if !enabled || currentPhrase == "" {
+			continue
+		}
+
+		if ChatIsDisabled {
+			a.AddLogMsg("[AUTO_SHOUT] skipped because chat is disabled")
+			continue
+		}
+
+		if isMuted {
+			a.AddLogMsg("[AUTO_SHOUT] skipped because muted")
+			continue
+		}
+
+		if dealerGameActive() {
+			a.AddLogMsg("[AUTO_SHOUT] suppressed because game is active")
 			continue
 		}
 
@@ -10185,6 +10174,60 @@ func (a *App) emitHandItemsUpdate() {
 // Runs asynchronously and logs status via `AddLogMsg`.
 func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 	go func(snapshot []TradeItem) {
+		// If Split Dealer Mode is enabled, and the history DB is available,
+		// prefer a DB-backed snapshot built from banker_inventory joined to
+		// public.stocked_items where is_active = TRUE. Pull items for all
+		// bankers (ignore configured banker name) per request.
+		if a.GetSplitDealerMode() {
+			db, owner := a.getHistoryDB()
+			if db != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+
+				var rows pgx.Rows
+				var err error
+				if owner != "" {
+					rows, err = db.Query(ctx, `
+						SELECT bi.item_name, bi.quantity
+						FROM banker_inventory bi
+						JOIN public.stocked_items si
+						  ON LOWER(si.raw_name) = LOWER(bi.item_name)
+						WHERE si.owner_key = $1 AND si.is_active = TRUE
+					`, owner)
+				} else {
+					rows, err = db.Query(ctx, `
+						SELECT bi.item_name, bi.quantity
+						FROM banker_inventory bi
+						JOIN public.stocked_items si
+						  ON LOWER(si.raw_name) = LOWER(bi.item_name)
+						WHERE si.is_active = TRUE
+					`)
+				}
+
+				if err != nil {
+					a.AddLogMsg(fmt.Sprintf("[TRADE_HAND_SNAPSHOT] DB query failed: %v", err))
+				} else {
+					defer rows.Close()
+					dbItems := make([]TradeItem, 0)
+					for rows.Next() {
+						var name string
+						var qty int
+						if err := rows.Scan(&name, &qty); err != nil {
+							a.AddLogMsg(fmt.Sprintf("[TRADE_HAND_SNAPSHOT] DB scan error: %v", err))
+							continue
+						}
+						dbItems = append(dbItems, TradeItem{Name: name, Quantity: qty})
+					}
+					if len(dbItems) > 0 {
+						snapshot = dbItems
+						a.AddLogMsg(fmt.Sprintf("[TRADE_HAND_SNAPSHOT] replaced snapshot with %d DB items (all bankers)", len(dbItems)))
+					} else {
+						a.AddLogMsg("[TRADE_HAND_SNAPSHOT] DB returned 0 active items; keeping in-memory snapshot")
+					}
+				}
+			}
+		}
+
 		payload := LiveDealerStatusPayload{
 			LastSeenAt:         time.Now().UTC().Format(time.RFC3339),
 			DealerOpen:         dealerAcceptingTrades,

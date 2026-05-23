@@ -26,8 +26,6 @@ export function GetActiveRaffles():Promise<Array<main.RaffleSession>>;
 
 export function GetAutoShoutConfig():Promise<main.AutoShoutConfig>;
 
-export function GetAutoShoutConfig2():Promise<main.AutoShoutConfig>;
-
 export function GetBankerName():Promise<string>;
 
 export function GetBlockArticlesPageConfig():Promise<main.BlockSlideObjectConfig>;

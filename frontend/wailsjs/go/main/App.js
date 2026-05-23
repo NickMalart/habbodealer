@@ -50,10 +50,6 @@ export function GetAutoShoutConfig() {
   return window['go']['main']['App']['GetAutoShoutConfig']();
 }
 
-export function GetAutoShoutConfig2() {
-  return window['go']['main']['App']['GetAutoShoutConfig2']();
-}
-
 export function GetBankerName() {
   return window['go']['main']['App']['GetBankerName']();
 }
