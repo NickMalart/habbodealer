@@ -2782,6 +2782,9 @@ func (a *App) startBankerTradePolling() {
 func (a *App) initGameFromBankerTrade(dbID int, playerName string, items []TradeItem, tradeID int, chatID int) {
 	a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] Initiating game for %s (ChatID: %d, TradeID: %d, DBID: %d)", playerName, chatID, tradeID, dbID))
 
+	// Handle any orphaned trade before adopting the new one
+	a.finalizeBankerTrade()
+
 	// Track the active banker trade ID
 	a.historyDBMu.Lock()
 	a.activeBankerTradeID = dbID
@@ -2810,10 +2813,9 @@ func (a *App) initGameFromBankerTrade(dbID int, playerName string, items []Trade
 func (a *App) finalizeBankerTrade() {
 	a.historyDBMu.Lock()
 	tradeID := a.activeBankerTradeID
-	db := a.historyDB
 	a.historyDBMu.Unlock()
 
-	if tradeID <= 0 || db == nil {
+	if tradeID <= 0 {
 		return
 	}
 
@@ -2829,23 +2831,45 @@ func (a *App) finalizeBankerTrade() {
 		return
 	}
 
-	// Proceed with completion: clear the active ID so we don't double-process
+	a.finalizeBankerTradeByID(tradeID)
+}
+
+func (a *App) finalizeBankerTradeByID(id int) {
+	if id <= 0 {
+		return
+	}
+
 	a.historyDBMu.Lock()
-	a.activeBankerTradeID = 0
+	db := a.historyDB
+	currentActive := a.activeBankerTradeID
 	a.historyDBMu.Unlock()
 
-	go func(id int) {
+	if db == nil {
+		return
+	}
+
+	// If the ID we are finaling is the CURRENT active one, clear it so the poller
+	// knows the bot is ready for a new trade (if not using orphan logic).
+	if id == currentActive {
+		a.historyDBMu.Lock()
+		if a.activeBankerTradeID == id {
+			a.activeBankerTradeID = 0
+		}
+		a.historyDBMu.Unlock()
+	}
+
+	go func(targetID int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		// Update status to completed and ensure bank is 0 if it was a loss
-		res, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'completed', risk_status = 'completed' WHERE id = $1", id)
+		// Update status to completed and ensure risk is closed if it was active
+		res, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'completed', risk_status = 'completed' WHERE id = $1", targetID)
 		if err != nil {
-			a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] ERROR: failed to mark trade %d as completed: %v", id, err))
+			a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] ERROR: failed to mark trade %d as completed: %v", targetID, err))
 		} else {
 			affected := res.RowsAffected()
-			a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] Successfully marked trade %d as completed (rows affected: %d)", id, affected))
+			a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] Successfully marked trade %d as completed (rows affected: %d)", targetID, affected))
 		}
-	}(tradeID)
+	}(id)
 }
 
 type RaffleSession struct {
@@ -3704,6 +3728,30 @@ func (a *App) beginGameHistory(playerName string, betItems []TradeItem) {
 		}
 	}) {
 		a.currentGameHistoryID = ""
+	}
+
+	if replacedEntry != nil {
+		a.AddLogMsg("[GAME_HISTORY] Round replaced - forcing state reset for new trade")
+
+		// Finalize any active banker trade associated with the replaced round
+		a.finalizeBankerTrade()
+
+		// Stop choice-waiting monitors for the old round
+		stopGameChoiceTimeoutMonitor()
+
+		// Soft reset game choice flags to ensure the new round prompt is effective
+		mutex.Lock()
+		awaitingGameChoice = false
+		awaitingGameChoicePartnerID = 0
+		awaitingGameChoicePartnerName = ""
+		// Also reset other potential choice-waiting states
+		awaitingBlackjackDecision = false
+		awaitingSixDecision = false
+		awaiting13Decision = false
+		awaitingTriChoice = false
+		awaitingUOChoice = false
+		awaitingMHChoice = false
+		mutex.Unlock()
 	}
 
 	startedAt := gameHistoryTimestamp()
