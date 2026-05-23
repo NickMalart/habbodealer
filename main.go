@@ -1948,7 +1948,8 @@ func dealerGameActive() bool {
 		isSixHitting ||
 		isDTRolling ||
 		isClosing ||
-		tradeOpen
+		tradeOpen ||
+		(app != nil && app.activeBankerTradeID > 0)
 }
 
 func dealerReadyForNewTrade() bool {
