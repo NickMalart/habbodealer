@@ -5865,12 +5865,36 @@ func startPayout(a *App, targetID int, targetName string) {
 			} else {
 				a.AddLogMsg("[BANKER_PAY] Cannot schedule auto-payout: history DB not connected")
 			}
-
-			return
+		} else {
+			// Finalize the banker trade for non-risk wins (or initial win when risk disabled)
+			a.finalizeBankerTrade()
 		}
 
-		// Finalize the banker trade for non-risk wins (or initial win when risk disabled)
-		a.finalizeBankerTrade()
+		// In Split Mode, we must manually complete the history and reopen dealer
+		// because we skip the physical payout trade (which usually triggers finalization).
+		a.gameHistoryMu.Lock()
+		var completedEntry *GameHistoryEntry
+		if a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+			entry.Status = "Completed"
+			entry.CompletedAt = gameHistoryTimestamp()
+			e := *entry
+			completedEntry = &e
+		}) {
+			a.currentGameHistoryID = ""
+		}
+		a.gameHistoryMu.Unlock()
+
+		if completedEntry != nil {
+			go a.sendDiscordWebhookForGame(*completedEntry)
+			a.persistCurrentGameHistoryNow("game_completed_split")
+		}
+
+		// Notify the room that the banker will handle it
+		if strings.TrimSpace(targetName) != "" {
+			sendMessageWithDelay(fmt.Sprintf("Payout recorded for %s — Banker system will handle your payout shortly.", targetName))
+		}
+
+		go a.openDealerAfterRound()
 		return
 	}
 
