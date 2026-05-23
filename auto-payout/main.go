@@ -1327,17 +1327,17 @@ func (a *App) loadPayoutsFromDB() {
 	}
 
 	a.AddLog("Querying public.auto_payouts records...")
-	payouts := []Payout{}
+	dbPayouts := []Payout{}
 	count := 0
 
-	// Manual entries from public.auto_payouts table
-	rows, err := a.db.Query(context.Background(), "SELECT id, player_name, item_name, quantity, status, created_at, COALESCE(player_trade_id,0), COALESCE(banker_trade_id,0), COALESCE(notified,false) FROM public.auto_payouts WHERE status != 'Completed' ORDER BY created_at DESC")
+	// Manual entries from public.auto_payouts table. Filter out Completed/Disabled status (case-insensitive).
+	rows, err := a.db.Query(context.Background(), "SELECT id, player_name, item_name, quantity, status, created_at, COALESCE(player_trade_id,0), COALESCE(banker_trade_id,0), COALESCE(notified,false) FROM public.auto_payouts WHERE LOWER(status) NOT IN ('completed', 'disabled') ORDER BY created_at DESC")
 	if err == nil {
 		for rows.Next() {
 			var p Payout
 			if err := rows.Scan(&p.ID, &p.Name, &p.ItemName, &p.Quantity, &p.Status, &p.CreatedAt, &p.TradeID, &p.BankerTradeID, &p.Notified); err == nil {
 				p.Name = normalizeName(p.Name)
-				payouts = append(payouts, p)
+				dbPayouts = append(dbPayouts, p)
 				count++
 			}
 		}
@@ -1347,21 +1347,51 @@ func (a *App) loadPayoutsFromDB() {
 	}
 
 	a.pMu.Lock()
-	a.payouts = payouts
+	// Create a map of DB results for quick lookup during merge
+	dbMap := make(map[string]Payout)
+	for _, p := range dbPayouts {
+		dbMap[p.ID] = p
+	}
+
+	merged := make([]Payout, 0)
+	// Process existing in-memory payouts
+	for _, oldP := range a.payouts {
+		if dbP, ok := dbMap[oldP.ID]; ok {
+			// Found in DB. Preserve 'Trading' or terminal statuses if they haven't synced yet.
+			if oldP.Status == "Trading" || oldP.Status == "Completed" || oldP.Status == "Disabled" {
+				merged = append(merged, oldP)
+			} else {
+				merged = append(merged, dbP)
+			}
+			delete(dbMap, oldP.ID)
+		} else {
+			// Not in DB results (meaning it's likely Completed or Disabled in the DB now).
+			// Keep it in memory if it's already marked terminal or Trading.
+			if oldP.Status == "Trading" || oldP.Status == "Completed" || oldP.Status == "Disabled" {
+				merged = append(merged, oldP)
+			}
+		}
+	}
+	// Add any remaining new payouts from DB
+	for _, newP := range dbMap {
+		merged = append(merged, newP)
+	}
+
+	a.payouts = merged
 	a.pMu.Unlock()
 
 	// Debug: log each loaded payout for easier tracing
-	for _, p := range payouts {
-		a.AddLog(fmt.Sprintf("[DB] loaded payout id=%s name=%s item=%s qty=%d status=%s tradeid=%d bankerid=%d",
+	for _, p := range merged {
+		a.AddLog(fmt.Sprintf("[DB_SYNC] id=%s name=%s item=%s qty=%d status=%s tradeid=%d bankerid=%d",
 			p.ID, p.Name, p.ItemName, p.Quantity, p.Status, p.TradeID, p.BankerTradeID))
 	}
 
-	a.AddLog(fmt.Sprintf("Sync complete. Found %d active records in public.auto_payouts.", count))
+	a.AddLog(fmt.Sprintf("Sync complete. Current in-memory queue: %d records.", len(merged)))
 	a.emitUpdate()
 
 	// If we have any pending payouts, request a room users refresh so parse28
 	// can populate the current room map immediately.
-	for _, p := range payouts {
+	for _, p := range merged {
 		if p.Status == "Pending" {
 			go a.requestRoomUsers()
 			break
@@ -1423,9 +1453,19 @@ func (a *App) persistPayoutStatus(id string, status string) {
 		return
 	}
 	ctx := context.Background()
-	if _, err := a.db.Exec(ctx, "UPDATE public.auto_payouts SET status = $1 WHERE id = $2", status, id); err != nil {
+
+	// Use a conditional update to ensure we don't overwrite a terminal status (Completed/Disabled)
+	// with a non-terminal one (e.g., Trading, Pending) due to a race condition.
+	query := "UPDATE public.auto_payouts SET status = $1 WHERE id = $2"
+	isTerminal := strings.EqualFold(status, "Completed") || strings.EqualFold(status, "Disabled")
+	if !isTerminal {
+		query += " AND LOWER(status) NOT IN ('completed', 'disabled')"
+	}
+
+	if _, err := a.db.Exec(ctx, query, status, id); err != nil {
 		a.AddLog("ERROR: Failed to persist payout status: " + err.Error())
 	} else {
+		// Log the status change for debugging
 		a.AddLog(fmt.Sprintf("DB: set payout %s status=%s", id, status))
 	}
 }
@@ -2726,6 +2766,10 @@ func (a *App) payoutMonitor() {
 		var targets []Payout
 		for _, p := range a.payouts {
 			if p.Status == "In Room" {
+				// Avoid picking up payouts that are already being actively automated
+				if _, ok := a.getInflight(p.Name); ok {
+					continue
+				}
 				targets = append(targets, p)
 			}
 		}
