@@ -22,11 +22,15 @@ export function GetActiveStockedItemNames():Promise<Array<string>>;
 
 export function GetBanList():Promise<Array<main.BanEntry>>;
 
+export function GetBotEnabled():Promise<boolean>;
+
 export function GetLogs():Promise<Array<string>>;
 
 export function GetPayouts():Promise<Array<main.Payout>>;
 
 export function GetSettings():Promise<main.PayoutSettings>;
+
+export function GetSkipStripScan():Promise<boolean>;
 
 export function GetStockedItems():Promise<Array<main.StockedItem>>;
 
@@ -40,7 +44,11 @@ export function ReturnAllToOwner(arg1:string):Promise<void>;
 
 export function SaveSettings(arg1:number,arg2:number):Promise<void>;
 
+export function SetSkipStripScan(arg1:boolean):Promise<void>;
+
 export function ShowWindow():Promise<void>;
+
+export function ToggleBotEnabled():Promise<boolean>;
 
 export function TogglePayoutStatus(arg1:string):Promise<void>;
 

@@ -42,6 +42,10 @@ export function GetBanList() {
   return window['go']['main']['App']['GetBanList']();
 }
 
+export function GetBotEnabled() {
+  return window['go']['main']['App']['GetBotEnabled']();
+}
+
 export function GetLogs() {
   return window['go']['main']['App']['GetLogs']();
 }
@@ -52,6 +56,10 @@ export function GetPayouts() {
 
 export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
+}
+
+export function GetSkipStripScan() {
+  return window['go']['main']['App']['GetSkipStripScan']();
 }
 
 export function GetStockedItems() {
@@ -78,8 +86,16 @@ export function SaveSettings(arg1, arg2) {
   return window['go']['main']['App']['SaveSettings'](arg1, arg2);
 }
 
+export function SetSkipStripScan(arg1) {
+  return window['go']['main']['App']['SetSkipStripScan'](arg1);
+}
+
 export function ShowWindow() {
   return window['go']['main']['App']['ShowWindow']();
+}
+
+export function ToggleBotEnabled() {
+  return window['go']['main']['App']['ToggleBotEnabled']();
 }
 
 export function TogglePayoutStatus(arg1) {

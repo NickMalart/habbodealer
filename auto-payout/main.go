@@ -169,9 +169,8 @@ type App struct {
 
 	// Notified map to avoid duplicate failure webhooks in-memory
 	notified   map[string]struct{}
-	notifiedMu sync.Mutex
+	notifiedMu sync.RWMutex
 	}
-
 func NewApp() *App {
 	return &App{
 		payouts:              []Payout{},
