@@ -10201,10 +10201,24 @@ func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 			url = "http://rollorigins.club/api/live-dealer"
 		}
 
-		if splitMode {
+		// Prefer DB items when split-dealer mode is enabled OR a banker name is configured.
+		// This allows using the database-backed `banker_inventory` even when the
+		// UI hasn't toggled split mode, as long as a banker name is set.
+		mutex.Lock()
+		bNameCfg := strings.TrimSpace(a.GetBankerName())
+		mutex.Unlock()
+
+		useDBItems := splitMode || bNameCfg != ""
+
+		if useDBItems {
 			db, _ := a.getHistoryDB()
 			if db != nil {
-				bName := strings.TrimSpace(a.GetBankerName())
+				// Determine banker name to query: prefer explicit app-configured banker,
+				// fall back to the local retrieved banker name variable.
+				bName := bNameCfg
+				if bName == "" {
+					bName = strings.TrimSpace(a.GetBankerName())
+				}
 				if bName != "" {
 					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 					rows, err := db.Query(ctx, `
@@ -10365,41 +10379,50 @@ func (a *App) sendLiveDealerStatus(open bool, dealerName string) {
 		// If split mode is enabled, populate `items`/`snapshot` from the
 		// `banker_inventory` table for the configured banker so the status
 		// payload includes the correct items.
+		// Prefer DB items when split-dealer mode is enabled OR a banker name is configured.
 		mutex.Lock()
 		splitMode := isSplitDealerMode
-		bName := bankerName
+		bNameCfg2 := strings.TrimSpace(a.GetBankerName())
 		mutex.Unlock()
-		if splitMode {
-			if db, _ := a.getHistoryDB(); db != nil && strings.TrimSpace(bName) != "" {
-				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-				rows, err := db.Query(ctx, `
-					SELECT item_name, quantity
-					FROM banker_inventory
-					WHERE LOWER(banker_name) = LOWER($1) AND quantity > 0
-					ORDER BY item_name ASC
-				`, bName)
-				cancel()
-				if err == nil {
-					items := make([]TradeItem, 0)
-					for rows.Next() {
-						var iname string
-						var qty int
-						if err := rows.Scan(&iname, &qty); err != nil {
-							a.AddLogMsg(fmt.Sprintf("[LIVE_DEALER] banker_inventory scan error: %v", err))
-							continue
+
+		useDBItems2 := splitMode || bNameCfg2 != ""
+		if useDBItems2 {
+			if db, _ := a.getHistoryDB(); db != nil {
+				bName := bNameCfg2
+				if bName == "" {
+					bName = bankerName
+				}
+				if strings.TrimSpace(bName) != "" {
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+					rows, err := db.Query(ctx, `
+						SELECT item_name, quantity
+						FROM banker_inventory
+						WHERE LOWER(banker_name) = LOWER($1) AND quantity > 0
+						ORDER BY item_name ASC
+					`, bName)
+					cancel()
+					if err == nil {
+						items := make([]TradeItem, 0)
+						for rows.Next() {
+							var iname string
+							var qty int
+							if err := rows.Scan(&iname, &qty); err != nil {
+								a.AddLogMsg(fmt.Sprintf("[LIVE_DEALER] banker_inventory scan error: %v", err))
+								continue
+							}
+							if qty <= 0 {
+								continue
+							}
+							items = append(items, TradeItem{Name: iname, Quantity: qty, RawData: ""})
 						}
-						if qty <= 0 {
-							continue
+						rows.Close()
+						if len(items) > 0 {
+							payload.Items = items
+							payload.Snapshot = items
 						}
-						items = append(items, TradeItem{Name: iname, Quantity: qty, RawData: ""})
+					} else {
+						a.AddLogMsg(fmt.Sprintf("[LIVE_DEALER] banker_inventory query error: %v", err))
 					}
-					rows.Close()
-					if len(items) > 0 {
-						payload.Items = items
-						payload.Snapshot = items
-					}
-				} else {
-					a.AddLogMsg(fmt.Sprintf("[LIVE_DEALER] banker_inventory query error: %v", err))
 				}
 			}
 		}
