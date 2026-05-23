@@ -139,6 +139,8 @@ type App struct {
 	// Banker state
 	bankerName   string
 	bankerNameMu sync.RWMutex
+	// When true, do not perform player hand/strip scans (banker/split mode)
+	skipStripScan bool
 
 	// Config & DB
 	pythonExec     string
@@ -1114,6 +1116,11 @@ func (a *App) RefreshInventory() {
 		}
 
 		a.stripScanMu.Lock()
+		if a.skipStripScan {
+			a.stripScanMu.Unlock()
+			a.AddLog("Skipping hand inventory scan (banker/split mode).")
+			return
+		}
 		if a.stripScanActive {
 			a.stripScanMu.Unlock()
 			return
@@ -1133,6 +1140,23 @@ func (a *App) RefreshInventory() {
 			a.finalizeStripScan(sessionID)
 		}()
 	}
+}
+
+// SetSkipStripScan enables/disables skipping player hand scans (banker/split mode).
+func (a *App) SetSkipStripScan(enabled bool) {
+	a.stripScanMu.Lock()
+	a.skipStripScan = enabled
+	a.stripScanMu.Unlock()
+	a.AddLog(fmt.Sprintf("[CONFIG] SkipStripScan = %t", enabled))
+	a.emitUpdate()
+}
+
+// GetSkipStripScan returns whether strip scans are skipped.
+func (a *App) GetSkipStripScan() bool {
+	a.stripScanMu.Lock()
+	v := a.skipStripScan
+	a.stripScanMu.Unlock()
+	return v
 }
 
 func (a *App) ReturnAllToOwner(ownerName string) {
@@ -1841,6 +1865,13 @@ func (a *App) handleStripInfo(e *g.Intercept) {
 	} else {
 		go func() {
 			time.Sleep(200 * time.Millisecond)
+			a.stripScanMu.Lock()
+			skip := a.skipStripScan
+			a.stripScanMu.Unlock()
+			if skip {
+				a.AddLog("Strip scan continuing skipped (banker/split mode).")
+				return
+			}
 			a.ext.Send(g.Out.Id("GETSTRIP_OUT"), "next")
 		}()
 	}
