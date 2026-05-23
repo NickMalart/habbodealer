@@ -25,7 +25,9 @@ var assets embed.FS
 type TradeItem struct {
 	Name     string `json:"name"`
 	Quantity int    `json:"quantity"`
-	RawData  string `json:"rawData"`
+	Qty      int    `json:"qty,omitempty"`
+	RawData  string `json:"rawData,omitempty"`
+	RawName  string `json:"raw_name,omitempty"`
 }
 
 type GameHistoryEntry struct {
@@ -156,7 +158,7 @@ func (a *App) initDB() {
 
 	a.ownerKey = cfg.OwnerKey
 	log.Printf("[DB_INIT] Connecting to database... (ownerKey: %s)", a.ownerKey)
-	
+
 	pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
 	if err != nil {
 		log.Printf("[DB_INIT] Failed to create connection pool: %v", err)
@@ -165,7 +167,7 @@ func (a *App) initDB() {
 		a.mu.Unlock()
 		return
 	}
-	
+
 	// Test connection
 	if err := pool.Ping(context.Background()); err != nil {
 		log.Printf("[DB_INIT] Failed to ping database: %v", err)
@@ -339,9 +341,9 @@ func (a *App) GetPlayerStats(startDate, endDate string) []PlayerStats {
 	query := `
 		SELECT player_name, winner, status, issue, completed_at
 		FROM game_history_entries
-		WHERE owner_key = $1
+		WHERE 1=1
 	`
-	args := []interface{}{a.ownerKey}
+	args := []interface{}{}
 	if startDate != "" {
 		query += fmt.Sprintf(" AND completed_at >= $%d", len(args)+1)
 		args = append(args, startDate)
@@ -378,7 +380,7 @@ func (a *App) GetPlayerStats(startDate, endDate string) []PlayerStats {
 
 		winnerClean := strings.TrimSpace(strings.ToLower(winner))
 		playerClean := strings.TrimSpace(strings.ToLower(name))
-		
+
 		isPlayerWin := winnerClean == playerClean
 		isDealerWin := winnerClean == "dealer"
 
@@ -430,9 +432,9 @@ func (a *App) GetPlayerGameStats(playerName, startDate, endDate string) []GameSt
 	query := `
 		SELECT game, winner, status, issue, completed_at
 		FROM game_history_entries
-		WHERE owner_key = $1 AND TRIM(player_name) = $2
+		WHERE 1=1 AND TRIM(player_name) = $1
 	`
-	args := []interface{}{a.ownerKey, strings.TrimSpace(playerName)}
+	args := []interface{}{strings.TrimSpace(playerName)}
 	if startDate != "" {
 		query += fmt.Sprintf(" AND completed_at >= $%d", len(args)+1)
 		args = append(args, startDate)
@@ -462,10 +464,10 @@ func (a *App) GetPlayerGameStats(playerName, startDate, endDate string) []GameSt
 		}
 
 		normGame := normalizeGameName(game, "") // choice info missing in this query, but normalize should handle it
-		
+
 		winnerClean := strings.TrimSpace(strings.ToLower(winner))
 		playerClean := strings.TrimSpace(strings.ToLower(playerName))
-		
+
 		isPlayerWin := winnerClean == playerClean
 		isDealerWin := winnerClean == "dealer"
 
@@ -509,7 +511,7 @@ func (a *App) GetPlayers() []string {
 	if a.db == nil {
 		return []string{}
 	}
-	rows, err := a.db.Query(context.Background(), "SELECT DISTINCT player_name FROM game_history_entries WHERE owner_key = $1 ORDER BY player_name", a.ownerKey)
+	rows, err := a.db.Query(context.Background(), "SELECT DISTINCT player_name FROM game_history_entries ORDER BY player_name")
 	if err != nil {
 		return []string{}
 	}
@@ -527,7 +529,7 @@ func (a *App) GetPlayers() []string {
 
 func normalizeGameName(game string, choice string) string {
 	g := strings.TrimSpace(strings.ToLower(game))
-	
+
 	// MidHouse Split
 	if strings.Contains(g, "mid") || strings.Contains(g, "house") || g == "mh" {
 		c := strings.TrimSpace(strings.ToLower(choice))
@@ -543,7 +545,7 @@ func normalizeGameName(game string, choice string) string {
 	// Broadly catch Under/Over games
 	if strings.Contains(g, "uo") || strings.Contains(g, "under") || strings.Contains(g, "over") {
 		c := strings.TrimSpace(strings.ToLower(choice))
-		
+
 		// Check for specific words first to avoid 'uo_over' matching 'u'
 		if strings.Contains(c, "over") {
 			return "O7"
@@ -551,7 +553,7 @@ func normalizeGameName(game string, choice string) string {
 		if strings.Contains(c, "under") {
 			return "U7"
 		}
-		
+
 		// Then check for single letters
 		if c == "o" {
 			return "O7"
@@ -559,14 +561,14 @@ func normalizeGameName(game string, choice string) string {
 		if c == "u" {
 			return "U7"
 		}
-		
+
 		if c == "7" || strings.Contains(c, "7") {
 			return "7"
 		}
 		// Fallback to U7 if choice is unclear
 		return "U7"
 	}
-	
+
 	if strings.Contains(g, "double") || g == "dt" || strings.Contains(g, "doubletrouble") {
 		return "DT"
 	}
@@ -614,9 +616,9 @@ func (a *App) GetStats(startDate, endDate string) CasinoStats {
 	query := `
 		SELECT player_name, game, winner, choice, completed_at, status, issue
 		FROM game_history_entries
-		WHERE owner_key = $1
+		WHERE 1=1
 	`
-	args := []interface{}{a.ownerKey}
+	args := []interface{}{}
 	// Note: We'll filter status and issue in Go for now to see EVERYTHING in the logs
 	if startDate != "" {
 		query += fmt.Sprintf(" AND completed_at >= $%d", len(args)+1)
@@ -660,10 +662,10 @@ func (a *App) GetStats(startDate, endDate string) CasinoStats {
 
 		normGame := normalizeGameName(game, choice)
 		gameCount[normGame]++
-		
+
 		winnerClean := strings.TrimSpace(strings.ToLower(winner))
 		playerClean := strings.TrimSpace(strings.ToLower(playerName))
-		
+
 		isPlayerWin := winnerClean == playerClean
 		isDealerWin := winnerClean == "dealer"
 
@@ -728,9 +730,9 @@ func (a *App) GetLedgerStats(startDate, endDate string) []LedgerItemStats {
 	query := `
 		SELECT partner_name, trade_type, items
 		FROM trade_ledger
-		WHERE owner_key = $1
+		WHERE 1=1
 	`
-	args := []interface{}{a.ownerKey}
+	args := []interface{}{}
 	if startDate != "" {
 		query += fmt.Sprintf(" AND created_at >= $%d", len(args)+1)
 		args = append(args, startDate)
@@ -766,8 +768,15 @@ func (a *App) GetLedgerStats(startDate, endDate string) []LedgerItemStats {
 
 		for _, it := range items {
 			name := strings.TrimSpace(it.Name)
+			if name == "" && strings.TrimSpace(it.RawName) != "" {
+				name = strings.TrimSpace(it.RawName)
+			}
 			if name == "" {
 				continue
+			}
+			qty := it.Quantity
+			if qty == 0 {
+				qty = it.Qty
 			}
 			ls, ok := itemMap[name]
 			if !ok {
@@ -776,9 +785,9 @@ func (a *App) GetLedgerStats(startDate, endDate string) []LedgerItemStats {
 			}
 
 			if tradeType == "IN" {
-				ls.TotalIn += it.Quantity
+				ls.TotalIn += qty
 			} else if tradeType == "OUT" {
-				ls.TotalOut += it.Quantity
+				ls.TotalOut += qty
 			}
 		}
 	}
@@ -806,9 +815,9 @@ func (a *App) GetPlayerLedgerStats(playerName, startDate, endDate string) []Ledg
 	query := `
 		SELECT trade_type, items
 		FROM trade_ledger
-		WHERE owner_key = $1 AND TRIM(LOWER(partner_name)) = $2
+		WHERE 1=1 AND TRIM(LOWER(partner_name)) = $1
 	`
-	args := []interface{}{a.ownerKey, strings.TrimSpace(strings.ToLower(playerName))}
+	args := []interface{}{strings.TrimSpace(strings.ToLower(playerName))}
 	if startDate != "" {
 		query += fmt.Sprintf(" AND created_at >= $%d", len(args)+1)
 		args = append(args, startDate)
@@ -840,8 +849,15 @@ func (a *App) GetPlayerLedgerStats(playerName, startDate, endDate string) []Ledg
 
 		for _, it := range items {
 			name := strings.TrimSpace(it.Name)
+			if name == "" && strings.TrimSpace(it.RawName) != "" {
+				name = strings.TrimSpace(it.RawName)
+			}
 			if name == "" {
 				continue
+			}
+			qty := it.Quantity
+			if qty == 0 {
+				qty = it.Qty
 			}
 			ls, ok := itemMap[name]
 			if !ok {
@@ -850,9 +866,9 @@ func (a *App) GetPlayerLedgerStats(playerName, startDate, endDate string) []Ledg
 			}
 
 			if tradeType == "IN" {
-				ls.TotalIn += it.Quantity
+				ls.TotalIn += qty
 			} else if tradeType == "OUT" {
-				ls.TotalOut += it.Quantity
+				ls.TotalOut += qty
 			}
 		}
 	}
