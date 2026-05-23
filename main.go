@@ -2668,6 +2668,46 @@ func (a *App) startBankerTradePolling() {
 				continue
 			}
 
+			// Attempt to adopt any orphaned 'playing' trade if we have no active banker trade.
+			// This helps resume games after restarts or if the in-memory state was lost.
+			ctxP, cancelP := context.WithTimeout(context.Background(), 3*time.Second)
+			var pID int
+			var pPlayerName string
+			var pBetItems []byte
+			var pTradeID, pChatID int
+			errP := db.QueryRow(ctxP, `
+				SELECT id, player_name, bet_items, player_trade_id, player_chat_id
+				FROM banker_trades
+				WHERE status = 'playing'
+				ORDER BY updated_at ASC
+				LIMIT 1
+			`).Scan(&pID, &pPlayerName, &pBetItems, &pTradeID, &pChatID)
+			cancelP()
+			if errP == nil {
+				a.historyDBMu.Lock()
+				active := a.activeBankerTradeID
+				a.historyDBMu.Unlock()
+				if active == 0 {
+					var bItems []struct {
+						RawName string `json:"raw_name"`
+						Qty     int    `json:"qty"`
+					}
+					if err := json.Unmarshal(pBetItems, &bItems); err != nil {
+						a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Found orphan 'playing' trade %d but failed to parse bet_items: %v", pID, err))
+					} else {
+						items := make([]TradeItem, 0, len(bItems))
+						for _, bi := range bItems {
+							items = append(items, TradeItem{Name: bi.RawName, Quantity: bi.Qty})
+						}
+						a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Found orphan 'playing' trade %d; adopting and resuming game for %s", pID, pPlayerName))
+						a.initGameFromBankerTrade(pID, pPlayerName, items, pTradeID, pChatID)
+						// allow init to settle and avoid tight-loop
+						time.Sleep(200 * time.Millisecond)
+						continue
+					}
+				}
+			}
+
 			a.AddLogMsg("[BANKER_POLL] Polling for any pending trade...")
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -7763,18 +7803,30 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 			return
 		}
 
-		// Final timeout hit: auto-finalize Keep -> payout
+		// Final timeout hit: determine whether this is a risk session or a normal banker game.
 		awaitingGameChoice = false
 		gameChoiceUnreadableWarned = false
 		awaitingGameChoicePartnerID = 0
 		awaitingGameChoicePartnerName = ""
 		gameChoiceTimeoutActive = false
 
-		a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] final timeout for %s after %d reminders; auto-finalizing Keep", player, reminderCount))
-		sendShout(fmt.Sprintf("No response from %q — finalizing Keep and attempting payout.", player))
+		a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] final timeout for %s after %d reminders; auto-finalizing", player, reminderCount))
+		sendShout(fmt.Sprintf("No response from %q — finalizing and flagging issue.", player))
 		time.Sleep(1200 * time.Millisecond)
 
-		go a.finalizeRiskKeep()
+		mutex.Lock()
+		riskActive := riskSessionActive
+		mutex.Unlock()
+
+		if riskActive {
+			// Preserve existing behavior for risk sessions (convert bank -> payout)
+			go a.finalizeRiskKeep()
+		} else {
+			// Mark the game as an issue, persist, send webhook, and finalize the banker trade
+			a.AddLogMsg(fmt.Sprintf("[GAME_CHOICE_TIMEOUT] marking game as issue and finalizing banker trade for %s", player))
+			a.markCurrentGameHistoryIssue("Player did not choose a game option; auto-finalized", true)
+			go a.finalizeBankerTrade()
+		}
 	}(monitorID, playerName)
 }
 
