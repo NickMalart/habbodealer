@@ -5,7 +5,12 @@
         <h1>Auto Payout Bot</h1>
         <div class="subtitle">Lightweight automated payouts</div>
       </div>
-      <div class="status" :class="{ connected: isConnected }">{{ isConnected ? '● Connected' : '○ Disconnected' }}</div>
+      <div class="header-right">
+        <button class="btn bot-toggle" :class="{ enabled: botEnabled }" @click="toggleBot">
+          {{ botEnabled ? 'Bot Enabled' : 'Bot Disabled' }}
+        </button>
+        <div class="status" :class="{ connected: isConnected }">{{ isConnected ? '● Connected' : '○ Disconnected' }}</div>
+      </div>
     </header>
 
     <nav class="primary-nav">
@@ -153,6 +158,7 @@ const newName = ref('')
 const newItem = ref('')
 const newQty = ref(1)
 const isConnected = ref(false)
+const botEnabled = ref(true)
 const logContainer = ref(null)
 const logFilter = ref('')
 
@@ -171,6 +177,7 @@ const loadInitial = async () => {
       payouts.value = await window.go.main.App.GetPayouts()
       logs.value = await window.go.main.App.GetLogs()
       isConnected.value = true
+      botEnabled.value = await window.go.main.App.GetBotEnabled()
       const s = await window.go.main.App.GetSettings()
       if (s) { maxUniqueItems.value = s.maxUniqueItems || 6; maxQtyPerUnique.value = s.maxQtyPerUnique || 10 }
       try {
@@ -186,6 +193,12 @@ const loadInitial = async () => {
     } catch (e) {
       console.warn('initial load failed', e)
     }
+  }
+}
+
+const toggleBot = async () => {
+  if (window.go?.main?.App) {
+    botEnabled.value = await window.go.main.App.ToggleBotEnabled()
   }
 }
 
@@ -250,6 +263,9 @@ const formatSeconds = (s) => {
 *{box-sizing:border-box}
 .app-root{font-family:Inter,Segoe UI,Arial;background:var(--bg);color:#e6eef6;min-height:100vh;padding:12px}
 .app-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.header-right { display: flex; align-items: center; gap: 16px; }
+.bot-toggle { background: #441111; color: #fff; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+.bot-toggle.enabled { background: #114411; }
 .brand h1{margin:0;font-size:1.2rem}
 .subtitle{font-size:0.85rem;color:var(--muted)}
 .status{font-weight:700}

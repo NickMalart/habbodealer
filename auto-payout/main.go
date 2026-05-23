@@ -164,10 +164,13 @@ type App struct {
 	// In-memory ban list to block abusive partners (keyed by name:lower or tradeid:<id>)
 	banList *BanList
 
+	// Bot enable/disable toggle
+	botEnabled bool
+
 	// Notified map to avoid duplicate failure webhooks in-memory
 	notified   map[string]struct{}
-	notifiedMu sync.RWMutex
-}
+	notifiedMu sync.Mutex
+	}
 
 func NewApp() *App {
 	return &App{
@@ -183,6 +186,7 @@ func NewApp() *App {
 		inflight:             make(map[string]string),
 		notified:             make(map[string]struct{}),
 		banList:              NewBanList(),
+		botEnabled:           true,
 	}
 }
 
@@ -1159,6 +1163,23 @@ func (a *App) GetSkipStripScan() bool {
 	return v
 }
 
+// GetBotEnabled returns the current enable/disable state of the bot.
+func (a *App) GetBotEnabled() bool {
+	a.tradeMu.Lock()
+	defer a.tradeMu.Unlock()
+	return a.botEnabled
+}
+
+// ToggleBotEnabled flips the bot's enabled state.
+func (a *App) ToggleBotEnabled() bool {
+	a.tradeMu.Lock()
+	a.botEnabled = !a.botEnabled
+	v := a.botEnabled
+	a.tradeMu.Unlock()
+	a.AddLog(fmt.Sprintf("[CONFIG] BotEnabled = %t", v))
+	return v
+}
+
 func (a *App) ReturnAllToOwner(ownerName string) {
 	a.inventoryMu.RLock()
 	defer a.inventoryMu.RUnlock()
@@ -1995,6 +2016,11 @@ func (a *App) handleUserObject(e *g.Intercept) {
 }
 
 func (a *App) handleTradeOpen(e *g.Intercept) {
+	// If bot is disabled, do not interfere with trade opening or block anything.
+	if !a.GetBotEnabled() {
+		return
+	}
+
 	// Determine incoming trader id (if any) so we can allow opens that match
 	// an outgoing payout attempt while still blocking unsolicited incoming
 	// trades when the banker has active banker_trades in the DB.
@@ -2226,6 +2252,11 @@ func (a *App) recordBankerTrade(playerName string, items []TradeItem, tradeID in
 }
 
 func (a *App) handlePartnerAccept(e *g.Intercept) {
+	// If bot is disabled, do not interfere with trade acceptance.
+	if !a.GetBotEnabled() {
+		return
+	}
+
 	a.AddLog("Partner accepted offer (Stage 1).")
 
 	// Track partner acceptance for outgoing payout trades so automation can proceed
@@ -2532,6 +2563,11 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 }
 
 func (a *App) handlePartnerConfirm(e *g.Intercept) {
+	// If bot is disabled, do not interfere with trade confirmation.
+	if !a.GetBotEnabled() {
+		return
+	}
+
 	a.AddLog("Partner confirmed trade (Stage 2).")
 
 	// Always schedule an automatic confirm after 4 seconds (Stage 2).
@@ -2721,6 +2757,11 @@ func (a *App) payoutMonitor() {
 	for {
 		time.Sleep(2 * time.Second)
 		cycle++
+
+		// Skip automation cycles if the bot is disabled.
+		if !a.GetBotEnabled() {
+			continue
+		}
 
 		a.pMu.RLock()
 		var targets []Payout
