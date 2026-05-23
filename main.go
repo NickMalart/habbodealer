@@ -10185,6 +10185,65 @@ func (a *App) emitHandItemsUpdate() {
 // Runs asynchronously and logs status via `AddLogMsg`.
 func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 	go func(snapshot []TradeItem) {
+		// If split-dealer mode is active, merge banker_inventory rows for the configured
+		// banker into the snapshot before building the payload.
+		if a.GetSplitDealerMode() {
+			// Resolve banker name: prefer configured banker, fallback to current dealer name.
+			bn := strings.TrimSpace(a.GetBankerName())
+			if bn == "" {
+				bn = strings.TrimSpace(a.getCurrentDealerName())
+			}
+			if bn != "" {
+				db, _ := a.getHistoryDB()
+				if db != nil {
+					ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+					rows, err := db.Query(ctx, `SELECT item_name, quantity FROM banker_inventory WHERE lower(banker_name)=lower($1)`, bn)
+					cancel()
+					if err != nil {
+						a.AddLogMsg(fmt.Sprintf("[TRADE_HAND_SNAPSHOT] banker_inventory query failed: %v", err))
+					} else {
+						defer rows.Close()
+						// Merge existing snapshot items into a map keyed by lower(name).
+						m := make(map[string]TradeItem, len(snapshot))
+						for _, it := range snapshot {
+							key := strings.ToLower(strings.TrimSpace(it.Name))
+							if key == "" {
+								continue
+							}
+							m[key] = TradeItem{Name: it.Name, Quantity: it.Quantity, RawData: it.RawData}
+						}
+						for rows.Next() {
+							var itemName string
+							var qty int
+							if err := rows.Scan(&itemName, &qty); err != nil {
+								a.AddLogMsg("[TRADE_HAND_SNAPSHOT] banker_inventory scan error: " + err.Error())
+								continue
+							}
+							key := strings.ToLower(strings.TrimSpace(itemName))
+							if key == "" {
+								continue
+							}
+							if ex, ok := m[key]; ok {
+								ex.Quantity += qty
+								m[key] = ex
+							} else {
+								m[key] = TradeItem{Name: itemName, Quantity: qty, RawData: itemName}
+							}
+						}
+						// Rebuild deterministic slice
+						newSnap := make([]TradeItem, 0, len(m))
+						for _, v := range m {
+							newSnap = append(newSnap, v)
+						}
+						sort.Slice(newSnap, func(i, j int) bool { return newSnap[i].Name < newSnap[j].Name })
+						snapshot = newSnap
+					}
+				} else {
+					a.AddLogMsg("[TRADE_HAND_SNAPSHOT] no history DB configured; skipping banker inventory merge")
+				}
+			}
+		}
+
 		payload := LiveDealerStatusPayload{
 			LastSeenAt:         time.Now().UTC().Format(time.RFC3339),
 			DealerOpen:         dealerAcceptingTrades,
