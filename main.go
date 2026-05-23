@@ -975,66 +975,17 @@ func (a *App) startup(ctx context.Context) {
 				continue
 			}
 
-			// Prefer frozen snapshot when available; in Split Dealer Mode
-			// prefer the `banker_inventory` from the history DB for remote
-			// snapshots instead of the local hand.
+			// Prefer frozen snapshot when available, otherwise use live hand.
 			handItemsMu.Lock()
-			var frozenSnapshot []TradeItem
+			var items []TradeItem
 			if tradeHandSnapshotReady && len(tradeHandSnapshot) > 0 {
-				frozenSnapshot = make([]TradeItem, len(tradeHandSnapshot))
-				copy(frozenSnapshot, tradeHandSnapshot)
-			}
-			var localHand []TradeItem
-			if len(currentHandItems) > 0 {
-				localHand = make([]TradeItem, len(currentHandItems))
-				copy(localHand, currentHandItems)
+				items = make([]TradeItem, len(tradeHandSnapshot))
+				copy(items, tradeHandSnapshot)
+			} else if len(currentHandItems) > 0 {
+				items = make([]TradeItem, len(currentHandItems))
+				copy(items, currentHandItems)
 			}
 			handItemsMu.Unlock()
-
-			mutex.Lock()
-			splitMode := isSplitDealerMode
-			bName := bankerName
-			mutex.Unlock()
-
-			var items []TradeItem
-			if splitMode {
-				if db, _ := a.getHistoryDB(); db != nil && strings.TrimSpace(bName) != "" {
-					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-					rows, err := db.Query(ctx, `
-						SELECT item_name, quantity
-						FROM banker_inventory
-						WHERE banker_name = $1 AND quantity > 0
-						ORDER BY item_name ASC
-					`, bName)
-					cancel()
-					if err == nil {
-						items = make([]TradeItem, 0)
-						for rows.Next() {
-							var iname string
-							var qty int
-							if err := rows.Scan(&iname, &qty); err != nil {
-								a.AddLogMsg(fmt.Sprintf("[LIVE_DEALER] banker_inventory scan error: %v", err))
-								continue
-							}
-							if qty <= 0 {
-								continue
-							}
-							items = append(items, TradeItem{Name: iname, Quantity: qty, RawData: ""})
-						}
-						rows.Close()
-					} else {
-						a.AddLogMsg(fmt.Sprintf("[LIVE_DEALER] banker_inventory query error: %v", err))
-					}
-				}
-			}
-
-			if len(items) == 0 {
-				if frozenSnapshot != nil && len(frozenSnapshot) > 0 {
-					items = frozenSnapshot
-				} else if localHand != nil && len(localHand) > 0 {
-					items = localHand
-				}
-			}
 
 			if len(items) == 0 {
 				continue
@@ -10225,60 +10176,95 @@ func (a *App) emitHandItemsUpdate() {
 		return
 	}
 	runtime.EventsEmit(a.ctx, "handItemsUpdate", string(jsonData))
-
 	// Also notify the configured live-dealer webhook so external dashboards
 	// remain in sync whenever the frontend receives a hand update.
-	// In Split Dealer Mode prefer the banker_inventory from the history DB
-	// for the live-dealer snapshot instead of the local hand.
-	snapshotItems := items
-	mutex.Lock()
-	splitMode := isSplitDealerMode
-	bName := bankerName
-	mutex.Unlock()
-	if splitMode {
-		if db, _ := a.getHistoryDB(); db != nil && strings.TrimSpace(bName) != "" {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			rows, err := db.Query(ctx, `
-				SELECT item_name, quantity
-				FROM banker_inventory
-				WHERE banker_name = $1 AND quantity > 0
-				ORDER BY item_name ASC
-			`, bName)
-			cancel()
-			if err == nil {
-				snapshotItems = make([]TradeItem, 0)
-				for rows.Next() {
-					var iname string
-					var qty int
-					if err := rows.Scan(&iname, &qty); err != nil {
-						a.AddLogMsg(fmt.Sprintf("[LIVE_DEALER] banker_inventory scan error: %v", err))
-						continue
-					}
-					if qty <= 0 {
-						continue
-					}
-					snapshotItems = append(snapshotItems, TradeItem{Name: iname, Quantity: qty, RawData: ""})
-				}
-				rows.Close()
-			} else {
-				a.AddLogMsg(fmt.Sprintf("[LIVE_DEALER] banker_inventory query error: %v", err))
-			}
-		}
-	}
-
-	a.sendLiveDealerSnapshot(snapshotItems)
+	// The DB-first snapshot logic is centralized in sendLiveDealerSnapshot.
+	a.sendLiveDealerSnapshot(items)
 }
 
 // sendLiveDealerSnapshot posts a hand snapshot to the configured live-dealer webhook.
 // Runs asynchronously and logs status via `AddLogMsg`.
 func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
-	go func(snapshot []TradeItem) {
-		// When running in Split Dealer Mode do not expose dealer or room names
-		// in the live-dealer snapshot payload (only send the snapshot items).
+	go func(_ []TradeItem) {
+		// If split-dealer mode is enabled, prefer the banker_inventory rows
+		// and send a minimal payload containing only the `snapshot` array
+		// (item name + quantity). If that fails, fall back to the normal
+		// full payload but with dealer/room omitted.
 		mutex.Lock()
 		splitMode := isSplitDealerMode
 		mutex.Unlock()
 
+		url := os.Getenv("LIVE_SYNC_URL")
+		if url == "" {
+			url = "http://rollorigins.club/api/live-dealer"
+		}
+
+		if splitMode {
+			db, _ := a.getHistoryDB()
+			if db != nil {
+				bName := strings.TrimSpace(a.GetBankerName())
+				if bName != "" {
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+					rows, err := db.Query(ctx, `
+						SELECT item_name, quantity
+						FROM banker_inventory
+						WHERE LOWER(banker_name) = LOWER($1) AND quantity > 0
+						ORDER BY item_name ASC
+					`, bName)
+					if err == nil {
+						snapshotItems := make([]TradeItem, 0)
+						for rows.Next() {
+							var iname string
+							var qty int
+							if err := rows.Scan(&iname, &qty); err != nil {
+								a.AddLogMsg(fmt.Sprintf("[LIVE_DEALER] banker_inventory scan error: %v", err))
+								continue
+							}
+							if qty <= 0 {
+								continue
+							}
+							snapshotItems = append(snapshotItems, TradeItem{Name: iname, Quantity: qty, RawData: ""})
+						}
+						rows.Close()
+						cancel()
+
+						if len(snapshotItems) > 0 {
+							jb, err := json.Marshal(map[string]interface{}{"snapshot": snapshotItems})
+							if err != nil {
+								a.AddLogMsg("[TRADE_HAND_SNAPSHOT] webhook marshal error: " + err.Error())
+								return
+							}
+							req, err := http.NewRequest("POST", url, bytes.NewReader(jb))
+							if err != nil {
+								a.AddLogMsg("[TRADE_HAND_SNAPSHOT] webhook request error: " + err.Error())
+								return
+							}
+							req.Header.Set("Content-Type", "application/json")
+							req.Header.Set("Authorization", "Bearer s3cUr3-r4nd0m_v4lu3-6f2b8a")
+
+							client := &http.Client{Timeout: 5 * time.Second}
+							resp, err := client.Do(req)
+							if err != nil {
+								a.AddLogMsg("[TRADE_HAND_SNAPSHOT] webhook POST error: " + err.Error())
+								return
+							}
+							defer resp.Body.Close()
+							if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+								a.AddLogMsg(fmt.Sprintf("[TRADE_HAND_SNAPSHOT] webhook responded: %s %d", url, resp.StatusCode))
+							} else {
+								a.AddLogMsg("[TRADE_HAND_SNAPSHOT] webhook sent to " + url)
+							}
+							return
+						}
+					} else {
+						cancel()
+						a.AddLogMsg(fmt.Sprintf("[LIVE_DEALER] banker_inventory query error: %v", err))
+					}
+				}
+			}
+		}
+
+		// Fallback: send the full payload but remove dealer/room when in split mode.
 		dealerName := a.getCurrentDealerName()
 		roomName := a.getCurrentRoomName()
 		if splitMode {
@@ -10296,18 +10282,13 @@ func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 			RoomName:           roomName,
 			MaxUniqueItems:     maxTradeUniqueItems,
 			MaxQuantityPerItem: maxTradeQuantityPerItem,
-			Snapshot:           snapshot,
+			Snapshot:           items,
 		}
 
 		jb, err := json.Marshal(payload)
 		if err != nil {
 			a.AddLogMsg("[TRADE_HAND_SNAPSHOT] webhook marshal error: " + err.Error())
 			return
-		}
-
-		url := os.Getenv("LIVE_SYNC_URL")
-		if url == "" {
-			url = "http://rollorigins.club/api/live-dealer"
 		}
 
 		req, err := http.NewRequest("POST", url, bytes.NewReader(jb))
