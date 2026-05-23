@@ -498,6 +498,8 @@ type LiveDealerStatusPayload struct {
 	MaxQuantityPerItem int               `json:"maxQuantityPerItem"`
 	RiskEnabled        bool              `json:"riskEnabled"`
 	Snapshot           []TradeItem       `json:"snapshot,omitempty"`
+	Items              []TradeItem       `json:"items,omitempty"`
+	CurrentPlayer      string            `json:"currentPlayer,omitempty"`
 	RecentGames        []LiveGameSummary `json:"recentGames,omitempty"`
 }
 
@@ -10229,7 +10231,25 @@ func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 						cancel()
 
 						if len(snapshotItems) > 0 {
-							jb, err := json.Marshal(map[string]interface{}{"snapshot": snapshotItems})
+							// Build a minimal payload that includes both `items` and
+							// `snapshot` to satisfy different consumers, and include
+							// the current dealer name so the endpoint accepts it.
+							payload := map[string]interface{}{
+								"lastSeenAt":         time.Now().UTC().Format(time.RFC3339),
+								"dealerOpen":         dealerAcceptingTrades,
+								"tradeOpen":          tradeOpen,
+								"gameActive":         dealerGameActive(),
+								"snapshotReady":      tradeHandSnapshotReady,
+								"dealerName":         a.getCurrentDealerName(),
+								"currentPlayer":      a.getCurrentDealerName(),
+								"roomName":           a.getCurrentRoomName(),
+								"maxUniqueItems":     maxTradeUniqueItems,
+								"maxQuantityPerItem": maxTradeQuantityPerItem,
+								"items":              snapshotItems,
+								"snapshot":           snapshotItems,
+							}
+
+							jb, err := json.Marshal(payload)
 							if err != nil {
 								a.AddLogMsg("[TRADE_HAND_SNAPSHOT] webhook marshal error: " + err.Error())
 								return
@@ -10334,11 +10354,54 @@ func (a *App) sendLiveDealerStatus(open bool, dealerName string) {
 			GameActive:         dealerGameActive(),
 			SnapshotReady:      tradeHandSnapshotReady,
 			DealerName:         strings.TrimSpace(name),
+			CurrentPlayer:      strings.TrimSpace(name),
 			RoomName:           a.getCurrentRoomName(),
 			MaxUniqueItems:     maxTradeUniqueItems,
 			MaxQuantityPerItem: maxTradeQuantityPerItem,
 			RiskEnabled:        isRiskEnabled,
 			RecentGames:        a.getRecentGameSummaries(5),
+		}
+
+		// If split mode is enabled, populate `items`/`snapshot` from the
+		// `banker_inventory` table for the configured banker so the status
+		// payload includes the correct items.
+		mutex.Lock()
+		splitMode := isSplitDealerMode
+		bName := bankerName
+		mutex.Unlock()
+		if splitMode {
+			if db, _ := a.getHistoryDB(); db != nil && strings.TrimSpace(bName) != "" {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				rows, err := db.Query(ctx, `
+					SELECT item_name, quantity
+					FROM banker_inventory
+					WHERE LOWER(banker_name) = LOWER($1) AND quantity > 0
+					ORDER BY item_name ASC
+				`, bName)
+				cancel()
+				if err == nil {
+					items := make([]TradeItem, 0)
+					for rows.Next() {
+						var iname string
+						var qty int
+						if err := rows.Scan(&iname, &qty); err != nil {
+							a.AddLogMsg(fmt.Sprintf("[LIVE_DEALER] banker_inventory scan error: %v", err))
+							continue
+						}
+						if qty <= 0 {
+							continue
+						}
+						items = append(items, TradeItem{Name: iname, Quantity: qty, RawData: ""})
+					}
+					rows.Close()
+					if len(items) > 0 {
+						payload.Items = items
+						payload.Snapshot = items
+					}
+				} else {
+					a.AddLogMsg(fmt.Sprintf("[LIVE_DEALER] banker_inventory query error: %v", err))
+				}
+			}
 		}
 
 		jb, err := json.Marshal(payload)
