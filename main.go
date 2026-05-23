@@ -17,35 +17,80 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"sort"
-	"strconv"
-	"strings"
-	"sync"
-	"syscall"
-	"time"
+						merged := 0
+						for rows.Next() {
+							var itemName string
+							var qty int
+							if err := rows.Scan(&itemName, &qty); err != nil {
+								a.AddLogMsg("[TRADE_HAND_SNAPSHOT] banker_inventory scan error: " + err.Error())
+								continue
+							}
+							key := strings.ToLower(strings.TrimSpace(itemName))
+							if key == "" {
+								continue
+							}
+							if ex, ok := m[key]; ok {
+								ex.Quantity += qty
+								m[key] = ex
+							} else {
+								m[key] = TradeItem{Name: itemName, Quantity: qty, RawData: itemName}
+							}
+							merged += qty
+						}
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/sirupsen/logrus"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
-	g "xabbo.b7c.io/goearth"
-	gencoding "xabbo.b7c.io/goearth/encoding"
-	"xabbo.b7c.io/goearth/shockwave/in"
-	"xabbo.b7c.io/goearth/shockwave/out"
-	room "xabbo.b7c.io/goearth/shockwave/room"
-)
+						// If nothing merged for the configured banker, try to find any banker
+						// with stock and merge their items instead (avoids relying on UI banker name).
+						if merged == 0 {
+							var altBanker string
+							ctx2, cancel2 := context.WithTimeout(context.Background(), 300*time.Millisecond)
+							err2 := db.QueryRow(ctx2, `SELECT banker_name FROM banker_inventory WHERE quantity>0 LIMIT 1`).Scan(&altBanker)
+							cancel2()
+							if err2 == nil && strings.TrimSpace(altBanker) != "" && !strings.EqualFold(altBanker, bn) {
+								ctx3, cancel3 := context.WithTimeout(context.Background(), 500*time.Millisecond)
+								rows2, err3 := db.Query(ctx3, `SELECT item_name, quantity FROM banker_inventory WHERE lower(banker_name)=lower($1)`, altBanker)
+								cancel3()
+								if err3 != nil {
+									// try alternate column names
+									ctx4, cancel4 := context.WithTimeout(context.Background(), 500*time.Millisecond)
+									rows2, err3 = db.Query(ctx4, `SELECT raw_name, qty FROM banker_inventory WHERE lower(banker_name)=lower($1)`, altBanker)
+									cancel4()
+								}
+								if err3 == nil {
+									defer rows2.Close()
+									for rows2.Next() {
+										var itemName string
+										var qty int
+										if err := rows2.Scan(&itemName, &qty); err != nil {
+											a.AddLogMsg("[TRADE_HAND_SNAPSHOT] banker_inventory scan error (alt): " + err.Error())
+											continue
+										}
+										key := strings.ToLower(strings.TrimSpace(itemName))
+										if key == "" {
+											continue
+										}
+										if ex, ok := m[key]; ok {
+											ex.Quantity += qty
+											m[key] = ex
+										} else {
+											m[key] = TradeItem{Name: itemName, Quantity: qty, RawData: itemName}
+										}
+										merged += qty
+									}
+									if merged > 0 {
+										a.AddLogMsg(fmt.Sprintf("[TRADE_HAND_SNAPSHOT] fallback merged banker_inventory items=%d from banker=%s", merged, altBanker))
+									}
+								}
+							}
+						}
 
-// Global variables for dice management, rolling state, mutex, and wait group
-var (
-	diceList                             []*Dice
-	mutedDuration                        int
-	isMuted                              bool
-	currentSum                           int
-	awaitingTradeOpen                    bool
-	dealerTradeWindowOpen                bool
-	dealerAcceptingTrades                bool
-	tradeOpenCount                       int
-	tradeCloseCount                      int
+						// Rebuild deterministic slice
+						newSnap := make([]TradeItem, 0, len(m))
+						for _, v := range m {
+							newSnap = append(newSnap, v)
+						}
+						sort.Slice(newSnap, func(i, j int) bool { return newSnap[i].Name < newSnap[j].Name })
+						snapshot = newSnap
+						a.AddLogMsg(fmt.Sprintf("[TRADE_HAND_SNAPSHOT] merged banker_inventory items=%d banker=%s", merged, bn))
 	lastTradePartnerID                   int
 	lastTradePartnerChatID               int
 	lastTradePartnerName                 string
@@ -206,72 +251,6 @@ var (
 	// Whether a trade-limit warning was previously active (used to detect
 	// transitions from invalid -> valid and to shout a one-time "now valid"
 	// message).
-	tradeLimitWasActive bool
-	lastTradeOpenData   string
-	lastTradeOpen       string
-	tradeOpen           bool
-	messageQueue        []string
-	isPokerRolling      bool
-	isTriRolling        bool
-	isBJRolling         bool
-	is13Rolling         bool
-	is13Hitting         bool
-	isSixRolling        bool
-	isSixHitting        bool
-	isPairUpRolling     bool
-	isH18Rolling        bool
-	isHitting           bool
-	isClosing           bool
-	ChatIsDisabled      bool
-	ChatMinimalMode     bool = true
-	mutex               sync.Mutex
-
-	resultsWaitGroup       sync.WaitGroup
-	rollDelay              = 550 * time.Millisecond
-	stripNextDelay         = 750 * time.Millisecond
-	stripGetNewPayload     = "new"
-	stripGetNextPayload    = "next"
-	tradeUserPattern       = regexp.MustCompile(`\[(\d+)\]`)
-	stripItemNameRe        = regexp.MustCompile(`(?:CF_\d+_[a-z][a-z0-9_.-]*|[a-z][a-z0-9_.-]*_[a-z0-9_.-]+)(?:\*\d+)?`)
-	gameChoiceCleanupRe    = regexp.MustCompile(`[^a-z0-9]+`)
-	roomEntities           = map[int]room.Entity{}
-	roomMu                 sync.Mutex
-	lastRoomUsersRequestAt time.Time
-	roomUsersReqMu         sync.Mutex
-	roomReadySeen          bool
-	// Canonical USERS28 registry: source of truth is the Python parser only.
-	users28Canonical          = map[string]ParsedUsers28User{}
-	users28ByToken            = map[string]ParsedUsers28User{}
-	users28ByIndex            = map[int]ParsedUsers28User{} // parsed chat_id -> user
-	users28ByTradeID          = map[int]ParsedUsers28User{} // parsed trade_id -> user
-	recentTradePartnerByToken = map[string]string{}
-	recentTradePartnerSeenAt  = map[string]time.Time{}
-	recentTradePartnerMu      sync.Mutex
-	users28Mu                 sync.Mutex
-	headerSniffUntil          time.Time
-	headerSniffSeen           = map[uint16]bool{}
-	headerSniffMu             sync.Mutex
-	currentTradeItems         []TradeItem
-	currentOwnTradeItems      []TradeItem
-	tradeItemsMu              sync.Mutex
-	lastAddItemWasOurs        bool
-	// lastAddItemByUsAt records when we observed an outgoing TRADE_ADDITEM
-	// packet. Use this timestamp in debugging to detect races between the
-	// outgoing add and the subsequent server TRADE_ITEMS update.
-	lastAddItemByUsAt      time.Time
-	addItemMu              sync.Mutex
-	currentHandItems       []TradeItem
-	currentHandItemIDs     map[string][]int
-	tradeHandSnapshot      []TradeItem
-	tradeHandSnapshotReady bool
-	// When true, the dealer will only refresh the frozen trade-hand
-	// snapshot at controlled points: once before announcing Dealer Open
-	// and after a game completes. Mid-trade strip scans will not update
-	// the frozen snapshot while this policy is active.
-	strictTradeSnapshotLifecycle bool = true
-	handItemsMu                  sync.Mutex
-	// lastAllTradeItems stores the last full TRADE_ITEMS (all items) packet
-	// so we can compute deltas between successive full-state packets. This
 	// helps reliably attribute the first added item to the correct side.
 	lastAllTradeItems []TradeItem
 	// partnerAcceptedSnapshot holds a copy of the trade full-state the partner
