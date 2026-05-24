@@ -707,7 +707,6 @@ func (a *App) initDatabase() {
 
 	// Add owner_key column if it doesn't exist (migration for existing tables)
 	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';")
-}
 
 	// Ensure notified column exists for failure webhooks
 	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS notified BOOLEAN DEFAULT FALSE;")
@@ -736,7 +735,6 @@ func (a *App) initDatabase() {
 	}
 
 	a.AddLog("Database connected and ready.")
-
 }
 
 func (a *App) ShowWindow() {
@@ -2105,8 +2103,22 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 		a.tradeMu.Unlock()
 		if !allow {
 			a.AddLog("Blocking incoming trade open: active banker_trades present")
-			if ownerName != "" {
-				a.queueShout(ownerName, fmt.Sprintf("%s, hold on! A game is in progress. Trades are paused until it finishes.", ownerName))
+
+			// Try to resolve the player's name so we can shout to them
+			targetName := ""
+			if id, ok := decodeLeadingVL64(e.Packet.Data); ok {
+				a.roomUsersMu.RLock()
+				for _, u := range a.roomUsers {
+					if u.TradeID == id {
+						targetName = u.Username
+						break
+					}
+				}
+				a.roomUsersMu.RUnlock()
+			}
+
+			if targetName != "" {
+				a.queueShout(targetName, fmt.Sprintf("%s, hold on! A game is in progress. Trades are paused until it finishes.", targetName))
 			}
 			e.Block()
 			if a.ext != nil {
