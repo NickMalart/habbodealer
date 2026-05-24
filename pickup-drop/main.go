@@ -115,25 +115,24 @@ func (a *App) ExecuteCommands() {
 			a.AddLog("ERROR: Extension not initialized")
 			return
 		}
+// Step 1: PICK_ALL (FQa[123]aMK)
+// Header 401 (FQ), Data: a{aMK
+a.AddLog("[Step 1/2] Sending PICK_ALL (Header 401)...")
+// We use the registered name "PICK_ALL" with g.Out.Id()
+a.ext.Send(g.Out.Id("PICK_ALL"), []byte{0x61, 0x7b, 0x61, 0x4d, 0x4b})
 
-		// Step 1: PICK_ALL (FQa[123]aMK)
-		// Header 401 (FQ), Data: a{aMK
-		a.AddLog("[Step 1/2] Sending PICK_ALL (Header 401)...")
-		a.ext.Send(g.Header{Dir: g.Out, Value: 401}, []byte{0x61, 0x7b, 0x61, 0x4d, 0x4b})
+// Step 2: 10s Delay
+for i := 10; i > 0; i-- {
+	a.AddLog(fmt.Sprintf("[Step 2/2] Waiting... %ds remaining", i))
+	time.Sleep(1 * time.Second)
+}
 
-		// Step 2: 10s Delay
-		for i := 10; i > 0; i-- {
-			a.AddLog(fmt.Sprintf("[Step 2/2] Waiting... %ds remaining", i))
-			time.Sleep(1 * time.Second)
-		}
-
-		// Step 3: GOTOFLAT (@[123]221681)
-		// Header 123 (@{), Data: 221681
-		a.AddLog("[Step 3/2] Sending GOTOFLAT (Header 123) for Room 221681...")
-		// Room IDs in Shockwave are often sent as Integers. 
-		// Trying as an integer to match standard GOTOFLAT behavior.
-		a.ext.Send(g.Header{Dir: g.Out, Value: 123}, 221681)
-		a.AddLog("GOTOFLAT packet dispatched (as integer).")
+// Step 3: GOTOFLAT (@[123]221681)
+// Header 123 (@{), Data: 221681
+a.AddLog("[Step 3/2] Sending GOTOFLAT (Header 123) for Room 221681...")
+// We use the registered name "GOTOFLAT" with g.Out.Id()
+a.ext.Send(g.Out.Id("GOTOFLAT"), 221681)
+a.AddLog("GOTOFLAT packet dispatched (as integer).")
 
 	}()
 }
