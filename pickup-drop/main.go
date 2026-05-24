@@ -94,48 +94,57 @@ func (a *App) ExecuteCommands() {
 	a.mu.Unlock()
 
 	go func() {
+		startTime := time.Now()
 		defer func() {
 			a.mu.Lock()
 			a.running = false
 			a.mu.Unlock()
+			duration := time.Since(startTime).Round(time.Millisecond)
+			a.AddLog(fmt.Sprintf("Execution cycle completed in %s", duration))
 		}()
 
-		a.AddLog("Starting command execution...")
+		a.AddLog(">>> Starting automated sequence...")
 
 		if a.ext == nil {
 			a.AddLog("ERROR: Extension not initialized")
 			return
 		}
 
-		// Step 1: Push GOTOFLAT to the server (Header 123, Room 221681)
-		a.AddLog("Pushing GOTOFLAT packet to server (Room: 221681)...")
-		gotoPacket := &g.Packet{
+		// Step 1: Initial GOTOFLAT
+		a.AddLog("[Step 1/3] Pushing GOTOFLAT to server (Room: 221681)...")
+		gotoPacket1 := &g.Packet{
 			Header: g.Header{Dir: g.Out, Value: 123},
 			Data:   []byte("221681"),
 			Client: g.Shockwave,
 		}
-		a.ext.SendPacket(gotoPacket)
+		a.ext.SendPacket(gotoPacket1)
 
-		// Step 2: Wait at least 10 seconds
-		a.AddLog("Waiting 10 seconds before next step...")
-		time.Sleep(10 * time.Second)
+		// Step 2: 10s Delay
+		for i := 10; i > 0; i-- {
+			a.AddLog(fmt.Sprintf("[Step 2/3] Waiting... %ds remaining", i))
+			time.Sleep(1 * time.Second)
+		}
 
 		// Step 3: PICK_ALL
-		// Rollorigins123![PICK_ALL][401]
-		// Outgoing[401] -> FQa[123]aMK
-		// Hex: 46 51 61 7b 61 4d 4b
-		a.AddLog("Sending PICK_ALL packet (401)...")
-
-		// We use SendPacket with the exact bytes. 
-		// Header 401 (FQ) + Data "a{aMK"
+		a.AddLog("[Step 3/3] Sending PICK_ALL packet (Header: 401)...")
 		pickPacket := &g.Packet{
 			Header: g.Header{Dir: g.Out, Value: 401},
 			Data:   []byte{0x61, 0x7b, 0x61, 0x4d, 0x4b},
 			Client: g.Shockwave,
 		}
 		a.ext.SendPacket(pickPacket)
+		a.AddLog("PICK_ALL sent successfully.")
 
-		a.AddLog("Packet sent. Command execution finished.")
+		// Step 4: Final GOTOFLAT (requested next after pickall)
+		a.AddLog("[Step 4/4] Sending final GOTOFLAT to server (Room: 221681)...")
+		gotoPacket2 := &g.Packet{
+			Header: g.Header{Dir: g.Out, Value: 123},
+			Data:   []byte("221681"),
+			Client: g.Shockwave,
+		}
+		a.ext.SendPacket(gotoPacket2)
+		a.AddLog("Final GOTOFLAT sent.")
+
 	}()
 }
 
