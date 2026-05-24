@@ -59,7 +59,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext = g.NewExt(g.ExtInfo{
 		Title:       "Pickup-Drop",
 		Description: "Pickup and Drop items automatically",
-		Version:     "1.2.0",
+		Version:     "1.3.0",
 		Author:      "Gemini CLI",
 	})
 
@@ -69,6 +69,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext.Headers().Add("GETSTRIP", g.Header{Dir: g.Out, Value: 65})
 	a.ext.Headers().Add("STRIPINFO_2", g.Header{Dir: g.In, Value: 140})
 	a.ext.Headers().Add("PLACESTUFF", g.Header{Dir: g.Out, Value: 90})
+	a.ext.Headers().Add("PLACEITEM", g.Header{Dir: g.Out, Value: 92})
 
 	a.ext.Activated(func() {
 		a.ShowWindow()
@@ -315,6 +316,7 @@ func (a *App) ExecuteAutoDrop() {
 
 		currentX := 1
 		currentY := 1
+		wallPass := false
 
 		for {
 			a.stripScanMu.Lock()
@@ -329,63 +331,99 @@ func (a *App) ExecuteAutoDrop() {
 				return
 			}
 
-			a.AddLog(fmt.Sprintf(">>> [Auto-Drop] Placing %d items...", len(allItemIDs)))
+			mode := "Floor"
+			if wallPass {
+				mode = "Wall"
+			}
+			a.AddLog(fmt.Sprintf(">>> [Auto-Drop] Starting %s pass for %d items...", mode, len(allItemIDs)))
 
 			for i, itemID := range allItemIDs {
-				if currentY > 26 {
-					a.AddLog("ERROR: Room is full! Cannot drop more items.")
-					return
-				}
+				if !wallPass {
+					// --- FLOOR PLACEMENT ---
+					if currentY > 26 {
+						a.AddLog("[Pass] Floor grid is full. Items remain. Switching to Wall Pass...")
+						wallPass = true
+						break
+					}
 
-				a.AddLog(fmt.Sprintf("[%d/%d] Placing item %d at (%d, %d)", i+1, len(allItemIDs), itemID, currentX, currentY))
+					a.AddLog(fmt.Sprintf("[%d/%d] Floor: Item %d at (%d, %d)", i+1, len(allItemIDs), itemID, currentX, currentY))
+					
+					idBuf := make([]byte, gencoding.VL64EncodeLen(itemID))
+					gencoding.VL64Encode(idBuf, itemID)
+					xBuf := make([]byte, gencoding.VL64EncodeLen(currentX))
+					gencoding.VL64Encode(xBuf, currentX)
+					yBuf := make([]byte, gencoding.VL64EncodeLen(currentY))
+					gencoding.VL64Encode(yBuf, currentY)
+					rotBuf := make([]byte, gencoding.VL64EncodeLen(0))
+					gencoding.VL64Encode(rotBuf, 0)
 
-				// Encode and Send
-				idBuf := make([]byte, gencoding.VL64EncodeLen(itemID))
-				gencoding.VL64Encode(idBuf, itemID)
-				xBuf := make([]byte, gencoding.VL64EncodeLen(currentX))
-				gencoding.VL64Encode(xBuf, currentX)
-				yBuf := make([]byte, gencoding.VL64EncodeLen(currentY))
-				gencoding.VL64Encode(yBuf, currentY)
-				rotBuf := make([]byte, gencoding.VL64EncodeLen(0))
-				gencoding.VL64Encode(rotBuf, 0)
+					payload := append([]byte{}, idBuf...)
+					payload = append(payload, xBuf...)
+					payload = append(payload, yBuf...)
+					payload = append(payload, rotBuf...)
+					a.ext.Send(g.Out.Id("PLACESTUFF"), payload)
 
-				payload := append([]byte{}, idBuf...)
-				payload = append(payload, xBuf...)
-				payload = append(payload, yBuf...)
-				payload = append(payload, rotBuf...)
-
-				a.ext.Send(g.Out.Id("PLACESTUFF"), payload)
-
-				currentX++
-				if currentX > 16 {
-					currentX = 1
-					currentY++
+					currentX++
+					if currentX > 16 {
+						currentX = 1
+						currentY++
+					}
+				} else {
+					// --- WALL PLACEMENT ---
+					// Simple wall brute force using a string coordinate
+					// Pattern: :w=1,0 l=15,28 r
+					wallPos := fmt.Sprintf(":w=1,0 l=%d,%d r", (i % 20) + 10, (i / 20) + 10)
+					a.AddLog(fmt.Sprintf("[%d/%d] Wall: Item %d at %s", i+1, len(allItemIDs), itemID, wallPos))
+					
+					idBuf := make([]byte, gencoding.VL64EncodeLen(itemID))
+					gencoding.VL64Encode(idBuf, itemID)
+					
+					payload := append([]byte{}, idBuf...)
+					payload = append(payload, []byte(" "+wallPos)...)
+					
+					a.ext.Send(g.Out.Id("PLACEITEM"), payload)
 				}
 
 				time.Sleep(800 * time.Millisecond)
 			}
 
 			// Verification Phase
-			a.AddLog(">>> [Verify] Finished cycle. Refreshing hand to check for remaining items...")
+			a.AddLog(">>> [Verify] Refreshing hand to check status...")
 			time.Sleep(2 * time.Second)
 			sid := a.requestHandScan()
 
-			// Wait for scan to complete
 			scanDeadline := time.Now().Add(15 * time.Second)
 			for time.Now().Before(scanDeadline) {
 				a.stripScanMu.Lock()
 				active := a.stripScanActive
 				currentSID := a.stripScanSessionID
 				a.stripScanMu.Unlock()
-				
-				// If scan finished (active is false) AND it's at least the SID we just started
 				if !active && currentSID >= sid {
 					break
 				}
 				time.Sleep(500 * time.Millisecond)
 			}
-			
-			// Small pause before checking the loop condition again
+
+			// Intelligent Pass Switching
+			a.stripScanMu.Lock()
+			remainingCount := 0
+			for _, ids := range a.stripScanItemIDs {
+				remainingCount += len(ids)
+			}
+			a.stripScanMu.Unlock()
+
+			if remainingCount > 0 && !wallPass {
+				// We tried floor, some left. If we aren't already full on floor, maybe they are wall items.
+				a.AddLog("[Verify] Floor items placed, but items remain. Trying Wall pass next.")
+				wallPass = true
+			} else if remainingCount > 0 && wallPass {
+				// We tried wall, some left. Try floor again in case it was a fluke.
+				a.AddLog("[Verify] Wall items placed, but items remain. Retrying Floor pass.")
+				wallPass = false
+				currentX = 1
+				currentY = 1
+			}
+
 			time.Sleep(1 * time.Second)
 		}
 	}()
