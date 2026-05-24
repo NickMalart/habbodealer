@@ -49,7 +49,7 @@ type App struct {
 	// Scheduling state
 	scheduleMu      sync.Mutex
 	scheduleEnabled bool
-	targetTime      string // HH:MM:SS
+	targetTime      time.Time
 }
 
 func NewApp() *App {
@@ -68,7 +68,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext = g.NewExt(g.ExtInfo{
 		Title:       "Pickup-Drop",
 		Description: "Pickup and Drop items automatically",
-		Version:     "1.5.0",
+		Version:     "1.6.0",
 		Author:      "Gemini CLI",
 	})
 
@@ -100,7 +100,7 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) monitorSchedule() {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -110,13 +110,11 @@ func (a *App) monitorSchedule() {
 			continue
 		}
 
-		now := time.Now().Format("15:04:05")
-		if now == a.targetTime {
-			a.scheduleEnabled = false // Auto-disable after trigger
-			a.AddLog(fmt.Sprintf(">>> SCHEDULE TRIGGERED at %s! <<<", now))
+		if time.Now().After(a.targetTime) {
+			a.scheduleEnabled = false
+			a.AddLog(fmt.Sprintf(">>> SCHEDULE TRIGGERED at %s! <<<", time.Now().Format("15:04:05")))
 			a.scheduleMu.Unlock()
 
-			// Trigger full sequence
 			go a.ExecuteCommands()
 		} else {
 			a.scheduleMu.Unlock()
@@ -124,28 +122,38 @@ func (a *App) monitorSchedule() {
 	}
 }
 
-func (a *App) SetSchedule(timeStr string, enabled bool) {
+func (a *App) SetSchedule(dateTimeStr string, enabled bool) {
 	a.scheduleMu.Lock()
 	defer a.scheduleMu.Unlock()
 
-	a.targetTime = timeStr
-	a.scheduleEnabled = enabled
-
-	status := "Disabled"
-	if enabled {
-		status = "Enabled"
-		a.AddLog(fmt.Sprintf("Schedule %s for %s (Local Machine Time)", status, timeStr))
-	} else {
+	if !enabled {
+		a.scheduleEnabled = false
 		a.AddLog("Schedule Disabled.")
+		return
 	}
+
+	// Parse ISO string from frontend (e.g. 2026-05-24T20:00:00)
+	t, err := time.Parse("2006-01-02T15:04", dateTimeStr)
+	if err != nil {
+		// Fallback for seconds
+		t, err = time.Parse("2006-01-02T15:04:05", dateTimeStr)
+	}
+
+	if err != nil {
+		a.AddLog(fmt.Sprintf("ERROR: Invalid date format: %v", err))
+		return
+	}
+
+	a.targetTime = t
+	a.scheduleEnabled = true
+	a.AddLog(fmt.Sprintf("Schedule Enabled for %s", t.Format("Jan 02, 15:04:05")))
 }
 
-func (a *App) GetSchedule() (string, bool) {
+func (a *App) GetScheduleStatus() (int64, bool) {
 	a.scheduleMu.Lock()
 	defer a.scheduleMu.Unlock()
-	return a.targetTime, a.scheduleEnabled
+	return a.targetTime.Unix(), a.scheduleEnabled
 }
-
 func (a *App) handleStripPacket(e *g.Intercept) {
 	a.stripScanMu.Lock()
 	if !a.stripScanActive {

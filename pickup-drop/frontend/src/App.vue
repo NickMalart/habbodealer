@@ -1,5 +1,5 @@
 <script setup>
-import {ref, onMounted} from 'vue'
+import {ref, onMounted, computed, onUnmounted} from 'vue'
 import {EventsOn} from '../wailsjs/runtime'
 import {
   ExecuteCommands, 
@@ -9,27 +9,63 @@ import {
   ExecuteAutoDrop, 
   GetLogs,
   SetSchedule,
-  GetSchedule
+  GetScheduleStatus
 } from '../wailsjs/go/main/App'
 
 const logs = ref([])
 const selectedStep = ref('pick_all')
-const scheduleTime = ref('00:00:00')
+const scheduleTime = ref('') // ISO string
 const scheduleEnabled = ref(false)
+const targetUnix = ref(0)
+const currentTime = ref(Date.now())
+
+let timerInterval = null
 
 onMounted(() => {
+  // Set default schedule time to 1 minute from now
+  const now = new Date()
+  now.setMinutes(now.getMinutes() + 1)
+  now.setSeconds(0)
+  scheduleTime.value = now.toISOString().slice(0, 16) // YYYY-MM-DDTHH:mm
+
   GetLogs().then(result => {
     logs.value = result
   })
 
-  GetSchedule().then(([time, enabled]) => {
-    scheduleTime.value = time || '00:00:00'
-    scheduleEnabled.value = enabled
-  })
+  syncScheduleStatus()
 
   EventsOn('logsUpdate', newLogs => {
     logs.value = newLogs
+    syncScheduleStatus()
   })
+
+  timerInterval = setInterval(() => {
+    currentTime.value = Date.now()
+  }, 1000)
+})
+
+onUnmounted(() => {
+  if (timerInterval) clearInterval(timerInterval)
+})
+
+function syncScheduleStatus() {
+  GetScheduleStatus().then(([unix, enabled]) => {
+    targetUnix.value = unix
+    scheduleEnabled.value = enabled
+  })
+}
+
+const countdownText = computed(() => {
+  if (!scheduleEnabled.value || targetUnix.value === 0) return 'Timer Inactive'
+  
+  const diff = (targetUnix.value * 1000) - currentTime.value
+  if (diff <= 0) return 'TRIGGERING...'
+
+  const hours = Math.floor(diff / 3600000)
+  const mins = Math.floor((diff % 3600000) / 60000)
+  const secs = Math.floor((diff % 60000) / 1000)
+
+  return `${hours}h ${mins}m ${secs}s remaining`
 })
 
 function handleExecuteFull() {
@@ -53,8 +89,10 @@ function handleCopyLogs() {
 }
 
 function toggleSchedule() {
-  scheduleEnabled.value = !scheduleEnabled.value
-  SetSchedule(scheduleTime.value, scheduleEnabled.value)
+  const newState = !scheduleEnabled.value
+  SetSchedule(scheduleTime.value, newState).then(() => {
+    syncScheduleStatus()
+  })
 }
 </script>
 
@@ -65,11 +103,14 @@ function toggleSchedule() {
     </div>
 
     <div class="actions">
-      <!-- Scheduling Section -->
+      <!-- Upgraded Scheduling Section -->
       <div class="schedule-box">
-        <label>Trigger Time (HH:MM:SS):</label>
+        <div class="schedule-header">
+          <label>Schedule Automatic Execution:</label>
+          <span :class="['countdown', scheduleEnabled ? 'active' : '']">{{ countdownText }}</span>
+        </div>
         <div class="schedule-controls">
-          <input v-model="scheduleTime" placeholder="20:00:00" />
+          <input type="datetime-local" v-model="scheduleTime" :disabled="scheduleEnabled" />
           <button @click="toggleSchedule" :class="scheduleEnabled ? 'btn-stop' : 'btn-step'">
             {{ scheduleEnabled ? 'Cancel' : 'Schedule' }}
           </button>
@@ -129,15 +170,33 @@ function toggleSchedule() {
 .schedule-box {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.75rem;
   background-color: #1a1f29;
-  padding: 0.75rem;
+  padding: 1rem;
   border-radius: 4px;
+  border: 1px solid #2d3446;
 }
 
-.schedule-box label {
-  font-size: 0.8rem;
+.schedule-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.schedule-header label {
+  font-size: 0.85rem;
   color: #90a4ae;
+}
+
+.countdown {
+  font-family: monospace;
+  font-size: 0.9rem;
+  color: #546e7a;
+}
+
+.countdown.active {
+  color: #ffb74d;
+  font-weight: bold;
 }
 
 .schedule-controls {
@@ -145,14 +204,19 @@ function toggleSchedule() {
   gap: 0.5rem;
 }
 
-input {
+input[type="datetime-local"] {
   flex-grow: 1;
   padding: 0.5rem;
   background-color: #0e1219;
   color: white;
   border: 1px solid #2d3446;
   border-radius: 4px;
-  font-family: monospace;
+  font-family: sans-serif;
+}
+
+input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .step-selector {
@@ -181,6 +245,11 @@ button {
   border: none;
   border-radius: 4px;
   color: white;
+  transition: opacity 0.2s;
+}
+
+button:hover {
+  opacity: 0.9;
 }
 
 .btn-step {
@@ -196,17 +265,9 @@ button {
   flex-grow: 2;
 }
 
-.btn-full:hover {
-  background-color: #1976d2;
-}
-
 .btn-copy {
   background-color: #607d8b;
   flex-grow: 1;
-}
-
-.btn-copy:hover {
-  background-color: #455a64;
 }
 
 hr {
