@@ -150,10 +150,24 @@ func (a *App) SetSchedule(dateTimeStr string, enabled bool) {
 	a.AddLog(fmt.Sprintf("Schedule Enabled for %s (Local Time)", t.Format("Jan 02, 15:04:05")))
 }
 
-func (a *App) GetScheduleStatus() (int64, bool) {
+type ScheduleStatus struct {
+	TargetUnix int64 `json:"targetUnix"`
+	Enabled    bool  `json:"enabled"`
+}
+
+func (a *App) GetScheduleStatus() ScheduleStatus {
 	a.scheduleMu.Lock()
 	defer a.scheduleMu.Unlock()
-	return a.targetTime.Unix(), a.scheduleEnabled
+	
+	unix := int64(0)
+	if !a.targetTime.IsZero() {
+		unix = a.targetTime.Unix()
+	}
+
+	return ScheduleStatus{
+		TargetUnix: unix,
+		Enabled:    a.scheduleEnabled,
+	}
 }
 func (a *App) handleStripPacket(e *g.Intercept) {
 	a.stripScanMu.Lock()
