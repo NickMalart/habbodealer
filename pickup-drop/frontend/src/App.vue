@@ -14,7 +14,8 @@ import {
 
 const logs = ref([])
 const selectedStep = ref('pick_all')
-const scheduleTime = ref('') // ISO string
+const scheduleHours = ref(0)
+const scheduleMinutes = ref(1)
 const scheduleEnabled = ref(false)
 const targetUnix = ref(0)
 const currentTime = ref(Date.now())
@@ -22,12 +23,6 @@ const currentTime = ref(Date.now())
 let timerInterval = null
 
 onMounted(() => {
-  // Set default schedule time to 1 minute from now
-  const now = new Date()
-  now.setMinutes(now.getMinutes() + 1)
-  now.setSeconds(0)
-  scheduleTime.value = now.toISOString().slice(0, 16) // YYYY-MM-DDTHH:mm
-
   GetLogs().then(result => {
     logs.value = result
   })
@@ -49,9 +44,9 @@ onUnmounted(() => {
 })
 
 function syncScheduleStatus() {
-  GetScheduleStatus().then(([unix, enabled]) => {
-    targetUnix.value = unix
-    scheduleEnabled.value = enabled
+  GetScheduleStatus().then(status => {
+    targetUnix.value = status.targetUnix
+    scheduleEnabled.value = status.enabled
   })
 }
 
@@ -90,16 +85,13 @@ function handleCopyLogs() {
 
 function toggleSchedule() {
   const newState = !scheduleEnabled.value
-  console.log('Toggling schedule to:', newState, 'at', scheduleTime.value)
-  
-  // Set locally first for immediate button change
+  // Immediately toggle UI state
   scheduleEnabled.value = newState
   
-  SetSchedule(scheduleTime.value, newState).then(() => {
+  SetSchedule(parseInt(scheduleHours.value), parseInt(scheduleMinutes.value), newState).then(() => {
     syncScheduleStatus()
-  }).catch(err => {
-    console.error('Failed to set schedule:', err)
-    syncScheduleStatus() // Revert to actual state on error
+  }).catch(() => {
+    syncScheduleStatus()
   })
 }
 </script>
@@ -111,13 +103,20 @@ function toggleSchedule() {
     </div>
 
     <div class="actions">
-      <!-- Upgraded Scheduling Section -->
+      <!-- Relative Scheduling Section -->
       <div class="schedule-box">
         <div class="schedule-header">
-          <label>Schedule Automatic Execution:</label>
+          <label>Schedule Execution In:</label>
         </div>
         <div class="schedule-controls">
-          <input type="datetime-local" v-model="scheduleTime" :disabled="scheduleEnabled" />
+          <div class="input-group">
+            <input type="number" v-model="scheduleHours" min="0" :disabled="scheduleEnabled" />
+            <span>h</span>
+          </div>
+          <div class="input-group">
+            <input type="number" v-model="scheduleMinutes" min="0" max="59" :disabled="scheduleEnabled" />
+            <span>m</span>
+          </div>
           <button @click="toggleSchedule" :class="scheduleEnabled ? 'btn-stop' : 'btn-step'">
             {{ scheduleEnabled ? 'Cancel' : 'Schedule' }}
           </button>
@@ -226,16 +225,39 @@ function toggleSchedule() {
 .schedule-controls {
   display: flex;
   gap: 0.5rem;
+  align-items: center;
 }
 
-input[type="datetime-local"] {
-  flex-grow: 1;
-  padding: 0.5rem;
+.input-group {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
   background-color: #0e1219;
-  color: white;
-  border: 1px solid #2d3446;
+  padding: 0 0.5rem;
   border-radius: 4px;
-  font-family: sans-serif;
+  border: 1px solid #2d3446;
+}
+
+input[type="number"] {
+  width: 40px;
+  padding: 0.5rem 0;
+  background: transparent;
+  color: white;
+  border: none;
+  font-family: monospace;
+  text-align: center;
+}
+
+/* Remove arrows from number input */
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.schedule-controls span {
+  color: #90a4ae;
+  font-size: 0.9rem;
 }
 
 input:disabled {

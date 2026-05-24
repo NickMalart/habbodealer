@@ -122,32 +122,26 @@ func (a *App) monitorSchedule() {
 	}
 }
 
-func (a *App) SetSchedule(dateTimeStr string, enabled bool) {
+func (a *App) SetSchedule(hours int, minutes int, enabled bool) {
 	a.scheduleMu.Lock()
 	defer a.scheduleMu.Unlock()
-
+	
 	if !enabled {
 		a.scheduleEnabled = false
 		a.AddLog("Schedule Disabled.")
 		return
 	}
 
-	// Parse ISO string from frontend (e.g. 2026-05-24T20:00:00)
-	// IMPORTANT: Use Local location to match machine time!
-	layout := "2006-01-02T15:04"
-	if len(dateTimeStr) > 16 {
-		layout = "2006-01-02T15:04:05"
-	}
-
-	t, err := time.ParseInLocation(layout, dateTimeStr, time.Local)
-	if err != nil {
-		a.AddLog(fmt.Sprintf("ERROR: Invalid date format: %v", err))
+	// Calculate target time based on relative offset
+	offset := time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute
+	if offset <= 0 {
+		a.AddLog("ERROR: Schedule time must be greater than 0.")
 		return
 	}
 
-	a.targetTime = t
+	a.targetTime = time.Now().Add(offset)
 	a.scheduleEnabled = true
-	a.AddLog(fmt.Sprintf("Schedule Enabled for %s (Local Time)", t.Format("Jan 02, 15:04:05")))
+	a.AddLog(fmt.Sprintf("Schedule Enabled! Bot will trigger in %dh %dm (at %s)", hours, minutes, a.targetTime.Format("15:04:05")))
 }
 
 type ScheduleStatus struct {
