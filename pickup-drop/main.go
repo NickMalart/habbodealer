@@ -107,6 +107,20 @@ func (a *App) ExecuteCommands() {
 			return
 		}
 
+		// Step 1: Push GOTOFLAT to the server (Header 123, Room 221681)
+		a.AddLog("Pushing GOTOFLAT packet to server (Room: 221681)...")
+		gotoPacket := &g.Packet{
+			Header: g.Header{Dir: g.Out, Value: 123},
+			Data:   []byte("221681"),
+			Client: g.Shockwave,
+		}
+		a.ext.SendPacket(gotoPacket)
+
+		// Step 2: Wait at least 10 seconds
+		a.AddLog("Waiting 10 seconds before next step...")
+		time.Sleep(10 * time.Second)
+
+		// Step 3: PICK_ALL
 		// Rollorigins123![PICK_ALL][401]
 		// Outgoing[401] -> FQa[123]aMK
 		// Hex: 46 51 61 7b 61 4d 4b
@@ -114,12 +128,12 @@ func (a *App) ExecuteCommands() {
 
 		// We use SendPacket with the exact bytes. 
 		// Header 401 (FQ) + Data "a{aMK"
-		packet := &g.Packet{
+		pickPacket := &g.Packet{
 			Header: g.Header{Dir: g.Out, Value: 401},
 			Data:   []byte{0x61, 0x7b, 0x61, 0x4d, 0x4b},
 			Client: g.Shockwave,
 		}
-		a.ext.SendPacket(packet)
+		a.ext.SendPacket(pickPacket)
 
 		a.AddLog("Packet sent. Command execution finished.")
 	}()
