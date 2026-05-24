@@ -40,6 +40,7 @@ type App struct {
 	stripScanLastPacketAt time.Time
 	stripScanSeenItemIDs  map[int]struct{}
 	stripScanCounts       map[string]int
+	stripScanItemIDs      map[string][]int
 	handItems             []TradeItem
 }
 
@@ -48,6 +49,7 @@ func NewApp() *App {
 		logs:                 []string{"Pickup-Drop initialized..."},
 		stripScanSeenItemIDs: make(map[int]struct{}),
 		stripScanCounts:      make(map[string]int),
+		stripScanItemIDs:     make(map[string][]int),
 	}
 }
 
@@ -66,6 +68,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext.Headers().Add("GOTOFLAT", g.Header{Dir: g.Out, Value: 123})
 	a.ext.Headers().Add("GETSTRIP", g.Header{Dir: g.Out, Value: 65})
 	a.ext.Headers().Add("STRIPINFO_2", g.Header{Dir: g.In, Value: 140})
+	a.ext.Headers().Add("PLACESTUFF", g.Header{Dir: g.Out, Value: 90})
 
 	a.ext.Activated(func() {
 		a.ShowWindow()
@@ -96,7 +99,7 @@ func (a *App) handleStripPacket(e *g.Intercept) {
 	scanID := a.stripScanSessionID
 
 	// Parse the page
-	firstMainID, pageRecords, classQtys := a.parseStripInfoPageRaw(e.Packet.Data)
+	firstMainID, pageRecords, classQtys, classItemIDs := a.parseStripInfoPageRaw(e.Packet.Data)
 
 	pageRepeated := false
 	if firstMainID != 0 {
@@ -110,6 +113,9 @@ func (a *App) handleStripPacket(e *g.Intercept) {
 	if !pageRepeated {
 		for className, qty := range classQtys {
 			a.stripScanCounts[className] += qty
+		}
+		for name, ids := range classItemIDs {
+			a.stripScanItemIDs[name] = append(a.stripScanItemIDs[name], ids...)
 		}
 	}
 
@@ -131,8 +137,9 @@ func (a *App) handleStripPacket(e *g.Intercept) {
 	}()
 }
 
-func (a *App) parseStripInfoPageRaw(data []byte) (firstMainID int, pageRecords int, classQtys map[string]int) {
+func (a *App) parseStripInfoPageRaw(data []byte) (firstMainID int, pageRecords int, classQtys map[string]int, classItemIDs map[string][]int) {
 	classQtys = make(map[string]int)
+	classItemIDs = make(map[string][]int)
 	pos := 0
 
 	readVL64 := func() (int, bool) {
@@ -176,9 +183,13 @@ func (a *App) parseStripInfoPageRaw(data []byte) (firstMainID int, pageRecords i
 		if i == 0 {
 			firstMainID = mainID
 		}
+		
+		itemIDs := []int{mainID}
 		extraCount, _ := readVL64()
 		for j := 0; j < extraCount; j++ {
-			readVL64()
+			if id, ok := readVL64(); ok {
+				itemIDs = append(itemIDs, id)
+			}
 		}
 		readVL64() // Pos
 		// S|I
@@ -201,7 +212,8 @@ func (a *App) parseStripInfoPageRaw(data []byte) (firstMainID int, pageRecords i
 			pos++ // skip \x02
 		}
 
-		classQtys[className] += (1 + extraCount)
+		classQtys[className] += len(itemIDs)
+		classItemIDs[className] = append(classItemIDs[className], itemIDs...)
 
 		// Field 3: Dimensions/Props
 		skipUntilDelim()
@@ -242,6 +254,7 @@ func (a *App) requestHandScan() int {
 	a.stripScanLastPacketAt = time.Now()
 	a.stripScanSeenItemIDs = make(map[int]struct{})
 	a.stripScanCounts = make(map[string]int)
+	a.stripScanItemIDs = make(map[string][]int)
 	sid := a.stripScanSessionID
 	a.stripScanMu.Unlock()
 
@@ -308,26 +321,26 @@ func (a *App) ExecuteCommands() {
 		}
 
 		// Step 1: PICK_ALL (FQa[123]aMK)
-		a.AddLog("[Step 1/3] Sending PICK_ALL (Header 401)...")
+		a.AddLog("[Step 1/4] Sending PICK_ALL (Header 401)...")
 		a.ext.Send(g.Out.Id("PICK_ALL"), []byte{0x61, 0x7b, 0x61, 0x4d, 0x4b})
 
 		// Step 2: 10s Delay
 		for i := 10; i > 0; i-- {
-			a.AddLog(fmt.Sprintf("[Step 2/3] Waiting... %ds remaining", i))
+			a.AddLog(fmt.Sprintf("[Step 2/4] Waiting... %ds remaining", i))
 			time.Sleep(1 * time.Second)
 		}
 
 		// Step 3: GOTOFLAT (@[123]221681)
-		a.AddLog("[Step 3/3] Sending GOTOFLAT (Header 123) for Room 221681...")
+		a.AddLog("[Step 3/4] Sending GOTOFLAT (Header 123) for Room 221681...")
 		a.ext.Send(g.Out.Id("GOTOFLAT"), []byte("221681"))
 		a.AddLog("GOTOFLAT packet dispatched.")
 
 		// Step 4: Hand Scan
-		a.AddLog("[Step 4/3] Waiting for room entry (3s)...")
+		a.AddLog("[Step 4/4] Waiting for room entry (3s)...")
 		time.Sleep(3 * time.Second)
 		a.requestHandScan()
 
-		// Wait for scan to complete (simple poll)
+		// Wait for scan to complete
 		a.AddLog("Waiting for hand scan completion...")
 		deadline := time.Now().Add(15 * time.Second)
 		for time.Now().Before(deadline) {
@@ -339,6 +352,72 @@ func (a *App) ExecuteCommands() {
 			}
 			time.Sleep(500 * time.Millisecond)
 		}
+
+		// Step 5: Auto-Drop
+		a.stripScanMu.Lock()
+		allItemIDs := []int{}
+		for _, ids := range a.stripScanItemIDs {
+			allItemIDs = append(allItemIDs, ids...)
+		}
+		a.stripScanMu.Unlock()
+
+		if len(allItemIDs) == 0 {
+			a.AddLog("No items found in hand to drop.")
+			return
+		}
+
+		a.AddLog(fmt.Sprintf(">>> Starting Auto-Drop of %d items...", len(allItemIDs)))
+
+		// Room Boundaries: X: 1-16, Y: 1-26
+		currentX := 1
+		currentY := 1
+
+		for i, itemID := range allItemIDs {
+			if currentY > 26 {
+				a.AddLog("ERROR: Room is full! Stopping drop sequence.")
+				break
+			}
+
+			a.AddLog(fmt.Sprintf("[%d/%d] Placing item %d at (%d, %d)", i+1, len(allItemIDs), itemID, currentX, currentY))
+
+			// Construct PLACESTUFF [90] packet
+			// Format: [Header 90][ItemID VL64] A [X VL64][Y VL64][Rot VL64]
+			
+			// 1. Encode ItemID
+			idBuf := make([]byte, gencoding.VL64EncodeLen(itemID))
+			gencoding.VL64Encode(idBuf, itemID)
+
+			// 2. Encode X, Y, Rot (0)
+			xBuf := make([]byte, gencoding.VL64EncodeLen(currentX))
+			gencoding.VL64Encode(xBuf, currentX)
+			
+			yBuf := make([]byte, gencoding.VL64EncodeLen(currentY))
+			gencoding.VL64Encode(yBuf, currentY)
+			
+			rotBuf := make([]byte, gencoding.VL64EncodeLen(0))
+			gencoding.VL64Encode(rotBuf, 0)
+
+			// 3. Assemble Payload
+			payload := append(idBuf, 'A')
+			payload = append(payload, xBuf...)
+			payload = append(payload, yBuf...)
+			payload = append(payload, rotBuf...)
+
+			// 4. Send
+			a.ext.Send(g.Out.Id("PLACESTUFF"), payload)
+
+			// 5. Increment Coordinates (Left to Right, then Down)
+			currentX++
+			if currentX > 16 {
+				currentX = 1
+				currentY++
+			}
+
+			// 6. Anti-Flood Delay
+			time.Sleep(200 * time.Millisecond)
+		}
+
+		a.AddLog("Auto-Drop sequence finished.")
 	}()
 }
 
