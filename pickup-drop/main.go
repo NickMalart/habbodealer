@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -19,6 +21,8 @@ import (
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+const DB_URL = "postgresql://neondb_owner:npg_S9jFTYzdQx3l@ep-aged-king-a77p1t8b-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 
 type TradeItem struct {
 	Name     string `json:"name"`
@@ -31,6 +35,9 @@ type App struct {
 	mu      sync.Mutex
 	logs    []string
 	running bool
+
+	// Database pool
+	dbPool *pgxpool.Pool
 
 	// Hand scan state
 	stripScanMu           sync.Mutex
@@ -65,10 +72,21 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
+	// Initialize Database Pool
+	dbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(dbCtx, DB_URL)
+	if err != nil {
+		a.AddLog(fmt.Sprintf("CRITICAL ERROR: Failed to connect to DB: %v", err))
+	} else {
+		a.dbPool = pool
+		a.AddLog("Connected to PostgreSQL successfully.")
+	}
+
 	a.ext = g.NewExt(g.ExtInfo{
 		Title:       "Pickup-Drop",
 		Description: "Pickup and Drop items automatically",
-		Version:     "1.6.0",
+		Version:     "2.0.0",
 		Author:      "Gemini CLI",
 	})
 
@@ -79,6 +97,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext.Headers().Add("STRIPINFO_2", g.Header{Dir: g.In, Value: 140})
 	a.ext.Headers().Add("PLACESTUFF", g.Header{Dir: g.Out, Value: 90})
 	a.ext.Headers().Add("PLACEITEM", g.Header{Dir: g.Out, Value: 92})
+	a.ext.Headers().Add("SHOUT", g.Header{Dir: g.Out, Value: 52})
 
 	a.ext.Activated(func() {
 		a.ShowWindow()
@@ -115,6 +134,7 @@ func (a *App) monitorSchedule() {
 			a.AddLog(fmt.Sprintf(">>> SCHEDULE TRIGGERED at %s! <<<", time.Now().Format("15:04:05")))
 			a.scheduleMu.Unlock()
 
+			// Trigger full sequence with DB check
 			go a.ExecuteCommands()
 		} else {
 			a.scheduleMu.Unlock()
@@ -125,14 +145,13 @@ func (a *App) monitorSchedule() {
 func (a *App) SetSchedule(hours int, minutes int, enabled bool) {
 	a.scheduleMu.Lock()
 	defer a.scheduleMu.Unlock()
-	
+
 	if !enabled {
 		a.scheduleEnabled = false
 		a.AddLog("Schedule Disabled.")
 		return
 	}
 
-	// Calculate target time based on relative offset
 	offset := time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute
 	if offset <= 0 {
 		a.AddLog("ERROR: Schedule time must be greater than 0.")
@@ -152,7 +171,7 @@ type ScheduleStatus struct {
 func (a *App) GetScheduleStatus() ScheduleStatus {
 	a.scheduleMu.Lock()
 	defer a.scheduleMu.Unlock()
-	
+
 	unix := int64(0)
 	if !a.targetTime.IsZero() {
 		unix = a.targetTime.Unix()
@@ -163,20 +182,55 @@ func (a *App) GetScheduleStatus() ScheduleStatus {
 		Enabled:    a.scheduleEnabled,
 	}
 }
+
+// --- Pre-Closure DB Logic ---
+
+func (a *App) checkActiveGames() ([]string, error) {
+	if a.dbPool == nil {
+		return nil, fmt.Errorf("database not connected")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	rows, err := a.dbPool.Query(ctx, "SELECT DISTINCT player_name FROM public.banker_trades WHERE status != 'completed'")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var players []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err == nil {
+			players = append(players, name)
+		}
+	}
+	return players, nil
+}
+
+func (a *App) Shout(msg string) {
+	if a.ext == nil {
+		return
+	}
+	// SHOUT format: [Header][Msg]
+	a.ext.Send(g.Out.Id("SHOUT"), msg)
+}
+
+// --- Hand Scan Logic ---
+
 func (a *App) handleStripPacket(e *g.Intercept) {
 	a.stripScanMu.Lock()
 	if !a.stripScanActive {
 		a.stripScanMu.Unlock()
 		return
 	}
+a.stripScanPageCount++
+a.stripScanLastPacketAt = time.Now()
+scanID := a.stripScanSessionID
 
-	a.stripScanPageCount++
-	a.stripScanLastPacketAt = time.Now()
-	currentPage := a.stripScanPageCount
-	scanID := a.stripScanSessionID
-
-	// Parse the page
-	firstMainID, pageRecords, classQtys, classItemIDs := a.parseStripInfoPageRaw(e.Packet.Data)
+// Parse the page
+firstMainID, pageRecords, classQtys, classItemIDs := a.parseStripInfoPageRaw(e.Packet.Data)
 
 	pageRepeated := false
 	if firstMainID != 0 {
@@ -197,8 +251,6 @@ func (a *App) handleStripPacket(e *g.Intercept) {
 	}
 
 	pageLimitReached := a.stripScanPageCount >= 25
-	
-	// STOP CONDITIONS: 0 records found, page repeated, or page limit reached
 	if pageRecords == 0 || pageRepeated || pageLimitReached {
 		a.stripScanActive = false
 		a.finalizeHandScan(scanID)
@@ -206,9 +258,6 @@ func (a *App) handleStripPacket(e *g.Intercept) {
 		return
 	}
 
-	a.AddLog(fmt.Sprintf("[STRIP] Page %d: records=%d", currentPage, pageRecords))
-
-	// Request next page
 	a.stripScanMu.Unlock()
 	go func() {
 		time.Sleep(750 * time.Millisecond)
@@ -239,7 +288,7 @@ func (a *App) parseStripInfoPageRaw(data []byte) (firstMainID int, pageRecords i
 			pos++
 		}
 		if pos < len(data) {
-			pos++ // skip \x02
+			pos++
 		}
 	}
 
@@ -253,8 +302,6 @@ func (a *App) parseStripInfoPageRaw(data []byte) (firstMainID int, pageRecords i
 		if pos >= len(data) {
 			break
 		}
-
-		// Field 1: IDs
 		mainID, ok := readVL64()
 		if !ok {
 			break
@@ -262,7 +309,6 @@ func (a *App) parseStripInfoPageRaw(data []byte) (firstMainID int, pageRecords i
 		if i == 0 {
 			firstMainID = mainID
 		}
-		
 		itemIDs := []int{mainID}
 		extraCount, _ := readVL64()
 		for j := 0; j < extraCount; j++ {
@@ -270,31 +316,24 @@ func (a *App) parseStripInfoPageRaw(data []byte) (firstMainID int, pageRecords i
 				itemIDs = append(itemIDs, id)
 			}
 		}
-		readVL64() // Pos
-		// S|I
+		readVL64()
 		if pos < len(data) {
 			pos++
 		}
 		skipUntilDelim()
-
-		// Field 2: Class Name
-		readVL64() // templateId
 		readVL64()
 		readVL64()
-		// String
+		readVL64()
 		start := pos
 		for pos < len(data) && data[pos] != 0x02 {
 			pos++
 		}
 		className := string(data[start:pos])
 		if pos < len(data) {
-			pos++ // skip \x02
+			pos++
 		}
-
 		classQtys[className] += len(itemIDs)
 		classItemIDs[className] = append(classItemIDs[className], itemIDs...)
-
-		// Field 3: Dimensions/Props
 		skipUntilDelim()
 	}
 	return
@@ -342,6 +381,116 @@ func (a *App) requestHandScan() int {
 	return sid
 }
 
+// --- Internal Sequence Control ---
+
+func (a *App) runAutoDropLogic() {
+	currentX := 1
+	currentY := 1
+	wallPass := false
+
+	for {
+		a.stripScanMu.Lock()
+		allItemIDs := []int{}
+		for _, ids := range a.stripScanItemIDs {
+			for _, id := range ids {
+				if _, ignored := a.ignoredItemIDs[id]; !ignored {
+					allItemIDs = append(allItemIDs, id)
+				}
+			}
+		}
+		a.stripScanMu.Unlock()
+
+		if len(allItemIDs) == 0 {
+			a.AddLog(">>> SEQUENCE COMPLETED: Hand is empty (or only ignored items remain)! <<<")
+			return
+		}
+
+		mode := "Floor"
+		if wallPass {
+			mode = "Wall"
+		}
+		a.AddLog(fmt.Sprintf(">>> [Auto-Drop] Starting %s pass for %d items...", mode, len(allItemIDs)))
+
+		for i, itemID := range allItemIDs {
+			if !wallPass {
+				if currentY > 26 {
+					a.AddLog("[Pass] Floor grid is full. Switching to Wall Pass...")
+					wallPass = true
+					break
+				}
+				a.AddLog(fmt.Sprintf("[%d/%d] Floor: Item %d at (%d, %d)", i+1, len(allItemIDs), itemID, currentX, currentY))
+				idBuf := make([]byte, gencoding.VL64EncodeLen(itemID))
+				gencoding.VL64Encode(idBuf, itemID)
+				xBuf := make([]byte, gencoding.VL64EncodeLen(currentX))
+				gencoding.VL64Encode(xBuf, currentX)
+				yBuf := make([]byte, gencoding.VL64EncodeLen(currentY))
+				gencoding.VL64Encode(yBuf, currentY)
+				rotBuf := make([]byte, gencoding.VL64EncodeLen(0))
+				gencoding.VL64Encode(rotBuf, 0)
+				payload := append([]byte{}, idBuf...)
+				payload = append(payload, xBuf...)
+				payload = append(payload, yBuf...)
+				payload = append(payload, rotBuf...)
+				a.ext.Send(g.Out.Id("PLACESTUFF"), payload)
+				currentX++
+				if currentX > 16 {
+					currentX = 1
+					currentY++
+				}
+			} else {
+				prefix := "@P"
+				if (i/10)%2 == 1 {
+					prefix = "@Q"
+				}
+				wallPos := fmt.Sprintf("%s:w=1,0 l=%d,%d r", prefix, (i%15)+5, (i/15)+20)
+				a.AddLog(fmt.Sprintf("[%d/%d] Wall: Item %d at %s", i+1, len(allItemIDs), itemID, wallPos))
+				idBuf := make([]byte, gencoding.VL64EncodeLen(itemID))
+				gencoding.VL64Encode(idBuf, itemID)
+				payload := append([]byte{}, idBuf...)
+				payload = append(payload, []byte(wallPos)...)
+				a.ext.Send(g.Out.Id("PLACEITEM"), payload)
+			}
+			time.Sleep(800 * time.Millisecond)
+		}
+
+		a.AddLog(">>> [Verify] Refreshing hand to check status...")
+		time.Sleep(2 * time.Second)
+		sid := a.requestHandScan()
+		scanDeadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(scanDeadline) {
+			a.stripScanMu.Lock()
+			active := a.stripScanActive
+			currentSID := a.stripScanSessionID
+			a.stripScanMu.Unlock()
+			if !active && currentSID >= sid {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		a.stripScanMu.Lock()
+		remainingNewCount := 0
+		for _, ids := range a.stripScanItemIDs {
+			for _, id := range ids {
+				if _, ignored := a.ignoredItemIDs[id]; !ignored {
+					remainingNewCount++
+				}
+			}
+		}
+		a.stripScanMu.Unlock()
+		if remainingNewCount > 0 && !wallPass {
+			wallPass = true
+		} else if remainingNewCount > 0 && wallPass {
+			wallPass = false
+			currentX = 1
+			currentY = 1
+		} else {
+			a.AddLog(">>> SEQUENCE COMPLETED: Hand is empty! <<<")
+			return
+		}
+		time.Sleep(1 * time.Second)
+	}
+}
+
 // --- Modular Step Functions ---
 
 func (a *App) ExecutePickAll() {
@@ -370,139 +519,11 @@ func (a *App) ExecuteHandScan() {
 	a.requestHandScan()
 }
 
-// Internal version that doesn't check 'a.running'
-func (a *App) runAutoDropLogic() {
-	currentX := 1
-	currentY := 1
-	wallPass := false
-
-	for {
-		a.stripScanMu.Lock()
-		allItemIDs := []int{}
-		for _, ids := range a.stripScanItemIDs {
-			for _, id := range ids {
-				// FILTER: Skip pre-existing items
-				if _, ignored := a.ignoredItemIDs[id]; !ignored {
-					allItemIDs = append(allItemIDs, id)
-				}
-			}
-		}
-		a.stripScanMu.Unlock()
-
-		if len(allItemIDs) == 0 {
-			a.AddLog(">>> SEQUENCE COMPLETED: Hand is empty (or only ignored items remain)! <<<")
-			return
-		}
-
-		mode := "Floor"
-		if wallPass {
-			mode = "Wall"
-		}
-		a.AddLog(fmt.Sprintf(">>> [Auto-Drop] Starting %s pass for %d items...", mode, len(allItemIDs)))
-
-		for i, itemID := range allItemIDs {
-			if !wallPass {
-				// --- FLOOR PLACEMENT ---
-				if currentY > 26 {
-					a.AddLog("[Pass] Floor grid is full. Items remain. Switching to Wall Pass...")
-					wallPass = true
-					break
-				}
-
-				a.AddLog(fmt.Sprintf("[%d/%d] Floor: Item %d at (%d, %d)", i+1, len(allItemIDs), itemID, currentX, currentY))
-				
-				idBuf := make([]byte, gencoding.VL64EncodeLen(itemID))
-				gencoding.VL64Encode(idBuf, itemID)
-				xBuf := make([]byte, gencoding.VL64EncodeLen(currentX))
-				gencoding.VL64Encode(xBuf, currentX)
-				yBuf := make([]byte, gencoding.VL64EncodeLen(currentY))
-				gencoding.VL64Encode(yBuf, currentY)
-				rotBuf := make([]byte, gencoding.VL64EncodeLen(0))
-				gencoding.VL64Encode(rotBuf, 0)
-
-				payload := append([]byte{}, idBuf...)
-				payload = append(payload, xBuf...)
-				payload = append(payload, yBuf...)
-				payload = append(payload, rotBuf...)
-				a.ext.Send(g.Out.Id("PLACESTUFF"), payload)
-
-				currentX++
-				if currentX > 16 {
-					currentX = 1
-					currentY++
-				}
-			} else {
-				// --- WALL PLACEMENT ---
-				prefix := "@P"
-				if (i / 10) % 2 == 1 {
-					prefix = "@Q"
-				}
-				wallPos := fmt.Sprintf("%s:w=1,0 l=%d,%d r", prefix, (i % 15) + 5, (i / 15) + 20)
-				a.AddLog(fmt.Sprintf("[%d/%d] Wall: Item %d at %s", i+1, len(allItemIDs), itemID, wallPos))
-				
-				idBuf := make([]byte, gencoding.VL64EncodeLen(itemID))
-				gencoding.VL64Encode(idBuf, itemID)
-				
-				payload := append([]byte{}, idBuf...)
-				payload = append(payload, []byte(wallPos)...)
-				
-				a.ext.Send(g.Out.Id("PLACEITEM"), payload)
-			}
-
-			time.Sleep(800 * time.Millisecond)
-		}
-
-		// Verification Phase
-		a.AddLog(">>> [Verify] Refreshing hand to check status...")
-		time.Sleep(2 * time.Second)
-		sid := a.requestHandScan()
-
-		scanDeadline := time.Now().Add(15 * time.Second)
-		for time.Now().Before(scanDeadline) {
-			a.stripScanMu.Lock()
-			active := a.stripScanActive
-			currentSID := a.stripScanSessionID
-			a.stripScanMu.Unlock()
-			if !active && currentSID >= sid {
-				break
-			}
-			time.Sleep(500 * time.Millisecond)
-		}
-
-		// Check what's left
-		a.stripScanMu.Lock()
-		remainingNewCount := 0
-		for _, ids := range a.stripScanItemIDs {
-			for _, id := range ids {
-				if _, ignored := a.ignoredItemIDs[id]; !ignored {
-					remainingNewCount++
-				}
-			}
-		}
-		a.stripScanMu.Unlock()
-
-		if remainingNewCount > 0 && !wallPass {
-			a.AddLog("[Verify] Floor items placed, but new items remain. Trying Wall pass next.")
-			wallPass = true
-		} else if remainingNewCount > 0 && wallPass {
-			a.AddLog("[Verify] Wall items placed, but new items remain. Retrying Floor pass.")
-			wallPass = false
-			currentX = 1
-			currentY = 1
-		} else {
-			a.AddLog(">>> SEQUENCE COMPLETED: Hand is empty (or only ignored items remain)! <<<")
-			return
-		}
-		time.Sleep(1 * time.Second)
-	}
-}
-
 func (a *App) ExecuteAutoDrop() {
 	if a.ext == nil {
 		a.AddLog("ERROR: Extension not initialized")
 		return
 	}
-
 	a.mu.Lock()
 	if a.running {
 		a.mu.Unlock()
@@ -511,17 +532,13 @@ func (a *App) ExecuteAutoDrop() {
 	}
 	a.running = true
 	a.mu.Unlock()
-
 	go func() {
 		defer func() {
 			a.mu.Lock()
 			a.running = false
 			a.mu.Unlock()
 		}()
-		
-		// Clear ignored list for manual trigger (assuming user wants to drop everything in hand now)
 		a.ignoredItemIDs = make(map[int]struct{})
-		
 		a.runAutoDropLogic()
 	}()
 }
@@ -544,9 +561,36 @@ func (a *App) ExecuteCommands() {
 		}()
 
 		startTime := time.Now()
-		
-		// 1. INITIAL SCAN (To identify ignored items)
-		a.AddLog(">>> [Step 1/6] Scanning hand for pre-existing items (to ignore)...")
+
+		// --- DB CHECK LOOP ---
+		a.AddLog(">>> [Pre-Flight] Checking for active games in database...")
+		for {
+			players, err := a.checkActiveGames()
+			if err != nil {
+				a.AddLog(fmt.Sprintf("DB ERROR: %v. Proceeding cautiously...", err))
+				break
+			}
+			if len(players) == 0 {
+				a.AddLog("No active games found. Safe to proceed.")
+				break
+			}
+			// Active games found!
+			playerList := strings.Join(players, ", ")
+			msg := fmt.Sprintf("%s, casino is closing please finish up your games.", playerList)
+			a.AddLog(fmt.Sprintf("[GUARD] Active players detected: %s. Shouting warning...", playerList))
+			a.Shout(msg)
+			
+			a.AddLog("Waiting 30 seconds for games to finish...")
+			time.Sleep(30 * time.Second)
+		}
+
+		// Final 30 second countdown
+		a.AddLog(">>> [Pre-Flight] All games finished. Final 30 second warning...")
+		a.Shout("Casino will be closing in 30 secs")
+		time.Sleep(30 * time.Second)
+
+		// 1. INITIAL SCAN
+		a.AddLog(">>> [Step 1/6] Scanning hand to ignore existing items...")
 		sid1 := a.requestHandScan()
 		scanDeadline1 := time.Now().Add(15 * time.Second)
 		for time.Now().Before(scanDeadline1) {
@@ -559,8 +603,6 @@ func (a *App) ExecuteCommands() {
 			}
 			time.Sleep(500 * time.Millisecond)
 		}
-
-		// Store ignored IDs
 		a.stripScanMu.Lock()
 		a.ignoredItemIDs = make(map[int]struct{})
 		initialCount := 0
@@ -571,22 +613,18 @@ func (a *App) ExecuteCommands() {
 			}
 		}
 		a.stripScanMu.Unlock()
-		a.AddLog(fmt.Sprintf("Found %d existing items. These will be ignored during placement.", initialCount))
+		a.AddLog(fmt.Sprintf("Found %d items to ignore.", initialCount))
 
 		// 2. PICK ALL
 		a.AddLog(">>> [Step 2/6] Sending PICK_ALL...")
 		a.ExecutePickAll()
-		
-		for i := 10; i > 0; i-- {
-			a.AddLog(fmt.Sprintf("Waiting... %ds remaining", i))
-			time.Sleep(1 * time.Second)
-		}
+		time.Sleep(10 * time.Second)
 
 		// 3. REFRESH ROOM
 		a.AddLog(">>> [Step 3/6] Refreshing room...")
 		a.ExecuteRoomRefresh()
 		time.Sleep(3 * time.Second)
-		
+
 		// 4. POST-PICKUP SCAN
 		a.AddLog(">>> [Step 4/6] Scanning hand for new items...")
 		sid2 := a.requestHandScan()
@@ -601,8 +639,6 @@ func (a *App) ExecuteCommands() {
 			}
 			time.Sleep(500 * time.Millisecond)
 		}
-
-		// Verify we actually picked something up
 		a.stripScanMu.Lock()
 		newItemsCount := 0
 		for _, ids := range a.stripScanItemIDs {
@@ -613,16 +649,15 @@ func (a *App) ExecuteCommands() {
 			}
 		}
 		a.stripScanMu.Unlock()
-
 		if newItemsCount == 0 {
-			a.AddLog("WARNING: No new items detected in hand after PICK_ALL. Stopping sequence.")
+			a.AddLog("WARNING: No new items detected. Sequence stopping.")
 			return
 		}
 		a.AddLog(fmt.Sprintf("Successfully picked up %d new items!", newItemsCount))
 
 		// 5. RUN AUTO DROP
 		a.runAutoDropLogic()
-		
+
 		duration := time.Since(startTime).Round(time.Millisecond)
 		a.AddLog(fmt.Sprintf("Full sequence finished. Total time: %s", duration))
 	}()
@@ -645,7 +680,6 @@ func (a *App) AddLog(msg string) {
 	logsCopy := make([]string, len(a.logs))
 	copy(logsCopy, a.logs)
 	a.mu.Unlock()
-
 	if a.ctx != nil {
 		go runtime.EventsEmit(a.ctx, "logsUpdate", logsCopy)
 	}
@@ -659,7 +693,6 @@ func (a *App) GetLogs() []string {
 
 func main() {
 	app := NewApp()
-
 	err := wails.Run(&options.App{
 		Title:  "Pickup-Drop",
 		Width:  400,
@@ -672,7 +705,6 @@ func main() {
 			app,
 		},
 	})
-
 	if err != nil {
 		log.Fatal(err)
 	}
