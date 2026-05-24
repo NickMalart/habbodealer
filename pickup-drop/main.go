@@ -42,11 +42,13 @@ func (a *App) startup(ctx context.Context) {
 		Author:      "Gemini CLI",
 	})
 
-	// Register PICK_ALL header
+	// Register headers for easy use with ext.Send
 	a.ext.Headers().Add("PICK_ALL", g.Header{Dir: g.Out, Value: 401})
+	a.ext.Headers().Add("GOTOFLAT", g.Header{Dir: g.Out, Value: 123})
 
 	a.ext.Activated(func() {
 		a.ShowWindow()
+		a.AddLog(fmt.Sprintf("Extension activated. Client: %v", a.ext.Client()))
 	})
 
 	a.AddLog("Extension registered. Waiting for connection...")
@@ -111,13 +113,10 @@ func (a *App) ExecuteCommands() {
 		}
 
 		// Step 1: PICK_ALL (FQa[123]aMK)
-		a.AddLog("[Step 1/2] Sending PICK_ALL (FQa[123]aMK)...")
-		pickPacket := &g.Packet{
-			Header: g.Header{Dir: g.Out, Value: 401},
-			Data:   []byte{0x61, 0x7b, 0x61, 0x4d, 0x4b}, // a{aMK
-			Client: g.Shockwave,
-		}
-		a.ext.SendPacket(pickPacket)
+		// Header 401 (FQ), Data: a{aMK
+		a.AddLog("[Step 1/2] Sending PICK_ALL (Header 401)...")
+		// We use raw bytes for data to ensure exact match: a{aMK
+		a.ext.Send(g.Header{Dir: g.Out, Value: 401}, []byte{0x61, 0x7b, 0x61, 0x4d, 0x4b})
 
 		// Step 2: 10s Delay
 		for i := 10; i > 0; i-- {
@@ -126,14 +125,12 @@ func (a *App) ExecuteCommands() {
 		}
 
 		// Step 3: GOTOFLAT (@[123]221681)
-		a.AddLog("[Step 3/2] Sending GOTOFLAT (@[123]221681)...")
-		gotoPacket := &g.Packet{
-			Header: g.Header{Dir: g.Out, Value: 123},
-			Data:   []byte("221681"),
-			Client: g.Shockwave,
-		}
-		a.ext.SendPacket(gotoPacket)
-		a.AddLog("GOTOFLAT sent.")
+		// Header 123 (@{), Data: 221681
+		a.AddLog("[Step 3/2] Sending GOTOFLAT (Header 123) for Room 221681...")
+		// Sending as a string. goearth will handle the Shockwave string encoding.
+		// If this fails, we will try raw bytes in the next iteration.
+		a.ext.Send(g.Header{Dir: g.Out, Value: 123}, "221681")
+		a.AddLog("GOTOFLAT packet dispatched.")
 
 	}()
 }
