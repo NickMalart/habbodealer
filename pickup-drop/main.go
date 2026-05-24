@@ -133,12 +133,13 @@ func (a *App) SetSchedule(dateTimeStr string, enabled bool) {
 	}
 
 	// Parse ISO string from frontend (e.g. 2026-05-24T20:00:00)
-	t, err := time.Parse("2006-01-02T15:04", dateTimeStr)
-	if err != nil {
-		// Fallback for seconds
-		t, err = time.Parse("2006-01-02T15:04:05", dateTimeStr)
+	// IMPORTANT: Use Local location to match machine time!
+	layout := "2006-01-02T15:04"
+	if len(dateTimeStr) > 16 {
+		layout = "2006-01-02T15:04:05"
 	}
 
+	t, err := time.ParseInLocation(layout, dateTimeStr, time.Local)
 	if err != nil {
 		a.AddLog(fmt.Sprintf("ERROR: Invalid date format: %v", err))
 		return
@@ -146,7 +147,7 @@ func (a *App) SetSchedule(dateTimeStr string, enabled bool) {
 
 	a.targetTime = t
 	a.scheduleEnabled = true
-	a.AddLog(fmt.Sprintf("Schedule Enabled for %s", t.Format("Jan 02, 15:04:05")))
+	a.AddLog(fmt.Sprintf("Schedule Enabled for %s (Local Time)", t.Format("Jan 02, 15:04:05")))
 }
 
 func (a *App) GetScheduleStatus() (int64, bool) {
