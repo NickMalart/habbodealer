@@ -130,10 +130,10 @@ for i := 10; i > 0; i-- {
 // Step 3: GOTOFLAT (@[123]221681)
 // Header 123 (@{), Data: 221681
 a.AddLog("[Step 3/2] Sending GOTOFLAT (Header 123) for Room 221681...")
-// We use the registered name "GOTOFLAT" with g.Out.Id()
-a.ext.Send(g.Out.Id("GOTOFLAT"), 221681)
-a.AddLog("GOTOFLAT packet dispatched (as integer).")
-
+// We use raw bytes []byte("221681") to send the exact characters.
+// This mimics manual injection in G-Earth: @[123]221681
+a.ext.Send(g.Out.Id("GOTOFLAT"), []byte("221681"))
+a.AddLog("GOTOFLAT packet dispatched as raw bytes.")
 	}()
 }
 
