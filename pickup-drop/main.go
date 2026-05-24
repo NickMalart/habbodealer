@@ -59,7 +59,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext = g.NewExt(g.ExtInfo{
 		Title:       "Pickup-Drop",
 		Description: "Pickup and Drop items automatically",
-		Version:     "1.3.1",
+		Version:     "1.4.0",
 		Author:      "Gemini CLI",
 	})
 
@@ -111,7 +111,7 @@ func (a *App) handleStripPacket(e *g.Intercept) {
 		}
 	}
 
-	if !pageRepeated {
+	if !pageRepeated && pageRecords > 0 {
 		for className, qty := range classQtys {
 			a.stripScanCounts[className] += qty
 		}
@@ -121,14 +121,16 @@ func (a *App) handleStripPacket(e *g.Intercept) {
 	}
 
 	pageLimitReached := a.stripScanPageCount >= 25
-	a.AddLog(fmt.Sprintf("[STRIP] Page %d: records=%d repeated=%t limit=%t", currentPage, pageRecords, pageRepeated, pageLimitReached))
-
-	if pageRepeated || pageLimitReached {
+	
+	// STOP CONDITIONS: 0 records found, page repeated, or page limit reached
+	if pageRecords == 0 || pageRepeated || pageLimitReached {
 		a.stripScanActive = false
 		a.finalizeHandScan(scanID)
 		a.stripScanMu.Unlock()
 		return
 	}
+
+	a.AddLog(fmt.Sprintf("[STRIP] Page %d: records=%d", currentPage, pageRecords))
 
 	// Request next page
 	a.stripScanMu.Unlock()
@@ -307,7 +309,7 @@ func (a *App) runAutoDropLogic() {
 		a.stripScanMu.Unlock()
 
 		if len(allItemIDs) == 0 {
-			a.AddLog("Hand is empty! Drop sequence complete.")
+			a.AddLog(">>> SEQUENCE COMPLETED: Hand is empty! <<<")
 			return
 		}
 
@@ -350,7 +352,6 @@ func (a *App) runAutoDropLogic() {
 				}
 			} else {
 				// --- WALL PLACEMENT ---
-				// Manual: A\cULC@P:w=1,0 l=21,31 r
 				prefix := "@P"
 				if (i / 10) % 2 == 1 {
 					prefix = "@Q"
@@ -361,7 +362,6 @@ func (a *App) runAutoDropLogic() {
 				idBuf := make([]byte, gencoding.VL64EncodeLen(itemID))
 				gencoding.VL64Encode(idBuf, itemID)
 				
-				// Payload is tight: Header + ID + WallCoord
 				payload := append([]byte{}, idBuf...)
 				payload = append(payload, []byte(wallPos)...)
 				
@@ -405,6 +405,7 @@ func (a *App) runAutoDropLogic() {
 			currentX = 1
 			currentY = 1
 		} else {
+			a.AddLog(">>> SEQUENCE COMPLETED: Hand is empty! <<<")
 			return
 		}
 		time.Sleep(1 * time.Second)
