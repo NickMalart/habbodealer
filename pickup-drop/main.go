@@ -98,6 +98,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext.Headers().Add("PLACESTUFF", g.Header{Dir: g.Out, Value: 90})
 	a.ext.Headers().Add("PLACEITEM", g.Header{Dir: g.Out, Value: 92})
 	a.ext.Headers().Add("SHOUT", g.Header{Dir: g.Out, Value: 52})
+	a.ext.Headers().Add("QUIT", g.Header{Dir: g.Out, Value: 53})
 
 	a.ext.Activated(func() {
 		a.ShowWindow()
@@ -485,6 +486,10 @@ func (a *App) runAutoDropLogic() {
 			currentY = 1
 		} else {
 			a.AddLog(">>> SEQUENCE COMPLETED: Hand is empty! <<<")
+			// Step 6: QUIT to Main Menu
+			a.AddLog("Exiting room to Main Menu...")
+			// Header 53 (QUIT), Data: @u (which is 0x40 0x75)
+			a.ext.Send(g.Out.Id("QUIT"), []byte{0x40, 0x75})
 			return
 		}
 		time.Sleep(1 * time.Second)
