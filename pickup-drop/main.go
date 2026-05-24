@@ -59,7 +59,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext = g.NewExt(g.ExtInfo{
 		Title:       "Pickup-Drop",
 		Description: "Pickup and Drop items automatically",
-		Version:     "1.1.0",
+		Version:     "1.2.0",
 		Author:      "Gemini CLI",
 	})
 
@@ -263,6 +263,172 @@ func (a *App) requestHandScan() int {
 	return sid
 }
 
+// --- Modular Step Functions ---
+
+func (a *App) ExecutePickAll() {
+	if a.ext == nil {
+		a.AddLog("ERROR: Extension not initialized")
+		return
+	}
+	a.AddLog(">>> [Step] Sending PICK_ALL (Header 401)...")
+	a.ext.Send(g.Out.Id("PICK_ALL"), []byte{0x61, 0x7b, 0x61, 0x4d, 0x4b})
+}
+
+func (a *App) ExecuteRoomRefresh() {
+	if a.ext == nil {
+		a.AddLog("ERROR: Extension not initialized")
+		return
+	}
+	a.AddLog(">>> [Step] Sending GOTOFLAT (Header 123) for Room 221681...")
+	a.ext.Send(g.Out.Id("GOTOFLAT"), []byte("221681"))
+}
+
+func (a *App) ExecuteHandScan() {
+	if a.ext == nil {
+		a.AddLog("ERROR: Extension not initialized")
+		return
+	}
+	a.requestHandScan()
+}
+
+func (a *App) ExecuteAutoDrop() {
+	if a.ext == nil {
+		a.AddLog("ERROR: Extension not initialized")
+		return
+	}
+
+	a.mu.Lock()
+	if a.running {
+		a.mu.Unlock()
+		a.AddLog("Auto-Drop already in progress...")
+		return
+	}
+	a.running = true
+	a.mu.Unlock()
+
+	go func() {
+		defer func() {
+			a.mu.Lock()
+			a.running = false
+			a.mu.Unlock()
+		}()
+
+		a.stripScanMu.Lock()
+		allItemIDs := []int{}
+		for _, ids := range a.stripScanItemIDs {
+			allItemIDs = append(allItemIDs, ids...)
+		}
+		a.stripScanMu.Unlock()
+
+		if len(allItemIDs) == 0 {
+			a.AddLog("No items found in hand to drop. Please run Hand Scan first.")
+			return
+		}
+
+		a.AddLog(fmt.Sprintf(">>> [Step] Starting Auto-Drop of %d items (800ms delay)...", len(allItemIDs)))
+
+		currentX := 1
+		currentY := 1
+
+		for i, itemID := range allItemIDs {
+			if currentY > 26 {
+				a.AddLog("ERROR: Room is full! Stopping drop sequence.")
+				break
+			}
+
+			// Force ID to positive if negative (Habbo VL64 quirk)
+			absID := itemID
+			if absID < 0 {
+				absID = -absID
+			}
+
+			a.AddLog(fmt.Sprintf("[%d/%d] Placing item %d at (%d, %d)", i+1, len(allItemIDs), absID, currentX, currentY))
+
+			// 1. Encode ItemID
+			idBuf := make([]byte, gencoding.VL64EncodeLen(absID))
+			gencoding.VL64Encode(idBuf, absID)
+
+			// 2. Encode X, Y, Rot (0)
+			xBuf := make([]byte, gencoding.VL64EncodeLen(currentX))
+			gencoding.VL64Encode(xBuf, currentX)
+			
+			yBuf := make([]byte, gencoding.VL64EncodeLen(currentY))
+			gencoding.VL64Encode(yBuf, currentY)
+			
+			rotBuf := make([]byte, gencoding.VL64EncodeLen(0))
+			gencoding.VL64Encode(rotBuf, 0)
+
+			// 3. Assemble Payload
+			payload := append(idBuf, 'A')
+			payload = append(payload, xBuf...)
+			payload = append(payload, yBuf...)
+			payload = append(payload, rotBuf...)
+
+			// 4. Send
+			a.ext.Send(g.Out.Id("PLACESTUFF"), payload)
+
+			// 5. Increment Coordinates
+			currentX++
+			if currentX > 16 {
+				currentX = 1
+				currentY++
+			}
+
+			// 6. Slowed down delay to 800ms
+			time.Sleep(800 * time.Millisecond)
+		}
+		a.AddLog("Auto-Drop sequence finished.")
+	}()
+}
+
+func (a *App) ExecuteCommands() {
+	a.mu.Lock()
+	if a.running {
+		a.mu.Unlock()
+		a.AddLog("Commands already running...")
+		return
+	}
+	a.running = true
+	a.mu.Unlock()
+
+	go func() {
+		startTime := time.Now()
+		defer func() {
+			a.mu.Lock()
+			a.running = false
+			a.mu.Unlock()
+			duration := time.Since(startTime).Round(time.Millisecond)
+			a.AddLog(fmt.Sprintf("Full sequence finished. Total time: %s", duration))
+		}()
+
+		a.ExecutePickAll()
+		
+		for i := 10; i > 0; i-- {
+			a.AddLog(fmt.Sprintf("Waiting... %ds remaining", i))
+			time.Sleep(1 * time.Second)
+		}
+
+		a.ExecuteRoomRefresh()
+		time.Sleep(3 * time.Second)
+		
+		a.ExecuteHandScan()
+
+		// Wait for scan to complete
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			a.stripScanMu.Lock()
+			active := a.stripScanActive
+			a.stripScanMu.Unlock()
+			if !active {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+
+		a.ExecuteAutoDrop()
+	}()
+}
+
 func (a *App) ShowWindow() {
 	if a.ctx != nil {
 		runtime.WindowShow(a.ctx)
@@ -292,142 +458,13 @@ func (a *App) GetLogs() []string {
 	return a.logs
 }
 
-// ExecuteCommands is the placeholder for the button action
-func (a *App) ExecuteCommands() {
-	a.mu.Lock()
-	if a.running {
-		a.mu.Unlock()
-		a.AddLog("Commands already running...")
-		return
-	}
-	a.running = true
-	a.mu.Unlock()
-
-	go func() {
-		startTime := time.Now()
-		defer func() {
-			a.mu.Lock()
-			a.running = false
-			a.mu.Unlock()
-			duration := time.Since(startTime).Round(time.Millisecond)
-			a.AddLog(fmt.Sprintf("Sequence finished. Total time: %s", duration))
-		}()
-
-		a.AddLog(">>> Starting sequence...")
-
-		if a.ext == nil {
-			a.AddLog("ERROR: Extension not initialized")
-			return
-		}
-
-		// Step 1: PICK_ALL (FQa[123]aMK)
-		a.AddLog("[Step 1/4] Sending PICK_ALL (Header 401)...")
-		a.ext.Send(g.Out.Id("PICK_ALL"), []byte{0x61, 0x7b, 0x61, 0x4d, 0x4b})
-
-		// Step 2: 10s Delay
-		for i := 10; i > 0; i-- {
-			a.AddLog(fmt.Sprintf("[Step 2/4] Waiting... %ds remaining", i))
-			time.Sleep(1 * time.Second)
-		}
-
-		// Step 3: GOTOFLAT (@[123]221681)
-		a.AddLog("[Step 3/4] Sending GOTOFLAT (Header 123) for Room 221681...")
-		a.ext.Send(g.Out.Id("GOTOFLAT"), []byte("221681"))
-		a.AddLog("GOTOFLAT packet dispatched.")
-
-		// Step 4: Hand Scan
-		a.AddLog("[Step 4/4] Waiting for room entry (3s)...")
-		time.Sleep(3 * time.Second)
-		a.requestHandScan()
-
-		// Wait for scan to complete
-		a.AddLog("Waiting for hand scan completion...")
-		deadline := time.Now().Add(15 * time.Second)
-		for time.Now().Before(deadline) {
-			a.stripScanMu.Lock()
-			active := a.stripScanActive
-			a.stripScanMu.Unlock()
-			if !active {
-				break
-			}
-			time.Sleep(500 * time.Millisecond)
-		}
-
-		// Step 5: Auto-Drop
-		a.stripScanMu.Lock()
-		allItemIDs := []int{}
-		for _, ids := range a.stripScanItemIDs {
-			allItemIDs = append(allItemIDs, ids...)
-		}
-		a.stripScanMu.Unlock()
-
-		if len(allItemIDs) == 0 {
-			a.AddLog("No items found in hand to drop.")
-			return
-		}
-
-		a.AddLog(fmt.Sprintf(">>> Starting Auto-Drop of %d items...", len(allItemIDs)))
-
-		// Room Boundaries: X: 1-16, Y: 1-26
-		currentX := 1
-		currentY := 1
-
-		for i, itemID := range allItemIDs {
-			if currentY > 26 {
-				a.AddLog("ERROR: Room is full! Stopping drop sequence.")
-				break
-			}
-
-			a.AddLog(fmt.Sprintf("[%d/%d] Placing item %d at (%d, %d)", i+1, len(allItemIDs), itemID, currentX, currentY))
-
-			// Construct PLACESTUFF [90] packet
-			// Format: [Header 90][ItemID VL64] A [X VL64][Y VL64][Rot VL64]
-			
-			// 1. Encode ItemID
-			idBuf := make([]byte, gencoding.VL64EncodeLen(itemID))
-			gencoding.VL64Encode(idBuf, itemID)
-
-			// 2. Encode X, Y, Rot (0)
-			xBuf := make([]byte, gencoding.VL64EncodeLen(currentX))
-			gencoding.VL64Encode(xBuf, currentX)
-			
-			yBuf := make([]byte, gencoding.VL64EncodeLen(currentY))
-			gencoding.VL64Encode(yBuf, currentY)
-			
-			rotBuf := make([]byte, gencoding.VL64EncodeLen(0))
-			gencoding.VL64Encode(rotBuf, 0)
-
-			// 3. Assemble Payload
-			payload := append(idBuf, 'A')
-			payload = append(payload, xBuf...)
-			payload = append(payload, yBuf...)
-			payload = append(payload, rotBuf...)
-
-			// 4. Send
-			a.ext.Send(g.Out.Id("PLACESTUFF"), payload)
-
-			// 5. Increment Coordinates (Left to Right, then Down)
-			currentX++
-			if currentX > 16 {
-				currentX = 1
-				currentY++
-			}
-
-			// 6. Anti-Flood Delay
-			time.Sleep(200 * time.Millisecond)
-		}
-
-		a.AddLog("Auto-Drop sequence finished.")
-	}()
-}
-
 func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
 		Title:  "Pickup-Drop",
 		Width:  400,
-		Height: 500,
+		Height: 600,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

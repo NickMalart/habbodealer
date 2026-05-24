@@ -1,10 +1,17 @@
 <script setup>
 import {ref, onMounted} from 'vue'
 import {EventsOn} from '../wailsjs/runtime'
-import {ExecuteCommands, GetLogs} from '../wailsjs/go/main/App'
+import {
+  ExecuteCommands, 
+  ExecutePickAll, 
+  ExecuteRoomRefresh, 
+  ExecuteHandScan, 
+  ExecuteAutoDrop, 
+  GetLogs
+} from '../wailsjs/go/main/App'
 
 const logs = ref([])
-const running = ref(false)
+const selectedStep = ref('pick_all')
 
 onMounted(() => {
   GetLogs().then(result => {
@@ -16,8 +23,17 @@ onMounted(() => {
   })
 })
 
-function handleExecute() {
+function handleExecuteFull() {
   ExecuteCommands()
+}
+
+function handleExecuteStep() {
+  switch (selectedStep.value) {
+    case 'pick_all': ExecutePickAll(); break;
+    case 'refresh': ExecuteRoomRefresh(); break;
+    case 'scan': ExecuteHandScan(); break;
+    case 'drop': ExecuteAutoDrop(); break;
+  }
 }
 </script>
 
@@ -28,7 +44,17 @@ function handleExecute() {
     </div>
 
     <div class="actions">
-      <button @click="handleExecute">Execute Commands</button>
+      <div class="step-selector">
+        <select v-model="selectedStep">
+          <option value="pick_all">1. Pick All</option>
+          <option value="refresh">2. Room Refresh</option>
+          <option value="scan">3. Hand Scan</option>
+          <option value="drop">4. Auto-Drop (Slow)</option>
+        </select>
+        <button @click="handleExecuteStep" class="btn-step">Execute Step</button>
+      </div>
+      <hr />
+      <button @click="handleExecuteFull" class="btn-full">Execute Full Sequence</button>
     </div>
 
     <div class="logs">
@@ -58,20 +84,56 @@ function handleExecute() {
 
 .actions {
   margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.step-selector {
+  display: flex;
+  gap: 0.5rem;
+}
+
+select {
+  flex-grow: 1;
+  padding: 0.5rem;
+  background-color: #1a1f29;
+  color: white;
+  border: 1px solid #2d3446;
+  border-radius: 4px;
 }
 
 button {
   padding: 0.5rem 1rem;
-  font-size: 1rem;
+  font-size: 0.9rem;
   cursor: pointer;
-  background-color: #2196f3;
-  color: white;
   border: none;
   border-radius: 4px;
+  color: white;
 }
 
-button:hover {
+.btn-step {
+  background-color: #4caf50;
+}
+
+.btn-step:hover {
+  background-color: #43a047;
+}
+
+.btn-full {
+  background-color: #2196f3;
+  width: 100%;
+}
+
+.btn-full:hover {
   background-color: #1976d2;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid #2d3446;
+  width: 100%;
+  margin: 0.25rem 0;
 }
 
 .logs {
