@@ -336,17 +336,11 @@ func (a *App) ExecuteAutoDrop() {
 				break
 			}
 
-			// Force ID to positive if negative (Habbo VL64 quirk)
-			absID := itemID
-			if absID < 0 {
-				absID = -absID
-			}
+			a.AddLog(fmt.Sprintf("[%d/%d] Placing item %d at (%d, %d)", i+1, len(allItemIDs), itemID, currentX, currentY))
 
-			a.AddLog(fmt.Sprintf("[%d/%d] Placing item %d at (%d, %d)", i+1, len(allItemIDs), absID, currentX, currentY))
-
-			// 1. Encode ItemID
-			idBuf := make([]byte, gencoding.VL64EncodeLen(absID))
-			gencoding.VL64Encode(idBuf, absID)
+			// 1. Encode ItemID (Send exactly as received, including potential negative bits)
+			idBuf := make([]byte, gencoding.VL64EncodeLen(itemID))
+			gencoding.VL64Encode(idBuf, itemID)
 
 			// 2. Encode X, Y, Rot (0)
 			xBuf := make([]byte, gencoding.VL64EncodeLen(currentX))
@@ -358,8 +352,9 @@ func (a *App) ExecuteAutoDrop() {
 			rotBuf := make([]byte, gencoding.VL64EncodeLen(0))
 			gencoding.VL64Encode(rotBuf, 0)
 
-			// 3. Assemble Payload
-			payload := append(idBuf, 'A')
+			// 3. Assemble Payload (Header + ID + X + Y + Rot)
+			// NO 'A' separator is needed for this client version.
+			payload := append([]byte{}, idBuf...)
 			payload = append(payload, xBuf...)
 			payload = append(payload, yBuf...)
 			payload = append(payload, rotBuf...)
