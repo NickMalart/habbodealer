@@ -35,6 +35,13 @@ function handleExecuteStep() {
     case 'drop': ExecuteAutoDrop(); break;
   }
 }
+
+function handleCopyLogs() {
+  const text = logs.value.join('\n')
+  navigator.clipboard.writeText(text).then(() => {
+    alert('Logs copied to clipboard!')
+  })
+}
 </script>
 
 <template>
@@ -54,7 +61,10 @@ function handleExecuteStep() {
         <button @click="handleExecuteStep" class="btn-step">Execute Step</button>
       </div>
       <hr />
-      <button @click="handleExecuteFull" class="btn-full">Execute Full Sequence</button>
+      <div class="main-buttons">
+        <button @click="handleExecuteFull" class="btn-full">Execute Full Sequence</button>
+        <button @click="handleCopyLogs" class="btn-copy">Copy Logs</button>
+      </div>
     </div>
 
     <div class="logs">
@@ -94,6 +104,11 @@ function handleExecuteStep() {
   gap: 0.5rem;
 }
 
+.main-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
 select {
   flex-grow: 1;
   padding: 0.5rem;
@@ -122,11 +137,20 @@ button {
 
 .btn-full {
   background-color: #2196f3;
-  width: 100%;
+  flex-grow: 2;
 }
 
 .btn-full:hover {
   background-color: #1976d2;
+}
+
+.btn-copy {
+  background-color: #607d8b;
+  flex-grow: 1;
+}
+
+.btn-copy:hover {
+  background-color: #455a64;
 }
 
 hr {
