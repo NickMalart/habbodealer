@@ -48,7 +48,11 @@ func (a *App) startup(ctx context.Context) {
 
 	a.ext.Activated(func() {
 		a.ShowWindow()
-		a.AddLog(fmt.Sprintf("Extension activated. Client: %v", a.ext.Client()))
+		clientType := "Unknown"
+		if a.ext != nil {
+			clientType = fmt.Sprintf("%v", a.ext.Client())
+		}
+		a.AddLog(fmt.Sprintf("Extension activated! Connected to: %s", clientType))
 	})
 
 	a.AddLog("Extension registered. Waiting for connection...")
@@ -115,7 +119,6 @@ func (a *App) ExecuteCommands() {
 		// Step 1: PICK_ALL (FQa[123]aMK)
 		// Header 401 (FQ), Data: a{aMK
 		a.AddLog("[Step 1/2] Sending PICK_ALL (Header 401)...")
-		// We use raw bytes for data to ensure exact match: a{aMK
 		a.ext.Send(g.Header{Dir: g.Out, Value: 401}, []byte{0x61, 0x7b, 0x61, 0x4d, 0x4b})
 
 		// Step 2: 10s Delay
@@ -127,10 +130,10 @@ func (a *App) ExecuteCommands() {
 		// Step 3: GOTOFLAT (@[123]221681)
 		// Header 123 (@{), Data: 221681
 		a.AddLog("[Step 3/2] Sending GOTOFLAT (Header 123) for Room 221681...")
-		// Sending as a string. goearth will handle the Shockwave string encoding.
-		// If this fails, we will try raw bytes in the next iteration.
-		a.ext.Send(g.Header{Dir: g.Out, Value: 123}, "221681")
-		a.AddLog("GOTOFLAT packet dispatched.")
+		// Room IDs in Shockwave are often sent as Integers. 
+		// Trying as an integer to match standard GOTOFLAT behavior.
+		a.ext.Send(g.Header{Dir: g.Out, Value: 123}, 221681)
+		a.AddLog("GOTOFLAT packet dispatched (as integer).")
 
 	}()
 }
