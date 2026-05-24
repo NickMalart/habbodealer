@@ -167,6 +167,10 @@ type App struct {
 	// Notified map to avoid duplicate failure webhooks in-memory
 	notified   map[string]struct{}
 	notifiedMu sync.RWMutex
+
+	// Cross-bot shout queue state
+	lastShoutTime map[string]time.Time
+	shoutMu       sync.Mutex
 }
 
 func NewApp() *App {
@@ -182,8 +186,41 @@ func NewApp() *App {
 		stripScanItemIDs:     make(map[string][]int),
 		inflight:             make(map[string]string),
 		notified:             make(map[string]struct{}),
+		lastShoutTime:        make(map[string]time.Time),
 		banList:              NewBanList(),
 	}
+}
+
+func (a *App) queueShout(playerName, message string) {
+	if a.db == nil || playerName == "" {
+		return
+	}
+
+	a.shoutMu.Lock()
+	if a.lastShoutTime == nil {
+		a.lastShoutTime = make(map[string]time.Time)
+	}
+	lastTime, exists := a.lastShoutTime[strings.ToLower(playerName)]
+	// 10 second cooldown per player to avoid spamming the Dealer shout queue
+	if exists && time.Since(lastTime) < 10*time.Second {
+		a.shoutMu.Unlock()
+		return
+	}
+	a.lastShoutTime[strings.ToLower(playerName)] = time.Now()
+	a.shoutMu.Unlock()
+
+	owner := a.getOwnerKey()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := a.db.Exec(ctx, "INSERT INTO public.dealer_shouts (target_player, message, shout_type, status, owner_key, created_at) VALUES ($1, $2, $3, 'pending', $4, NOW())", playerName, message, "error", owner)
+		if err != nil {
+			a.AddLog("ERROR: Failed to insert shout: " + err.Error())
+		} else {
+			a.AddLog(fmt.Sprintf("DB: Queued shout for %s: %s (owner=%s)", playerName, message, owner))
+		}
+	}()
 }
 
 // BanList is a simple in-memory ban store keyed by arbitrary string keys
@@ -651,6 +688,26 @@ func (a *App) initDatabase() {
 	if err != nil {
 		a.AddLog("ERROR: Table creation failed: " + err.Error())
 	}
+
+	// Create dealer_shouts table for cross-bot communication
+	query = `CREATE TABLE IF NOT EXISTS public.dealer_shouts (
+		id SERIAL PRIMARY KEY,
+		owner_key TEXT NOT NULL DEFAULT '',
+		target_player TEXT NOT NULL,
+		message TEXT NOT NULL,
+		shout_type TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'pending',
+		created_at TIMESTAMP DEFAULT NOW(),
+		completed_at TIMESTAMP NULL
+	);`
+	_, err = a.db.Exec(context.Background(), query)
+	if err != nil {
+		a.AddLog("ERROR: dealer_shouts table creation failed: " + err.Error())
+	}
+
+	// Add owner_key column if it doesn't exist (migration for existing tables)
+	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';")
+}
 
 	// Ensure notified column exists for failure webhooks
 	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS notified BOOLEAN DEFAULT FALSE;")
@@ -2048,6 +2105,9 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 		a.tradeMu.Unlock()
 		if !allow {
 			a.AddLog("Blocking incoming trade open: active banker_trades present")
+			if ownerName != "" {
+				a.queueShout(ownerName, fmt.Sprintf("%s, hold on! A game is in progress. Trades are paused until it finishes.", ownerName))
+			}
 			e.Block()
 			if a.ext != nil {
 				a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
@@ -2392,6 +2452,7 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 				}
 				if len(unallowed) > 0 {
 					a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: trade contains unallowed items: %v", unallowed))
+					a.queueShout(partnerName, fmt.Sprintf("%s, trade cancelled: unallowed items detected.", partnerName))
 					if a.ctx != nil {
 						go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "unallowed_items", "player": partnerName, "items": unallowed})
 					}
@@ -2414,6 +2475,7 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 				}
 				if !matched {
 					a.AddLog("[FILTER] Blocking acceptance: no stocked items found in trade.")
+					a.queueShout(partnerName, fmt.Sprintf("%s, trade rejected: no authorized items found.", partnerName))
 					if a.ctx != nil {
 						go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "no_stocked_items", "player": partnerName, "allowed": allowedNames})
 					}
@@ -2492,6 +2554,7 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 					if available < need {
 						short = true
 						a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: insufficient payout stock for %s required=%d available=%d (hand=%d incoming=%d)", name, need, available, have, inc))
+						a.queueShout(partnerName, fmt.Sprintf("%s, trade cancelled. Please wait for the Banker to restock before betting.", partnerName))
 						if a.ctx != nil {
 							go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "insufficient_payout_stock", "player": partnerName, "item": name, "required": need, "available": available, "hand": have, "incoming": inc})
 						}
@@ -2513,6 +2576,7 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 			for itName, qty := range matchedItems {
 				if maxQty > 0 && qty > maxQty {
 					a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: %s offered %d which exceeds max per-unique %d", itName, qty, maxQty))
+					a.queueShout(partnerName, fmt.Sprintf("%s, trade cancelled: quantity exceeds the limit of %d.", partnerName, maxQty))
 					if a.ctx != nil {
 						go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "max_qty_exceeded", "player": partnerName, "item": itName, "qty": qty, "max_qty": maxQty})
 					}
@@ -2525,6 +2589,7 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 			// Check unique count
 			if maxUnique > 0 && len(matchedItems) > maxUnique {
 				a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: player offered %d unique stocked items (limit %d)", len(matchedItems), maxUnique))
+				a.queueShout(partnerName, fmt.Sprintf("%s, please consolidate your trade. I can only process %d unique item types at once.", partnerName, maxUnique))
 				if a.ctx != nil {
 					go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "max_unique_exceeded", "player": partnerName, "unique_offered": len(matchedItems), "max_unique": maxUnique, "items": matchedItems})
 				}

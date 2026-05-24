@@ -906,6 +906,7 @@ func (a *App) startup(ctx context.Context) {
 		a.initHistoryDatabase()
 		a.loadGameHistory()
 		a.startBankerTradePolling()
+		a.startDealerShoutPolling()
 	}()
 	rand.Seed(time.Now().UnixNano())
 	a.setupExt()
@@ -2988,6 +2989,17 @@ func (a *App) ensureGameHistoryTables() error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			UNIQUE(owner_key, raw_name)
 		)`,
+		`CREATE TABLE IF NOT EXISTS public.dealer_shouts (
+			id SERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL DEFAULT '',
+			target_player TEXT NOT NULL,
+			message TEXT NOT NULL,
+			shout_type TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			completed_at TIMESTAMPTZ NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_dealer_shouts_status_owner ON public.dealer_shouts(status, owner_key)`,
 	}
 
 	for _, q := range queries {
@@ -16724,6 +16736,60 @@ func (a *App) rollMidHouseDice() {
 
 	a.evaluateMidHouseRound()
 	isMidHouseRolling = false
+}
+
+func (a *App) startDealerShoutPolling() {
+	a.AddLogMsg("[SHOUT_POLL] starting background worker")
+	go func() {
+		for {
+			time.Sleep(2 * time.Second)
+
+			db, owner := a.getHistoryDB()
+			if db == nil {
+				continue
+			}
+
+			// Query for the oldest pending shout for this dealer
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			var id int
+			var targetPlayer, message string
+			err := db.QueryRow(ctx, `
+				SELECT id, target_player, message 
+				FROM public.dealer_shouts 
+				WHERE status = 'pending' AND (owner_key = $1 OR owner_key = '')
+				ORDER BY created_at ASC 
+				LIMIT 1
+			`, owner).Scan(&id, &targetPlayer, &message)
+			cancel()
+
+			if err != nil {
+				// No pending shouts
+				continue
+			}
+
+			a.AddLogMsg(fmt.Sprintf("[SHOUT_POLL] Picking up shout for %s: %s", targetPlayer, message))
+
+			// Mark as 'processing' to avoid duplicate shouts from same poller
+			ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+			_, err = db.Exec(ctx2, "UPDATE public.dealer_shouts SET status = 'processing' WHERE id = $1", id)
+			cancel2()
+			if err != nil {
+				a.AddLogMsg(fmt.Sprintf("[SHOUT_POLL] ERROR: failed to mark shout %d as processing: %v", id, err))
+				continue
+			}
+
+			// Execute the shout!
+			sendShout(message)
+
+			// Mark as completed
+			ctx3, cancel3 := context.WithTimeout(context.Background(), 2*time.Second)
+			_, err = db.Exec(ctx3, "UPDATE public.dealer_shouts SET status = 'completed', completed_at = NOW() WHERE id = $1", id)
+			cancel3()
+			if err != nil {
+				a.AddLogMsg(fmt.Sprintf("[SHOUT_POLL] ERROR: failed to mark shout %d as completed: %v", id, err))
+			}
+		}
+	}()
 }
 
 func resetMidHouseSequence() {
