@@ -100,50 +100,40 @@ func (a *App) ExecuteCommands() {
 			a.running = false
 			a.mu.Unlock()
 			duration := time.Since(startTime).Round(time.Millisecond)
-			a.AddLog(fmt.Sprintf("Execution cycle completed in %s", duration))
+			a.AddLog(fmt.Sprintf("Sequence finished. Total time: %s", duration))
 		}()
 
-		a.AddLog(">>> Starting automated sequence...")
+		a.AddLog(">>> Starting sequence...")
 
 		if a.ext == nil {
 			a.AddLog("ERROR: Extension not initialized")
 			return
 		}
 
-		// Step 1: Initial GOTOFLAT
-		a.AddLog("[Step 1/3] Pushing GOTOFLAT to server (Room: 221681)...")
-		gotoPacket1 := &g.Packet{
-			Header: g.Header{Dir: g.Out, Value: 123},
-			Data:   []byte("221681"),
-			Client: g.Shockwave,
-		}
-		a.ext.SendPacket(gotoPacket1)
-
-		// Step 2: 10s Delay
-		for i := 10; i > 0; i-- {
-			a.AddLog(fmt.Sprintf("[Step 2/3] Waiting... %ds remaining", i))
-			time.Sleep(1 * time.Second)
-		}
-
-		// Step 3: PICK_ALL
-		a.AddLog("[Step 3/3] Sending PICK_ALL packet (Header: 401)...")
+		// Step 1: PICK_ALL (FQa[123]aMK)
+		a.AddLog("[Step 1/2] Sending PICK_ALL (FQa[123]aMK)...")
 		pickPacket := &g.Packet{
 			Header: g.Header{Dir: g.Out, Value: 401},
-			Data:   []byte{0x61, 0x7b, 0x61, 0x4d, 0x4b},
+			Data:   []byte{0x61, 0x7b, 0x61, 0x4d, 0x4b}, // a{aMK
 			Client: g.Shockwave,
 		}
 		a.ext.SendPacket(pickPacket)
-		a.AddLog("PICK_ALL sent successfully.")
 
-		// Step 4: Final GOTOFLAT (requested next after pickall)
-		a.AddLog("[Step 4/4] Sending final GOTOFLAT to server (Room: 221681)...")
-		gotoPacket2 := &g.Packet{
+		// Step 2: 10s Delay
+		for i := 10; i > 0; i-- {
+			a.AddLog(fmt.Sprintf("[Step 2/2] Waiting... %ds remaining", i))
+			time.Sleep(1 * time.Second)
+		}
+
+		// Step 3: GOTOFLAT (@[123]221681)
+		a.AddLog("[Step 3/2] Sending GOTOFLAT (@[123]221681)...")
+		gotoPacket := &g.Packet{
 			Header: g.Header{Dir: g.Out, Value: 123},
 			Data:   []byte("221681"),
 			Client: g.Shockwave,
 		}
-		a.ext.SendPacket(gotoPacket2)
-		a.AddLog("Final GOTOFLAT sent.")
+		a.ext.SendPacket(gotoPacket)
+		a.AddLog("GOTOFLAT sent.")
 
 	}()
 }
