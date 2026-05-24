@@ -90,8 +90,16 @@ function handleCopyLogs() {
 
 function toggleSchedule() {
   const newState = !scheduleEnabled.value
+  console.log('Toggling schedule to:', newState, 'at', scheduleTime.value)
+  
+  // Set locally first for immediate button change
+  scheduleEnabled.value = newState
+  
   SetSchedule(scheduleTime.value, newState).then(() => {
     syncScheduleStatus()
+  }).catch(err => {
+    console.error('Failed to set schedule:', err)
+    syncScheduleStatus() // Revert to actual state on error
   })
 }
 </script>
