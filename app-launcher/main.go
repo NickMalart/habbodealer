@@ -118,6 +118,17 @@ func knownBuildTargets() []buildTarget {
 			},
 			OutExe: filepath.Join("auto-payout", "build", "bin", "auto-payout.exe"),
 		},
+		{
+			ID:        "pickup-drop",
+			Name:      "Pickup-Drop",
+			SrcDir:    "pickup-drop",
+			BuildType: "wails",
+			CleanPaths: []string{
+				filepath.Join("pickup-drop", "build", "bin", "pickup-drop.exe"),
+				filepath.Join("pickup-drop", "pickup-drop.exe"),
+			},
+			OutExe: filepath.Join("pickup-drop", "build", "bin", "pickup-drop.exe"),
+		},
 	}
 }
 
