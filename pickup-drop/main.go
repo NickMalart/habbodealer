@@ -300,7 +300,7 @@ func (a *App) ExecuteAutoDrop() {
 	a.mu.Lock()
 	if a.running {
 		a.mu.Unlock()
-		a.AddLog("Auto-Drop already in progress...")
+		a.AddLog("Drop sequence already in progress...")
 		return
 	}
 	a.running = true
@@ -313,66 +313,81 @@ func (a *App) ExecuteAutoDrop() {
 			a.mu.Unlock()
 		}()
 
-		a.stripScanMu.Lock()
-		allItemIDs := []int{}
-		for _, ids := range a.stripScanItemIDs {
-			allItemIDs = append(allItemIDs, ids...)
-		}
-		a.stripScanMu.Unlock()
-
-		if len(allItemIDs) == 0 {
-			a.AddLog("No items found in hand to drop. Please run Hand Scan first.")
-			return
-		}
-
-		a.AddLog(fmt.Sprintf(">>> [Step] Starting Auto-Drop of %d items (800ms delay)...", len(allItemIDs)))
-
 		currentX := 1
 		currentY := 1
 
-		for i, itemID := range allItemIDs {
-			if currentY > 26 {
-				a.AddLog("ERROR: Room is full! Stopping drop sequence.")
-				break
+		for {
+			a.stripScanMu.Lock()
+			allItemIDs := []int{}
+			for _, ids := range a.stripScanItemIDs {
+				allItemIDs = append(allItemIDs, ids...)
+			}
+			a.stripScanMu.Unlock()
+
+			if len(allItemIDs) == 0 {
+				a.AddLog("Hand is empty! Drop sequence complete.")
+				return
 			}
 
-			a.AddLog(fmt.Sprintf("[%d/%d] Placing item %d at (%d, %d)", i+1, len(allItemIDs), itemID, currentX, currentY))
+			a.AddLog(fmt.Sprintf(">>> [Auto-Drop] Placing %d items...", len(allItemIDs)))
 
-			// 1. Encode ItemID (Send exactly as received, including potential negative bits)
-			idBuf := make([]byte, gencoding.VL64EncodeLen(itemID))
-			gencoding.VL64Encode(idBuf, itemID)
+			for i, itemID := range allItemIDs {
+				if currentY > 26 {
+					a.AddLog("ERROR: Room is full! Cannot drop more items.")
+					return
+				}
 
-			// 2. Encode X, Y, Rot (0)
-			xBuf := make([]byte, gencoding.VL64EncodeLen(currentX))
-			gencoding.VL64Encode(xBuf, currentX)
-			
-			yBuf := make([]byte, gencoding.VL64EncodeLen(currentY))
-			gencoding.VL64Encode(yBuf, currentY)
-			
-			rotBuf := make([]byte, gencoding.VL64EncodeLen(0))
-			gencoding.VL64Encode(rotBuf, 0)
+				a.AddLog(fmt.Sprintf("[%d/%d] Placing item %d at (%d, %d)", i+1, len(allItemIDs), itemID, currentX, currentY))
 
-			// 3. Assemble Payload (Header + ID + X + Y + Rot)
-			// NO 'A' separator is needed for this client version.
-			payload := append([]byte{}, idBuf...)
-			payload = append(payload, xBuf...)
-			payload = append(payload, yBuf...)
-			payload = append(payload, rotBuf...)
+				// Encode and Send
+				idBuf := make([]byte, gencoding.VL64EncodeLen(itemID))
+				gencoding.VL64Encode(idBuf, itemID)
+				xBuf := make([]byte, gencoding.VL64EncodeLen(currentX))
+				gencoding.VL64Encode(xBuf, currentX)
+				yBuf := make([]byte, gencoding.VL64EncodeLen(currentY))
+				gencoding.VL64Encode(yBuf, currentY)
+				rotBuf := make([]byte, gencoding.VL64EncodeLen(0))
+				gencoding.VL64Encode(rotBuf, 0)
 
-			// 4. Send
-			a.ext.Send(g.Out.Id("PLACESTUFF"), payload)
+				payload := append([]byte{}, idBuf...)
+				payload = append(payload, xBuf...)
+				payload = append(payload, yBuf...)
+				payload = append(payload, rotBuf...)
 
-			// 5. Increment Coordinates
-			currentX++
-			if currentX > 16 {
-				currentX = 1
-				currentY++
+				a.ext.Send(g.Out.Id("PLACESTUFF"), payload)
+
+				currentX++
+				if currentX > 16 {
+					currentX = 1
+					currentY++
+				}
+
+				time.Sleep(800 * time.Millisecond)
 			}
 
-			// 6. Slowed down delay to 800ms
-			time.Sleep(800 * time.Millisecond)
+			// Verification Phase
+			a.AddLog(">>> [Verify] Finished cycle. Refreshing hand to check for remaining items...")
+			time.Sleep(2 * time.Second)
+			sid := a.requestHandScan()
+
+			// Wait for scan to complete
+			scanDeadline := time.Now().Add(15 * time.Second)
+			for time.Now().Before(scanDeadline) {
+				a.stripScanMu.Lock()
+				active := a.stripScanActive
+				currentSID := a.stripScanSessionID
+				a.stripScanMu.Unlock()
+				
+				// If scan finished (active is false) AND it's at least the SID we just started
+				if !active && currentSID >= sid {
+					break
+				}
+				time.Sleep(500 * time.Millisecond)
+			}
+			
+			// Small pause before checking the loop condition again
+			time.Sleep(1 * time.Second)
 		}
-		a.AddLog("Auto-Drop sequence finished.")
 	}()
 }
 
