@@ -42,6 +42,9 @@ type App struct {
 	stripScanCounts       map[string]int
 	stripScanItemIDs      map[string][]int
 	handItems             []TradeItem
+
+	// Filtering state
+	ignoredItemIDs map[int]struct{}
 }
 
 func NewApp() *App {
@@ -50,6 +53,7 @@ func NewApp() *App {
 		stripScanSeenItemIDs: make(map[int]struct{}),
 		stripScanCounts:      make(map[string]int),
 		stripScanItemIDs:     make(map[string][]int),
+		ignoredItemIDs:      make(map[int]struct{}),
 	}
 }
 
@@ -304,12 +308,17 @@ func (a *App) runAutoDropLogic() {
 		a.stripScanMu.Lock()
 		allItemIDs := []int{}
 		for _, ids := range a.stripScanItemIDs {
-			allItemIDs = append(allItemIDs, ids...)
+			for _, id := range ids {
+				// FILTER: Skip pre-existing items
+				if _, ignored := a.ignoredItemIDs[id]; !ignored {
+					allItemIDs = append(allItemIDs, id)
+				}
+			}
 		}
 		a.stripScanMu.Unlock()
 
 		if len(allItemIDs) == 0 {
-			a.AddLog(">>> SEQUENCE COMPLETED: Hand is empty! <<<")
+			a.AddLog(">>> SEQUENCE COMPLETED: Hand is empty (or only ignored items remain)! <<<")
 			return
 		}
 
@@ -390,22 +399,26 @@ func (a *App) runAutoDropLogic() {
 
 		// Check what's left
 		a.stripScanMu.Lock()
-		remainingCount := 0
+		remainingNewCount := 0
 		for _, ids := range a.stripScanItemIDs {
-			remainingCount += len(ids)
+			for _, id := range ids {
+				if _, ignored := a.ignoredItemIDs[id]; !ignored {
+					remainingNewCount++
+				}
+			}
 		}
 		a.stripScanMu.Unlock()
 
-		if remainingCount > 0 && !wallPass {
-			a.AddLog("[Verify] Floor items placed, but items remain. Trying Wall pass next.")
+		if remainingNewCount > 0 && !wallPass {
+			a.AddLog("[Verify] Floor items placed, but new items remain. Trying Wall pass next.")
 			wallPass = true
-		} else if remainingCount > 0 && wallPass {
-			a.AddLog("[Verify] Wall items placed, but items remain. Retrying Floor pass.")
+		} else if remainingNewCount > 0 && wallPass {
+			a.AddLog("[Verify] Wall items placed, but new items remain. Retrying Floor pass.")
 			wallPass = false
 			currentX = 1
 			currentY = 1
 		} else {
-			a.AddLog(">>> SEQUENCE COMPLETED: Hand is empty! <<<")
+			a.AddLog(">>> SEQUENCE COMPLETED: Hand is empty (or only ignored items remain)! <<<")
 			return
 		}
 		time.Sleep(1 * time.Second)
@@ -433,6 +446,10 @@ func (a *App) ExecuteAutoDrop() {
 			a.running = false
 			a.mu.Unlock()
 		}()
+		
+		// Clear ignored list for manual trigger (assuming user wants to drop everything in hand now)
+		a.ignoredItemIDs = make(map[int]struct{})
+		
 		a.runAutoDropLogic()
 	}()
 }
@@ -456,6 +473,36 @@ func (a *App) ExecuteCommands() {
 
 		startTime := time.Now()
 		
+		// 1. INITIAL SCAN (To identify ignored items)
+		a.AddLog(">>> [Step 1/6] Scanning hand for pre-existing items (to ignore)...")
+		sid1 := a.requestHandScan()
+		scanDeadline1 := time.Now().Add(15 * time.Second)
+		for time.Now().Before(scanDeadline1) {
+			a.stripScanMu.Lock()
+			active := a.stripScanActive
+			currentSID := a.stripScanSessionID
+			a.stripScanMu.Unlock()
+			if !active && currentSID >= sid1 {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+
+		// Store ignored IDs
+		a.stripScanMu.Lock()
+		a.ignoredItemIDs = make(map[int]struct{})
+		initialCount := 0
+		for _, ids := range a.stripScanItemIDs {
+			for _, id := range ids {
+				a.ignoredItemIDs[id] = struct{}{}
+				initialCount++
+			}
+		}
+		a.stripScanMu.Unlock()
+		a.AddLog(fmt.Sprintf("Found %d existing items. These will be ignored during placement.", initialCount))
+
+		// 2. PICK ALL
+		a.AddLog(">>> [Step 2/6] Sending PICK_ALL...")
 		a.ExecutePickAll()
 		
 		for i := 10; i > 0; i-- {
@@ -463,25 +510,45 @@ func (a *App) ExecuteCommands() {
 			time.Sleep(1 * time.Second)
 		}
 
+		// 3. REFRESH ROOM
+		a.AddLog(">>> [Step 3/6] Refreshing room...")
 		a.ExecuteRoomRefresh()
 		time.Sleep(3 * time.Second)
 		
-		sid := a.requestHandScan()
-
-		// Wait for scan to complete
-		scanDeadline := time.Now().Add(15 * time.Second)
-		for time.Now().Before(scanDeadline) {
+		// 4. POST-PICKUP SCAN
+		a.AddLog(">>> [Step 4/6] Scanning hand for new items...")
+		sid2 := a.requestHandScan()
+		scanDeadline2 := time.Now().Add(15 * time.Second)
+		for time.Now().Before(scanDeadline2) {
 			a.stripScanMu.Lock()
 			active := a.stripScanActive
 			currentSID := a.stripScanSessionID
 			a.stripScanMu.Unlock()
-			if !active && currentSID >= sid {
+			if !active && currentSID >= sid2 {
 				break
 			}
 			time.Sleep(500 * time.Millisecond)
 		}
 
-		// Run the drop logic (already running in this goroutine, no need to spawn another)
+		// Verify we actually picked something up
+		a.stripScanMu.Lock()
+		newItemsCount := 0
+		for _, ids := range a.stripScanItemIDs {
+			for _, id := range ids {
+				if _, ignored := a.ignoredItemIDs[id]; !ignored {
+					newItemsCount++
+				}
+			}
+		}
+		a.stripScanMu.Unlock()
+
+		if newItemsCount == 0 {
+			a.AddLog("WARNING: No new items detected in hand after PICK_ALL. Stopping sequence.")
+			return
+		}
+		a.AddLog(fmt.Sprintf("Successfully picked up %d new items!", newItemsCount))
+
+		// 5. RUN AUTO DROP
 		a.runAutoDropLogic()
 		
 		duration := time.Since(startTime).Round(time.Millisecond)
