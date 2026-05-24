@@ -45,6 +45,11 @@ type App struct {
 
 	// Filtering state
 	ignoredItemIDs map[int]struct{}
+
+	// Scheduling state
+	scheduleMu      sync.Mutex
+	scheduleEnabled bool
+	targetTime      string // HH:MM:SS
 }
 
 func NewApp() *App {
@@ -53,7 +58,7 @@ func NewApp() *App {
 		stripScanSeenItemIDs: make(map[int]struct{}),
 		stripScanCounts:      make(map[string]int),
 		stripScanItemIDs:     make(map[string][]int),
-		ignoredItemIDs:      make(map[int]struct{}),
+		ignoredItemIDs:       make(map[int]struct{}),
 	}
 }
 
@@ -63,7 +68,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext = g.NewExt(g.ExtInfo{
 		Title:       "Pickup-Drop",
 		Description: "Pickup and Drop items automatically",
-		Version:     "1.4.0",
+		Version:     "1.5.0",
 		Author:      "Gemini CLI",
 	})
 
@@ -87,8 +92,58 @@ func (a *App) startup(ctx context.Context) {
 	// Intercept STRIPINFO_2 for hand scanning
 	a.ext.Intercept(g.In.Id("STRIPINFO_2")).With(a.handleStripPacket)
 
+	// Start background schedule monitor
+	go a.monitorSchedule()
+
 	a.AddLog("Extension registered. Waiting for connection...")
 	go a.ext.Run()
+}
+
+func (a *App) monitorSchedule() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		a.scheduleMu.Lock()
+		if !a.scheduleEnabled {
+			a.scheduleMu.Unlock()
+			continue
+		}
+
+		now := time.Now().Format("15:04:05")
+		if now == a.targetTime {
+			a.scheduleEnabled = false // Auto-disable after trigger
+			a.AddLog(fmt.Sprintf(">>> SCHEDULE TRIGGERED at %s! <<<", now))
+			a.scheduleMu.Unlock()
+
+			// Trigger full sequence
+			go a.ExecuteCommands()
+		} else {
+			a.scheduleMu.Unlock()
+		}
+	}
+}
+
+func (a *App) SetSchedule(timeStr string, enabled bool) {
+	a.scheduleMu.Lock()
+	defer a.scheduleMu.Unlock()
+
+	a.targetTime = timeStr
+	a.scheduleEnabled = enabled
+
+	status := "Disabled"
+	if enabled {
+		status = "Enabled"
+		a.AddLog(fmt.Sprintf("Schedule %s for %s (Local Machine Time)", status, timeStr))
+	} else {
+		a.AddLog("Schedule Disabled.")
+	}
+}
+
+func (a *App) GetSchedule() (string, bool) {
+	a.scheduleMu.Lock()
+	defer a.scheduleMu.Unlock()
+	return a.targetTime, a.scheduleEnabled
 }
 
 func (a *App) handleStripPacket(e *g.Intercept) {

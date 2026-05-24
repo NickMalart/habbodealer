@@ -7,15 +7,24 @@ import {
   ExecuteRoomRefresh, 
   ExecuteHandScan, 
   ExecuteAutoDrop, 
-  GetLogs
+  GetLogs,
+  SetSchedule,
+  GetSchedule
 } from '../wailsjs/go/main/App'
 
 const logs = ref([])
 const selectedStep = ref('pick_all')
+const scheduleTime = ref('00:00:00')
+const scheduleEnabled = ref(false)
 
 onMounted(() => {
   GetLogs().then(result => {
     logs.value = result
+  })
+
+  GetSchedule().then(([time, enabled]) => {
+    scheduleTime.value = time || '00:00:00'
+    scheduleEnabled.value = enabled
   })
 
   EventsOn('logsUpdate', newLogs => {
@@ -42,6 +51,11 @@ function handleCopyLogs() {
     alert('Logs copied to clipboard!')
   })
 }
+
+function toggleSchedule() {
+  scheduleEnabled.value = !scheduleEnabled.value
+  SetSchedule(scheduleTime.value, scheduleEnabled.value)
+}
 </script>
 
 <template>
@@ -51,6 +65,19 @@ function handleCopyLogs() {
     </div>
 
     <div class="actions">
+      <!-- Scheduling Section -->
+      <div class="schedule-box">
+        <label>Trigger Time (HH:MM:SS):</label>
+        <div class="schedule-controls">
+          <input v-model="scheduleTime" placeholder="20:00:00" />
+          <button @click="toggleSchedule" :class="scheduleEnabled ? 'btn-stop' : 'btn-step'">
+            {{ scheduleEnabled ? 'Cancel' : 'Schedule' }}
+          </button>
+        </div>
+      </div>
+
+      <hr />
+
       <div class="step-selector">
         <select v-model="selectedStep">
           <option value="pick_all">1. Pick All</option>
@@ -99,6 +126,35 @@ function handleCopyLogs() {
   gap: 0.75rem;
 }
 
+.schedule-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background-color: #1a1f29;
+  padding: 0.75rem;
+  border-radius: 4px;
+}
+
+.schedule-box label {
+  font-size: 0.8rem;
+  color: #90a4ae;
+}
+
+.schedule-controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+input {
+  flex-grow: 1;
+  padding: 0.5rem;
+  background-color: #0e1219;
+  color: white;
+  border: 1px solid #2d3446;
+  border-radius: 4px;
+  font-family: monospace;
+}
+
 .step-selector {
   display: flex;
   gap: 0.5rem;
@@ -131,8 +187,8 @@ button {
   background-color: #4caf50;
 }
 
-.btn-step:hover {
-  background-color: #43a047;
+.btn-stop {
+  background-color: #f44336;
 }
 
 .btn-full {
