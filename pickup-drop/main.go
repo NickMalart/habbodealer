@@ -350,14 +350,20 @@ func (a *App) runAutoDropLogic() {
 				}
 			} else {
 				// --- WALL PLACEMENT ---
-				wallPos := fmt.Sprintf(":w=1,0 l=%d,%d r", (i % 20) + 10, (i / 20) + 10)
+				// Manual: A\cULC@P:w=1,0 l=21,31 r
+				prefix := "@P"
+				if (i / 10) % 2 == 1 {
+					prefix = "@Q"
+				}
+				wallPos := fmt.Sprintf("%s:w=1,0 l=%d,%d r", prefix, (i % 15) + 5, (i / 15) + 20)
 				a.AddLog(fmt.Sprintf("[%d/%d] Wall: Item %d at %s", i+1, len(allItemIDs), itemID, wallPos))
 				
 				idBuf := make([]byte, gencoding.VL64EncodeLen(itemID))
 				gencoding.VL64Encode(idBuf, itemID)
 				
+				// Payload is tight: Header + ID + WallCoord
 				payload := append([]byte{}, idBuf...)
-				payload = append(payload, []byte(" "+wallPos)...)
+				payload = append(payload, []byte(wallPos)...)
 				
 				a.ext.Send(g.Out.Id("PLACEITEM"), payload)
 			}
@@ -399,7 +405,6 @@ func (a *App) runAutoDropLogic() {
 			currentX = 1
 			currentY = 1
 		} else {
-			// Hand is actually empty (remainingCount == 0)
 			return
 		}
 		time.Sleep(1 * time.Second)
