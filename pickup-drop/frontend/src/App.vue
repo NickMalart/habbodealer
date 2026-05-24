@@ -107,13 +107,17 @@ function toggleSchedule() {
       <div class="schedule-box">
         <div class="schedule-header">
           <label>Schedule Automatic Execution:</label>
-          <span :class="['countdown', scheduleEnabled ? 'active' : '']">{{ countdownText }}</span>
         </div>
         <div class="schedule-controls">
           <input type="datetime-local" v-model="scheduleTime" :disabled="scheduleEnabled" />
           <button @click="toggleSchedule" :class="scheduleEnabled ? 'btn-stop' : 'btn-step'">
             {{ scheduleEnabled ? 'Cancel' : 'Schedule' }}
           </button>
+        </div>
+        <!-- Dedicated Countdown Display -->
+        <div v-if="scheduleEnabled" class="countdown-container">
+          <span class="countdown-label">Time until trigger:</span>
+          <span class="countdown-value">{{ countdownText }}</span>
         </div>
       </div>
 
@@ -188,13 +192,25 @@ function toggleSchedule() {
   color: #90a4ae;
 }
 
-.countdown {
-  font-family: monospace;
-  font-size: 0.9rem;
-  color: #546e7a;
+.countdown-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.5rem;
+  background-color: #0e1219;
+  border-radius: 4px;
+  border: 1px dashed #455a64;
 }
 
-.countdown.active {
+.countdown-label {
+  font-size: 0.75rem;
+  color: #90a4ae;
+  margin-bottom: 0.25rem;
+}
+
+.countdown-value {
+  font-family: monospace;
+  font-size: 1.2rem;
   color: #ffb74d;
   font-weight: bold;
 }
