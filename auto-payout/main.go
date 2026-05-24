@@ -2720,6 +2720,16 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 			a.AddLog(fmt.Sprintf("Payout for %s SUCCESSFUL. Items delivered.", p.Name))
 			a.sendDiscordNotification(a.payouts[i], screenshotPath)
 
+			// Record payout to trade_ledger as OUT. Prefer the intercepted trade items when available,
+			// otherwise fall back to the queued payout item/quantity.
+			var outItems []TradeItem
+			if len(lastItems) > 0 {
+				outItems = lastItems
+			} else {
+				outItems = []TradeItem{{Name: p.ItemName, Quantity: p.Quantity}}
+			}
+			a.recordTradeLedger(p.Name, "OUT", outItems)
+
 			// Also mark any associated banker_trades as completed so the dealer bot re-opens
 			if a.db != nil {
 				var err error
@@ -2734,18 +2744,10 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 					a.AddLog(fmt.Sprintf("ERROR: Failed to update banker_trades for %s/%d (banker_id=%d): %v", p.Name, p.TradeID, p.BankerTradeID, err))
 				} else {
 					a.AddLog(fmt.Sprintf("Marked banker_trades for %s/%d (banker_id=%d) as completed", p.Name, p.TradeID, p.BankerTradeID))
-
-					// Record payout to trade_ledger as OUT. Prefer the intercepted trade items when available,
-					// otherwise fall back to the queued payout item/quantity.
-					var outItems []TradeItem
-					if len(lastItems) > 0 {
-						outItems = lastItems
-					} else {
-						outItems = []TradeItem{{Name: p.ItemName, Quantity: p.Quantity}}
-					}
-					a.recordTradeLedger(p.Name, "OUT", outItems)
 				}
 			}
+
+			break // Ensure only one payout record is consumed per completion packet
 		}
 	}
 	a.pMu.Unlock()
@@ -3355,6 +3357,82 @@ func (a *App) automateTrade(p *Payout) {
 
 		if completed {
 			return
+		}
+
+		// Step 3: Inventory Verification (Dropped Packet Floor)
+		// If the confirm loop exhausted without completion, explicitly refresh inventory
+		// and check if the items are gone. If they are, the trade likely succeeded.
+		a.AddLog(fmt.Sprintf("Confirm stage timed out for %s; performing inventory verification...", p.Name))
+		a.RefreshInventory()
+		
+		// Wait for scan to complete (max 5s)
+		scanTimedOut := true
+		for s := 0; s < 50; s++ {
+			time.Sleep(100 * time.Millisecond)
+			a.stripScanMu.Lock()
+			active := a.stripScanActive
+			a.stripScanMu.Unlock()
+			if !active {
+				scanTimedOut = false
+				break
+			}
+		}
+
+		if !scanTimedOut {
+			// Check if the items we tried to trade are still there
+			a.inventoryMu.RLock()
+			currentIDs, _ := a.inventory[strings.ToLower(p.ItemName)]
+			a.inventoryMu.RUnlock()
+
+			// Simple heuristic: if our count for this item is now less than what we
+			// tried to trade (or if specific IDs are gone), assume success.
+			// Using IDs set from earlier in this attempt (ids[0:toAdd])
+			stillHave := false
+			for _, idToFind := range ids[:toAdd] {
+				found := false
+				for _, curID := range currentIDs {
+					if curID == idToFind {
+						found = true
+						break
+					}
+				}
+				if found {
+					stillHave = true
+					break
+				}
+			}
+
+			if !stillHave {
+				a.AddLog(fmt.Sprintf("INVENTORY_VERIFY: Items are GONE from hand. Deducing successful trade for %s.", p.Name))
+				a.pMu.Lock()
+				for i := range a.payouts {
+					if a.payouts[i].ID == p.ID {
+						a.payouts[i].Status = "Completed"
+						break
+					}
+				}
+				a.pMu.Unlock()
+				a.persistPayoutStatus(p.ID, "Completed")
+				a.emitUpdate()
+
+				// Record reliable ledger OUT and mark banker trades
+				if a.db != nil {
+					if p.BankerTradeID > 0 {
+						a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE id = $1 AND status = 'paying'", p.BankerTradeID)
+					} else if p.TradeID > 0 {
+						a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_trade_id = $1 AND status = 'paying'", p.TradeID)
+					} else {
+						a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_name = $1 AND status = 'paying'", p.Name)
+					}
+				}
+				a.recordTradeLedger(p.Name, "OUT", []TradeItem{{Name: p.ItemName, Quantity: p.Quantity}})
+				a.AddLog(fmt.Sprintf("Payout for %s COMPLETED via inventory verification.", p.Name))
+				return
+			} else {
+				a.AddLog("INVENTORY_VERIFY: Items still in hand. Trade definitely failed.")
+			}
+		} else {
+			a.AddLog("INVENTORY_VERIFY: Scan timed out; proceeding with normal retry.")
 		}
 
 		a.AddLog(fmt.Sprintf("Attempt %d/%d did not complete; will retry.", attemptNum, maxAttempts))
