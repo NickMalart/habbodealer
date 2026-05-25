@@ -16785,11 +16785,14 @@ func (a *App) startDealerShoutPolling() {
 				ORDER BY created_at ASC 
 				LIMIT 1
 			`
-			err := db.QueryRow(ctx, query, owner).Scan(&id, &targetPlayer, &message, &dbOwner)
+			err := db.QueryRow(ctx, query).Scan(&id, &targetPlayer, &message, &dbOwner)
 			cancel()
 
 			if err != nil {
 				// No pending shouts found for our filters
+				if err != pgx.ErrNoRows && !strings.Contains(err.Error(), "no rows") {
+					a.AddLogMsg(fmt.Sprintf("[SHOUT_POLL] query error: %v", err))
+				}
 				continue
 			}
 
