@@ -902,12 +902,11 @@ func (a *App) getCurrentRoomName() string {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.startHistoryPersistWorker()
-	go func() {
-		a.initHistoryDatabase()
-		a.loadGameHistory()
-		a.startBankerTradePolling()
-		a.startDealerShoutPolling()
-	}()
+	// Start independent background workers
+	go a.initHistoryDatabase()
+	go a.loadGameHistory()
+	go a.startBankerTradePolling()
+	go a.startDealerShoutPolling()
 	rand.Seed(time.Now().UnixNano())
 	a.setupExt()
 	go func() {
@@ -2537,65 +2536,75 @@ func (a *App) initHistoryDatabase() {
 	exe, _ := os.Executable()
 	dbDiagLog(fmt.Sprintf("initHistoryDatabase called cwd=%s exe=%s", cwd, exe))
 
-	cfg, err := loadDBConfig()
-	if err != nil {
-		msg := fmt.Sprintf("[GAME_HISTORY][DB] config not loaded: %v", err)
-		a.AddLogMsg(msg)
-		dbDiagLog(msg)
-		return
-	}
-	dbDiagLog(fmt.Sprintf("config loaded, url length=%d owner=%q", len(cfg.DatabaseURL), cfg.OwnerKey))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
-	if err != nil {
-		msg := fmt.Sprintf("[GAME_HISTORY][DB] pool creation failed: %v", err)
-		a.AddLogMsg(msg)
-		dbDiagLog(msg)
-		return
-	}
-	if err := db.Ping(ctx); err != nil {
-		msg := fmt.Sprintf("[GAME_HISTORY][DB] ping failed: %v", err)
-		a.AddLogMsg(msg)
-		dbDiagLog(msg)
-		db.Close()
-		return
-	}
-	dbDiagLog("ping OK")
-
-	owner := strings.TrimSpace(os.Getenv("ROLL_ORIGINS_OWNER_KEY"))
-	if owner == "" {
-		owner = strings.TrimSpace(os.Getenv("TRADE_TRACKER_OWNER_KEY"))
-	}
-	if owner == "" {
-		owner = strings.TrimSpace(cfg.OwnerKey)
-	}
-	if owner == "" {
-		if h, err := os.Hostname(); err == nil {
-			owner = h
-		} else {
-			owner = "local"
+	for {
+		cfg, err := loadDBConfig()
+		if err != nil {
+			msg := fmt.Sprintf("[GAME_HISTORY][DB] config not loaded: %v", err)
+			a.AddLogMsg(msg)
+			dbDiagLog(msg)
+			time.Sleep(10 * time.Second)
+			continue
 		}
+		dbDiagLog(fmt.Sprintf("config loaded, url length=%d owner=%q", len(cfg.DatabaseURL), cfg.OwnerKey))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		db, err := pgxpool.New(ctx, cfg.DatabaseURL)
+		if err != nil {
+			cancel()
+			msg := fmt.Sprintf("[GAME_HISTORY][DB] pool creation failed: %v", err)
+			a.AddLogMsg(msg)
+			dbDiagLog(msg)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		if err := db.Ping(ctx); err != nil {
+			cancel()
+			msg := fmt.Sprintf("[GAME_HISTORY][DB] ping failed: %v", err)
+			a.AddLogMsg(msg)
+			dbDiagLog(msg)
+			db.Close()
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		cancel()
+		dbDiagLog("ping OK")
+
+		owner := strings.TrimSpace(os.Getenv("ROLL_ORIGINS_OWNER_KEY"))
+		if owner == "" {
+			owner = strings.TrimSpace(os.Getenv("TRADE_TRACKER_OWNER_KEY"))
+		}
+		if owner == "" {
+			owner = strings.TrimSpace(cfg.OwnerKey)
+		}
+		if owner == "" {
+			if h, err := os.Hostname(); err == nil {
+				owner = h
+			} else {
+				owner = "local"
+			}
+		}
+
+		a.historyDBMu.Lock()
+		a.historyDB = db
+		a.historyOwnerKey = owner
+		a.historyDBMu.Unlock()
+
+		if err := a.ensureGameHistoryTables(); err != nil {
+			msg := fmt.Sprintf("[GAME_HISTORY][DB] migration failed: %v", err)
+			a.AddLogMsg(msg)
+			dbDiagLog(msg)
+			// Don't retry indefinitely if migration fails? 
+			// Actually, let's retry anyway as it might be a transient DB issue.
+			time.Sleep(10 * time.Second)
+			continue
+		}
+
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] connected (owner=%s)", owner))
+		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] database URL length: %d", len(cfg.DatabaseURL)))
+		dbDiagLog(fmt.Sprintf("READY owner=%s", owner))
+		a.loadStockedItems()
+		break // Success!
 	}
-
-	a.historyDBMu.Lock()
-	a.historyDB = db
-	a.historyOwnerKey = owner
-	a.historyDBMu.Unlock()
-
-	if err := a.ensureGameHistoryTables(); err != nil {
-		msg := fmt.Sprintf("[GAME_HISTORY][DB] migration failed: %v", err)
-		a.AddLogMsg(msg)
-		dbDiagLog(msg)
-		return
-	}
-
-	a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] connected (owner=%s)", owner))
-	a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] database URL length: %d", len(cfg.DatabaseURL)))
-	dbDiagLog(fmt.Sprintf("READY owner=%s", owner))
-	a.loadStockedItems()
 }
 
 func (a *App) getHistoryDB() (*pgxpool.Pool, string) {
@@ -16741,8 +16750,11 @@ func (a *App) rollMidHouseDice() {
 func (a *App) startDealerShoutPolling() {
 	a.AddLogMsg("[SHOUT_POLL] starting background worker")
 	go func() {
+		// Wait a bit for DB to stabilize on startup
+		time.Sleep(5 * time.Second)
+		
 		for {
-			time.Sleep(2 * time.Second)
+			time.Sleep(1 * time.Second) // Poll every 1 second
 
 			db, owner := a.getHistoryDB()
 			if db == nil {
@@ -16750,16 +16762,22 @@ func (a *App) startDealerShoutPolling() {
 			}
 
 			// Query for the oldest pending shout for this dealer
+			// We look for:
+			// 1. Exact owner match
+			// 2. Empty owner (broadcast)
+			// 3. 'roll-origins' or 'local' as fallback if the current owner is one of those
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			var id int
 			var targetPlayer, message string
-			err := db.QueryRow(ctx, `
+			
+			query := `
 				SELECT id, target_player, message 
 				FROM public.dealer_shouts 
-				WHERE status = 'pending' AND (owner_key = $1 OR owner_key = '')
+				WHERE status = 'pending' AND (owner_key = $1 OR owner_key = '' OR (owner_key = 'roll-origins' AND $1 = 'local') OR (owner_key = 'local' AND $1 = 'roll-origins'))
 				ORDER BY created_at ASC 
 				LIMIT 1
-			`, owner).Scan(&id, &targetPlayer, &message)
+			`
+			err := db.QueryRow(ctx, query, owner).Scan(&id, &targetPlayer, &message)
 			cancel()
 
 			if err != nil {
@@ -16767,7 +16785,7 @@ func (a *App) startDealerShoutPolling() {
 				continue
 			}
 
-			a.AddLogMsg(fmt.Sprintf("[SHOUT_POLL] Picking up shout for %s: %s", targetPlayer, message))
+			a.AddLogMsg(fmt.Sprintf("[SHOUT_POLL] Picking up shout for %s (Owner: %s): %s", targetPlayer, owner, message))
 
 			// Mark as 'processing' to avoid duplicate shouts from same poller
 			ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
@@ -16787,6 +16805,8 @@ func (a *App) startDealerShoutPolling() {
 			cancel3()
 			if err != nil {
 				a.AddLogMsg(fmt.Sprintf("[SHOUT_POLL] ERROR: failed to mark shout %d as completed: %v", id, err))
+			} else {
+				a.AddLogMsg(fmt.Sprintf("[SHOUT_POLL] Successfully shouted and completed ID %d", id))
 			}
 		}
 	}()
