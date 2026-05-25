@@ -16748,44 +16748,52 @@ func (a *App) rollMidHouseDice() {
 }
 
 func (a *App) startDealerShoutPolling() {
-	a.AddLogMsg("[SHOUT_POLL] starting background worker")
+	a.AddLogMsg("[SHOUT_POLL] worker started and entering loop")
 	go func() {
 		// Wait a bit for DB to stabilize on startup
 		time.Sleep(5 * time.Second)
 		
+		lastHeartbeat := time.Now()
+		a.AddLogMsg("[SHOUT_POLL] worker loop running")
 		for {
 			time.Sleep(1 * time.Second) // Poll every 1 second
 
+			if time.Since(lastHeartbeat) > 30*time.Second {
+				a.AddLogMsg("[SHOUT_POLL] heartbeat: poller is active and waiting for shouts")
+				lastHeartbeat = time.Now()
+			}
+
 			db, owner := a.getHistoryDB()
 			if db == nil {
+				if time.Since(lastHeartbeat) > 25*time.Second {
+					a.AddLogMsg("[SHOUT_POLL] heartbeat: still waiting for database connection...")
+					// don't reset lastHeartbeat here so it triggers frequently if disconnected
+				}
 				continue
 			}
 
 			// Query for the oldest pending shout for this dealer
-			// We look for:
-			// 1. Exact owner match
-			// 2. Empty owner (broadcast)
-			// 3. 'roll-origins' or 'local' as fallback if the current owner is one of those
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			var id int
-			var targetPlayer, message string
+			var targetPlayer, message, dbOwner string
 			
+			// Simplified query: Ignore owner_key entirely and pick up any pending shout
 			query := `
-				SELECT id, target_player, message 
+				SELECT id, target_player, message, owner_key
 				FROM public.dealer_shouts 
-				WHERE status = 'pending' AND (owner_key = $1 OR owner_key = '' OR (owner_key = 'roll-origins' AND $1 = 'local') OR (owner_key = 'local' AND $1 = 'roll-origins'))
+				WHERE status = 'pending'
 				ORDER BY created_at ASC 
 				LIMIT 1
 			`
-			err := db.QueryRow(ctx, query, owner).Scan(&id, &targetPlayer, &message)
+			err := db.QueryRow(ctx, query, owner).Scan(&id, &targetPlayer, &message, &dbOwner)
 			cancel()
 
 			if err != nil {
-				// No pending shouts
+				// No pending shouts found for our filters
 				continue
 			}
 
-			a.AddLogMsg(fmt.Sprintf("[SHOUT_POLL] Picking up shout for %s (Owner: %s): %s", targetPlayer, owner, message))
+			a.AddLogMsg(fmt.Sprintf("[SHOUT_POLL] Picking up shout ID %d for %s (DB Owner: %q, Local Owner: %q): %s", id, targetPlayer, dbOwner, owner, message))
 
 			// Mark as 'processing' to avoid duplicate shouts from same poller
 			ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
