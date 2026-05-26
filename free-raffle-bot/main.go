@@ -45,7 +45,7 @@ var ext = g.NewExt(g.ExtInfo{
 	Author:      "Dubbo",
 })
 
-const hardcodedRaffleWebhookURL = "https://discordapp.com/api/webhooks/1499651607800057926/SLvv8HU_yG2vyW04MaXkZ2eVd_10qpddkJjBWDQ6GmB7LzUhJu7yZAgQInsg0eLOogJ9"
+const hardcodedRaffleWebhookURL = "https://discordapp.com/api/webhooks/1508744238962053130/ztAuoSHjLeGHXaFQDmIDl9NOALvetKK1EWBnoqOrTjL4x5opsCRK5lLx-qh2e-_sXwkm"
 
 type DBConfig struct {
 	DatabaseURL string `json:"databaseUrl"`
