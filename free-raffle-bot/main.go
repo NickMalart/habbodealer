@@ -2195,21 +2195,47 @@ func (a *App) ResumeSession(dbID int64) (RaffleState, error) {
 	}
 	// Move it out of closed list and make it current (clear EndedAt so it's live)
 	s := a.sessions[idx]
+	a.logDebug("ResumeSession: Found session %d in a.sessions with %d participants", dbID, len(s.Participants))
+	for _, p := range s.Participants {
+		a.logDebug("ResumeSession: Participant in s: %s (%d tickets)", p.Username, p.Tickets)
+	}
+
 	a.sessions = append(a.sessions[:idx], a.sessions[idx+1:]...)
 	s.EndedAt = ""
 	s.ResumedAt = time.Now().UTC()
-	a.currentSession = &s
+	
+	// Clear scheduled end if it's in the past, to prevent immediate auto-stop
+	if s.ScheduledEndAt != "" {
+		if t, err := time.Parse(time.RFC3339, s.ScheduledEndAt); err == nil {
+			if time.Now().UTC().After(t.UTC()) {
+				a.logDebug("ResumeSession: Clearing expired scheduled end time %s", s.ScheduledEndAt)
+				s.ScheduledEndAt = ""
+			}
+		}
+	}
+
+	// Deep copy to ensure it's on the heap and separate from the slice
+	a.currentSession = copySession(&s)
+	
+	a.logDebug("ResumeSession: a.currentSession now has %d participants", len(a.currentSession.Participants))
+	for _, p := range a.currentSession.Participants {
+		a.logDebug("ResumeSession: Participant in a.currentSession: %s (%d tickets)", p.Username, p.Tickets)
+	}
+
 	db := a.db
 	owner := a.ownerKey
 	a.enabled = true
 	a.mu.Unlock()
 
-	// Reopen in DB (clear ended_at)
+	// Reopen in DB (clear ended_at and scheduled_end_at if expired)
 	if db != nil && dbID > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		if _, err := db.Exec(ctx,
-			`UPDATE raffle_sessions SET ended_at = NULL WHERE id = $1 AND owner_key = $2`,
+			`UPDATE raffle_sessions SET ended_at = NULL, scheduled_end_at = CASE 
+				WHEN scheduled_end_at < NOW() THEN NULL 
+				ELSE scheduled_end_at 
+			 END WHERE id = $1 AND owner_key = $2`,
 			dbID, owner,
 		); err != nil {
 			a.logDebug("resume session db update failed: %v", err)
@@ -3195,6 +3221,7 @@ func (a *App) initDatabase() {
 	a.mu.Lock()
 	a.db = db
 	a.ownerKey = owner
+	a.logDebug("initDatabase: ownerKey set to %q", a.ownerKey)
 	a.mu.Unlock()
 
 	if err := a.ensureTables(); err != nil {
@@ -3417,29 +3444,6 @@ func (a *App) loadSessionsFromDB() error {
 	sessionsByID := map[int64]*RaffleSession{}
 	orderedIDs := make([]int64, 0)
 	maxID := 0
-	var current *RaffleSession
-
-	type sessionMeta struct {
-		raffleName         string
-		prizeName          string
-		prizeQty           int
-		heroImageURL       string
-		heroAttachmentID   string
-		heroAttachmentFile string
-		winnerName         string
-		winnerTickets      int
-		winnerOdds         string
-		winnerDrawnAt      string
-		winnerMethod       string
-		winnerSummary      string
-		winnerProofURL     string
-		winnerProofID      string
-		winnerProofFile    string
-		sponsorEnabled     bool
-		sponsorName        string
-		sponsorRoomName    string
-	}
-	metaByID := map[int64]sessionMeta{}
 
 	for sRows.Next() {
 		var s dbSession
@@ -3479,26 +3483,6 @@ func (a *App) loadSessionsFromDB() error {
 		if s.winnerDrawnAt != nil {
 			rs.WinnerDrawnAt = s.winnerDrawnAt.UTC().Format(time.RFC3339)
 		}
-		metaByID[s.id] = sessionMeta{
-			raffleName:         strings.TrimSpace(s.raffleName),
-			prizeName:          strings.TrimSpace(s.prizeName),
-			prizeQty:           s.prizeQty,
-			heroImageURL:       strings.TrimSpace(s.heroImageURL),
-			heroAttachmentID:   strings.TrimSpace(s.heroAttachmentID),
-			heroAttachmentFile: strings.TrimSpace(s.heroAttachmentFile),
-			winnerName:         strings.TrimSpace(s.winnerName),
-			winnerTickets:      s.winnerTickets,
-			winnerOdds:         strings.TrimSpace(s.winnerOdds),
-			winnerDrawnAt:      rs.WinnerDrawnAt,
-			winnerMethod:       strings.TrimSpace(s.winnerMethod),
-			winnerSummary:      strings.TrimSpace(s.winnerSummary),
-			winnerProofURL:     strings.TrimSpace(s.winnerProofURL),
-			winnerProofID:      strings.TrimSpace(s.winnerProofID),
-			winnerProofFile:    strings.TrimSpace(s.winnerProofFile),
-			sponsorEnabled:     s.sponsorEnabled,
-			sponsorName:        strings.TrimSpace(s.sponsorName),
-			sponsorRoomName:    strings.TrimSpace(s.sponsorRoomName),
-		}
 		if s.scheduledEndAt != nil {
 			rs.ScheduledEndAt = s.scheduledEndAt.UTC().Format(time.RFC3339)
 		}
@@ -3518,6 +3502,8 @@ func (a *App) loadSessionsFromDB() error {
 		return err
 	}
 
+	a.logDebug("loadSessionsFromDB: Loaded %d sessions", len(orderedIDs))
+
 	pRows, err := db.Query(ctx, `
 		SELECT session_id, username, username_key, bet_count, ticket_count, manual_ticket_delta, first_bet_at, last_bet_at
 		FROM raffle_participants
@@ -3529,6 +3515,7 @@ func (a *App) loadSessionsFromDB() error {
 	}
 	defer pRows.Close()
 
+	participantCount := 0
 	for pRows.Next() {
 		var sessionID int64
 		var p RaffleParticipant
@@ -3537,19 +3524,23 @@ func (a *App) loadSessionsFromDB() error {
 		if err := pRows.Scan(&sessionID, &p.Username, &p.UsernameKey, &p.BetCount, &p.Tickets, &p.ManualDelta, &firstAt, &lastAt); err != nil {
 			return err
 		}
-		if p.Tickets != effectiveTicketsForParticipant(p.BetCount, sessionsByID[sessionID].BonusEvery, p.ManualDelta) {
-			p.Tickets = effectiveTicketsForParticipant(p.BetCount, sessionsByID[sessionID].BonusEvery, p.ManualDelta)
-		}
-		p.FirstBet = firstAt.UTC().Format(time.RFC3339)
-		p.LastBet = lastAt.UTC().Format(time.RFC3339)
-		if s := sessionsByID[sessionID]; s != nil {
+		if s, ok := sessionsByID[sessionID]; ok {
+			if p.Tickets != effectiveTicketsForParticipant(p.BetCount, s.BonusEvery, p.ManualDelta) {
+				p.Tickets = effectiveTicketsForParticipant(p.BetCount, s.BonusEvery, p.ManualDelta)
+			}
+			p.FirstBet = firstAt.UTC().Format(time.RFC3339)
+			p.LastBet = lastAt.UTC().Format(time.RFC3339)
 			s.Participants = append(s.Participants, p)
+			participantCount++
 		}
 	}
 	if err := pRows.Err(); err != nil {
 		return err
 	}
 
+	a.logDebug("loadSessionsFromDB: Loaded %d participants total", participantCount)
+
+	var current *RaffleSession
 	closed := make([]RaffleSession, 0)
 	for _, id := range orderedIDs {
 		s := sessionsByID[id]
@@ -3569,37 +3560,18 @@ func (a *App) loadSessionsFromDB() error {
 	a.currentSession = current
 	if a.currentSession != nil {
 		a.raffleMessageID = strings.TrimSpace(a.currentSession.WebhookMessageID)
+		a.logDebug("loadSessionsFromDB: Current session is %d with %d participants", a.currentSession.DBID, len(a.currentSession.Participants))
 	} else {
 		a.raffleMessageID = ""
 	}
-	if current != nil {
-		if m, ok := metaByID[current.DBID]; ok {
-			if m.raffleName != "" {
-				a.raffleName = m.raffleName
-				current.RaffleName = m.raffleName
-			}
-			if m.prizeName != "" {
-				a.rafflePrizeName = m.prizeName
-				current.PrizeName = m.prizeName
-			}
-			if m.prizeQty > 0 {
-				a.rafflePrizeQty = m.prizeQty
-				current.PrizeQty = m.prizeQty
-			}
-			a.raffleHeroImageURL = m.heroImageURL
-			a.raffleHeroAttachmentID = m.heroAttachmentID
-			a.raffleHeroAttachmentFile = m.heroAttachmentFile
-			current.HeroImageURL = m.heroImageURL
-			current.HeroAttachmentID = m.heroAttachmentID
-			current.HeroAttachmentFile = m.heroAttachmentFile
-			a.sponsorEnabled = m.sponsorEnabled
-			a.sponsorName = m.sponsorName
-			a.sponsorRoomName = m.sponsorRoomName
-			current.SponsorEnabled = m.sponsorEnabled
-			current.SponsorName = m.sponsorName
-			current.SponsorRoomName = m.sponsorRoomName
+	
+	// Check session 38 specifically in logs
+	for _, s := range a.sessions {
+		if s.DBID == 38 {
+			a.logDebug("loadSessionsFromDB: Session 38 found in closed with %d participants", len(s.Participants))
 		}
 	}
+
 	if a.nextSessionID < maxID {
 		a.nextSessionID = maxID
 	}
