@@ -4952,6 +4952,12 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			a.AddLogMsg(fmt.Sprintf("[SPLIT_DEALER] blocking trade, redirecting to banker: %s", bankerName))
 			e.Block()
 			ext.Send(out.TRADE_CLOSE)
+
+			// Suppress the redundant "trade closed" shout that follows this block
+			hiddenBlockedTradeCleanupPending = true
+			ignoreNextGuardCloseRecovery = true
+			suppressNextTradeCloseAnnouncement = true
+
 			if bankerName != "" {
 				sendPublicShout(fmt.Sprintf("Please trade %s", bankerName))
 			} else {
