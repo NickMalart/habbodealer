@@ -3418,6 +3418,8 @@ func (a *App) ensureTables() error {
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS bonus_every INTEGER NOT NULL DEFAULT 5`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS last_seen_created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS last_seen_entry_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS last_seen_banker_at TIMESTAMPTZ NOT NULL DEFAULT '2000-01-01'`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS last_seen_banker_id BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS webhook_message_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS raffle_name TEXT NOT NULL DEFAULT 'Flame Raffle'`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS prize_name TEXT NOT NULL DEFAULT 'Purple Dragon Lamp'`,
