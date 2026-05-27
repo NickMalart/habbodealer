@@ -3346,11 +3346,11 @@ func (a *App) persistSingleGameEntryToDB(entry GameHistoryEntry) error {
 				INSERT INTO game_history_entries (
 					id, owner_key, player_name, started_at, updated_at, completed_at,
 					game, winner, status, issue, issue_reason, player_result, dealer_result,
-					notes, choice, choice_shout, payout_multiplier, updated_db_at
+					notes, choice, choice_shout, payout_multiplier, raffle_session_id, updated_db_at
 				) VALUES (
 					$1,$2,$3,$4,$5,$6,
 					$7,$8,$9,$10,$11,$12,$13,
-					$14,$15,$16,$17,NOW()
+					$14,$15,$16,$17,$18,NOW()
 				)
 				ON CONFLICT (id, owner_key) DO UPDATE SET
 					player_name = EXCLUDED.player_name,
@@ -3368,6 +3368,7 @@ func (a *App) persistSingleGameEntryToDB(entry GameHistoryEntry) error {
 					choice = EXCLUDED.choice,
 					choice_shout = EXCLUDED.choice_shout,
 					payout_multiplier = EXCLUDED.payout_multiplier,
+					raffle_session_id = EXCLUDED.raffle_session_id,
 					updated_db_at = NOW()
 			`,
 				entry.ID,
@@ -3387,6 +3388,7 @@ func (a *App) persistSingleGameEntryToDB(entry GameHistoryEntry) error {
 				entry.Choice,
 				entry.ChoiceShout,
 				entry.PayoutMultiplier,
+				entry.RaffleSessionID,
 			); err != nil {
 				return err
 			}

@@ -711,6 +711,9 @@ func (a *App) initDatabase() {
 	// Ensure notified column exists for failure webhooks
 	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS notified BOOLEAN DEFAULT FALSE;")
 
+	// Ensure banker_trades has owner_key for raffle tracking
+	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';")
+
 	// Create public.stocked_items table
 	query = `CREATE TABLE IF NOT EXISTS public.stocked_items (
 		id SERIAL PRIMARY KEY,
@@ -2319,14 +2322,16 @@ func (a *App) recordBankerTrade(playerName string, items []TradeItem, tradeID in
 		return
 	}
 
+	owner := a.getOwnerKey()
+
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		_, err := a.db.Exec(ctx, `
-			INSERT INTO public.banker_trades (player_name, bet_items, banker_name, status, created_at, player_trade_id, player_chat_id)
-			VALUES ($1, $2, $3, $4, NOW(), $5, $6)
-		`, playerName, itemsJSON, banker, "pending", tradeID, chatID)
+			INSERT INTO public.banker_trades (player_name, bet_items, banker_name, status, created_at, player_trade_id, player_chat_id, owner_key)
+			VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7)
+		`, playerName, itemsJSON, banker, "pending", tradeID, chatID, owner)
 		if err != nil {
 			a.AddLog(fmt.Sprintf("ERROR: [BANKER][DB] failed to record trade: %v", err))
 		} else {

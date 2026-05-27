@@ -102,6 +102,8 @@ type RaffleSession struct {
 	DBID               int64               `json:"-"`
 	CursorAt           time.Time           `json:"-"`
 	CursorEntry        string              `json:"-"`
+	BankerCursorAt     time.Time           `json:"-"`
+	BankerCursorID     int64               `json:"-"`
 	ResumedAt          time.Time           `json:"-"` // zero if never resumed; bets before this time skip shouts
 
 	SponsorEnabled  bool   `json:"sponsorEnabled"`
@@ -2092,10 +2094,13 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 
 		var dbSessionID int64
 		err := db.QueryRow(ctx,
-			`INSERT INTO raffle_sessions (started_at, scheduled_end_at, owner_key, bonus_every, last_seen_created_at, last_seen_entry_id, webhook_message_id,
+			`INSERT INTO raffle_sessions (started_at, scheduled_end_at, owner_key, bonus_every, 
+			                              last_seen_created_at, last_seen_entry_id, 
+			                              last_seen_banker_at, last_seen_banker_id,
+			                              webhook_message_id,
 			                              raffle_name, prize_name, prize_qty, hero_image_url, hero_attachment_id, hero_attachment_file,
 			                              sponsor_enabled, sponsor_name, sponsor_room_name)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 			 RETURNING id`,
 			startAt,
 			func() interface{} {
@@ -2108,6 +2113,8 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 			bonusEvery,
 			startAt,
 			"",
+			startAt, // last_seen_banker_at
+			0,       // last_seen_banker_id
 			"",
 			raffleName,
 			rafflePrizeName,
@@ -2529,10 +2536,12 @@ func (a *App) processNewBets() {
 	sessionStartedAt := startAt.UTC()
 	cursorAt := a.currentSession.CursorAt
 	cursorEntry := a.currentSession.CursorEntry
+	bankerCursorAt := a.currentSession.BankerCursorAt
+	bankerCursorID := a.currentSession.BankerCursorID
 	db := a.db
 	a.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
 	var cursorEntryNum int64
@@ -2540,6 +2549,18 @@ func (a *App) processNewBets() {
 		cursorEntryNum, _ = strconv.ParseInt(strings.TrimSpace(cursorEntry), 10, 64)
 	}
 
+	type betRow struct {
+		ID        string
+		Player    string
+		EventAt   time.Time
+		IsBanker  bool
+		NumericID int64
+	}
+	batch := make([]betRow, 0)
+
+	// 1. Query standard game_history_entries
+	// We EXCLUDE rows that are adoptions of banker trades to avoid double counting,
+	// because we will pick those up directly from banker_trades.
 	rows, err := db.Query(ctx, `
 		SELECT
 			e.id::text,
@@ -2551,87 +2572,72 @@ func (a *App) processNewBets() {
 		  AND (e.raffle_session_id = $2 OR e.raffle_session_id = 0)
 		  AND e.raffle_session_id <> -1
 		  AND lower(e.game) <> 'bandit'
+		  AND (e.notes IS NULL OR array_to_string(e.notes, ' ') NOT LIKE '%Adopting banker trade%')
 		  AND (
 			e.started_at::timestamptz > $3
 			OR (e.started_at::timestamptz = $3 AND e.id::bigint > $4)
 		  )
-		ORDER BY e.started_at::timestamptz ASC, e.id ASC
-		LIMIT 500
+		ORDER BY e.started_at::timestamptz ASC, e.id::bigint ASC
+		LIMIT 250
 	`, owner, sessionDBID, cursorAt, cursorEntryNum)
-	if err != nil {
-		a.logDebug("poll query failed: %v", err)
-		return
-	}
-	defer rows.Close()
-
-	type dbBetRow struct {
-		EntryID   string
-		Player    string
-		StartedAt string
-	}
-	type betRow struct {
-		EntryID string
-		Player  string
-		EventAt time.Time
-	}
-	scannedCount := 0
-	skippedInvalidTime := 0
-	latestSeenAt := time.Time{}
-	latestSeenEntry := ""
-	batch := make([]betRow, 0)
-	for rows.Next() {
-		var raw dbBetRow
-		if err := rows.Scan(&raw.EntryID, &raw.Player, &raw.StartedAt); err != nil {
-			a.logDebug("poll scan failed: %v", err)
-			return
+	if err == nil {
+		for rows.Next() {
+			var id, player, started string
+			if err := rows.Scan(&id, &player, &started); err == nil {
+				if t, ok := parseHistoryStartedAt(started); ok && !t.Before(sessionStartedAt) {
+					batch = append(batch, betRow{ID: id, Player: player, EventAt: t, IsBanker: false})
+				}
+			}
 		}
-		scannedCount++
-
-		eventAt, ok := parseHistoryStartedAt(raw.StartedAt)
-		if !ok {
-			skippedInvalidTime++
-			continue
-		}
-		if eventAt.Before(sessionStartedAt) {
-			continue
-		}
-
-		if latestSeenAt.IsZero() || eventAt.After(latestSeenAt) || (eventAt.Equal(latestSeenAt) && raw.EntryID > latestSeenEntry) {
-			latestSeenAt = eventAt
-			latestSeenEntry = raw.EntryID
-		}
-
-		batch = append(batch, betRow{
-			EntryID: raw.EntryID,
-			Player:  raw.Player,
-			EventAt: eventAt,
-		})
+		rows.Close()
 	}
-	if err := rows.Err(); err != nil {
-		a.logDebug("poll rows error: %v", err)
-		return
+
+	// 2. Query banker_trades
+	// These don't have raffle_session_id, so we rely on the owner_key and time window.
+	bRows, err := db.Query(ctx, `
+		SELECT
+			id,
+			player_name,
+			created_at
+		FROM banker_trades
+		WHERE owner_key = $1
+		  AND (
+			created_at > $2
+			OR (created_at = $2 AND id > $3)
+		  )
+		ORDER BY created_at ASC, id ASC
+		LIMIT 250
+	`, owner, bankerCursorAt, bankerCursorID)
+	if err == nil {
+		for bRows.Next() {
+			var id int64
+			var player string
+			var created time.Time
+			if err := bRows.Scan(&id, &player, &created); err == nil {
+				t := created.UTC()
+				if !t.Before(sessionStartedAt) {
+					batch = append(batch, betRow{ID: strconv.FormatInt(id, 10), Player: player, EventAt: t, IsBanker: true, NumericID: id})
+				}
+			}
+		}
+		bRows.Close()
 	}
-	latestSeenAtText := ""
-	if !latestSeenAt.IsZero() {
-		latestSeenAtText = latestSeenAt.Format(time.RFC3339)
-	}
-	a.logDebug(
-		"poll inspected=%d accepted=%d skippedInvalidTime=%d sessionStart=%s cursorAt=%s cursorEntry=%q latestSeenAt=%s latestSeenEntry=%q",
-		scannedCount,
-		len(batch),
-		skippedInvalidTime,
-		sessionStartedAt.Format(time.RFC3339),
-		cursorAt.Format(time.RFC3339),
-		cursorEntry,
-		latestSeenAtText,
-		latestSeenEntry,
-	)
+
 	if len(batch) == 0 {
 		a.debugMu.Lock()
 		a.lastQueryRows = 0
 		a.debugMu.Unlock()
 		return
 	}
+
+	// Sort unified batch by time then ID
+	sort.Slice(batch, func(i, j int) bool {
+		if !batch[i].EventAt.Equal(batch[j].EventAt) {
+			return batch[i].EventAt.Before(batch[j].EventAt)
+		}
+		return batch[i].ID < batch[j].ID
+	})
+
 	a.debugMu.Lock()
 	a.lastQueryRows = len(batch)
 	a.debugMu.Unlock()
@@ -2641,11 +2647,14 @@ func (a *App) processNewBets() {
 		name      string
 		tickets   int
 		isNew     bool
-		gamesAway int // if > 0, it's a progress shout
+		gamesAway int
 	}
 	ticketAnnounces := make([]ticketAnnounce, 0, len(batch))
-	lastCursorAt := cursorAt
-	lastCursorEntry := cursorEntry
+	
+	newCursorAt := cursorAt
+	newCursorEntry := cursorEntry
+	newBankerAt := bankerCursorAt
+	newBankerID := bankerCursorID
 
 	a.mu.Lock()
 	if a.currentSession == nil || a.currentSession.DBID != sessionDBID {
@@ -2670,9 +2679,16 @@ func (a *App) processNewBets() {
 	for _, row := range batch {
 		name := normalizeUsername(row.Player)
 		key := normalizeUsernameKey(name)
+		
+		if row.IsBanker {
+			newBankerAt = row.EventAt
+			newBankerID = row.NumericID
+		} else {
+			newCursorAt = row.EventAt
+			newCursorEntry = row.ID
+		}
+
 		if key == "" {
-			lastCursorAt = row.EventAt.UTC()
-			lastCursorEntry = row.EntryID
 			continue
 		}
 
@@ -2694,7 +2710,6 @@ func (a *App) processNewBets() {
 			}
 			a.currentSession.Participants = append(a.currentSession.Participants, p)
 			upserts = append(upserts, p)
-			// New entrant: use combined shout, but suppress if this bet predates a resume
 			if resumedAt.IsZero() || row.EventAt.UTC().After(resumedAt) {
 				ticketAnnounces = append(ticketAnnounces, ticketAnnounce{name: p.Username, tickets: p.Tickets, isNew: true})
 			}
@@ -2713,21 +2728,20 @@ func (a *App) processNewBets() {
 					}
 				} else if progressEnabled {
 					gamesAway := bonusEvery - (p.BetCount % bonusEvery)
-					if gamesAway > 0 && gamesAway <= 2 { // Only shout when close to avoid spam
+					if gamesAway > 0 && gamesAway <= 2 {
 						ticketAnnounces = append(ticketAnnounces, ticketAnnounce{name: p.Username, gamesAway: gamesAway})
 					}
 				}
 			}
 		}
-
-		lastCursorAt = row.EventAt.UTC()
-		lastCursorEntry = row.EntryID
 	}
 
 	sortParticipants(a.currentSession.Participants)
 
-	a.currentSession.CursorAt = lastCursorAt
-	a.currentSession.CursorEntry = lastCursorEntry
+	a.currentSession.CursorAt = newCursorAt
+	a.currentSession.CursorEntry = newCursorEntry
+	a.currentSession.BankerCursorAt = newBankerAt
+	a.currentSession.BankerCursorID = newBankerID
 	a.mu.Unlock()
 
 	for _, ta := range ticketAnnounces {
@@ -2744,12 +2758,22 @@ func (a *App) processNewBets() {
 		if err := a.persistParticipants(sessionDBID, upserts); err != nil {
 			a.logDebug("participant upsert failed: %v", err)
 		}
-		a.logDebug("processed %d new bet rows (bonusEvery=%d)", len(batch), bonusEvery)
 	}
 
-	if err := a.persistSessionCursor(sessionDBID, lastCursorAt, lastCursorEntry); err != nil {
+	if err := a.persistSessionCursor(sessionDBID, newCursorAt, newCursorEntry, newBankerAt, newBankerID); err != nil {
 		a.logDebug("cursor persist failed: %v", err)
 	}
+
+	a.emitUpdate()
+
+	if len(upserts) > 0 {
+		go func() {
+			if err := a.postOrUpdateRaffleWebhook(nil, true, "ticket-gain"); err != nil {
+				a.logDebug("auto-patch ticket gain failed: %v", err)
+			}
+		}()
+	}
+}
 
 	a.emitUpdate()
 
@@ -2797,7 +2821,7 @@ func (a *App) shoutTicketCount(name string, entries int, prize string) {
 	a.logDebug("ticket shout queued: %s", msg)
 }
 
-func (a *App) persistSessionCursor(sessionDBID int64, at time.Time, entryID string) error {
+func (a *App) persistSessionCursor(sessionDBID int64, at time.Time, entryID string, bankerAt time.Time, bankerID int64) error {
 	a.mu.Lock()
 	db := a.db
 	owner := a.ownerKey
@@ -2809,10 +2833,13 @@ func (a *App) persistSessionCursor(sessionDBID int64, at time.Time, entryID stri
 	defer cancel()
 	_, err := db.Exec(ctx,
 		`UPDATE raffle_sessions
-		 SET last_seen_created_at = $1, last_seen_entry_id = $2
-		 WHERE id = $3 AND owner_key = $4`,
+		 SET last_seen_created_at = $1, last_seen_entry_id = $2,
+		     last_seen_banker_at = $3, last_seen_banker_id = $4
+		 WHERE id = $5 AND owner_key = $6`,
 		at,
 		entryID,
+		bankerAt,
+		bankerID,
 		sessionDBID,
 		owner,
 	)
@@ -3254,6 +3281,8 @@ func (a *App) ensureTables() error {
 			bonus_every INTEGER NOT NULL DEFAULT 5,
 			last_seen_created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			last_seen_entry_id TEXT NOT NULL DEFAULT '',
+			last_seen_banker_at TIMESTAMPTZ NOT NULL DEFAULT '2000-01-01',
+			last_seen_banker_id BIGINT NOT NULL DEFAULT 0,
 			webhook_message_id TEXT NOT NULL DEFAULT '',
 			raffle_name TEXT NOT NULL DEFAULT 'Flame Raffle',
 			prize_name TEXT NOT NULL DEFAULT 'Purple Dragon Lamp',
@@ -3316,6 +3345,20 @@ func (a *App) ensureTables() error {
 			RETURN NEW;
 		END;
 		$$ LANGUAGE plpgsql`,
+		`CREATE OR REPLACE FUNCTION notify_raffle_banker_trade_insert()
+		RETURNS TRIGGER AS $$
+		BEGIN
+			PERFORM pg_notify(
+				'raffle_game_finished',
+				json_build_object(
+					'owner_key', COALESCE(NEW.owner_key, ''),
+					'entry_id', NEW.id,
+					'source', 'banker_trades'
+				)::text
+			);
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql`,
 		`DO $$
 		BEGIN
 			IF to_regclass('public.game_history_entries') IS NOT NULL THEN
@@ -3334,6 +3377,16 @@ func (a *App) ensureTables() error {
 				AFTER INSERT ON trade_entries
 				FOR EACH ROW
 				EXECUTE FUNCTION notify_raffle_trade_entry_insert();
+			END IF;
+		END $$`,
+		`DO $$
+		BEGIN
+			IF to_regclass('public.banker_trades') IS NOT NULL THEN
+				DROP TRIGGER IF EXISTS trg_raffle_banker_trades_insert ON banker_trades;
+				CREATE TRIGGER trg_raffle_banker_trades_insert
+				AFTER INSERT ON banker_trades
+				FOR EACH ROW
+				EXECUTE FUNCTION notify_raffle_banker_trade_insert();
 			END IF;
 		END $$`,
 	}
@@ -3400,7 +3453,9 @@ func (a *App) loadSessionsFromDB() error {
 	defer cancel()
 
 	sRows, err := db.Query(ctx, `
-		SELECT id, started_at, scheduled_end_at, ended_at, bonus_every, last_seen_created_at, last_seen_entry_id, webhook_message_id,
+		SELECT id, started_at, scheduled_end_at, ended_at, bonus_every, last_seen_created_at, last_seen_entry_id,
+		       last_seen_banker_at, last_seen_banker_id,
+		       webhook_message_id,
 		       raffle_name, prize_name, prize_qty, hero_image_url, hero_attachment_id, hero_attachment_file,
 		       winner_name, winner_tickets, winner_odds, winner_drawn_at, winner_method, winner_summary,
 		       winner_proof_url, winner_proof_id, winner_proof_file, sponsor_enabled, sponsor_name, sponsor_room_name
@@ -3447,7 +3502,9 @@ func (a *App) loadSessionsFromDB() error {
 
 	for sRows.Next() {
 		var s dbSession
-		if err := sRows.Scan(&s.id, &s.startedAt, &s.scheduledEndAt, &s.endedAt, &s.bonusEvery, &s.cursorAt, &s.cursorID, &s.webhookMessageID,
+		if err := sRows.Scan(&s.id, &s.startedAt, &s.scheduledEndAt, &s.endedAt, &s.bonusEvery, &s.cursorAt, &s.cursorID,
+			&s.bankerCursorAt, &s.bankerCursorID,
+			&s.webhookMessageID,
 			&s.raffleName, &s.prizeName, &s.prizeQty, &s.heroImageURL, &s.heroAttachmentID, &s.heroAttachmentFile,
 			&s.winnerName, &s.winnerTickets, &s.winnerOdds, &s.winnerDrawnAt, &s.winnerMethod, &s.winnerSummary,
 			&s.winnerProofURL, &s.winnerProofID, &s.winnerProofFile, &s.sponsorEnabled, &s.sponsorName, &s.sponsorRoomName); err != nil {
@@ -3465,6 +3522,8 @@ func (a *App) loadSessionsFromDB() error {
 			DBID:               s.id,
 			CursorAt:           s.cursorAt.UTC(),
 			CursorEntry:        s.cursorID,
+			BankerCursorAt:     s.bankerCursorAt.UTC(),
+			BankerCursorID:     s.bankerCursorID,
 			HeroImageURL:       strings.TrimSpace(s.heroImageURL),
 			HeroAttachmentID:   strings.TrimSpace(s.heroAttachmentID),
 			HeroAttachmentFile: strings.TrimSpace(s.heroAttachmentFile),
