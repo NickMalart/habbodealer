@@ -93,9 +93,50 @@ func comparePokerHands(player PokerHandResult, dealer PokerHandResult) PokerWinn
 	if player.Category < dealer.Category {
 		return PokerWinnerDealer
 	}
-	// Same category: ignore all kickers/tiebreaks per rule — treat as tie
+
+	// Same category: compare meaningful tiebreaks while ignoring kickers
+	count := getHandValueCount(player.Category)
+	pTiebreaks := player.Tiebreaks
+	if len(pTiebreaks) > count {
+		pTiebreaks = pTiebreaks[:count]
+	}
+	dTiebreaks := dealer.Tiebreaks
+	if len(dTiebreaks) > count {
+		dTiebreaks = dTiebreaks[:count]
+	}
+
+	res := comparePokerTiebreaks(pTiebreaks, dTiebreaks)
+	if res > 0 {
+		return PokerWinnerPlayer
+	}
+
 	// Dealer wins ties by policy.
 	return PokerWinnerDealer
+}
+
+func getHandValueCount(category PokerHandCategory) int {
+	switch category {
+	case PokerFiveOfAKind:
+		return 1
+	case PokerFourOfAKind:
+		return 1
+	case PokerFullHouse:
+		return 2
+	case PokerHighStraight:
+		return 1
+	case PokerLowStraight:
+		return 1
+	case PokerThreeOfAKind:
+		return 1
+	case PokerTwoPair:
+		return 2
+	case PokerOnePair:
+		return 1
+	case PokerNothing:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func classifyPokerHand(values []int) PokerHandResult {
