@@ -2409,6 +2409,12 @@ func (a *App) startPoller() {
 	a.mu.Unlock()
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				a.logDebug("Panic in startPoller: %v", r)
+			}
+		}()
+
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -2439,6 +2445,12 @@ func (a *App) startRealtimeWatcher() {
 	a.mu.Unlock()
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				a.logDebug("Panic in startRealtimeWatcher: %v", r)
+			}
+		}()
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -2506,12 +2518,16 @@ func (a *App) processNewBets() {
 
 	a.mu.Lock()
 	if !a.enabled || a.currentSession == nil || a.db == nil {
+		if !a.enabled && a.currentSession != nil {
+			a.logDebug("processNewBets: tracking is currently disabled")
+		}
 		a.mu.Unlock()
 		return
 	}
 	now := time.Now().UTC()
 	startAt, err := time.Parse(time.RFC3339, a.currentSession.StartedAt)
 	if err != nil {
+		a.logDebug("processNewBets: failed to parse session startAt %q: %v", a.currentSession.StartedAt, err)
 		a.mu.Unlock()
 		return
 	}
@@ -2522,6 +2538,7 @@ func (a *App) processNewBets() {
 	if strings.TrimSpace(a.currentSession.ScheduledEndAt) != "" {
 		endAt, err := time.Parse(time.RFC3339, a.currentSession.ScheduledEndAt)
 		if err == nil && (now.Equal(endAt.UTC()) || now.After(endAt.UTC())) {
+			a.logDebug("processNewBets: session reached scheduled end time %s", a.currentSession.ScheduledEndAt)
 			a.mu.Unlock()
 			a.StopRaffle()
 			return
@@ -2580,7 +2597,9 @@ func (a *App) processNewBets() {
 		ORDER BY e.started_at::timestamptz ASC, e.id::bigint ASC
 		LIMIT 250
 	`, owner, sessionDBID, cursorAt, cursorEntryNum)
-	if err == nil {
+	if err != nil {
+		a.logDebug("processNewBets: entries query failed: %v", err)
+	} else {
 		for rows.Next() {
 			var id, player, started string
 			if err := rows.Scan(&id, &player, &started); err == nil {
@@ -2608,7 +2627,9 @@ func (a *App) processNewBets() {
 		ORDER BY created_at ASC, id ASC
 		LIMIT 250
 	`, owner, bankerCursorAt, bankerCursorID)
-	if err == nil {
+	if err != nil {
+		a.logDebug("processNewBets: banker query failed: %v", err)
+	} else {
 		for bRows.Next() {
 			var id int64
 			var player string
@@ -2630,17 +2651,23 @@ func (a *App) processNewBets() {
 		return
 	}
 
-	// Sort unified batch by time then ID
+	// Sort unified batch by time then ID (numerical comparison for IDs)
 	sort.Slice(batch, func(i, j int) bool {
 		if !batch[i].EventAt.Equal(batch[j].EventAt) {
 			return batch[i].EventAt.Before(batch[j].EventAt)
 		}
-		return batch[i].ID < batch[j].ID
+		
+		// Fall back to numerical ID if times are identical
+		idI, _ := strconv.ParseInt(batch[i].ID, 10, 64)
+		idJ, _ := strconv.ParseInt(batch[j].ID, 10, 64)
+		return idI < idJ
 	})
 
 	a.debugMu.Lock()
 	a.lastQueryRows = len(batch)
 	a.debugMu.Unlock()
+
+	a.logDebug("processNewBets: found %d new events to process", len(batch))
 
 	upserts := make([]RaffleParticipant, 0, len(batch))
 	type ticketAnnounce struct {
@@ -2763,17 +2790,6 @@ func (a *App) processNewBets() {
 	if err := a.persistSessionCursor(sessionDBID, newCursorAt, newCursorEntry, newBankerAt, newBankerID); err != nil {
 		a.logDebug("cursor persist failed: %v", err)
 	}
-
-	a.emitUpdate()
-
-	if len(upserts) > 0 {
-		go func() {
-			if err := a.postOrUpdateRaffleWebhook(nil, true, "ticket-gain"); err != nil {
-				a.logDebug("auto-patch ticket gain failed: %v", err)
-			}
-		}()
-	}
-}
 
 	a.emitUpdate()
 
@@ -3476,6 +3492,8 @@ func (a *App) loadSessionsFromDB() error {
 		bonusEvery         int
 		cursorAt           time.Time
 		cursorID           string
+		bankerCursorAt     time.Time
+		bankerCursorID     int64
 		webhookMessageID   string
 		raffleName         string
 		prizeName          string
@@ -3618,8 +3636,9 @@ func (a *App) loadSessionsFromDB() error {
 	a.sessions = closed
 	a.currentSession = current
 	if a.currentSession != nil {
+		a.enabled = true // Automatically resume tracking on startup if session is active
 		a.raffleMessageID = strings.TrimSpace(a.currentSession.WebhookMessageID)
-		a.logDebug("loadSessionsFromDB: Current session is %d with %d participants", a.currentSession.DBID, len(a.currentSession.Participants))
+		a.logDebug("loadSessionsFromDB: Current session is %d with %d participants (tracking enabled)", a.currentSession.DBID, len(a.currentSession.Participants))
 	} else {
 		a.raffleMessageID = ""
 	}
