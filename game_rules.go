@@ -133,7 +133,7 @@ func getHandValueCount(category PokerHandCategory) int {
 	case PokerOnePair:
 		return 1
 	case PokerNothing:
-		return 1
+		return 0
 	default:
 		return 0
 	}
