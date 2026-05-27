@@ -4106,7 +4106,9 @@ func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note strin
 		if complete {
 			if !isPayout {
 				// Normal game completion — mark entry Completed.
-				entry.Status = "Completed"
+				if entry.Status != "Completed (Keep)" {
+					entry.Status = "Completed"
+				}
 				entry.CompletedAt = gameHistoryTimestamp()
 			} else {
 				// Payout completed successfully — clear any prior issue flags and mark Completed.
@@ -4115,7 +4117,9 @@ func (a *App) captureCurrentGameHistoryPayoutItems(items []TradeItem, note strin
 				entry.IssueType = ""
 				entry.IssueOwed = 0
 				entry.IssueOwedItems = ""
-				entry.Status = "Completed"
+				if entry.Status != "Completed (Keep)" {
+					entry.Status = "Completed"
+				}
 				if strings.TrimSpace(entry.CompletedAt) == "" {
 					entry.CompletedAt = gameHistoryTimestamp()
 				}
@@ -5950,7 +5954,9 @@ func startPayout(a *App, targetID int, targetName string) {
 		a.gameHistoryMu.Lock()
 		var completedEntry *GameHistoryEntry
 		if a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
-			entry.Status = "Completed"
+			if entry.Status != "Completed (Keep)" {
+				entry.Status = "Completed"
+			}
 			entry.CompletedAt = gameHistoryTimestamp()
 			e := *entry
 			completedEntry = &e
@@ -7210,6 +7216,7 @@ func (a *App) finalizeRiskKeep() {
 	a.gameHistoryMu.Lock()
 	a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
 		entry.RiskDecision = "Keep"
+		entry.Status = "Completed (Keep)"
 	})
 	a.gameHistoryMu.Unlock()
 
