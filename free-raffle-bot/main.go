@@ -2583,6 +2583,8 @@ func (a *App) processNewBets() {
 	db := a.db
 	a.mu.Unlock()
 
+	a.logDebug("processNewBets: checking for games after cursor %s (ID %s) for owner %q and session %d", cursorAt.Format(time.RFC3339), cursorEntry, owner, sessionDBID)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
@@ -2601,8 +2603,6 @@ func (a *App) processNewBets() {
 	batch := make([]betRow, 0)
 
 	// 1. Query standard game_history_entries
-	// We EXCLUDE rows that are adoptions of banker trades to avoid double counting,
-	// because we will pick those up directly from banker_trades.
 	rows, err := db.Query(ctx, `
 		SELECT
 			e.id::text,
@@ -2614,7 +2614,7 @@ func (a *App) processNewBets() {
 		  AND (e.raffle_session_id = $2 OR e.raffle_session_id = 0)
 		  AND e.raffle_session_id <> -1
 		  AND lower(e.game) <> 'bandit'
-		  AND (e.notes IS NULL OR array_to_string(e.notes, ' ') NOT LIKE '%Adopting banker trade%')
+		  AND (e.notes IS NULL OR e.notes::text NOT LIKE '%Adopting banker trade%')
 		  AND (
 			e.started_at::timestamptz > $3
 			OR (e.started_at::timestamptz = $3 AND e.id::bigint > $4)
@@ -2622,14 +2622,23 @@ func (a *App) processNewBets() {
 		ORDER BY e.started_at::timestamptz ASC, e.id::bigint ASC
 		LIMIT 250
 	`, owner, sessionDBID, cursorAt, cursorEntryNum)
+	
+	entryCount := 0
 	if err != nil {
 		a.logDebug("processNewBets: entries query failed: %v", err)
 	} else {
 		for rows.Next() {
+			entryCount++
 			var id, player, started string
 			if err := rows.Scan(&id, &player, &started); err == nil {
-				if t, ok := parseHistoryStartedAt(started); ok && !t.Before(sessionStartedAt) {
-					batch = append(batch, betRow{ID: id, Player: player, EventAt: t, IsBanker: false})
+				if t, ok := parseHistoryStartedAt(started); ok {
+					if !t.Before(sessionStartedAt) {
+						batch = append(batch, betRow{ID: id, Player: player, EventAt: t, IsBanker: false})
+					} else {
+						a.logDebug("processNewBets: skipping game %s from %s (before session start %s)", id, t.Format(time.RFC3339), sessionStartedAt.Format(time.RFC3339))
+					}
+				} else {
+					a.logDebug("processNewBets: failed to parse started_at %q for game %s", started, id)
 				}
 			}
 		}
@@ -2637,7 +2646,6 @@ func (a *App) processNewBets() {
 	}
 
 	// 2. Query banker_trades
-	// These don't have raffle_session_id, so we rely on the owner_key and time window.
 	bRows, err := db.Query(ctx, `
 		SELECT
 			id,
@@ -2652,10 +2660,13 @@ func (a *App) processNewBets() {
 		ORDER BY created_at ASC, id ASC
 		LIMIT 250
 	`, owner, bankerCursorAt, bankerCursorID)
+	
+	bankerCount := 0
 	if err != nil {
 		a.logDebug("processNewBets: banker query failed: %v", err)
 	} else {
 		for bRows.Next() {
+			bankerCount++
 			var id int64
 			var player string
 			var created time.Time
@@ -2670,29 +2681,16 @@ func (a *App) processNewBets() {
 	}
 
 	if len(batch) == 0 {
+		if entryCount > 0 || bankerCount > 0 {
+			a.logDebug("processNewBets: found %d entries and %d banker trades, but 0 qualifying events after filtering", entryCount, bankerCount)
+		}
 		a.debugMu.Lock()
 		a.lastQueryRows = 0
 		a.debugMu.Unlock()
 		return
 	}
 
-	// Sort unified batch by time then ID (numerical comparison for IDs)
-	sort.Slice(batch, func(i, j int) bool {
-		if !batch[i].EventAt.Equal(batch[j].EventAt) {
-			return batch[i].EventAt.Before(batch[j].EventAt)
-		}
-		
-		// Fall back to numerical ID if times are identical
-		idI, _ := strconv.ParseInt(batch[i].ID, 10, 64)
-		idJ, _ := strconv.ParseInt(batch[j].ID, 10, 64)
-		return idI < idJ
-	})
-
-	a.debugMu.Lock()
-	a.lastQueryRows = len(batch)
-	a.debugMu.Unlock()
-
-	a.logDebug("processNewBets: found %d new events to process", len(batch))
+	a.logDebug("processNewBets: batch created with %d events (%d raw entries, %d raw banker)", len(batch), entryCount, bankerCount)
 
 	upserts := make([]RaffleParticipant, 0, len(batch))
 	type ticketAnnounce struct {

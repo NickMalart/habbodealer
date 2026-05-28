@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>G-Earth</groupId>
+    <artifactId>G-Earth-Parent</artifactId>
+    <packaging>pom</packaging>
+    <version>${revision}${changelist}</version>
+
+    <properties>
+        <!-- Version of the application. -->
+        <revision>1.5.4-beta-23</revision>
+        <changelist>-SNAPSHOT</changelist>
+        <!-- Version for https://github.com/sirjonasxx/G-ExtensionStore to keep compatibility with beta versions. -->
+        <storeVersion>1.5.3</storeVersion>
+        <!-- Default repository for version checking. -->
+        <repository>sirjonasxx/G-Earth</repository>
+        <!-- Encoding. -->
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Java version. -->
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <!-- Dependency versions -->
+        <slf4j.version>2.1.0-alpha1</slf4j.version>
+        <org.json.version>20250517</org.json.version>
+    </properties>
+
+    <name>G-Earth-Parent</name>
+    <url>https://github.com/sirjonasxx/G-Earth</url>
+    <description>Cross Platform Habbo packetlogger/manipulator</description>
+
+    <modules>
+        <module>G-Earth</module>
+        <module>G-Earth-Api</module>
+        <module>deps/Proxyee</module>
+        <module>deps/g-wasm</module>
+    </modules>
+</project>

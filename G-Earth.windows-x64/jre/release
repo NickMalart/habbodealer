@@ -1,5 +1,5 @@
 IMAGE_TYPE=JRE
-JAVA_VERSION="21.0.11"
-MODULES="java.base java.datatransfer java.xml java.prefs java.desktop java.logging java.security.sasl java.naming java.net.http java.scripting java.transaction.xa java.sql javafx.base jdk.unsupported javafx.graphics javafx.controls javafx.fxml javafx.media jdk.unsupported.desktop javafx.swing jdk.jsobject jdk.xml.dom javafx.web jdk.crypto.ec jdk.net"
+JAVA_VERSION="21.0.9"
+MODULES="java.base java.datatransfer java.xml java.prefs java.desktop java.logging java.security.sasl java.naming java.net.http java.scripting java.transaction.xa java.sql javafx.base jdk.unsupported javafx.graphics javafx.controls javafx.fxml javafx.media jdk.unsupported.desktop javafx.swing jdk.jsobject jdk.xml.dom javafx.web jdk.crypto.ec"
 OS_ARCH=x86_64
 OS_NAME=Windows
