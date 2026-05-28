@@ -455,9 +455,24 @@ func (a *App) GetState() RaffleState {
 		BonusEvery:            a.bonusEvery,
 		TicketAnnounceEnabled: a.ticketAnnounceEnabled,
 		TicketProgressEnabled: a.ticketProgressEnabled,
-		RaffleName:            a.raffleName,
-		RafflePrizeName:       a.rafflePrizeName,
-		RafflePrizeQty:        a.rafflePrizeQty,
+		RaffleName: func() string {
+			if a.currentSession != nil && strings.TrimSpace(a.currentSession.RaffleName) != "" {
+				return a.currentSession.RaffleName
+			}
+			return a.raffleName
+		}(),
+		RafflePrizeName: func() string {
+			if a.currentSession != nil && strings.TrimSpace(a.currentSession.PrizeName) != "" {
+				return a.currentSession.PrizeName
+			}
+			return a.rafflePrizeName
+		}(),
+		RafflePrizeQty: func() int {
+			if a.currentSession != nil && a.currentSession.PrizeQty > 0 {
+				return a.currentSession.PrizeQty
+			}
+			return a.rafflePrizeQty
+		}(),
 		RaffleHeroImageName:   a.raffleHeroFileName,
 		RaffleAutoUpdate:      a.raffleAutoUpdate,
 		RaffleMessageID:       a.raffleMessageID,
@@ -941,16 +956,18 @@ func (a *App) SetRaffleDiscordConfig(
 	a.raffleAutoUpdate = autoUpdate
 	var sessionDBID int64
 	if a.currentSession != nil {
-		// Freeze display metadata once a message exists for this session.
-		// Later auto-updates should only update mutable tracker content.
-		if strings.TrimSpace(a.currentSession.WebhookMessageID) == "" {
-			a.currentSession.RaffleName = a.raffleName
-			a.currentSession.PrizeName = a.rafflePrizeName
-			a.currentSession.PrizeQty = a.rafflePrizeQty
+		// Update session metadata from top-level app state
+		a.currentSession.RaffleName = a.raffleName
+		a.currentSession.PrizeName = a.rafflePrizeName
+		a.currentSession.PrizeQty = a.rafflePrizeQty
+		
+		// Only update attachment info if new image was actually provided (handled above)
+		if a.raffleHeroDataURL != "" || a.raffleHeroImageURL == "" {
 			a.currentSession.HeroImageURL = a.raffleHeroImageURL
 			a.currentSession.HeroAttachmentID = a.raffleHeroAttachmentID
 			a.currentSession.HeroAttachmentFile = a.raffleHeroAttachmentFile
 		}
+		
 		sessionDBID = a.currentSession.DBID
 	}
 	a.mu.Unlock()
@@ -2223,6 +2240,14 @@ func (a *App) ResumeSession(dbID int64) (RaffleState, error) {
 
 	// Deep copy to ensure it's on the heap and separate from the slice
 	a.currentSession = copySession(&s)
+	
+	// Sync top-level app state with resumed session defaults
+	a.raffleName = s.RaffleName
+	a.rafflePrizeName = s.PrizeName
+	a.rafflePrizeQty = s.PrizeQty
+	a.raffleHeroImageURL = s.HeroImageURL
+	a.raffleHeroAttachmentID = s.HeroAttachmentID
+	a.raffleHeroAttachmentFile = s.HeroAttachmentFile
 	
 	a.logDebug("ResumeSession: a.currentSession now has %d participants", len(a.currentSession.Participants))
 	for _, p := range a.currentSession.Participants {
@@ -3640,6 +3665,15 @@ func (a *App) loadSessionsFromDB() error {
 	if a.currentSession != nil {
 		a.enabled = true // Automatically resume tracking on startup if session is active
 		a.raffleMessageID = strings.TrimSpace(a.currentSession.WebhookMessageID)
+		
+		// Sync top-level app state with resumed session defaults
+		a.raffleName = a.currentSession.RaffleName
+		a.rafflePrizeName = a.currentSession.PrizeName
+		a.rafflePrizeQty = a.currentSession.PrizeQty
+		a.raffleHeroImageURL = a.currentSession.HeroImageURL
+		a.raffleHeroAttachmentID = a.currentSession.HeroAttachmentID
+		a.raffleHeroAttachmentFile = a.currentSession.HeroAttachmentFile
+		
 		a.logDebug("loadSessionsFromDB: Current session is %d with %d participants (tracking enabled)", a.currentSession.DBID, len(a.currentSession.Participants))
 	} else {
 		a.raffleMessageID = ""
