@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	stdruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -908,7 +909,7 @@ func SafeGo(fn func()) {
 				if f != nil {
 					now := time.Now().Format("2006-01-02 15:04:05")
 					stack := make([]byte, 4096)
-					stack = stack[:runtime.Stack(stack, false)]
+					stack = stack[:stdruntime.Stack(stack, false)]
 					_, _ = f.WriteString(fmt.Sprintf("[%s] GOROUTINE PANIC: %v\n%s\n", now, r, stack))
 					f.Close()
 				}
