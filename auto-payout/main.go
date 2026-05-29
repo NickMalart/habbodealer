@@ -2219,9 +2219,28 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string) []TradeIt
 	counts := map[string]int{}
 	fields := bytes.Split(data, []byte{0x02})
 
-	allowed := make(map[string]bool)
+	// Pre-normalize allowed names from DB for faster matching
+	type allowedItem struct {
+		raw      string
+		lower    string
+		baseName string // Name without * quantity
+	}
+	var activeItems []allowedItem
 	for _, n := range allowedNamesCache {
-		allowed[strings.ToLower(strings.TrimSpace(n))] = true
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		low := strings.ToLower(n)
+		base := low
+		if idx := strings.LastIndex(base, "*"); idx != -1 {
+			base = base[:idx]
+		}
+		activeItems = append(activeItems, allowedItem{
+			raw:      n,
+			lower:    low,
+			baseName: base,
+		})
 	}
 
 	a.tradeMu.Lock()
@@ -2248,28 +2267,31 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string) []TradeIt
 			continue
 		}
 
-		lowName := strings.ToLower(s)
+		lowField := strings.ToLower(s)
 
-		// Skip fields that match the partner's name, banker's name, ANY room user, or are known metadata
-		if lowName == partner || lowName == banker || roomUsers[lowName] ||
-			lowName == "credit" || lowName == "pixel" || lowName == "shell" ||
-			strings.HasPrefix(lowName, "ii") || strings.HasPrefix(lowName, "ih") ||
-			len(lowName) < 3 {
+		// Skip fields that match known metadata to reduce false matches
+		if lowField == partner || lowField == banker || roomUsers[lowField] ||
+			lowField == "credit" || lowField == "pixel" || lowField == "shell" ||
+			strings.HasPrefix(lowField, "ii") || strings.HasPrefix(lowField, "ih") ||
+			len(lowField) < 3 {
 			continue
 		}
 
-		// Extract exact base name (handling legacy | and origin * variations)
-		baseName := lowName
-		if idx := strings.LastIndex(baseName, "|"); idx != -1 {
-			baseName = baseName[idx+1:]
+		// Iterate through active items from DB and check if they exist as a substring
+		// in this packet field. We look for the best (longest) match.
+		var bestMatch *allowedItem
+		for i := range activeItems {
+			it := &activeItems[i]
+			// Check for either the full name or the base name (no * qty)
+			if strings.Contains(lowField, it.lower) || strings.Contains(lowField, it.baseName) {
+				if bestMatch == nil || len(it.baseName) > len(bestMatch.baseName) {
+					bestMatch = it
+				}
+			}
 		}
-		if idx := strings.LastIndex(baseName, "*"); idx != -1 {
-			baseName = baseName[:idx]
-		}
-		
-		// Only count items that perfectly match our allowed stocked list
-		if allowed[baseName] {
-			counts[baseName]++
+
+		if bestMatch != nil {
+			counts[bestMatch.baseName]++
 		}
 	}
 
