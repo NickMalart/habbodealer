@@ -2232,6 +2232,13 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string) []TradeIt
 	banker := strings.ToLower(strings.TrimSpace(a.bankerName))
 	a.bankerNameMu.RUnlock()
 
+	a.roomUsersMu.RLock()
+	roomUsers := make(map[string]bool)
+	for name := range a.roomUsers {
+		roomUsers[name] = true
+	}
+	a.roomUsersMu.RUnlock()
+
 	for _, field := range fields {
 		if len(field) == 0 {
 			continue
@@ -2243,8 +2250,9 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string) []TradeIt
 
 		lowName := strings.ToLower(s)
 
-		// Skip fields that match the partner's name, banker's name, or are known metadata
-		if lowName == partner || lowName == banker || lowName == "credit" || lowName == "pixel" || lowName == "shell" ||
+		// Skip fields that match the partner's name, banker's name, ANY room user, or are known metadata
+		if lowName == partner || lowName == banker || roomUsers[lowName] ||
+			lowName == "credit" || lowName == "pixel" || lowName == "shell" ||
 			strings.HasPrefix(lowName, "ii") || strings.HasPrefix(lowName, "ih") ||
 			len(lowName) < 3 {
 			continue
@@ -2273,13 +2281,24 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string) []TradeIt
 			isItem = true
 		} else {
 			// 2. Fallback heuristic for Habbo class names
-			// Usually starts with cf_ (currency) or contains underscores and numbers.
-			// Stricter check: must contain underscore and no spaces/weird chars to avoid metadata.
+			// Stricter check: must start with cf_ (currency) OR have underscore and no digits/spaces/hyphens
+			// (metadata like bmchjn_iphs often contains randomized letters/numbers and appears in 108)
 			if strings.HasPrefix(lowName, "cf_") {
 				isItem = true
 			} else if strings.Contains(lowName, "_") && !strings.Contains(lowName, " ") && !strings.Contains(lowName, "-") {
-				// Habbo class names with underscores typically don't have hyphens (used in figures) or spaces
-				isItem = true
+				// Avoid catching random metadata by checking if it contains digits (furni classes rarely do in the middle)
+				hasDigit := false
+				for _, r := range lowName {
+					if r >= '0' && r <= '9' {
+						hasDigit = true
+						break
+					}
+				}
+				// If it has underscores but no digits and is fairly short, it might be a furni.
+				// If it has digits, we only trust it if it starts with 'cf_'.
+				if !hasDigit && len(lowName) <= 16 {
+					isItem = true
+				}
 			}
 		}
 
@@ -2529,71 +2548,72 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 				return
 			}
 
-			// Check payout coverage: ensure dealer hand + incoming items can cover
-			// the required payout assuming a 2x multiplier. If not, block the trade.
-			{
-				mult := 2
-				// Snapshot last parsed items (incoming counts)
-				a.tradeMu.Lock()
-				lastItemsCopy := make([]TradeItem, len(a.lastTradeItems))
-				copy(lastItemsCopy, a.lastTradeItems)
-				a.tradeMu.Unlock()
+		// 2. Check payout coverage: ensure dealer hand + incoming items can cover
+		// the required payout assuming a 2x multiplier. If not, block the trade.
+		// Skip this check if in split-banker mode (strip scan skipped).
+		if !a.GetSkipStripScan() {
+			mult := 2
+			// Snapshot last parsed items (incoming counts)
+			a.tradeMu.Lock()
+			lastItemsCopy := make([]TradeItem, len(a.lastTradeItems))
+			copy(lastItemsCopy, a.lastTradeItems)
+			a.tradeMu.Unlock()
 
-				// Build hand map from current inventory (base name -> qty)
-				handMap := make(map[string]int)
-				a.inventoryMu.RLock()
-				for name, ids := range a.inventory {
-					base := name
-					if star := strings.LastIndex(name, "*"); star > 0 {
-						base = name[:star]
-					}
-					handMap[base] += len(ids)
+			// Build hand map from current inventory (base name -> qty)
+			handMap := make(map[string]int)
+			a.inventoryMu.RLock()
+			for name, ids := range a.inventory {
+				base := name
+				if star := strings.LastIndex(name, "*"); star > 0 {
+					base = name[:star]
 				}
-				a.inventoryMu.RUnlock()
+				handMap[base] += len(ids)
+			}
+			a.inventoryMu.RUnlock()
 
-				// Build incoming map from observed partner items
-				incomingMap := make(map[string]int)
-				for _, it := range lastItemsCopy {
-					n := strings.ToLower(strings.TrimSpace(it.Name))
-					base := n
-					if star := strings.LastIndex(n, "*"); star > 0 {
-						base = n[:star]
-					}
-					incomingMap[base] += it.Quantity
+			// Build incoming map from observed partner items
+			incomingMap := make(map[string]int)
+			for _, it := range lastItemsCopy {
+				n := strings.ToLower(strings.TrimSpace(it.Name))
+				base := n
+				if star := strings.LastIndex(n, "*"); star > 0 {
+					base = n[:star]
 				}
+				incomingMap[base] += it.Quantity
+			}
 
-				// Compute required payouts from matchedItems
-				required := make(map[string]int)
-				for k, q := range matchedItems {
-					base := k
-					if star := strings.LastIndex(k, "*"); star > 0 {
-						base = k[:star]
-					}
-					required[base] += q * mult
+			// Compute required payouts from matchedItems
+			required := make(map[string]int)
+			for k, q := range matchedItems {
+				base := k
+				if star := strings.LastIndex(k, "*"); star > 0 {
+					base = k[:star]
 				}
+				required[base] += q * mult
+			}
 
-				// Detect shortages
-				short := false
-				for name, need := range required {
-					have := handMap[name]
-					inc := incomingMap[name]
-					available := have + inc
-					if available < need {
-						short = true
-						a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: insufficient payout stock for %s required=%d available=%d (hand=%d incoming=%d)", name, need, available, have, inc))
-						a.queueShout(partnerName, fmt.Sprintf("%s, trade cancelled. Please wait for the Banker to restock before betting.", partnerName))
-						if a.ctx != nil {
-							go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "insufficient_payout_stock", "player": partnerName, "item": name, "required": need, "available": available, "hand": have, "incoming": inc})
-						}
-						break
+			// Detect shortages
+			short := false
+			for name, need := range required {
+				have := handMap[name]
+				inc := incomingMap[name]
+				available := have + inc
+				if available < need {
+					short = true
+					a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: insufficient payout stock for %s required=%d available=%d (hand=%d incoming=%d)", name, need, available, have, inc))
+					a.queueShout(partnerName, fmt.Sprintf("%s, trade cancelled. Please wait for the Banker to restock before betting.", partnerName))
+					if a.ctx != nil {
+						go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "insufficient_payout_stock", "player": partnerName, "item": name, "required": need, "available": available, "hand": have, "incoming": inc})
 					}
-				}
-				if short {
-					e.Block()
-					a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
-					return
+					break
 				}
 			}
+			if short {
+				e.Block()
+				a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+				return
+			}
+		}
 
 			// Enforce configured limits per-settings
 			maxQty := a.getIntSetting("max_qty_per_unique", 10)
