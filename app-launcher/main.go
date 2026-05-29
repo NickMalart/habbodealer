@@ -947,6 +947,19 @@ func (a *App) KillAllTasks() string {
 }
 
 func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			f, _ := os.OpenFile("crash.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if f != nil {
+				now := time.Now().Format("2006-01-02 15:04:05")
+				stack := make([]byte, 4096)
+				stack = stack[:runtime.Stack(stack, false)]
+				_, _ = f.WriteString(fmt.Sprintf("[%s] PANIC: %v\n%s\n", now, r, stack))
+				f.Close()
+			}
+			time.Sleep(time.Second)
+		}
+	}()
 	app := NewApp()
 
 	err := wails.Run(&options.App{

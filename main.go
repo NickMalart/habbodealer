@@ -899,20 +899,39 @@ func (a *App) getCurrentRoomName() string {
 	return ""
 }
 
+// SafeGo launches a goroutine with a recovery block that logs panics to crash.log
+func SafeGo(fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				f, _ := os.OpenFile("crash.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+				if f != nil {
+					now := time.Now().Format("2006-01-02 15:04:05")
+					stack := make([]byte, 4096)
+					stack = stack[:runtime.Stack(stack, false)]
+					_, _ = f.WriteString(fmt.Sprintf("[%s] GOROUTINE PANIC: %v\n%s\n", now, r, stack))
+					f.Close()
+				}
+			}
+		}()
+		fn()
+	}()
+}
+
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.startHistoryPersistWorker()
-	// Start independent background workers
-	go a.initHistoryDatabase()
-	go a.loadGameHistory()
-	go a.startBankerTradePolling()
-	go a.startDealerShoutPolling()
+	// Start independent background workers with panic recovery
+	SafeGo(a.initHistoryDatabase)
+	SafeGo(a.loadGameHistory)
+	SafeGo(a.startBankerTradePolling)
+	SafeGo(a.startDealerShoutPolling)
 	rand.Seed(time.Now().UnixNano())
 	a.setupExt()
-	go func() {
+	SafeGo(func() {
 		a.runExt()
-	}()
-	go func() {
+	})
+	SafeGo(func() {
 		time.Sleep(1200 * time.Millisecond)
 		requestRoomUsers(a)
 
@@ -921,8 +940,8 @@ func (a *App) startup(ctx context.Context) {
 		for range ticker.C {
 			requestRoomUsers(a)
 		}
-	}()
-	go func() {
+	})
+	SafeGo(func() {
 		deadline := time.Now().Add(12 * time.Second)
 		for time.Now().Before(deadline) {
 			roomMu.Lock()
@@ -955,22 +974,22 @@ func (a *App) startup(ctx context.Context) {
 			}
 			a.requestPlayerStrip(false)
 		}
-	}()
+	})
 
 	// Send an initial heartbeat so external dashboards receive immediate status
 	a.sendLiveDealerStatus(dealerAcceptingTrades, a.getCurrentDealerName())
 
 	// Start a periodic heartbeat to keep the website's lastSeenAt fresh.
-	go func() {
+	SafeGo(func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
 			a.sendLiveDealerStatus(dealerAcceptingTrades, a.getCurrentDealerName())
 		}
-	}()
+	})
 
 	// Periodic hand-snapshot sender: keep remote site up-to-date for open dealers.
-	go func() {
+	SafeGo(func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
@@ -997,8 +1016,7 @@ func (a *App) startup(ctx context.Context) {
 			// sendLiveDealerSnapshot is already asynchronous.
 			a.sendLiveDealerSnapshot(items)
 		}
-	}()
-
+	})
 }
 
 func (a *App) shutdown(context.Context) {
