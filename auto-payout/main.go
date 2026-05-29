@@ -2185,14 +2185,12 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 		return
 	}
 
-	// Fetch active stocked items immediately on trade open
-	go func() {
-		names := a.GetActiveStockedItemNames()
-		a.tradeMu.Lock()
-		a.allowedNamesCache = names
-		a.tradeMu.Unlock()
-		a.AddLog(fmt.Sprintf("[DEBUG] Stocked items cached for trade: %v", names))
-	}()
+	// Fetch active stocked items immediately on trade open (synchronously to avoid race with parseTradeItems)
+	names := a.GetActiveStockedItemNames()
+	a.tradeMu.Lock()
+	a.allowedNamesCache = names
+	a.tradeMu.Unlock()
+	a.AddLog(fmt.Sprintf("[DEBUG] Stocked items cached for trade: %v", names))
 
 	a.AddLog("Trade window opened.")
 }
@@ -2226,6 +2224,14 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string) []TradeIt
 		allowed[strings.ToLower(strings.TrimSpace(n))] = true
 	}
 
+	a.tradeMu.Lock()
+	partner := strings.ToLower(strings.TrimSpace(a.lastTradePartner))
+	a.tradeMu.Unlock()
+
+	a.bankerNameMu.RLock()
+	banker := strings.ToLower(strings.TrimSpace(a.bankerName))
+	a.bankerNameMu.RUnlock()
+
 	for _, field := range fields {
 		if len(field) == 0 {
 			continue
@@ -2236,6 +2242,13 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string) []TradeIt
 		}
 
 		lowName := strings.ToLower(s)
+
+		// Skip fields that match the partner's name, banker's name, or are known metadata
+		if lowName == partner || lowName == banker || lowName == "credit" || lowName == "pixel" || lowName == "shell" ||
+			strings.HasPrefix(lowName, "ii") || strings.HasPrefix(lowName, "ih") ||
+			len(lowName) < 3 {
+			continue
+		}
 
 		// Quick substring match against active stocked items (allowed map keys)
 		best := ""
@@ -2254,21 +2267,18 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string) []TradeIt
 			continue
 		}
 
-		// Filter out known packet fragments/metadata that are NOT physical items
-		if lowName == "credit" || lowName == "pixel" || lowName == "shell" ||
-			strings.HasPrefix(lowName, "ii") || strings.HasPrefix(lowName, "ih") ||
-			len(lowName) < 3 {
-			continue
-		}
-
 		isItem := false
-		// 1. Check if it's in our allowed/stocked list
+		// 1. Check if it's in our allowed/stocked list (exact match)
 		if allowed[lowName] {
 			isItem = true
 		} else {
 			// 2. Fallback heuristic for Habbo class names
-			// Usually starts with cf_ (currency) or contains underscores and numbers
-			if strings.HasPrefix(lowName, "cf_") || strings.Contains(lowName, "_") {
+			// Usually starts with cf_ (currency) or contains underscores and numbers.
+			// Stricter check: must contain underscore and no spaces/weird chars to avoid metadata.
+			if strings.HasPrefix(lowName, "cf_") {
+				isItem = true
+			} else if strings.Contains(lowName, "_") && !strings.Contains(lowName, " ") && !strings.Contains(lowName, "-") {
+				// Habbo class names with underscores typically don't have hyphens (used in figures) or spaces
 				isItem = true
 			}
 		}
