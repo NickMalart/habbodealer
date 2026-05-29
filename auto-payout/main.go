@@ -2258,52 +2258,18 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string) []TradeIt
 			continue
 		}
 
-		// Quick substring match against active stocked items (allowed map keys)
-		best := ""
-		for n := range allowed {
-			if n == "" {
-				continue
-			}
-			if strings.Contains(lowName, n) {
-				if len(n) > len(best) {
-					best = n
-				}
-			}
+		// Extract exact base name (handling legacy | and origin * variations)
+		baseName := lowName
+		if idx := strings.LastIndex(baseName, "|"); idx != -1 {
+			baseName = baseName[idx+1:]
 		}
-		if best != "" {
-			counts[best]++
-			continue
+		if idx := strings.LastIndex(baseName, "*"); idx != -1 {
+			baseName = baseName[:idx]
 		}
-
-		isItem := false
-		// 1. Check if it's in our allowed/stocked list (exact match)
-		if allowed[lowName] {
-			isItem = true
-		} else {
-			// 2. Fallback heuristic for Habbo class names
-			// Stricter check: must start with cf_ (currency) OR have underscore and no digits/spaces/hyphens
-			// (metadata like bmchjn_iphs often contains randomized letters/numbers and appears in 108)
-			if strings.HasPrefix(lowName, "cf_") {
-				isItem = true
-			} else if strings.Contains(lowName, "_") && !strings.Contains(lowName, " ") && !strings.Contains(lowName, "-") {
-				// Avoid catching random metadata by checking if it contains digits (furni classes rarely do in the middle)
-				hasDigit := false
-				for _, r := range lowName {
-					if r >= '0' && r <= '9' {
-						hasDigit = true
-						break
-					}
-				}
-				// If it has underscores but no digits and is fairly short, it might be a furni.
-				// If it has digits, we only trust it if it starts with 'cf_'.
-				if !hasDigit && len(lowName) <= 16 {
-					isItem = true
-				}
-			}
-		}
-
-		if isItem {
-			counts[lowName]++
+		
+		// Only count items that perfectly match our allowed stocked list
+		if allowed[baseName] {
+			counts[baseName]++
 		}
 	}
 
@@ -2456,56 +2422,10 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 			// Map of matched allowed item -> qty
 			matchedItems := make(map[string]int)
 			for _, it := range lastItems {
+				// We already filtered items in parseTradeItems to ONLY include exact matches
+				// against the allowed cache, so we can just use the name directly.
 				low := strings.ToLower(strings.TrimSpace(it.Name))
-				matchedKey := ""
-				if allowedSet[low] {
-					matchedKey = low
-				} else {
-					for k := range allowedSet {
-						if k != "" && strings.Contains(low, k) {
-							matchedKey = k
-							break
-						}
-					}
-				}
-				if matchedKey != "" {
-					matchedItems[matchedKey] += it.Quantity
-				}
-			}
-
-			// SECURITY: If any parsed trade item is not matched to an allowed stocked
-			// item, block the trade. Previously we only required at least one
-			// matched item which allowed mixed trades (allowed + disallowed).
-			// Now we enforce that ALL parsed items must map to the allowed set.
-			if len(lastItems) > 0 {
-				unallowed := []string{}
-				for _, it := range lastItems {
-					low := strings.ToLower(strings.TrimSpace(it.Name))
-					matchedKey := ""
-					if allowedSet[low] {
-						matchedKey = low
-					} else {
-						for k := range allowedSet {
-							if k != "" && strings.Contains(low, k) {
-								matchedKey = k
-								break
-							}
-						}
-					}
-					if matchedKey == "" {
-						unallowed = append(unallowed, low)
-					}
-				}
-				if len(unallowed) > 0 {
-					a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: trade contains unallowed items: %v", unallowed))
-					a.queueShout(partnerName, fmt.Sprintf("%s, trade cancelled: unallowed items detected.", partnerName))
-					if a.ctx != nil {
-						go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "unallowed_items", "player": partnerName, "items": unallowed})
-					}
-					e.Block()
-					a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
-					return
-				}
+				matchedItems[low] += it.Quantity
 			}
 
 			// If we couldn't parse items, fallback to previous substring check
