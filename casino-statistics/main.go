@@ -573,7 +573,14 @@ func normalizeGameName(game string, choice string) string {
 		return "DT"
 	}
 	if strings.Contains(g, "tri") {
-		return "Tri"
+		c := strings.TrimSpace(strings.ToLower(choice))
+		if strings.Contains(c, "high") || strings.Contains(c, "trih") {
+			return "TriH"
+		}
+		if strings.Contains(c, "low") || strings.Contains(c, "tril") {
+			return "TriL"
+		}
+		return "TriL"
 	}
 	if strings.Contains(g, "pair") || strings.Contains(g, "pu") {
 		return "PU"

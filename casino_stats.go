@@ -280,10 +280,12 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 		Range:       StatsRange{Key: rangeKey},
 		Overall:     CasinoStatsSummary{},
 		ByGame: map[string]GameStats{
-			"PU": {Game: "PU"},
-			"O7": {Game: "O7"},
-			"U7": {Game: "U7"},
-			"7":  {Game: "7"},
+			"PU":    {Game: "PU"},
+			"O7":    {Game: "O7"},
+			"U7":    {Game: "U7"},
+			"7":     {Game: "7"},
+			"TriL":  {Game: "TriL"},
+			"TriH": {Game: "TriH"},
 		},
 	}
 
@@ -323,6 +325,17 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 			} else {
 				// Fallback if choice is empty or unexpected but it's a UO game
 				g = "U7" // Default to U7 if choice is missing (common for old entries)
+			}
+		}
+
+		if g == "Tri" {
+			choice := strings.ToLower(entry.Choice)
+			if strings.Contains(choice, "high") || strings.Contains(choice, "trih") {
+				g = "TriH"
+			} else if strings.Contains(choice, "low") || strings.Contains(choice, "tril") {
+				g = "TriL"
+			} else {
+				g = "TriL"
 			}
 		}
 
