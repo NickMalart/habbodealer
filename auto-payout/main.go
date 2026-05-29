@@ -2199,9 +2199,27 @@ func (a *App) handleTradeItems(e *g.Intercept) {
 	a.tradeMu.Lock()
 	a.currentTradeItems = string(e.Packet.Data)
 	allowedCache := a.allowedNamesCache
-	a.lastTradeItems = a.parseTradeItems(e.Packet.Data, allowedCache)
+	partner := a.lastTradePartner
 	a.tradeMu.Unlock()
-	a.AddLog(fmt.Sprintf("[DEBUG] TRADE_ITEMS updated, found %d items", len(a.lastTradeItems)))
+
+	a.bankerNameMu.RLock()
+	banker := a.bankerName
+	a.bankerNameMu.RUnlock()
+
+	a.roomUsersMu.RLock()
+	roomUsers := make(map[string]bool)
+	for name := range a.roomUsers {
+		roomUsers[name] = true
+	}
+	a.roomUsersMu.RUnlock()
+
+	items := a.parseTradeItems(e.Packet.Data, allowedCache, partner, banker, roomUsers)
+
+	a.tradeMu.Lock()
+	a.lastTradeItems = items
+	a.tradeMu.Unlock()
+
+	a.AddLog(fmt.Sprintf("[DEBUG] TRADE_ITEMS updated, found %d items", len(items)))
 }
 
 func decodeLeadingVL64(data []byte) (int, bool) {
@@ -2215,7 +2233,7 @@ func decodeLeadingVL64(data []byte) (int, bool) {
 	return gencoding.VL64Decode(data[:n]), true
 }
 
-func (a *App) parseTradeItems(data []byte, allowedNamesCache []string) []TradeItem {
+func (a *App) parseTradeItems(data []byte, allowedNamesCache []string, partner string, banker string, roomUsers map[string]bool) []TradeItem {
 	counts := map[string]int{}
 	fields := bytes.Split(data, []byte{0x02})
 
@@ -2243,20 +2261,8 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string) []TradeIt
 		})
 	}
 
-	a.tradeMu.Lock()
-	partner := strings.ToLower(strings.TrimSpace(a.lastTradePartner))
-	a.tradeMu.Unlock()
-
-	a.bankerNameMu.RLock()
-	banker := strings.ToLower(strings.TrimSpace(a.bankerName))
-	a.bankerNameMu.RUnlock()
-
-	a.roomUsersMu.RLock()
-	roomUsers := make(map[string]bool)
-	for name := range a.roomUsers {
-		roomUsers[name] = true
-	}
-	a.roomUsersMu.RUnlock()
+	lowPartner := strings.ToLower(strings.TrimSpace(partner))
+	lowBanker := strings.ToLower(strings.TrimSpace(banker))
 
 	for _, field := range fields {
 		if len(field) == 0 {
@@ -2270,7 +2276,7 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string) []TradeIt
 		lowField := strings.ToLower(s)
 
 		// Skip fields that match known metadata to reduce false matches
-		if lowField == partner || lowField == banker || roomUsers[lowField] ||
+		if lowField == lowPartner || lowField == lowBanker || roomUsers[lowField] ||
 			lowField == "credit" || lowField == "pixel" || lowField == "shell" ||
 			strings.HasPrefix(lowField, "ii") || strings.HasPrefix(lowField, "ih") ||
 			len(lowField) < 3 {
