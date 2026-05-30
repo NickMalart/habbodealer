@@ -166,6 +166,7 @@ type App struct {
 	mu        sync.Mutex
 	processMu sync.Mutex
 	debugMu   sync.Mutex
+	discordMu sync.Mutex
 
 	connected             bool
 	inRoom                bool
@@ -1025,10 +1026,11 @@ func (a *App) CreateRaffle(name, prize string, qty int, heroDataUrl, heroFileNam
 		a.rafflePrizeQty = 1
 	}
 
-	// If no new image is provided, clear the global IDs so we don't accidentally reuse
-	// attachment IDs from a previous message. We keep the ImageURL (CDN link) as a fallback
-	// so the user still has an image, but it won't try to use invalid Discord Attachment IDs.
+	// If no new image is provided, clear the global IDs AND the CDN URLs.
+	// This ensures a completely clean slate for a new raffle, preventing it from
+	// reusing images from a previous session unless explicitly uploaded.
 	if heroDataUrl == "" {
+		a.raffleHeroImageURL = ""
 		a.raffleHeroAttachmentID = ""
 		a.raffleHeroAttachmentFile = ""
 	} else {
@@ -1044,6 +1046,7 @@ func (a *App) CreateRaffle(name, prize string, qty int, heroDataUrl, heroFileNam
 	a.sponsorRoomName = strings.TrimSpace(sponsorRoom)
 	
 	if sponsorHeroDataUrl == "" {
+		a.sponsorImageURL = ""
 		a.sponsorAttachmentID = ""
 		a.sponsorAttachmentFile = ""
 	} else {
@@ -1456,6 +1459,9 @@ func webhookMessageEndpoint(raw string, messageID string) (string, error) {
 }
 
 func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowManual bool, reason string) error {
+	a.discordMu.Lock()
+	defer a.discordMu.Unlock()
+
 	a.mu.Lock()
 	webhookURL := strings.TrimSpace(hardcodedRaffleWebhookURL)
 	autoUpdate := a.raffleAutoUpdate
