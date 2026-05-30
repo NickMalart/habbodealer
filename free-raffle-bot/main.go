@@ -856,7 +856,7 @@ func parseHistoryStartedAt(raw string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func formatDateDDMMYYYYGMTPlus10(raw string) string {
+func formatFullDateTimeGMTPlus10(raw string) string {
 	v := strings.TrimSpace(raw)
 	if v == "" || strings.EqualFold(v, "tbd") {
 		return "TBD (GMT +10)"
@@ -872,7 +872,7 @@ func formatDateDDMMYYYYGMTPlus10(raw string) string {
 	}
 
 	loc := time.FixedZone("GMT+10", 10*60*60)
-	return t.In(loc).Format("02/01/2006") + " GMT +10"
+	return t.In(loc).Format("02/01/2006 15:04:05") + " GMT +10"
 }
 
 func decodeImageDataURL(dataURL string) ([]byte, string, error) {
@@ -1110,6 +1110,7 @@ func (a *App) RepostSessionWebhook(sessionDBID int64, heroDataUrl, heroFileName,
 	// Create a copy for the webhook logic
 	sess := copySession(target)
 	sess.WebhookMessageID = "" // Force a new POST
+	sess.EndedAt = ""          // Treat as active for the repost visuals so Planned End is used
 
 	// Apply time overrides if provided
 	if strings.TrimSpace(startAt) != "" {
@@ -1662,7 +1663,7 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		{"name": "👥 Participants", "value": strconv.Itoa(len(participants)), "inline": true},
 		{"name": "🎟️ Total Tickets", "value": strconv.Itoa(totalTickets), "inline": true},
 		{"name": "🧾 Raffle ID", "value": strconv.FormatInt(session.DBID, 10), "inline": false},
-		{"name": "⏰ Planned End", "value": clampEmbedText(formatDateDDMMYYYYGMTPlus10(endLine), 1000), "inline": false},
+		{"name": "⏰ Planned End", "value": clampEmbedText(formatFullDateTimeGMTPlus10(endLine), 1000), "inline": false},
 		{"name": "🏆 Winner", "value": func() string {
 			if strings.TrimSpace(session.WinnerName) == "" {
 				return "TBD"
@@ -1681,7 +1682,7 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			}
 			return clampEmbedText(session.WinnerOdds, 200)
 		}(), "inline": true},
-		{"name": "🕒 Created", "value": clampEmbedText(startLine, 1000), "inline": true},
+		{"name": "🕒 Created", "value": clampEmbedText(formatFullDateTimeGMTPlus10(startLine), 1000), "inline": true},
 		{"name": "🧠 Winner Explain", "value": func() string {
 			if strings.TrimSpace(session.WinnerSummary) == "" {
 				return "Draw not completed yet."
