@@ -45,7 +45,7 @@ const { EventsOn } = window['runtime'];
 let building = false;
 let gEarthState = { exists: false, running: false };
 function setBuilding(v){building=v;document.getElementById('btnBuildAll').disabled=v;document.querySelectorAll('.btn-build').forEach(b=>b.disabled=v);document.querySelectorAll('.port-input').forEach(i=>i.disabled=v);document.querySelectorAll('.btn-kill').forEach(b=>b.disabled=v);document.querySelectorAll('.btn-open').forEach(b=>{const r=b.closest('.app-row');if(r)b.disabled=v||r.dataset.missing==='1';});}
-function log(line,kind){const el=document.getElementById('log');const d=document.createElement('div');d.className='log-'+(kind||'info');d.textContent=line;el.appendChild(d);el.scrollTop=el.scrollHeight;}
+function log(line,kind){const el=document.getElementById('log');const d=document.createElement('div');d.className='log-'+(kind||'info');d.textContent=line;el.appendChild(d);while(el.children.length>500){el.removeChild(el.firstChild);}el.scrollTop=el.scrollHeight;}
 function clearLog(){document.getElementById('log').innerHTML='';}
 function setStatus(msg){document.getElementById('status').textContent=msg;}
 function updateGEarthButton(){const btn=document.getElementById('btnGEarth');if(!btn)return;btn.disabled=!gEarthState.exists;btn.textContent='Launch G-Earth';btn.title=gEarthState.exists?'':'Missing: G-Earth.windows-x64/G-Earth.exe';}

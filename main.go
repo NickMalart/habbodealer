@@ -3094,16 +3094,16 @@ func (a *App) recordTradeToLedger(partnerName string, tradeType string, items []
 	})
 }
 
-func (a *App) loadGameHistoryFromDB() ([]GameHistoryEntry, error) {
+func (a *App) loadGameHistoryFromDB(limit int) ([]GameHistoryEntry, error) {
 	db, owner := a.getHistoryDB()
 	if db == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	rows, err := db.Query(ctx, `
+	query := `
 		SELECT
 			id,
 			player_name,
@@ -3125,7 +3125,12 @@ func (a *App) loadGameHistoryFromDB() ([]GameHistoryEntry, error) {
 		FROM game_history_entries
 		WHERE owner_key = $1
 		ORDER BY started_at DESC, id DESC
-	`, owner)
+	`
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := db.Query(ctx, query, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -3165,9 +3170,23 @@ func (a *App) loadGameHistoryFromDB() ([]GameHistoryEntry, error) {
 		return nil, err
 	}
 
+	// For small limited sets, we can fetch items efficiently.
+	// If limit is 0 (all history), this might still be slow but it's what was there before.
+	// In practice we will call this with a limit for the UI.
 	itemRows, err := db.Query(ctx, `
 		SELECT entry_id, item_type, item_name, quantity, raw_data
 		FROM game_history_items
+		WHERE entry_id IN (
+			SELECT id FROM game_history_entries WHERE owner_key = $1
+			ORDER BY started_at DESC, id DESC
+			`+(func() string {
+		if limit > 0 {
+			return fmt.Sprintf("LIMIT %d", limit)
+		}
+		return ""
+	}())+`
+		)
+	`, owner)
 		WHERE owner_key = $1
 		ORDER BY entry_id, item_type, item_index
 	`, owner)
@@ -3559,7 +3578,7 @@ func gameHistoryTimestamp() string {
 }
 
 func (a *App) loadGameHistory() {
-	if entries, err := a.loadGameHistoryFromDB(); err == nil && len(entries) > 0 {
+	if entries, err := a.loadGameHistoryFromDB(200); err == nil && len(entries) > 0 {
 		modified := normalizeGameHistoryWinners(entries)
 		a.gameHistoryMu.Lock()
 		a.gameHistory = entries
@@ -3569,7 +3588,7 @@ func (a *App) loadGameHistory() {
 		}
 		a.gameHistoryMu.Unlock()
 		a.emitGameHistoryUpdate()
-		a.AddLogMsg("[GAME_HISTORY][DB] loaded game history from database")
+		a.AddLogMsg("[GAME_HISTORY][DB] loaded game history from database (capped at 200)")
 		return
 	} else if err != nil {
 		a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] load failed, using file fallback: %v", err))
@@ -3836,6 +3855,10 @@ func (a *App) beginGameHistory(playerName string, betItems []TradeItem) {
 	}
 
 	a.gameHistory = append([]GameHistoryEntry{entry}, a.gameHistory...)
+	// Cap in-memory history to prevent OOM
+	if len(a.gameHistory) > 200 {
+		a.gameHistory = a.gameHistory[:200]
+	}
 	a.currentGameHistoryID = entry.ID
 	a.AddLogMsg("[GAME_HISTORY] beginGameHistory mutation complete")
 	a.gameHistoryMu.Unlock()

@@ -61,8 +61,8 @@ func LogEvent(typ string, payload interface{}, summary string, metadata map[stri
 	select {
 	case eventLogCh <- rec:
 	default:
-		// best-effort background enqueue if channel is full
-		SafeGo(func() { eventLogCh <- rec })
+		// best-effort: if channel is full, we drop the log instead of spawning
+		// infinite goroutines which causes OOM.
 	}
 }
 
@@ -101,6 +101,13 @@ func writeEventRecord(rec EventRecord) error {
 		Summary:   rec.Summary,
 		Metadata:  rec.Metadata,
 	}}, idx...)
+
+	// Cap index to last 1000 events to prevent performance degradation and OOM
+	// when reading/writing/marshalling huge index files.
+	if len(idx) > 1000 {
+		idx = idx[:1000]
+	}
+
 	if j, err := json.MarshalIndent(idx, "", "  "); err == nil {
 		_ = os.WriteFile(idxPath, j, 0600)
 	}

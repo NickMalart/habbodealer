@@ -271,10 +271,6 @@ func unionItemNames(a map[string]int, b map[string]int) []string {
 // BuildCasinoStats computes statistics for the provided time range key.
 // Supported rangeKey: all_time, today, last_7_days, last_30_days
 func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
-	// Minimal stats: overall player/dealer win counts + per-game breakdown
-	a.gameHistoryMu.Lock()
-	defer a.gameHistoryMu.Unlock()
-
 	stats := CasinoStats{
 		GeneratedAt: time.Now().Format(time.RFC3339),
 		Range:       StatsRange{Key: rangeKey},
@@ -300,83 +296,42 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 		stats.Range.EndAt = end.Format(time.RFC3339)
 	}
 
-	for _, entry := range a.gameHistory {
-		if !isFinanciallyCountableRound(entry) {
-			continue
-		}
-		t := parseEntryTime(entry)
-		if rangeKey == "today" {
-			if t.IsZero() || t.Before(start) || t.After(end) {
-				continue
+	// Use DB if available for accurate stats across all history without OOM
+	db, owner := a.getHistoryDB()
+	if db != nil {
+		rows, err := db.Query(context.Background(), `
+			SELECT
+				player_name, started_at, updated_at, completed_at, game, winner, status, issue, notes, choice, bet_items_json
+			FROM game_history_entries
+			WHERE owner_key = $1
+		`, owner)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var e GameHistoryEntry
+				var notesRaw, betItemsRaw []byte
+				if err := rows.Scan(
+					&e.PlayerName, &e.StartedAt, &e.UpdatedAt, &e.CompletedAt, &e.Game, &e.Winner, &e.Status, &e.Issue, &notesRaw, &e.Choice, &betItemsRaw,
+				); err != nil {
+					continue
+				}
+				if len(notesRaw) > 0 {
+					_ = json.Unmarshal(notesRaw, &e.Notes)
+				}
+				if len(betItemsRaw) > 0 {
+					_ = json.Unmarshal(betItemsRaw, &e.BetItems)
+				}
+
+				a.processStatsEntry(&stats, e, rangeKey, start, end)
 			}
 		}
-
-		// Determine normalized game key; group unknown/uncategorized games
-		// into an "Other" bucket so BY-GAME totals match the overall totals.
-		g := normalizeGameName(entry.Game)
-		if g == "UO7" {
-			choice := strings.ToLower(entry.Choice)
-			if strings.Contains(choice, "over") {
-				g = "O7"
-			} else if strings.Contains(choice, "under") {
-				g = "U7"
-			} else if choice == "7" {
-				g = "7"
-			} else {
-				// Fallback if choice is empty or unexpected but it's a UO game
-				g = "U7" // Default to U7 if choice is missing (common for old entries)
-			}
+	} else {
+		// Fallback to in-memory if DB is not available (though it will only be recent history)
+		a.gameHistoryMu.Lock()
+		for _, entry := range a.gameHistory {
+			a.processStatsEntry(&stats, entry, rangeKey, start, end)
 		}
-
-		if g == "Tri" {
-			choice := strings.ToLower(entry.Choice)
-			if strings.Contains(choice, "high") || strings.Contains(choice, "trih") {
-				g = "TriH"
-			} else if strings.Contains(choice, "low") || strings.Contains(choice, "tril") {
-				g = "TriL"
-			} else {
-				g = "TriL"
-			}
-		}
-
-		if g == "" {
-			g = "Other"
-		}
-		
-		if g == "UO7" {
-			// Safety: should never happen with the logic above, but force it to U7/O7/7
-			g = "U7"
-		}
-
-		if _, ok := stats.ByGame[g]; !ok {
-			stats.ByGame[g] = GameStats{Game: g}
-		}
-
-		// Update overall counters
-		stats.Overall.TotalRounds++
-		stats.Overall.CompletedRounds++
-		if entry.Issue {
-			stats.Overall.IssueRounds++
-		}
-		if didPlayerWin(entry) {
-			stats.Overall.PlayerWins++
-		} else if didDealerWin(entry) {
-			stats.Overall.DealerWins++
-		}
-
-		// Update per-game counters (including the Other bucket)
-		gs := stats.ByGame[g]
-		gs.TotalRounds++
-		gs.CompletedRounds++
-		if entry.Issue {
-			gs.IssueRounds++
-		}
-		if didPlayerWin(entry) {
-			gs.PlayerWins++
-		} else if didDealerWin(entry) {
-			gs.DealerWins++
-		}
-		stats.ByGame[g] = gs
+		a.gameHistoryMu.Unlock()
 	}
 
 	// Compute win rates using only decided outcomes (player or dealer wins).
@@ -397,6 +352,78 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 	}
 
 	return stats
+}
+
+func (a *App) processStatsEntry(stats *CasinoStats, entry GameHistoryEntry, rangeKey string, start, end time.Time) {
+	if !isFinanciallyCountableRound(entry) {
+		return
+	}
+	t := parseEntryTime(entry)
+	if rangeKey == "today" {
+		if t.IsZero() || t.Before(start) || t.After(end) {
+			return
+		}
+	}
+
+	// Determine normalized game key
+	g := normalizeGameName(entry.Game)
+	if g == "UO7" {
+		choice := strings.ToLower(entry.Choice)
+		if strings.Contains(choice, "over") {
+			g = "O7"
+		} else if strings.Contains(choice, "under") {
+			g = "U7"
+		} else if choice == "7" {
+			g = "7"
+		} else {
+			g = "U7"
+		}
+	}
+
+	if g == "Tri" {
+		choice := strings.ToLower(entry.Choice)
+		if strings.Contains(choice, "high") || strings.Contains(choice, "trih") {
+			g = "TriH"
+		} else if strings.Contains(choice, "low") || strings.Contains(choice, "tril") {
+			g = "TriL"
+		} else {
+			g = "TriL"
+		}
+	}
+
+	if g == "" {
+		g = "Other"
+	}
+
+	if _, ok := stats.ByGame[g]; !ok {
+		stats.ByGame[g] = GameStats{Game: g}
+	}
+
+	// Update overall counters
+	stats.Overall.TotalRounds++
+	stats.Overall.CompletedRounds++
+	if entry.Issue {
+		stats.Overall.IssueRounds++
+	}
+	if didPlayerWin(entry) {
+		stats.Overall.PlayerWins++
+	} else if didDealerWin(entry) {
+		stats.Overall.DealerWins++
+	}
+
+	// Update per-game counters
+	gs := stats.ByGame[g]
+	gs.TotalRounds++
+	gs.CompletedRounds++
+	if entry.Issue {
+		gs.IssueRounds++
+	}
+	if didPlayerWin(entry) {
+		gs.PlayerWins++
+	} else if didDealerWin(entry) {
+		gs.DealerWins++
+	}
+	stats.ByGame[g] = gs
 }
 
 func (a *App) GetCasinoStatsJSON(rangeKey string) string {
