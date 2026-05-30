@@ -730,6 +730,12 @@ func (a *App) SetRaffleSponsorConfig(enabled bool, name string, roomName string)
 		if err := a.saveSessionMeta(sessionDBID); err != nil {
 			a.logDebug("SetRaffleSponsorConfig save failed: %v", err)
 		}
+		// Automatically sync to Discord if we have an active session
+		go func() {
+			if err := a.postOrUpdateRaffleWebhook(nil, true, "sponsor-update"); err != nil {
+				a.logDebug("SetRaffleSponsorConfig webhook update failed: %v", err)
+			}
+		}()
 	}
 	return a.GetState()
 }
