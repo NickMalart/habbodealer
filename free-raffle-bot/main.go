@@ -1988,7 +1988,17 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 
 			errStr := strings.TrimSpace(string(patchBody))
 			if resp.StatusCode == 404 {
-				a.logDebug("[DISCORD_DEBUG] Message not found (404). Falling back to POST. Error: %s", errStr)
+				a.logDebug("[DISCORD_DEBUG] Message not found (404).")
+				
+				// STRICT GUARD: Never automatically recreate a post from a background event.
+				// If the user deleted the post, they must manually click "Update" or "Repost"
+				// to spawn a new one. This prevents infinite spam loops.
+				if reason == "ticket-gain" || reason == "winner-draw" || reason == "sponsor-update" {
+					a.logDebug("[DISCORD_DEBUG] Auto-repost blocked for reason: %s", reason)
+					return fmt.Errorf("message not found in discord. skipping auto-repost to prevent spam")
+				}
+				
+				a.logDebug("[DISCORD_DEBUG] Falling back to POST.")
 				a.mu.Lock()
 				a.raffleMessageID = ""
 				if a.currentSession != nil {
@@ -2946,6 +2956,8 @@ func (a *App) processNewBets() {
 	}
 	prize := fmt.Sprintf("%s x%d", prizeName, prizeQty)
 
+	ticketsChanged := false
+
 	for _, row := range batch {
 		name := normalizeUsername(row.Player)
 		key := normalizeUsernameKey(name)
@@ -2980,6 +2992,11 @@ func (a *App) processNewBets() {
 			}
 			a.currentSession.Participants = append(a.currentSession.Participants, p)
 			upserts = append(upserts, p)
+			
+			if p.Tickets > 0 {
+				ticketsChanged = true
+			}
+
 			if resumedAt.IsZero() || row.EventAt.UTC().After(resumedAt) {
 				ticketAnnounces = append(ticketAnnounces, ticketAnnounce{name: p.Username, tickets: p.Tickets, isNew: true})
 			}
@@ -2990,6 +3007,10 @@ func (a *App) processNewBets() {
 			p.Tickets = effectiveTicketsForParticipant(p.BetCount, a.currentSession.BonusEvery, p.ManualDelta)
 			p.LastBet = row.EventAt.UTC().Format(time.RFC3339)
 			upserts = append(upserts, *p)
+
+			if p.Tickets > oldTickets {
+				ticketsChanged = true
+			}
 
 			if resumedAt.IsZero() || row.EventAt.UTC().After(resumedAt) {
 				if p.Tickets > oldTickets {
@@ -3036,7 +3057,7 @@ func (a *App) processNewBets() {
 
 	a.emitUpdate()
 
-	if len(upserts) > 0 {
+	if ticketsChanged {
 		go func() {
 			if err := a.postOrUpdateRaffleWebhook(nil, true, "ticket-gain"); err != nil {
 				a.logDebug("auto-patch ticket gain failed: %v", err)
