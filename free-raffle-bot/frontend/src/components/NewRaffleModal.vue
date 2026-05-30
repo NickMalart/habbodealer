@@ -14,6 +14,8 @@ const heroImageFileName = ref('');
 const sponsorEnabled = ref(false);
 const sponsorName = ref('');
 const sponsorRoomName = ref('');
+const sponsorImageDataUrl = ref('');
+const sponsorImageFileName = ref('');
 
 onMounted(() => {
   const start = new Date();
@@ -39,6 +41,19 @@ function handleHeroImageChange(event) {
   reader.readAsDataURL(file);
 }
 
+function handleSponsorImageChange(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    sponsorImageDataUrl.value = e.target.result;
+    sponsorImageFileName.value = file.name;
+    document.getElementById('modalSponsorImagePreview').src = e.target.result;
+    document.getElementById('modalSponsorImagePreview').style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+}
+
 function createRaffle() {
   const startISO = startAt.value ? new Date(startAt.value).toISOString() : '';
   const endISO = endAt.value ? new Date(endAt.value).toISOString() : '';
@@ -54,6 +69,8 @@ function createRaffle() {
     sponsorEnabled: sponsorEnabled.value,
     sponsorName: sponsorName.value,
     sponsorRoom: sponsorRoomName.value,
+    sponsorDataUrl: sponsorImageDataUrl.value,
+    sponsorFileName: sponsorImageFileName.value,
   });
 }
 </script>
@@ -97,6 +114,12 @@ function createRaffle() {
 
           <label for="sponsorRoom">Sponsor Room</label>
           <input v-model="sponsorRoomName" id="sponsorRoom" type="text" placeholder="e.g. Rare Trade [1]" />
+
+          <label for="sponsorImage">Sponsor Room Photo</label>
+          <div>
+            <input id="sponsorImage" type="file" accept="image/*" @change="handleSponsorImageChange" />
+            <img id="modalSponsorImagePreview" class="raffle-hero-preview" style="margin-top:8px;display:none;" alt="Sponsor room preview" />
+          </div>
         </template>
       </div>
 
