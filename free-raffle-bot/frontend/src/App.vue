@@ -6,6 +6,7 @@ import HypeShout from './components/HypeShout.vue';
 import JoinShout from './components/JoinShout.vue';
 import AutoMsg from './components/AutoMsg.vue';
 import DiscordConfig from './components/DiscordConfig.vue';
+import SponsorCard from './components/SponsorCard.vue';
 import ActiveSession from './components/ActiveSession.vue';
 import SessionHistory from './components/SessionHistory.vue';
 import DebugPanel from './components/DebugPanel.vue';
@@ -115,6 +116,7 @@ onUnmounted(() => {
       <StatusHeader :state="state" @refresh="refresh" />
       <ControlPanel :state="state" @refresh="refresh" />
       <DiscordConfig :state="state" @refresh="refresh" />
+      <SponsorCard :state="state" @refresh="refresh" />
       <ActiveSession :state="state" @refresh="refresh" />
       <SessionHistory :state="state" @refresh="refresh" />
     </div>
