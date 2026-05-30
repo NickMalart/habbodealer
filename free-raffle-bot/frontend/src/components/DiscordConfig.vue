@@ -171,23 +171,6 @@ async function postWinnerProof() {
       </label>
     </div>
 
-    <div class="row" style="margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px;">
-      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-        <input v-model="sponsorEnabled" type="checkbox" id="sponsorEnabledChk"> Sponsor (Add sponsorship info)
-      </label>
-    </div>
-
-    <div v-show="sponsorEnabled" id="sponsorFields" style="margin-top: 8px;">
-      <div class="row" style="margin-bottom: 8px;">
-        <label for="sponsorName" style="min-width: 140px;">Sponsor Name</label>
-        <input v-model="sponsorName" id="sponsorName" type="text" placeholder="e.g. Neon Casino" />
-      </div>
-      <div class="row" style="margin-bottom: 8px;">
-        <label for="sponsorRoom" style="min-width: 140px;">Sponsor Room</label>
-        <input v-model="sponsorRoomName" id="sponsorRoom" type="text" placeholder="e.g. The VIP Lounge" />
-      </div>
-    </div>
-
     <div class="row" style="margin-top: 12px;">
       <button class="alt" @click="saveDiscordCfg">Save Settings</button>
       <button @click="postOrUpdateRaffleWebhook">Post / Update Raffle</button>

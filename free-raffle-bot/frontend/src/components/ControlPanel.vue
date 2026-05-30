@@ -58,7 +58,7 @@ const toggleSession = async () => {
 
 const createRaffle = async (data) => {
   try {
-    await call('CreateRaffle', data.name, data.prize, data.qty, data.heroDataUrl, data.heroFileName, data.startAt, data.endAt);
+    await call('CreateRaffle', data.name, data.prize, data.qty, data.heroDataUrl, data.heroFileName, data.startAt, data.endAt, data.sponsorEnabled, data.sponsorName, data.sponsorRoom);
     showNewRaffleModal.value = false;
     emit('refresh');
   } catch (err) {

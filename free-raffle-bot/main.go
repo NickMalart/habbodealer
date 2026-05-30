@@ -986,7 +986,7 @@ func (a *App) SetRaffleDiscordConfig(
 	return a.GetState()
 }
 
-func (a *App) CreateRaffle(name, prize string, qty int, heroDataUrl, heroFileName string, startAt, endAt string) (RaffleState, error) {
+func (a *App) CreateRaffle(name, prize string, qty int, heroDataUrl, heroFileName string, startAt, endAt string, sponsorEnabled bool, sponsorName string, sponsorRoom string) (RaffleState, error) {
 	a.mu.Lock()
 	a.raffleName = name
 	a.rafflePrizeName = prize
@@ -1004,6 +1004,11 @@ func (a *App) CreateRaffle(name, prize string, qty int, heroDataUrl, heroFileNam
 		a.raffleHeroAttachmentID = ""
 		a.raffleHeroAttachmentFile = ""
 	}
+
+	a.sponsorEnabled = sponsorEnabled
+	a.sponsorName = strings.TrimSpace(sponsorName)
+	a.sponsorRoomName = strings.TrimSpace(sponsorRoom)
+
 	// Let's assume auto-update should be on for new raffles.
 	a.raffleAutoUpdate = true
 	a.mu.Unlock()

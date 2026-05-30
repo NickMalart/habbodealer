@@ -11,6 +11,10 @@ const endAt = ref('');
 const heroImageDataUrl = ref('');
 const heroImageFileName = ref('');
 
+const sponsorEnabled = ref(false);
+const sponsorName = ref('');
+const sponsorRoomName = ref('');
+
 onMounted(() => {
   const start = new Date();
   const end = new Date(start.getTime() + 60 * 60 * 1000);
@@ -47,6 +51,9 @@ function createRaffle() {
     heroFileName: heroImageFileName.value,
     startAt: startISO,
     endAt: endISO,
+    sponsorEnabled: sponsorEnabled.value,
+    sponsorName: sponsorName.value,
+    sponsorRoom: sponsorRoomName.value,
   });
 }
 </script>
@@ -77,6 +84,20 @@ function createRaffle() {
           <input id="heroImage" type="file" accept="image/*" @change="handleHeroImageChange" />
           <img id="modalHeroImagePreview" class="raffle-hero-preview" style="margin-top:8px;display:none;" alt="Raffle hero preview" />
         </div>
+
+        <div style="grid-column: 1 / span 2; margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.05);">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;justify-content:flex-start;">
+            <input v-model="sponsorEnabled" type="checkbox"> 💎 Add Sponsorship Info
+          </label>
+        </div>
+
+        <template v-if="sponsorEnabled">
+          <label for="sponsorName">Sponsor Name</label>
+          <input v-model="sponsorName" id="sponsorName" type="text" placeholder="e.g. Dubbo" />
+
+          <label for="sponsorRoom">Sponsor Room</label>
+          <input v-model="sponsorRoomName" id="sponsorRoom" type="text" placeholder="e.g. Rare Trade [1]" />
+        </template>
       </div>
 
       <div class="modal-actions">
