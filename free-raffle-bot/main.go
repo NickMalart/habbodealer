@@ -1744,12 +1744,14 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		promoEmbed["image"] = map[string]interface{}{"url": heroImageURL}
 	}
 
-	if sponsorDataURL != "" {
-		// New upload will use attachment logic below
-	} else if messageID != "" && existingSponsorID != "" && existingSponsorFile != "" {
-		sponsorEmbed["image"] = map[string]interface{}{"url": "attachment://" + existingSponsorFile}
-	} else if sponsorImageURL != "" {
-		sponsorEmbed["image"] = map[string]interface{}{"url": sponsorImageURL}
+	if sponsorEmbed != nil {
+		if sponsorDataURL != "" {
+			// New upload will use attachment logic below
+		} else if messageID != "" && existingSponsorID != "" && existingSponsorFile != "" {
+			sponsorEmbed["image"] = map[string]interface{}{"url": "attachment://" + existingSponsorFile}
+		} else if sponsorImageURL != "" {
+			sponsorEmbed["image"] = map[string]interface{}{"url": sponsorImageURL}
+		}
 	}
 
 	if proofBytes != nil && proofFileName != "" {
@@ -1878,17 +1880,24 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 
 				a.mu.Lock()
 				for _, att := range patchResp.Attachments {
-					if (heroFileName != "" && att.Filename == heroFileName) || (heroFileName == "" && att.Filename == existingHeroFile) {
+					// STRICT STANDARDIZED MATCHING: 
+					// We use the reserved prefixes we created during upload to identify the types.
+					lowName := strings.ToLower(att.Filename)
+					isHero := strings.HasPrefix(lowName, "raffle-hero")
+					isSponsor := strings.HasPrefix(lowName, "sponsor-room")
+					isProof := strings.HasPrefix(lowName, "winner-proof")
+
+					if isHero {
 						a.raffleHeroImageURL = att.URL
 						a.raffleHeroAttachmentID = att.ID
 						a.raffleHeroAttachmentFile = att.Filename
 					}
-					if (sponsorFileName != "" && att.Filename == sponsorFileName) || (sponsorFileName == "" && att.Filename == existingSponsorFile) {
+					if isSponsor {
 						a.sponsorImageURL = att.URL
 						a.sponsorAttachmentID = att.ID
 						a.sponsorAttachmentFile = att.Filename
 					}
-					if (proofFileName != "" && att.Filename == proofFileName) || (proofFileName == "" && att.Filename == existingProofFile) {
+					if isProof {
 						if a.currentSession != nil {
 							a.currentSession.WinnerProofURL = att.URL
 							a.currentSession.WinnerProofID = att.ID
@@ -1930,18 +1939,13 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		if err != nil {
 			return fmt.Errorf("hero image decode error: %w", err)
 		}
-		fileName := strings.TrimSpace(heroFileName)
-		if fileName == "" {
-			switch mimeType {
-			case "image/jpeg":
-				fileName = "raffle-hero.jpg"
-			case "image/gif":
-				fileName = "raffle-hero.gif"
-			case "image/webp":
-				fileName = "raffle-hero.webp"
-			default:
-				fileName = "raffle-hero.png"
-			}
+		
+		// ALWAYS use a standardized name for matching logic
+		fileName := "raffle-hero.png"
+		switch mimeType {
+		case "image/jpeg": fileName = "raffle-hero.jpg"
+		case "image/gif":  fileName = "raffle-hero.gif"
+		case "image/webp": fileName = "raffle-hero.webp"
 		}
 		
 		// Placement: Hero always goes to Yellow card
@@ -1952,15 +1956,13 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	if sponsorDataURL != "" {
 		raw, mimeType, err := decodeImageDataURL(sponsorDataURL)
 		if err == nil {
-			fileName := strings.TrimSpace(sponsorFileName)
-			if fileName == "" {
-				switch mimeType {
-				case "image/jpeg": fileName = "sponsor-room.jpg"
-				case "image/gif":  fileName = "sponsor-room.gif"
-				case "image/webp": fileName = "sponsor-room.webp"
-				default:           fileName = "sponsor-room.png"
-				}
+			fileName := "sponsor-room.png"
+			switch mimeType {
+			case "image/jpeg": fileName = "sponsor-room.jpg"
+			case "image/gif":  fileName = "sponsor-room.gif"
+			case "image/webp": fileName = "sponsor-room.webp"
 			}
+			
 			// Placement: Room Photo is the main image in the Orange Sponsor Card
 			if sponsorEmbed != nil {
 				sponsorEmbed["image"] = map[string]interface{}{"url": "attachment://" + fileName}
@@ -2058,14 +2060,15 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		}
 	}
 	
-	// Update all attachment state from response
+	// Update all attachment state from response using standardized matching
 	for _, att := range respPayload.Attachments {
-		if heroFileName != "" && att.Filename == heroFileName {
+		lowName := strings.ToLower(att.Filename)
+		if strings.HasPrefix(lowName, "raffle-hero") {
 			a.raffleHeroImageURL = att.URL
 			a.raffleHeroAttachmentID = att.ID
 			a.raffleHeroAttachmentFile = att.Filename
 		}
-		if sponsorFileName != "" && att.Filename == sponsorFileName {
+		if strings.HasPrefix(lowName, "sponsor-room") {
 			a.sponsorImageURL = att.URL
 			a.sponsorAttachmentID = att.ID
 			a.sponsorAttachmentFile = att.Filename
