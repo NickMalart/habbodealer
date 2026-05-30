@@ -2199,6 +2199,9 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 		sponsorEnabled = a.sponsorEnabled
 		sponsorName = strings.TrimSpace(a.sponsorName)
 		sponsorRoomName = strings.TrimSpace(a.sponsorRoomName)
+		sponsorImageURL := strings.TrimSpace(a.sponsorImageURL)
+		sponsorAttachmentID := strings.TrimSpace(a.sponsorAttachmentID)
+		sponsorAttachmentFile := strings.TrimSpace(a.sponsorAttachmentFile)
 
 		a.currentSession = &RaffleSession{
 			ID:                 sessionID,
@@ -2216,6 +2219,9 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 			SponsorEnabled:     sponsorEnabled,
 			SponsorName:        sponsorName,
 			SponsorRoomName:    sponsorRoomName,
+			SponsorImageURL:    sponsorImageURL,
+			SponsorAttachmentID: sponsorAttachmentID,
+			SponsorAttachmentFile: sponsorAttachmentFile,
 		}
 	} else {
 		a.mu.Unlock()
@@ -2224,6 +2230,12 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 	db = a.db
 	owner = a.ownerKey
 	a.enabled = true
+	
+	// Capture sponsor local variables for SQL query before unlocking
+	sponsorImageURL := a.currentSession.SponsorImageURL
+	sponsorAttachmentID := a.currentSession.SponsorAttachmentID
+	sponsorAttachmentFile := a.currentSession.SponsorAttachmentFile
+
 	a.mu.Unlock()
 
 	if sessionID > 0 && db != nil {
@@ -2237,8 +2249,9 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 			                              last_seen_banker_at, last_seen_banker_id,
 			                              webhook_message_id,
 			                              raffle_name, prize_name, prize_qty, hero_image_url, hero_attachment_id, hero_attachment_file,
-			                              sponsor_enabled, sponsor_name, sponsor_room_name)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+			                              sponsor_enabled, sponsor_name, sponsor_room_name,
+			                              sponsor_image_url, sponsor_attachment_id, sponsor_attachment_file)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
 			 RETURNING id`,
 			startAt,
 			func() interface{} {
@@ -2263,6 +2276,9 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 			sponsorEnabled,
 			sponsorName,
 			sponsorRoomName,
+			sponsorImageURL,
+			sponsorAttachmentID,
+			sponsorAttachmentFile,
 		).Scan(&dbSessionID)
 		if err != nil {
 			a.logDebug("start session insert failed: %v", err)
@@ -3055,6 +3071,8 @@ func (a *App) saveSessionMeta(sessionDBID int64) error {
 
 	// Find the session to save metadata for
 	var session *RaffleSession
+	var sponsorImageURL, sponsorAttachmentID, sponsorAttachmentFile string
+	
 	if a.currentSession != nil && a.currentSession.DBID == sessionDBID {
 		session = a.currentSession
 	} else {
@@ -3097,6 +3115,9 @@ func (a *App) saveSessionMeta(sessionDBID int64) error {
 		sponsorEnabled = session.SponsorEnabled
 		sponsorName = strings.TrimSpace(session.SponsorName)
 		sponsorRoomName = strings.TrimSpace(session.SponsorRoomName)
+		sponsorImageURL = strings.TrimSpace(session.SponsorImageURL)
+		sponsorAttachmentID = strings.TrimSpace(session.SponsorAttachmentID)
+		sponsorAttachmentFile = strings.TrimSpace(session.SponsorAttachmentFile)
 	}
 	a.mu.Unlock()
 
@@ -3121,14 +3142,16 @@ func (a *App) saveSessionMeta(sessionDBID int64) error {
 		     winner_name = $7, winner_tickets = $8, winner_odds = $9, winner_drawn_at = $10,
 		     winner_method = $11, winner_summary = $12, winner_proof_url = $13,
 		     winner_proof_id = $14, winner_proof_file = $15,
-		     sponsor_enabled = $16, sponsor_name = $17, sponsor_room_name = $18
-		 WHERE id = $19 AND owner_key = $20`,
+		     sponsor_enabled = $16, sponsor_name = $17, sponsor_room_name = $18,
+		     sponsor_image_url = $19, sponsor_attachment_id = $20, sponsor_attachment_file = $21
+		 WHERE id = $22 AND owner_key = $23`,
 		raffleName, prizeName, prizeQty,
 		heroImageURL, heroAttachmentID, heroAttachmentFile,
 		winnerName, winnerTickets, winnerOdds, winnerDrawnAt,
 		winnerMethod, winnerSummary, winnerProofURL,
 		winnerProofID, winnerProofFile,
 		sponsorEnabled, sponsorName, sponsorRoomName,
+		sponsorImageURL, sponsorAttachmentID, sponsorAttachmentFile,
 		sessionDBID, owner,
 	)
 	return err
@@ -3623,7 +3646,8 @@ func (a *App) loadSessionsFromDB() error {
 		       webhook_message_id,
 		       raffle_name, prize_name, prize_qty, hero_image_url, hero_attachment_id, hero_attachment_file,
 		       winner_name, winner_tickets, winner_odds, winner_drawn_at, winner_method, winner_summary,
-		       winner_proof_url, winner_proof_id, winner_proof_file, sponsor_enabled, sponsor_name, sponsor_room_name
+		       winner_proof_url, winner_proof_id, winner_proof_file, sponsor_enabled, sponsor_name, sponsor_room_name,
+		       sponsor_image_url, sponsor_attachment_id, sponsor_attachment_file
 		FROM raffle_sessions
 		WHERE owner_key = $1
 		ORDER BY id ASC
