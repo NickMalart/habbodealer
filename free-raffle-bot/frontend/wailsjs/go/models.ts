@@ -146,6 +146,7 @@ export namespace main {
 	    sponsorEnabled: boolean;
 	    sponsorName: string;
 	    sponsorRoomName: string;
+	    sponsorImageName: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new RaffleState(source);
@@ -182,6 +183,7 @@ export namespace main {
 	        this.sponsorEnabled = source["sponsorEnabled"];
 	        this.sponsorName = source["sponsorName"];
 	        this.sponsorRoomName = source["sponsorRoomName"];
+	        this.sponsorImageName = source["sponsorImageName"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

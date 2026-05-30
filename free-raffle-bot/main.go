@@ -1726,11 +1726,12 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	proofBytes := a.pendingProofBytes
 	proofFileName := strings.TrimSpace(a.pendingProofFileName)
 	
-	// Collect existing attachment IDs from the session to ensure they are preserved during PATCH
-	existingHeroID := strings.TrimSpace(session.HeroAttachmentID)
-	existingHeroFile := strings.TrimSpace(session.HeroAttachmentFile)
-	existingSponsorID := strings.TrimSpace(session.SponsorAttachmentID)
-	existingSponsorFile := strings.TrimSpace(session.SponsorAttachmentFile)
+	// Collect existing attachment IDs from the session to ensure they are preserved during PATCH.
+	// We use the already-resolved local variables (heroAttachmentID etc) which have bot-global fallbacks.
+	existingHeroID := heroAttachmentID
+	existingHeroFile := heroAttachmentFile
+	existingSponsorID := sponsorAttachmentID
+	existingSponsorFile := sponsorAttachmentFile
 	existingProofID := strings.TrimSpace(session.WinnerProofID)
 	existingProofFile := strings.TrimSpace(session.WinnerProofFile)
 	a.mu.Unlock()
@@ -1828,9 +1829,15 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			attachmentsList = append(attachmentsList, map[string]interface{}{"id": existingProofID, "filename": existingProofFile})
 		}
 
+		// Even if we have no NEW uploads, we MUST send the existing attachment IDs
+		// in the 'attachments' array to tell Discord to KEEP them.
+		// If we omit this field entirely, Discord keeps the files but might
+		// detach them from the embeds (moving them to the top of the post).
 		payload["attachments"] = attachmentsList
 		
 		a.logDebug("[DISCORD_DEBUG] Reason: %s | MessageID: %s", reason, messageID)
+		a.logDebug("[DISCORD_DEBUG] Resolved HeroID: %q | Resolved SponsorID: %q", existingHeroID, existingSponsorID)
+		a.logDebug("[DISCORD_DEBUG] Resolved HeroURL: %q | Resolved SponsorURL: %q", heroImageURL, sponsorImageURL)
 		attJSON, _ := json.Marshal(attachmentsList)
 		a.logDebug("[DISCORD_DEBUG] Sending Attachments Keep-List: %s", string(attJSON))
 
@@ -1923,6 +1930,27 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 				a.pendingProofBytes = nil
 				a.pendingProofFileName = ""
 				
+				if session != nil {
+					// Update history array as well so Resuming the session brings the IDs forward
+					for i := range a.sessions {
+						if a.sessions[i].DBID == session.DBID {
+							a.sessions[i].HeroImageURL = a.raffleHeroImageURL
+							a.sessions[i].HeroAttachmentID = a.raffleHeroAttachmentID
+							a.sessions[i].HeroAttachmentFile = a.raffleHeroAttachmentFile
+							a.sessions[i].SponsorImageURL = a.sponsorImageURL
+							a.sessions[i].SponsorAttachmentID = a.sponsorAttachmentID
+							a.sessions[i].SponsorAttachmentFile = a.sponsorAttachmentFile
+							
+							if a.currentSession != nil && a.currentSession.DBID == session.DBID {
+								a.sessions[i].WinnerProofURL = a.currentSession.WinnerProofURL
+								a.sessions[i].WinnerProofID = a.currentSession.WinnerProofID
+								a.sessions[i].WinnerProofFile = a.currentSession.WinnerProofFile
+							}
+							break
+						}
+					}
+				}
+
 				if a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
 					a.currentSession.HeroImageURL = a.raffleHeroImageURL
 					a.currentSession.HeroAttachmentID = a.raffleHeroAttachmentID
@@ -1930,6 +1958,7 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 					a.currentSession.SponsorImageURL = a.sponsorImageURL
 					a.currentSession.SponsorAttachmentID = a.sponsorAttachmentID
 					a.currentSession.SponsorAttachmentFile = a.sponsorAttachmentFile
+					// WinnerProof was already updated above in the attachments loop
 				}
 				a.mu.Unlock()
 
@@ -2050,6 +2079,13 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	a.raffleHeroFileName = ""
 	a.sponsorDataURL = ""
 	a.sponsorFileName = ""
+	
+	// Clear old attachment IDs as they are specific to the PREVIOUS message.
+	// If the new post didn't upload anything, we must fall back to CDN URLs only.
+	a.raffleHeroAttachmentID = ""
+	a.raffleHeroAttachmentFile = ""
+	a.sponsorAttachmentID = ""
+	a.sponsorAttachmentFile = ""
 
 	if strings.TrimSpace(respPayload.ID) != "" {
 		newMsgID := strings.TrimSpace(respPayload.ID)
@@ -2072,30 +2108,28 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	}
 	
 	// Update all attachment state from response using standardized matching
-	for _, att := range respPayload.Attachments {
-		lowName := strings.ToLower(att.Filename)
-		if strings.HasPrefix(lowName, "raffle-hero") {
-			a.raffleHeroImageURL = att.URL
-			a.raffleHeroAttachmentID = att.ID
-			a.raffleHeroAttachmentFile = att.Filename
-			a.logDebug("[DISCORD_DEBUG] POST Saved Hero ID=%s", att.ID)
+	if len(respPayload.Attachments) > 0 {
+		a.logDebug("[DISCORD_DEBUG] POST Response had %d attachments", len(respPayload.Attachments))
+		for _, att := range respPayload.Attachments {
+			lowName := strings.ToLower(att.Filename)
+			if strings.HasPrefix(lowName, "raffle-hero") {
+				a.raffleHeroImageURL = att.URL
+				a.raffleHeroAttachmentID = att.ID
+				a.raffleHeroAttachmentFile = att.Filename
+				a.logDebug("[DISCORD_DEBUG] POST Saved Hero ID=%s", att.ID)
+			}
+			if strings.HasPrefix(lowName, "sponsor-room") {
+				a.sponsorImageURL = att.URL
+				a.sponsorAttachmentID = att.ID
+				a.sponsorAttachmentFile = att.Filename
+				a.logDebug("[DISCORD_DEBUG] POST Saved Sponsor ID=%s", att.ID)
+			}
 		}
-		if strings.HasPrefix(lowName, "sponsor-room") {
-			a.sponsorImageURL = att.URL
-			a.sponsorAttachmentID = att.ID
-			a.sponsorAttachmentFile = att.Filename
-			a.logDebug("[DISCORD_DEBUG] POST Saved Sponsor ID=%s", att.ID)
-		}
+	} else {
+		a.logDebug("[DISCORD_DEBUG] POST Response had 0 attachments (likely using CDN URLs)")
 	}
 	
-	if a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
-		a.currentSession.HeroImageURL = a.raffleHeroImageURL
-		a.currentSession.HeroAttachmentID = a.raffleHeroAttachmentID
-		a.currentSession.HeroAttachmentFile = a.raffleHeroAttachmentFile
-		a.currentSession.SponsorImageURL = a.sponsorImageURL
-		a.currentSession.SponsorAttachmentID = a.sponsorAttachmentID
-		a.currentSession.SponsorAttachmentFile = a.sponsorAttachmentFile
-	} else if session != nil {
+	if session != nil {
 		// Update history array as well so Resuming the session brings the IDs forward
 		for i := range a.sessions {
 			if a.sessions[i].DBID == session.DBID {
@@ -2108,6 +2142,15 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 				break
 			}
 		}
+	}
+
+	if a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
+		a.currentSession.HeroImageURL = a.raffleHeroImageURL
+		a.currentSession.HeroAttachmentID = a.raffleHeroAttachmentID
+		a.currentSession.HeroAttachmentFile = a.raffleHeroAttachmentFile
+		a.currentSession.SponsorImageURL = a.sponsorImageURL
+		a.currentSession.SponsorAttachmentID = a.sponsorAttachmentID
+		a.currentSession.SponsorAttachmentFile = a.sponsorAttachmentFile
 	}
 	a.mu.Unlock()
 
@@ -2385,6 +2428,9 @@ func (a *App) ResumeSession(dbID int64) (RaffleState, error) {
 	a.raffleHeroImageURL = s.HeroImageURL
 	a.raffleHeroAttachmentID = s.HeroAttachmentID
 	a.raffleHeroAttachmentFile = s.HeroAttachmentFile
+	a.sponsorImageURL = s.SponsorImageURL
+	a.sponsorAttachmentID = s.SponsorAttachmentID
+	a.sponsorAttachmentFile = s.SponsorAttachmentFile
 	
 	a.logDebug("ResumeSession: a.currentSession now has %d participants", len(a.currentSession.Participants))
 	for _, p := range a.currentSession.Participants {
@@ -3071,7 +3117,9 @@ func (a *App) saveSessionMeta(sessionDBID int64) error {
 
 	// Find the session to save metadata for
 	var session *RaffleSession
-	var sponsorImageURL, sponsorAttachmentID, sponsorAttachmentFile string
+	sponsorImageURL := strings.TrimSpace(a.sponsorImageURL)
+	sponsorAttachmentID := strings.TrimSpace(a.sponsorAttachmentID)
+	sponsorAttachmentFile := strings.TrimSpace(a.sponsorAttachmentFile)
 	
 	if a.currentSession != nil && a.currentSession.DBID == sessionDBID {
 		session = a.currentSession
@@ -3094,9 +3142,15 @@ func (a *App) saveSessionMeta(sessionDBID int64) error {
 		if session.PrizeQty > 0 {
 			prizeQty = session.PrizeQty
 		}
-		heroImageURL = strings.TrimSpace(session.HeroImageURL)
-		heroAttachmentID = strings.TrimSpace(session.HeroAttachmentID)
-		heroAttachmentFile = strings.TrimSpace(session.HeroAttachmentFile)
+		if n := strings.TrimSpace(session.HeroImageURL); n != "" {
+			heroImageURL = n
+		}
+		if n := strings.TrimSpace(session.HeroAttachmentID); n != "" {
+			heroAttachmentID = n
+		}
+		if n := strings.TrimSpace(session.HeroAttachmentFile); n != "" {
+			heroAttachmentFile = n
+		}
 
 		winnerName = strings.TrimSpace(session.WinnerName)
 		winnerTickets = session.WinnerTickets
@@ -3115,9 +3169,15 @@ func (a *App) saveSessionMeta(sessionDBID int64) error {
 		sponsorEnabled = session.SponsorEnabled
 		sponsorName = strings.TrimSpace(session.SponsorName)
 		sponsorRoomName = strings.TrimSpace(session.SponsorRoomName)
-		sponsorImageURL = strings.TrimSpace(session.SponsorImageURL)
-		sponsorAttachmentID = strings.TrimSpace(session.SponsorAttachmentID)
-		sponsorAttachmentFile = strings.TrimSpace(session.SponsorAttachmentFile)
+		if n := strings.TrimSpace(session.SponsorImageURL); n != "" {
+			sponsorImageURL = n
+		}
+		if n := strings.TrimSpace(session.SponsorAttachmentID); n != "" {
+			sponsorAttachmentID = n
+		}
+		if n := strings.TrimSpace(session.SponsorAttachmentFile); n != "" {
+			sponsorAttachmentFile = n
+		}
 	}
 	a.mu.Unlock()
 
@@ -3826,6 +3886,9 @@ func (a *App) loadSessionsFromDB() error {
 		a.raffleHeroImageURL = a.currentSession.HeroImageURL
 		a.raffleHeroAttachmentID = a.currentSession.HeroAttachmentID
 		a.raffleHeroAttachmentFile = a.currentSession.HeroAttachmentFile
+		a.sponsorImageURL = a.currentSession.SponsorImageURL
+		a.sponsorAttachmentID = a.currentSession.SponsorAttachmentID
+		a.sponsorAttachmentFile = a.currentSession.SponsorAttachmentFile
 		
 		a.logDebug("loadSessionsFromDB: Current session is %d with %d participants (tracking enabled)", a.currentSession.DBID, len(a.currentSession.Participants))
 	} else {

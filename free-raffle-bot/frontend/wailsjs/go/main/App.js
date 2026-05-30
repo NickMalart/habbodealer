@@ -10,8 +10,8 @@ export function ClearSessions() {
   return window['go']['main']['App']['ClearSessions']();
 }
 
-export function CreateRaffle(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
-  return window['go']['main']['App']['CreateRaffle'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
+export function CreateRaffle(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12) {
+  return window['go']['main']['App']['CreateRaffle'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12);
 }
 
 export function DeleteSession(arg1) {
@@ -62,6 +62,10 @@ export function RepostRaffleWebhook() {
   return window['go']['main']['App']['RepostRaffleWebhook']();
 }
 
+export function RepostSessionWebhook(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+  return window['go']['main']['App']['RepostSessionWebhook'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
+}
+
 export function ResumeSession(arg1) {
   return window['go']['main']['App']['ResumeSession'](arg1);
 }
@@ -98,8 +102,8 @@ export function SetRaffleDiscordConfig(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['SetRaffleDiscordConfig'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
-export function SetRaffleSponsorConfig(arg1, arg2, arg3) {
-  return window['go']['main']['App']['SetRaffleSponsorConfig'](arg1, arg2, arg3);
+export function SetRaffleSponsorConfig(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['SetRaffleSponsorConfig'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function SetTicketAnnounceEnabled(arg1) {
