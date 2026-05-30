@@ -1491,8 +1491,9 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		heroAttachmentID = strings.TrimSpace(session.HeroAttachmentID)
 		heroAttachmentFile = strings.TrimSpace(session.HeroAttachmentFile)
 
-		// If this is the current session, we might have unsaved/pending hero data in the bot state
-		if sessionOverride == nil || (a.currentSession != nil && session.DBID == a.currentSession.DBID) {
+		// If this is the current session, we might have unsaved/pending hero data in the bot state.
+		// We also allow this for "repost-history" so new images can be sent.
+		if sessionOverride == nil || (a.currentSession != nil && session.DBID == a.currentSession.DBID) || reason == "repost-history" {
 			heroDataURL = strings.TrimSpace(a.raffleHeroDataURL)
 			heroFileName = strings.TrimSpace(a.raffleHeroFileName)
 			if heroImageURL == "" {
@@ -1537,7 +1538,7 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	sponsorAttachmentFile := strings.TrimSpace(session.SponsorAttachmentFile)
 	sponsorDataURL := ""
 	sponsorFileName := ""
-	if sessionOverride == nil || (a.currentSession != nil && session.DBID == a.currentSession.DBID) {
+	if sessionOverride == nil || (a.currentSession != nil && session.DBID == a.currentSession.DBID) || reason == "repost-history" {
 		sponsorDataURL = strings.TrimSpace(a.sponsorDataURL)
 		sponsorFileName = strings.TrimSpace(a.sponsorFileName)
 		if sponsorImageURL == "" {
@@ -1611,9 +1612,14 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		"timestamp":   now.Format(time.RFC3339),
 	}
 
-	if heroAttachmentID != "" && heroAttachmentFile != "" {
+	// Image logic for Prize Card
+	if heroDataURL != "" {
+		// New upload pending, will be handled in POST/PATCH block below
+	} else if messageID != "" && heroAttachmentID != "" && heroAttachmentFile != "" {
+		// Existing message, can reuse attachment ID
 		promoEmbed["image"] = map[string]interface{}{"url": "attachment://" + heroAttachmentFile}
 	} else if heroImageURL != "" {
+		// New message or no attachment ID, use CDN URL
 		promoEmbed["image"] = map[string]interface{}{"url": heroImageURL}
 	}
 
@@ -1630,7 +1636,10 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			"footer": map[string]interface{}{"text": "💎 Thank you for supporting our raffles!"},
 			"timestamp": now.Format(time.RFC3339),
 		}
-		if sponsorAttachmentID != "" && sponsorAttachmentFile != "" {
+
+		if sponsorDataURL != "" {
+			// New upload pending
+		} else if messageID != "" && sponsorAttachmentID != "" && sponsorAttachmentFile != "" {
 			sponsorEmbed["thumbnail"] = map[string]interface{}{"url": "attachment://" + sponsorAttachmentFile}
 		} else if sponsorImageURL != "" {
 			sponsorEmbed["thumbnail"] = map[string]interface{}{"url": sponsorImageURL}
