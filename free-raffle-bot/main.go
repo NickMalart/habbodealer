@@ -1725,16 +1725,39 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	a.mu.Lock()
 	proofBytes := a.pendingProofBytes
 	proofFileName := strings.TrimSpace(a.pendingProofFileName)
-	existingProofAttachmentID := ""
-	existingProofFileName := ""
-	if session != nil {
-		existingProofAttachmentID = strings.TrimSpace(session.WinnerProofID)
-		existingProofFileName = strings.TrimSpace(session.WinnerProofFile)
-	}
+	
+	// Collect existing attachment IDs from the session to ensure they are preserved during PATCH
+	existingHeroID := strings.TrimSpace(session.HeroAttachmentID)
+	existingHeroFile := strings.TrimSpace(session.HeroAttachmentFile)
+	existingSponsorID := strings.TrimSpace(session.SponsorAttachmentID)
+	existingSponsorFile := strings.TrimSpace(session.SponsorAttachmentFile)
+	existingProofID := strings.TrimSpace(session.WinnerProofID)
+	existingProofFile := strings.TrimSpace(session.WinnerProofFile)
 	a.mu.Unlock()
+
+	// Embed Reference Logic: Use attachment:// if we have a file/ID, otherwise fallback to CDN URL
+	if heroDataURL != "" {
+		// New upload will use attachment logic below
+	} else if messageID != "" && existingHeroID != "" && existingHeroFile != "" {
+		promoEmbed["image"] = map[string]interface{}{"url": "attachment://" + existingHeroFile}
+	} else if heroImageURL != "" {
+		promoEmbed["image"] = map[string]interface{}{"url": heroImageURL}
+	}
+
+	if sponsorDataURL != "" {
+		// New upload will use attachment logic below
+	} else if messageID != "" && existingSponsorID != "" && existingSponsorFile != "" {
+		sponsorEmbed["image"] = map[string]interface{}{"url": "attachment://" + existingSponsorFile}
+	} else if sponsorImageURL != "" {
+		sponsorEmbed["image"] = map[string]interface{}{"url": sponsorImageURL}
+	}
 
 	if proofBytes != nil && proofFileName != "" {
 		trackerEmbed["image"] = map[string]interface{}{"url": "attachment://" + proofFileName}
+	} else if existingProofID != "" && existingProofFile != "" {
+		trackerEmbed["image"] = map[string]interface{}{"url": "attachment://" + existingProofFile}
+	} else if strings.TrimSpace(session.WinnerProofURL) != "" {
+		trackerEmbed["image"] = map[string]interface{}{"url": strings.TrimSpace(session.WinnerProofURL)}
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -1745,105 +1768,95 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			return err
 		}
 
+		attachmentsList := []map[string]interface{}{}
+		nextUploadIdx := 0
+
+		// 1. Determine what to KEEP vs what to UPLOAD
+		var heroBytes []byte
+		actualHeroName := heroFileName
+		if heroDataURL != "" {
+			raw, mimeType, err := decodeImageDataURL(heroDataURL)
+			if err == nil {
+				heroBytes = raw
+				if actualHeroName == "" {
+					switch mimeType {
+					case "image/jpeg": actualHeroName = "raffle-hero.jpg"
+					case "image/gif":  actualHeroName = "raffle-hero.gif"
+					case "image/webp": actualHeroName = "raffle-hero.webp"
+					default:           actualHeroName = "raffle-hero.png"
+					}
+				}
+				promoEmbed["image"] = map[string]interface{}{"url": "attachment://" + actualHeroName}
+				attachmentsList = append(attachmentsList, map[string]interface{}{"id": strconv.Itoa(nextUploadIdx), "filename": actualHeroName})
+				nextUploadIdx++
+			}
+		} else if existingHeroID != "" && existingHeroFile != "" {
+			attachmentsList = append(attachmentsList, map[string]interface{}{"id": existingHeroID, "filename": existingHeroFile})
+		}
+
+		var sponsorBytes []byte
+		actualSponsorName := sponsorFileName
+		if sponsorDataURL != "" {
+			raw, mimeType, err := decodeImageDataURL(sponsorDataURL)
+			if err == nil {
+				sponsorBytes = raw
+				if actualSponsorName == "" {
+					switch mimeType {
+					case "image/jpeg": actualSponsorName = "sponsor-room.jpg"
+					case "image/gif":  actualSponsorName = "sponsor-room.gif"
+					case "image/webp": actualSponsorName = "sponsor-room.webp"
+					default:           actualSponsorName = "sponsor-room.png"
+					}
+				}
+				if sponsorEmbed != nil {
+					sponsorEmbed["image"] = map[string]interface{}{"url": "attachment://" + actualSponsorName}
+				}
+				attachmentsList = append(attachmentsList, map[string]interface{}{"id": strconv.Itoa(nextUploadIdx), "filename": actualSponsorName})
+				nextUploadIdx++
+			}
+		} else if existingSponsorID != "" && existingSponsorFile != "" {
+			attachmentsList = append(attachmentsList, map[string]interface{}{"id": existingSponsorID, "filename": existingSponsorFile})
+		}
+
+		if proofBytes != nil && proofFileName != "" {
+			trackerEmbed["image"] = map[string]interface{}{"url": "attachment://" + proofFileName}
+			attachmentsList = append(attachmentsList, map[string]interface{}{"id": strconv.Itoa(nextUploadIdx), "filename": proofFileName})
+			nextUploadIdx++
+		} else if existingProofID != "" && existingProofFile != "" {
+			attachmentsList = append(attachmentsList, map[string]interface{}{"id": existingProofID, "filename": existingProofFile})
+		}
+
+		payload["attachments"] = attachmentsList
+		
 		var patchReq *http.Request
-		if (proofBytes != nil && proofFileName != "") || (heroDataURL != "" && heroFileName != "") || (sponsorDataURL != "" && sponsorFileName != "") {
-			// Multipart PATCH to upload new files
-			attachmentsList := []map[string]interface{}{}
-			nextFileIdx := 0
-
-			// 1. Hero
-			var heroBytes []byte
-			actualHeroName := heroFileName
-			if heroDataURL != "" {
-				raw, mimeType, err := decodeImageDataURL(heroDataURL)
-				if err == nil {
-					heroBytes = raw
-					if actualHeroName == "" {
-						switch mimeType {
-						case "image/jpeg": actualHeroName = "raffle-hero.jpg"
-						case "image/gif":  actualHeroName = "raffle-hero.gif"
-						case "image/webp": actualHeroName = "raffle-hero.webp"
-						default:           actualHeroName = "raffle-hero.png"
-						}
-					}
-					promoEmbed["image"] = map[string]interface{}{"url": "attachment://" + actualHeroName}
-					attachmentsList = append(attachmentsList, map[string]interface{}{"id": strconv.Itoa(nextFileIdx), "filename": actualHeroName})
-					nextFileIdx++
-				}
-			} else if heroAttachmentID != "" && heroAttachmentFile != "" {
-				attachmentsList = append(attachmentsList, map[string]interface{}{"id": heroAttachmentID, "filename": heroAttachmentFile})
-			}
-
-			// 2. Sponsor
-			var sponsorBytes []byte
-			actualSponsorName := sponsorFileName
-			if sponsorDataURL != "" {
-				raw, mimeType, err := decodeImageDataURL(sponsorDataURL)
-				if err == nil {
-					sponsorBytes = raw
-					if actualSponsorName == "" {
-						switch mimeType {
-						case "image/jpeg": actualSponsorName = "sponsor-room.jpg"
-						case "image/gif":  actualSponsorName = "sponsor-room.gif"
-						case "image/webp": actualSponsorName = "sponsor-room.webp"
-						default:           actualSponsorName = "sponsor-room.png"
-						}
-					}
-					if sponsorEmbed != nil {
-						sponsorEmbed["image"] = map[string]interface{}{"url": "attachment://" + actualSponsorName}
-					}
-					attachmentsList = append(attachmentsList, map[string]interface{}{"id": strconv.Itoa(nextFileIdx), "filename": actualSponsorName})
-					nextFileIdx++
-				}
-			} else if sponsorAttachmentID != "" && sponsorAttachmentFile != "" {
-				attachmentsList = append(attachmentsList, map[string]interface{}{"id": sponsorAttachmentID, "filename": sponsorAttachmentFile})
-			}
-
-			// 3. Proof
-			if proofBytes != nil && proofFileName != "" {
-				trackerEmbed["image"] = map[string]interface{}{"url": "attachment://" + proofFileName}
-				attachmentsList = append(attachmentsList, map[string]interface{}{"id": strconv.Itoa(nextFileIdx), "filename": proofFileName})
-				nextFileIdx++
-			} else if existingProofAttachmentID != "" && existingProofFileName != "" {
-				attachmentsList = append(attachmentsList, map[string]interface{}{"id": existingProofAttachmentID, "filename": existingProofFileName})
-			}
-
-			payload["attachments"] = attachmentsList
-			jb, err := json.Marshal(payload)
-			if err != nil { return err }
-
+		if len(heroBytes) > 0 || len(sponsorBytes) > 0 || len(proofBytes) > 0 {
+			// Multipart PATCH for new uploads
+			jb, _ := json.Marshal(payload)
 			var mpBody bytes.Buffer
 			mpWriter := multipart.NewWriter(&mpBody)
 			mpWriter.WriteField("payload_json", string(jb))
 
+			fileCounter := 0
 			if len(heroBytes) > 0 {
-				part, _ := mpWriter.CreateFormFile(fmt.Sprintf("files[%d]", nextFileIdx-3), actualHeroName) // Indices are actually irrelevant as long as they match the ID
+				part, _ := mpWriter.CreateFormFile(fmt.Sprintf("files[%d]", fileCounter), actualHeroName)
 				part.Write(heroBytes)
+				fileCounter++
 			}
 			if len(sponsorBytes) > 0 {
-				part, _ := mpWriter.CreateFormFile(fmt.Sprintf("files[%d]", nextFileIdx-2), actualSponsorName)
+				part, _ := mpWriter.CreateFormFile(fmt.Sprintf("files[%d]", fileCounter), actualSponsorName)
 				part.Write(sponsorBytes)
+				fileCounter++
 			}
 			if len(proofBytes) > 0 {
-				part, _ := mpWriter.CreateFormFile(fmt.Sprintf("files[%d]", nextFileIdx-1), proofFileName)
+				part, _ := mpWriter.CreateFormFile(fmt.Sprintf("files[%d]", fileCounter), proofFileName)
 				part.Write(proofBytes)
+				fileCounter++
 			}
 			mpWriter.Close()
 			patchReq, _ = http.NewRequest("PATCH", endpoint, &mpBody)
 			patchReq.Header.Set("Content-Type", mpWriter.FormDataContentType())
 		} else {
 			// Basic JSON PATCH
-			attachmentsList := []map[string]interface{}{}
-			if heroAttachmentID != "" && heroAttachmentFile != "" {
-				attachmentsList = append(attachmentsList, map[string]interface{}{"id": heroAttachmentID, "filename": heroAttachmentFile})
-			}
-			if sponsorAttachmentID != "" && sponsorAttachmentFile != "" {
-				attachmentsList = append(attachmentsList, map[string]interface{}{"id": sponsorAttachmentID, "filename": sponsorAttachmentFile})
-			}
-			if existingProofAttachmentID != "" && existingProofFileName != "" {
-				attachmentsList = append(attachmentsList, map[string]interface{}{"id": existingProofAttachmentID, "filename": existingProofFileName})
-			}
-			payload["attachments"] = attachmentsList
 			jb, _ := json.Marshal(payload)
 			patchReq, _ = http.NewRequest("PATCH", endpoint, bytes.NewReader(jb))
 			patchReq.Header.Set("Content-Type", "application/json")
@@ -1864,19 +1877,18 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 				json.Unmarshal(patchBody, &patchResp)
 
 				a.mu.Lock()
-				// Update all attachment state from response
 				for _, att := range patchResp.Attachments {
-					if heroFileName != "" && att.Filename == heroFileName {
+					if (heroFileName != "" && att.Filename == heroFileName) || (heroFileName == "" && att.Filename == existingHeroFile) {
 						a.raffleHeroImageURL = att.URL
 						a.raffleHeroAttachmentID = att.ID
 						a.raffleHeroAttachmentFile = att.Filename
 					}
-					if sponsorFileName != "" && att.Filename == sponsorFileName {
+					if (sponsorFileName != "" && att.Filename == sponsorFileName) || (sponsorFileName == "" && att.Filename == existingSponsorFile) {
 						a.sponsorImageURL = att.URL
 						a.sponsorAttachmentID = att.ID
 						a.sponsorAttachmentFile = att.Filename
 					}
-					if proofFileName != "" && att.Filename == proofFileName {
+					if (proofFileName != "" && att.Filename == proofFileName) || (proofFileName == "" && att.Filename == existingProofFile) {
 						if a.currentSession != nil {
 							a.currentSession.WinnerProofURL = att.URL
 							a.currentSession.WinnerProofID = att.ID
