@@ -1830,6 +1830,10 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 
 		payload["attachments"] = attachmentsList
 		
+		a.logDebug("[DISCORD_DEBUG] Reason: %s | MessageID: %s", reason, messageID)
+		attJSON, _ := json.Marshal(attachmentsList)
+		a.logDebug("[DISCORD_DEBUG] Sending Attachments Keep-List: %s", string(attJSON))
+
 		var patchReq *http.Request
 		if len(heroBytes) > 0 || len(sponsorBytes) > 0 || len(proofBytes) > 0 {
 			// Multipart PATCH for new uploads
@@ -1868,6 +1872,7 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		if err == nil {
 			defer resp.Body.Close()
 			patchBody, _ := io.ReadAll(resp.Body)
+			a.logDebug("[DISCORD_DEBUG] Response Status: %d", resp.StatusCode)
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				var patchResp struct {
 					Attachments []struct {
@@ -1877,6 +1882,9 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 					} `json:"attachments"`
 				}
 				json.Unmarshal(patchBody, &patchResp)
+				
+				respAtts, _ := json.Marshal(patchResp.Attachments)
+				a.logDebug("[DISCORD_DEBUG] Response Attachments: %s", string(respAtts))
 
 				a.mu.Lock()
 				for _, att := range patchResp.Attachments {
@@ -1891,17 +1899,20 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 						a.raffleHeroImageURL = att.URL
 						a.raffleHeroAttachmentID = att.ID
 						a.raffleHeroAttachmentFile = att.Filename
+						a.logDebug("[DISCORD_DEBUG] Saved Hero ID=%s File=%s", att.ID, att.Filename)
 					}
 					if isSponsor {
 						a.sponsorImageURL = att.URL
 						a.sponsorAttachmentID = att.ID
 						a.sponsorAttachmentFile = att.Filename
+						a.logDebug("[DISCORD_DEBUG] Saved Sponsor ID=%s File=%s", att.ID, att.Filename)
 					}
 					if isProof {
 						if a.currentSession != nil {
 							a.currentSession.WinnerProofURL = att.URL
 							a.currentSession.WinnerProofID = att.ID
 							a.currentSession.WinnerProofFile = att.Filename
+							a.logDebug("[DISCORD_DEBUG] Saved Proof ID=%s File=%s", att.ID, att.Filename)
 						}
 					}
 				}
