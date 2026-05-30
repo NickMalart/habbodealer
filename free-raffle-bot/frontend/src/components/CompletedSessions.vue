@@ -35,7 +35,7 @@ function openRepostModal(session) {
 
 async function handleRepost(data) {
   try {
-    const res = await call('RepostSessionWebhook', data.dbId, data.heroDataUrl, data.heroFileName, data.sponsorDataUrl, data.sponsorFileName);
+    const res = await call('RepostSessionWebhook', data.dbId, data.heroDataUrl, data.heroFileName, data.sponsorDataUrl, data.sponsorFileName, data.startAt, data.endAt);
     if (res !== 'ok') {
       alert(`Repost response: ${res}`);
     } else {

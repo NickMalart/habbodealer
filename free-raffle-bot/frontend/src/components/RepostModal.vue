@@ -11,6 +11,20 @@ const heroImageFileName = ref('');
 const sponsorImageDataUrl = ref('');
 const sponsorImageFileName = ref('');
 
+const startAt = ref('');
+const endAt = ref('');
+
+onMounted(() => {
+  if (props.session) {
+    if (props.session.startedAt) {
+      startAt.value = new Date(props.session.startedAt).toISOString().slice(0, 16);
+    }
+    if (props.session.scheduledEndAt) {
+      endAt.value = new Date(props.session.scheduledEndAt).toISOString().slice(0, 16);
+    }
+  }
+});
+
 function handleHeroImageChange(event) {
   const file = event.target.files[0];
   if (!file) return;
@@ -38,12 +52,17 @@ function handleSponsorImageChange(event) {
 }
 
 function repost() {
+  const startISO = startAt.value ? new Date(startAt.value).toISOString() : '';
+  const endISO = endAt.value ? new Date(endAt.value).toISOString() : '';
+
   emit('repost', {
     dbId: props.session.dbId,
     heroDataUrl: heroImageDataUrl.value,
     heroFileName: heroImageFileName.value,
     sponsorDataUrl: sponsorImageDataUrl.value,
     sponsorFileName: sponsorImageFileName.value,
+    startAt: startISO,
+    endAt: endISO,
   });
 }
 </script>
@@ -58,6 +77,12 @@ function repost() {
       </p>
 
       <div class="form-grid">
+        <label for="repostStartAt">New Start Time</label>
+        <input v-model="startAt" id="repostStartAt" type="datetime-local" />
+
+        <label for="repostEndAt">New End Time</label>
+        <input v-model="endAt" id="repostEndAt" type="datetime-local" />
+
         <label for="repostHeroImage">New Prize Photo</label>
         <div>
           <input id="repostHeroImage" type="file" accept="image/*" @change="handleHeroImageChange" />

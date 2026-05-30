@@ -1088,7 +1088,7 @@ func (a *App) RepostRaffleWebhook() string {
 	return "ok"
 }
 
-func (a *App) RepostSessionWebhook(sessionDBID int64, heroDataUrl, heroFileName, sponsorDataUrl, sponsorFileName string) string {
+func (a *App) RepostSessionWebhook(sessionDBID int64, heroDataUrl, heroFileName, sponsorDataUrl, sponsorFileName, startAt, endAt string) string {
 	a.mu.Lock()
 	var target *RaffleSession
 	if a.currentSession != nil && a.currentSession.DBID == sessionDBID {
@@ -1110,6 +1110,18 @@ func (a *App) RepostSessionWebhook(sessionDBID int64, heroDataUrl, heroFileName,
 	// Create a copy for the webhook logic
 	sess := copySession(target)
 	sess.WebhookMessageID = "" // Force a new POST
+
+	// Apply time overrides if provided
+	if strings.TrimSpace(startAt) != "" {
+		if t, err := time.Parse(time.RFC3339, startAt); err == nil {
+			sess.StartedAt = t.UTC().Format(time.RFC3339)
+		}
+	}
+	if strings.TrimSpace(endAt) != "" {
+		if t, err := time.Parse(time.RFC3339, endAt); err == nil {
+			sess.ScheduledEndAt = t.UTC().Format(time.RFC3339)
+		}
+	}
 
 	// If new images are provided, override them in the copy
 	if heroDataUrl != "" {
@@ -1612,6 +1624,15 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		"timestamp":   now.Format(time.RFC3339),
 	}
 
+	// 1. Hero Image -> Yellow Card (promoEmbed)
+	if heroDataURL != "" {
+		// New upload pending
+	} else if messageID != "" && heroAttachmentID != "" && heroAttachmentFile != "" {
+		promoEmbed["image"] = map[string]interface{}{"url": "attachment://" + heroAttachmentFile}
+	} else if heroImageURL != "" {
+		promoEmbed["image"] = map[string]interface{}{"url": heroImageURL}
+	}
+
 	var sponsorEmbed map[string]interface{}
 	if sponsorEnabled && sponsorName != "" {
 		sponsorVal := sponsorName
@@ -1626,27 +1647,14 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			"timestamp": now.Format(time.RFC3339),
 		}
 
+		// 2. Sponsor Image -> Orange Card (sponsorEmbed)
 		if sponsorDataURL != "" {
 			// New upload pending
 		} else if messageID != "" && sponsorAttachmentID != "" && sponsorAttachmentFile != "" {
-			sponsorEmbed["thumbnail"] = map[string]interface{}{"url": "attachment://" + sponsorAttachmentFile}
+			sponsorEmbed["image"] = map[string]interface{}{"url": "attachment://" + sponsorAttachmentFile}
 		} else if sponsorImageURL != "" {
-			sponsorEmbed["thumbnail"] = map[string]interface{}{"url": sponsorImageURL}
+			sponsorEmbed["image"] = map[string]interface{}{"url": sponsorImageURL}
 		}
-	}
-
-	// Raffle (Hero) Image Placement
-	heroTarget := promoEmbed
-	if sponsorEmbed != nil {
-		heroTarget = sponsorEmbed
-	}
-
-	if heroDataURL != "" {
-		// New upload pending
-	} else if messageID != "" && heroAttachmentID != "" && heroAttachmentFile != "" {
-		heroTarget["image"] = map[string]interface{}{"url": "attachment://" + heroAttachmentFile}
-	} else if heroImageURL != "" {
-		heroTarget["image"] = map[string]interface{}{"url": heroImageURL}
 	}
 
 	trackerFields := []map[string]interface{}{
@@ -1780,7 +1788,9 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 						default:           actualSponsorName = "sponsor-room.png"
 						}
 					}
-					promoEmbed["thumbnail"] = map[string]interface{}{"url": "attachment://" + actualSponsorName}
+					if sponsorEmbed != nil {
+						sponsorEmbed["image"] = map[string]interface{}{"url": "attachment://" + actualSponsorName}
+					}
 					attachmentsList = append(attachmentsList, map[string]interface{}{"id": strconv.Itoa(nextFileIdx), "filename": actualSponsorName})
 					nextFileIdx++
 				}
@@ -1921,12 +1931,8 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			}
 		}
 		
-		// Placement: Hero goes to Sponsor Card if available
-		if sponsorEmbed != nil {
-			sponsorEmbed["image"] = map[string]interface{}{"url": "attachment://" + fileName}
-		} else {
-			promoEmbed["image"] = map[string]interface{}{"url": "attachment://" + fileName}
-		}
+		// Placement: Hero always goes to Yellow card
+		promoEmbed["image"] = map[string]interface{}{"url": "attachment://" + fileName}
 		uploads = append(uploads, uploadFile{Field: "files[0]", Name: fileName, Bytes: raw})
 	}
 	
@@ -1942,11 +1948,11 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 				default:           fileName = "sponsor-room.png"
 				}
 			}
-			// Placement: Room Photo is ALWAYS a thumbnail in Sponsor Card
+			// Placement: Room Photo is the main image in the Orange Sponsor Card
 			if sponsorEmbed != nil {
-				sponsorEmbed["thumbnail"] = map[string]interface{}{"url": "attachment://" + fileName}
+				sponsorEmbed["image"] = map[string]interface{}{"url": "attachment://" + fileName}
 			} else {
-				// Fallback if no sponsor card (shouldn't happen with dataURL present)
+				// Fallback if card missing
 				promoEmbed["thumbnail"] = map[string]interface{}{"url": "attachment://" + fileName}
 			}
 			uploads = append(uploads, uploadFile{Field: fmt.Sprintf("files[%d]", len(uploads)), Name: fileName, Bytes: raw})
