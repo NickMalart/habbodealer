@@ -154,9 +154,10 @@ type RaffleState struct {
 	CurrentSession        *RaffleSession         `json:"currentSession,omitempty"`
 	Sessions              []RaffleSessionSummary `json:"sessions"`
 
-	SponsorEnabled  bool   `json:"sponsorEnabled"`
-	SponsorName     string `json:"sponsorName"`
-	SponsorRoomName string `json:"sponsorRoomName"`
+	SponsorEnabled   bool   `json:"sponsorEnabled"`
+	SponsorName      string `json:"sponsorName"`
+	SponsorRoomName  string `json:"sponsorRoomName"`
+	SponsorImageName string `json:"sponsorImageName"`
 }
 
 type App struct {
@@ -1037,11 +1038,11 @@ func (a *App) CreateRaffle(name, prize string, qty int, heroDataUrl, heroFileNam
 	a.sponsorRoomName = strings.TrimSpace(sponsorRoom)
 	
 	if sponsorHeroDataUrl != "" {
-		a.sponsorHeroDataURL = sponsorHeroDataUrl
-		a.sponsorHeroFileName = sponsorHeroFileName
-		a.sponsorHeroImageURL = ""
-		a.sponsorHeroAttachmentID = ""
-		a.sponsorHeroAttachmentFile = ""
+		a.sponsorDataURL = sponsorHeroDataUrl
+		a.sponsorFileName = sponsorHeroFileName
+		a.sponsorImageURL = ""
+		a.sponsorAttachmentID = ""
+		a.sponsorAttachmentFile = ""
 	}
 
 	// Let's assume auto-update should be on for new raffles.
@@ -1458,32 +1459,6 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		sponsorEnabled = session.SponsorEnabled
 		sponsorName = strings.TrimSpace(session.SponsorName)
 		sponsorRoomName = strings.TrimSpace(session.SponsorRoomName)
-		sponsorImageURL := strings.TrimSpace(session.SponsorImageURL)
-		sponsorAttachmentID := strings.TrimSpace(session.SponsorAttachmentID)
-		sponsorAttachmentFile := strings.TrimSpace(session.SponsorAttachmentFile)
-
-		// Unsaved pending sponsor data
-		sponsorDataURL := ""
-		sponsorFileName := ""
-		if sessionOverride == nil || (a.currentSession != nil && session.DBID == a.currentSession.DBID) {
-			sponsorDataURL = strings.TrimSpace(a.sponsorDataURL)
-			sponsorFileName = strings.TrimSpace(a.sponsorFileName)
-			if sponsorImageURL == "" {
-				sponsorImageURL = strings.TrimSpace(a.sponsorImageURL)
-			}
-			if sponsorAttachmentID == "" {
-				sponsorAttachmentID = strings.TrimSpace(a.sponsorAttachmentID)
-			}
-			if sponsorAttachmentFile == "" {
-				sponsorAttachmentFile = strings.TrimSpace(a.sponsorAttachmentFile)
-			}
-		}
-
-		if !sponsorEnabled && sessionOverride == nil {
-			sponsorEnabled = a.sponsorEnabled
-			sponsorName = strings.TrimSpace(a.sponsorName)
-			sponsorRoomName = strings.TrimSpace(a.sponsorRoomName)
-		}
 	}
 	a.mu.Unlock()
 
@@ -1842,9 +1817,6 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			}
 		}
 	}
-	// Fallback to POST omitted for brevity, logic follows same multipart pattern as above
-	return nil
-}
 
 	type uploadFile struct {
 		Field string
@@ -1852,7 +1824,6 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		Bytes []byte
 	}
 	uploads := make([]uploadFile, 0, 1)
-	createWithHeroUpload := false
 	if heroDataURL != "" {
 		raw, mimeType, err := decodeImageDataURL(heroDataURL)
 		if err != nil {
@@ -1868,28 +1839,28 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			case "image/webp":
 				fileName = "raffle-hero.webp"
 			default:
-				createWithHeroUpload = true
 				fileName = "raffle-hero.png"
-
-				// Fallback creates must not reference attachment:// images unless those files are uploaded in this request.
-				if !createWithHeroUpload {
-					if heroImageURL != "" {
-						promoEmbed["image"] = map[string]interface{}{"url": heroImageURL}
-					} else {
-						delete(promoEmbed, "image")
-					}
-				}
-				if proofBytes == nil || proofFileName == "" {
-					if strings.TrimSpace(session.WinnerProofURL) != "" {
-						trackerEmbed["image"] = map[string]interface{}{"url": strings.TrimSpace(session.WinnerProofURL)}
-					} else if strings.TrimSpace(session.WinnerProofID) != "" && strings.TrimSpace(session.WinnerProofFile) != "" {
-						delete(trackerEmbed, "image")
-					}
-				}
 			}
 		}
 		promoEmbed["image"] = map[string]interface{}{"url": "attachment://" + fileName}
 		uploads = append(uploads, uploadFile{Field: "files[0]", Name: fileName, Bytes: raw})
+	}
+	
+	if sponsorDataURL != "" {
+		raw, mimeType, err := decodeImageDataURL(sponsorDataURL)
+		if err == nil {
+			fileName := strings.TrimSpace(sponsorFileName)
+			if fileName == "" {
+				switch mimeType {
+				case "image/jpeg": fileName = "sponsor-room.jpg"
+				case "image/gif":  fileName = "sponsor-room.gif"
+				case "image/webp": fileName = "sponsor-room.webp"
+				default:           fileName = "sponsor-room.png"
+				}
+			}
+			promoEmbed["thumbnail"] = map[string]interface{}{"url": "attachment://" + fileName}
+			uploads = append(uploads, uploadFile{Field: fmt.Sprintf("files[%d]", len(uploads)), Name: fileName, Bytes: raw})
+		}
 	}
 
 	payloadJSON, err := json.Marshal(payload)
@@ -1955,6 +1926,8 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	a.mu.Lock()
 	a.raffleHeroDataURL = ""
 	a.raffleHeroFileName = ""
+	a.sponsorDataURL = ""
+	a.sponsorFileName = ""
 
 	if strings.TrimSpace(respPayload.ID) != "" {
 		a.raffleMessageID = strings.TrimSpace(respPayload.ID)
@@ -1962,33 +1935,28 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			a.currentSession.WebhookMessageID = strings.TrimSpace(respPayload.ID)
 		}
 	}
-	heroAttachmentUpdated := false
-	if len(respPayload.Attachments) > 0 {
-		if strings.TrimSpace(respPayload.Attachments[0].URL) != "" {
-			a.raffleHeroImageURL = strings.TrimSpace(respPayload.Attachments[0].URL)
-			if a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
-				a.currentSession.HeroImageURL = strings.TrimSpace(respPayload.Attachments[0].URL)
-			}
-			heroAttachmentUpdated = true
+	
+	// Update all attachment state from response
+	for _, att := range respPayload.Attachments {
+		if heroFileName != "" && att.Filename == heroFileName {
+			a.raffleHeroImageURL = att.URL
+			a.raffleHeroAttachmentID = att.ID
+			a.raffleHeroAttachmentFile = att.Filename
 		}
-		if strings.TrimSpace(respPayload.Attachments[0].ID) != "" {
-			a.raffleHeroAttachmentID = strings.TrimSpace(respPayload.Attachments[0].ID)
-			if a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
-				a.currentSession.HeroAttachmentID = strings.TrimSpace(respPayload.Attachments[0].ID)
-			}
-			heroAttachmentUpdated = true
-		}
-		if strings.TrimSpace(respPayload.Attachments[0].Filename) != "" {
-			a.raffleHeroAttachmentFile = strings.TrimSpace(respPayload.Attachments[0].Filename)
-			if a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
-				a.currentSession.HeroAttachmentFile = strings.TrimSpace(respPayload.Attachments[0].Filename)
-			}
-			heroAttachmentUpdated = true
+		if sponsorFileName != "" && att.Filename == sponsorFileName {
+			a.sponsorImageURL = att.URL
+			a.sponsorAttachmentID = att.ID
+			a.sponsorAttachmentFile = att.Filename
 		}
 	}
-	var metaSessionDBID int64
-	if session != nil && heroAttachmentUpdated {
-		metaSessionDBID = session.DBID
+	
+	if a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
+		a.currentSession.HeroImageURL = a.raffleHeroImageURL
+		a.currentSession.HeroAttachmentID = a.raffleHeroAttachmentID
+		a.currentSession.HeroAttachmentFile = a.raffleHeroAttachmentFile
+		a.currentSession.SponsorImageURL = a.sponsorImageURL
+		a.currentSession.SponsorAttachmentID = a.sponsorAttachmentID
+		a.currentSession.SponsorAttachmentFile = a.sponsorAttachmentFile
 	}
 	a.mu.Unlock()
 
@@ -1997,9 +1965,9 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			a.logDebug("failed to persist webhook message id session=%d id=%s err=%v", session.DBID, strings.TrimSpace(respPayload.ID), err)
 		}
 	}
-	if metaSessionDBID > 0 {
-		if err := a.saveSessionMeta(metaSessionDBID); err != nil {
-			a.logDebug("saveSessionMeta after hero attachment failed: %v", err)
+	if session != nil {
+		if err := a.saveSessionMeta(session.DBID); err != nil {
+			a.logDebug("saveSessionMeta after hero/sponsor attachment failed: %v", err)
 		}
 	}
 
