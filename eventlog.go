@@ -40,11 +40,11 @@ var (
 func startEventLogger() {
 	eventLogOnce.Do(func() {
 		eventLogCh = make(chan EventRecord, 2048)
-		go func() {
+		SafeGo(func() {
 			for rec := range eventLogCh {
 				_ = writeEventRecord(rec)
 			}
-		}()
+		})
 	})
 }
 
@@ -62,7 +62,7 @@ func LogEvent(typ string, payload interface{}, summary string, metadata map[stri
 	case eventLogCh <- rec:
 	default:
 		// best-effort background enqueue if channel is full
-		go func() { eventLogCh <- rec }()
+		SafeGo(func() { eventLogCh <- rec })
 	}
 }
 

@@ -646,12 +646,12 @@ func (a *App) rejectTradeForLimitViolation(v *tradeLimitViolation) {
 
 	// Force close immediately per user request to ensure no accidental accepts.
 	// We use a tiny delay to ensure the shout is enqueued first.
-	go func() {
+	SafeGo(func() {
 		time.Sleep(500 * time.Millisecond)
 		a.AddLogMsg("[TRADE_LIMIT] force-closing trade immediately due to violation")
 		ext.Send(out.TRADE_CLOSE)
 		stopTradeLimitMonitor()
-	}()
+	})
 }
 
 func normalizeUsers28Name(name string, tokenHex string) string {
@@ -900,25 +900,39 @@ func (a *App) getCurrentRoomName() string {
 	return ""
 }
 
+func logPanic(r interface{}, label string) {
+	exe, err := os.Executable()
+	var logPath string
+	if err == nil {
+		logPath = filepath.Join(filepath.Dir(exe), "crash.log")
+	} else {
+		logPath = "crash.log"
+	}
+
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Printf("failed to open crash log %s: %v\n", logPath, err)
+		return
+	}
+	defer f.Close()
+
+	now := time.Now().Format("2006-01-02 15:04:05")
+	stack := make([]byte, 8192)
+	stack = stack[:stdruntime.Stack(stack, false)]
+	_, _ = f.WriteString(fmt.Sprintf("[%s] %s PANIC: %v\n%s\n--------------------------------------------------------------------------------\n", now, label, r, stack))
+}
+
 // SafeGo launches a goroutine with a recovery block that logs panics to crash.log
 func SafeGo(fn func()) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				f, _ := os.OpenFile("crash.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-				if f != nil {
-					now := time.Now().Format("2006-01-02 15:04:05")
-					stack := make([]byte, 4096)
-					stack = stack[:stdruntime.Stack(stack, false)]
-					_, _ = f.WriteString(fmt.Sprintf("[%s] GOROUTINE PANIC: %v\n%s\n", now, r, stack))
-					f.Close()
-				}
+				logPanic(r, "GOROUTINE")
 			}
 		}()
 		fn()
 	}()
 }
-
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.startHistoryPersistWorker()
@@ -2123,7 +2137,7 @@ func (a *App) startHistoryPersistWorker() {
 	a.historyPersistRunning = true
 	a.historyPersistStateMu.Unlock()
 
-	go func() {
+	SafeGo(func() {
 		// Recover any previous failed persist from local spool on startup.
 		a.flushQueuedGameHistoryPersist("startup_recovery")
 
@@ -2161,7 +2175,7 @@ func (a *App) startHistoryPersistWorker() {
 				return
 			}
 		}
-	}()
+	})
 }
 
 func (a *App) stopHistoryPersistWorker() {
@@ -2665,7 +2679,7 @@ func (a *App) ensureHistoryDatabaseConnected() error {
 
 func (a *App) startBankerTradePolling() {
 	a.AddLogMsg("[BANKER_POLL] starting background worker")
-	go func() {
+	SafeGo(func() {
 		for {
 			time.Sleep(3 * time.Second)
 
@@ -2805,7 +2819,7 @@ func (a *App) startBankerTradePolling() {
 				a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] Successfully marked trade %d as playing", id))
 			}
 		}
-	}()
+	})
 }
 
 func (a *App) initGameFromBankerTrade(dbID int, playerName string, items []TradeItem, tradeID int, chatID int) {
@@ -2888,6 +2902,11 @@ func (a *App) finalizeBankerTradeByID(id int) {
 	}
 
 	go func(targetID int) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		// Update status to completed and ensure risk is closed if it was active
@@ -3059,7 +3078,7 @@ func (a *App) recordTradeToLedger(partnerName string, tradeType string, items []
 
 	itemsJSON, _ := json.Marshal(items)
 
-	go func() {
+	SafeGo(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
@@ -3072,7 +3091,7 @@ func (a *App) recordTradeToLedger(partnerName string, tradeType string, items []
 		} else {
 			a.AddLogMsg(fmt.Sprintf("[LEDGER] recorded %s trade with %s (%d items)", tradeType, partnerName, totalQty))
 		}
-	}()
+	})
 }
 
 func (a *App) loadGameHistoryFromDB() ([]GameHistoryEntry, error) {
@@ -3472,13 +3491,13 @@ func (a *App) persistCurrentGameHistoryNow(reason string) {
 	a.gameHistoryMu.Unlock()
 
 	// Persist just the current entry directly (like Discord webhook gets just the one entry)
-	go func() {
+	SafeGo(func() {
 		if err := a.persistSingleGameEntryToDB(current); err != nil {
 			a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] persist now (%s) failed: %v", reason, err))
 		} else {
 			a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] persist now (%s) ok", reason))
 		}
-	}()
+	})
 }
 
 // getRecentGameSummaries returns the last n completed games as anonymized
@@ -3611,11 +3630,11 @@ func (a *App) ClearGameHistory() {
 	a.gameHistoryMu.Unlock()
 
 	_ = os.Remove(getGameHistoryFilePath())
-	go func() {
+	SafeGo(func() {
 		if err := a.persistGameHistoryToDB(nil); err != nil {
 			a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] clear failed: %v", err))
 		}
-	}()
+	})
 	a.emitGameHistoryUpdate()
 	a.AddLogMsg("[GAME_HISTORY] cleared all saved game history")
 }
@@ -3697,13 +3716,13 @@ func (a *App) syncCurrentGameEntry() {
 	a.gameHistoryMu.Unlock()
 
 	// Persist directly without the cleanup DELETE that would wipe other entries
-	go func() {
+	SafeGo(func() {
 		if err := a.persistSingleGameEntryToDB(current); err != nil {
 			a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] sync single entry failed: %v", err))
 		} else {
 			a.AddLogMsg("[GAME_HISTORY][DB] sync single entry ok")
 		}
-	}()
+	})
 }
 
 // currentGameHistoryEntryForPersistLocked returns the active game-history entry
@@ -4215,7 +4234,7 @@ func (a *App) setupExt() {
 func startShoutWorker() {
 	shoutWorkerOnce.Do(func() {
 		shoutQueue = make(chan string, 128)
-		go func() {
+		SafeGo(func() {
 			for m := range shoutQueue {
 				s := strings.TrimSpace(m)
 				if s == "" {
@@ -4241,7 +4260,7 @@ func startShoutWorker() {
 				ext.Send(out.SHOUT, s)
 				log.Printf("[SHOUT_WORKER] sent at %s: %q", time.Now().Format(time.RFC3339Nano), s)
 			}
-		}()
+		})
 	})
 }
 
@@ -4332,7 +4351,10 @@ func registerCustomTradeHeaders(a *App) {
 }
 
 func (a *App) runExt() {
-	defer os.Exit(0)
+	defer func() {
+		logPanic("Extension loop finished - exiting", "SHUTDOWN")
+		os.Exit(0)
+	}()
 	a.ext.Run()
 }
 
@@ -4442,6 +4464,7 @@ func handleMutePacket(e *g.Intercept) {
 func handleTradePacket(a *App, e *g.Intercept) {
 	defer func() {
 		if r := recover(); r != nil {
+			logPanic(r, "TRADE")
 			a.AddLogMsg(fmt.Sprintf("[TRADE] recovered while handling header %d: %v", e.Packet.Header.Value, r))
 		}
 	}()
@@ -4681,6 +4704,11 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			// Perform validation in a goroutine with a short delay if the trade is currently empty.
 			// This gives the player time to add their first item before we force-close.
 			go func(initialItems []TradeItem, wasValidPrev bool) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 				items := initialItems
 				if len(items) == 0 {
 					// If empty, wait a bit for the first item to arrive.
@@ -4958,7 +4986,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			} else {
 				a.captureCurrentGameHistoryPayoutItems([]TradeItem{}, "No payout items recorded yet", false, false)
 			}
-			go func() {
+			SafeGo(func() {
 				if ok := a.forceRefreshHandSnapshot("trade completed"); ok {
 					a.AddLogMsg("[TRADE_COMPLETED] forced hand refresh complete after trade")
 				} else {
@@ -4966,7 +4994,7 @@ func handleTradePacket(a *App, e *g.Intercept) {
 				}
 				// Trigger the game choice prompt after the trade is fully finalized
 				a.sendTradeCompletionMessage()
-			}()
+			})
 		}
 		return
 	}
@@ -5417,13 +5445,13 @@ func handleTradePacket(a *App, e *g.Intercept) {
 		lastTradeLimitNotice = ""
 		stopTradeLimitMonitor()
 
-		go func() {
+		SafeGo(func() {
 			if ok := a.forceRefreshHandSnapshot("incoming trade open"); ok {
 				a.notifyTradeQuantityCoverage()
 			} else {
 				a.AddLogMsg("[TRADE_HAND_SNAPSHOT] forced refresh failed on incoming trade open")
 			}
-		}()
+		})
 		return
 	}
 
@@ -5749,6 +5777,11 @@ func (a *App) startPayoutResponseTimeoutMonitor(playerName string, targetID int,
 	payoutResponseTimeoutActive = true
 
 	go func(id int, player string, retryTargetID int, retryTargetName string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		time.Sleep(45 * time.Second) // Increased from 45s to 5 minutes for slow Origins trades
 
 		if id != payoutResponseTimeoutMonitorID || !payoutResponseTimeoutActive || !payoutTradeActive {
@@ -5904,6 +5937,11 @@ func startPayout(a *App, targetID int, targetName string) {
 				}
 
 				go func(items []TradeItem, id int, player string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 					ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 					defer cancel()
 
@@ -6053,7 +6091,7 @@ func startPayout(a *App, targetID int, targetName string) {
 		go sendMessageWithDelay(fmt.Sprintf("Payout started for %s — offering items now, please remain in trade until 'Trade Completed'.", targetName))
 	}
 
-	go func() {
+	SafeGo(func() {
 		// Small delay so the winner shout clears Habbo's rate limiter first
 		time.Sleep(1200 * time.Millisecond)
 
@@ -6158,7 +6196,7 @@ func startPayout(a *App, targetID int, targetName string) {
 				startDealerOpenHeartbeat(a)
 			}
 		}
-	}()
+	})
 }
 
 func (a *App) autoAddPayoutItems() {
@@ -6421,6 +6459,11 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 			a.historyDBMu.Unlock()
 			if dbID > 0 && db != nil {
 				go func(id, qty int) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
 					// Use GREATEST so an async init write cannot reduce a later, larger bank value.
@@ -6539,6 +6582,11 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 
 	// Send initial prompt (mute-aware) and start the risk-decision reminder monitor
 	go func(player string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		waitForUnmute(90 * time.Second)
 		mutex.Lock()
 		canPrompt := riskSessionActive && playerRisk > 0 && dealerRisk > 0
@@ -6640,6 +6688,11 @@ func (a *App) handleRiskBet(n int, sender string, userID int) {
 		a.historyDBMu.Unlock()
 		if dbID > 0 && db != nil {
 			go func(id, qty int) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				_, _ = db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1, risk_status = 'risk_active' WHERE id = $2", qty, id)
@@ -6910,6 +6963,11 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			a.historyDBMu.Unlock()
 			if dbID > 0 && db != nil {
 				go func(id, qty int) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
 					_, _ = db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1 WHERE id = $2", qty, id)
@@ -6985,6 +7043,11 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		a.AddLogMsg(fmt.Sprintf("[RISK] %s lost risk round; bank remains playerRisk=%d dealerRisk=%d", partner, playerRisk, dealerRisk))
 
 		go func(max int, p string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 			waitForUnmute(90 * time.Second)
 			mutex.Lock()
 			canPrompt := riskSessionActive && playerRisk > 0 && dealerRisk > 0
@@ -7056,6 +7119,11 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		a.historyDBMu.Unlock()
 		if dbID > 0 && db != nil {
 			go func(id, qty int) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				_, _ = db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1 WHERE id = $2", qty, id)
@@ -7134,6 +7202,11 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 	mutex.Unlock()
 
 	go func(max int, p string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		waitForUnmute(90 * time.Second)
 		mutex.Lock()
 		canPrompt := riskSessionActive && playerRisk > 0 && dealerRisk > 0
@@ -7580,6 +7653,11 @@ func startTradeWindowTimeoutMonitor(a *App) {
 	tradeWindowTimeoutActive = true
 
 	go func(id int) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 
@@ -7667,6 +7745,11 @@ func (a *App) startRiskDecisionTimeoutMonitor(player string) {
 	riskDecisionTimeoutActive = true
 
 	go func(id int, p string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		// Repeat 4 reminders (so initial + 4 = 5 total)
 		for attempt := 1; attempt <= 4; attempt++ {
 			time.Sleep(30 * time.Second)
@@ -7710,6 +7793,11 @@ func (a *App) startBlackjackDecisionTimeoutMonitor(player string) {
 	blackjackDecisionTimeoutActive = true
 
 	go func(id int, p string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		for attempt := 1; attempt <= 4; attempt++ {
 			time.Sleep(30 * time.Second)
 
@@ -7747,6 +7835,11 @@ func (a *App) startSixDecisionTimeoutMonitor(player string) {
 	sixDecisionTimeoutActive = true
 
 	go func(id int, p string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		for attempt := 1; attempt <= 4; attempt++ {
 			time.Sleep(30 * time.Second)
 
@@ -7784,6 +7877,11 @@ func (a *App) startThirteenDecisionTimeoutMonitor(player string) {
 	thirteenDecisionTimeoutActive = true
 
 	go func(id int, p string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		for attempt := 1; attempt <= 4; attempt++ {
 			time.Sleep(30 * time.Second)
 
@@ -7821,6 +7919,11 @@ func (a *App) startTriChoiceTimeoutMonitor(player string) {
 	triChoiceTimeoutActive = true
 
 	go func(id int, p string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		for attempt := 1; attempt <= 4; attempt++ {
 			time.Sleep(30 * time.Second)
 
@@ -7858,6 +7961,11 @@ func (a *App) startUOChoiceTimeoutMonitor(player string) {
 	uoChoiceTimeoutActive = true
 
 	go func(id int, p string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		for attempt := 1; attempt <= 4; attempt++ {
 			time.Sleep(30 * time.Second)
 
@@ -7910,6 +8018,11 @@ func (a *App) startGameChoiceTimeoutMonitor() {
 	}
 
 	go func(id int, player string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		// Repeat the prompt 4 more times (initial prompt already sent by caller)
 		reminderCount := 4
 		interval := 30 * time.Second
@@ -7975,6 +8088,11 @@ func startShortageMonitor(a *App, timeout time.Duration) {
 	shortageMonitorDeadline = time.Now().Add(timeout)
 
 	go func(monitor int) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 
@@ -8033,6 +8151,11 @@ func startTradeLimitMonitor(a *App, timeout time.Duration) {
 	tradeLimitMonitorDeadline = time.Now().Add(timeout)
 
 	go func(monitor int) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 
@@ -8112,6 +8235,11 @@ func startDealerOpenHeartbeat(a *App) {
 	}
 
 	go func(id int, openMsg string, secs int) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		defer emitNext(0, "")
 
 		base := time.Duration(secs) * time.Second
@@ -8212,6 +8340,11 @@ func scheduleAutoTradeAccept(a *App, payload string) {
 	a.AddLogMsg(fmt.Sprintf("[TRADE_ACCEPT #109] detected (%q), auto-accept in 2s", payload))
 
 	go func(flow int) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		time.Sleep(2 * time.Second)
 
 		if flow != tradeAutoFlowID || strings.TrimSpace(lastTradePartnerToken) == "" {
@@ -8291,6 +8424,11 @@ func scheduleAutoTradeConfirm(a *App, payload string) {
 	a.AddLogMsg(fmt.Sprintf("[TRADE_CONFIRM #111] detected (%q), auto-confirm starts in 4s with up to 10 attempts", payload))
 
 	go func(flow int) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		defer func() {
 			if r := recover(); r != nil {
 				tradeAutoConfirmPending = false
@@ -8959,7 +9097,8 @@ func decodeShortChatToken(token string) (idx int, ok bool) {
 		return 0, false
 	}
 	defer func() {
-		if recover() != nil {
+		if r := recover(); r != nil {
+			logPanic(r, "RECOVERED")
 			idx = 0
 			ok = false
 		}
@@ -9984,7 +10123,7 @@ func (a *App) openDealerAfterRound() {
 	tradeStarterLocked = false
 
 	// Move hand refresh to background so dealer opens immediately without waiting
-	go func() {
+	SafeGo(func() {
 		a.forceRefreshHandSnapshot("openDealerAfterRound")
 		if shouldRefreshRoomUsers() {
 			requestRoomUsers(a)
@@ -9994,7 +10133,7 @@ func (a *App) openDealerAfterRound() {
 			time.Sleep(250 * time.Millisecond)
 			a.captureRiskSnapshot(true)
 		}
-	}()
+	})
 
 	dealerResyncInProgress = false
 	// Do not open dealer if banker_trades are currently active.
@@ -10075,10 +10214,10 @@ func handleStripPacket(a *App, e *g.Intercept) {
 		return
 	}
 
-	go func() {
+	SafeGo(func() {
 		time.Sleep(stripNextDelay)
 		sendGetStripRaw(a, stripGetNextPayload)
-	}()
+	})
 
 	a.AddLogMsg(fmt.Sprintf("[STRIP] continuing scan: page %d had %d item(s), requesting next after %s", currentPage, pageRecords, stripNextDelay))
 	return
@@ -10123,12 +10262,12 @@ func (a *App) finalizeStripScan(sessionID int, reason string) {
 		if !strictTradeSnapshotLifecycle || !tradeHandSnapshotReady {
 			// captureTradeHandSnapshot will copy currentHandItems into tradeHandSnapshot
 			// and mark the snapshot ready for coverage comparisons.
-			go func() {
+			SafeGo(func() {
 				a.captureTradeHandSnapshot()
 				// small delay to ensure snapshot processed before coverage check
 				time.Sleep(50 * time.Millisecond)
 				a.notifyTradeQuantityCoverage()
-			}()
+			})
 		} else {
 			a.AddLogMsg("[STRIP_DEBUG] trade open and strict snapshot lifecycle active; skipping snapshot refresh")
 		}
@@ -10356,6 +10495,11 @@ func (a *App) emitHandItemsUpdate() {
 // Runs asynchronously and logs status via `AddLogMsg`.
 func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 	go func(snapshot []TradeItem) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		// If Split Dealer Mode is enabled, and the history DB is available,
 		// prefer a DB-backed snapshot built from banker_inventory joined to
 		// public.stocked_items where is_active = TRUE. Pull items for all
@@ -10470,6 +10614,11 @@ func (a *App) sendLiveDealerStatus(open bool, dealerName string) {
 	}
 
 	go func(dealerOpen bool, name string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		payload := LiveDealerStatusPayload{
 			LastSeenAt:         time.Now().UTC().Format(time.RFC3339),
 			DealerOpen:         dealerOpen,
@@ -10781,6 +10930,11 @@ func (a *App) PostDealerOpenAnnouncement(
 // is mapped to "Player"/"Dealer"/"Unknown".
 func (a *App) sendLiveDealerGames(last int) {
 	go func(n int) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		type GameSummary struct {
 			ID          string      `json:"id"`
 			Game        string      `json:"game"`
@@ -11195,6 +11349,11 @@ func (a *App) notifyTradeQuantityCoverage() {
 				if shouldShout {
 					lastTradeCoverageShoutAt = now
 					go func(m string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 						time.Sleep(350 * time.Millisecond)
 						sendShout(m)
 					}(msg)
@@ -11263,6 +11422,11 @@ func (a *App) notifyTradeQuantityCoverage() {
 	a.AddLogMsg(fmt.Sprintf("[TRADE_COVERAGE] immediate shortage close with %s: %s", partnerName, msg))
 
 	go func(m string, shout bool) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 		if shout {
 			time.Sleep(350 * time.Millisecond)
 			sendShout(m)
@@ -11703,20 +11867,20 @@ func (a *App) applyBufferedGameChoice(index int, msg string) bool {
 		a.beginUOChoiceSequence()
 	case "uo_over":
 		if riskSessionActive {
-			go func() {
+			SafeGo(func() {
 				time.Sleep(1400 * time.Millisecond)
 				a.executeRiskRound()
-			}()
+			})
 		} else {
 			a.setCurrentGameHistoryGame("UO7")
 			a.beginUnderOverRound("over")
 		}
 	case "uo_under":
 		if riskSessionActive {
-			go func() {
+			SafeGo(func() {
 				time.Sleep(1400 * time.Millisecond)
 				a.executeRiskRound()
-			}()
+			})
 		} else {
 			a.setCurrentGameHistoryGame("UO7")
 			a.beginUnderOverRound("under")
@@ -12122,7 +12286,8 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 
 func requestRoomUsers(a *App) {
 	defer func() {
-		if recover() != nil {
+		if r := recover(); r != nil {
+			logPanic(r, "RECOVERED")
 			a.AddLogMsg("[ROOM_USERS] request failed")
 		}
 	}()
@@ -12630,7 +12795,8 @@ func matchesRecentOutgoingTradeOpen(data []byte, leadingIncomingID int) (int, bo
 
 func tryReadInt(pkt *g.Packet) (value int, pos int, ok bool) {
 	defer func() {
-		if recover() != nil {
+		if r := recover(); r != nil {
+			logPanic(r, "RECOVERED")
 			ok = false
 		}
 	}()
@@ -12642,7 +12808,8 @@ func tryReadInt(pkt *g.Packet) (value int, pos int, ok bool) {
 
 func tryReadString(pkt *g.Packet) (value string, pos int, ok bool) {
 	defer func() {
-		if recover() != nil {
+		if r := recover(); r != nil {
+			logPanic(r, "RECOVERED")
 			ok = false
 		}
 	}()
@@ -12654,7 +12821,8 @@ func tryReadString(pkt *g.Packet) (value string, pos int, ok bool) {
 
 func tryReadIntString(pkt *g.Packet) (id int, text string, pos int, ok bool) {
 	defer func() {
-		if recover() != nil {
+		if r := recover(); r != nil {
+			logPanic(r, "RECOVERED")
 			ok = false
 		}
 	}()
@@ -12667,7 +12835,8 @@ func tryReadIntString(pkt *g.Packet) (id int, text string, pos int, ok bool) {
 
 func tryReadIntInt(pkt *g.Packet) (a int, b int, pos int, ok bool) {
 	defer func() {
-		if recover() != nil {
+		if r := recover(); r != nil {
+			logPanic(r, "RECOVERED")
 			ok = false
 		}
 	}()
@@ -12817,13 +12986,13 @@ func (a *App) beginPokerSequence() {
 	pokerSequenceStage = 1
 	pokerSequencePlayerName = playerName
 
-	go func() {
+	SafeGo(func() {
 		// Wait the same total delay previously used (700 + 700ms) before
 		// starting the player's roll; the public shout was already sent above.
 		time.Sleep(1400 * time.Millisecond)
 		a.AddLogMsg("[GAME_SELECT] starting player roll")
 		a.startPokerRoll()
-	}()
+	})
 }
 
 func (a *App) beginBlackjackSequence() {
@@ -12839,13 +13008,13 @@ func (a *App) beginBlackjackSequence() {
 	blackjackPlayerName = playerName
 	a.setCurrentGameHistoryGame("21")
 
-	go func() {
+	SafeGo(func() {
 		// Combined ack already announced; delay then start player's BJ roll
 		time.Sleep(1400 * time.Millisecond)
 		isBJRolling = true
 		a.AddLogMsg("21 Roll:\n")
 		go a.rollBjDice()
-	}()
+	})
 }
 
 func (a *App) beginSixSequence() {
@@ -12861,12 +13030,12 @@ func (a *App) beginSixSequence() {
 	sixPlayerName = playerName
 	a.setCurrentGameHistoryGame("6")
 
-	go func() {
+	SafeGo(func() {
 		time.Sleep(1400 * time.Millisecond)
 		isSixRolling = true
 		a.AddLogMsg("6 Roll:\n")
 		go a.rollSixDice()
-	}()
+	})
 }
 
 func (a *App) begin13Sequence() {
@@ -12883,13 +13052,13 @@ func (a *App) begin13Sequence() {
 	thirteenPlayerName = playerName
 	a.setCurrentGameHistoryGame("13")
 
-	go func() {
+	SafeGo(func() {
 		// Combined ack already announced; delay then start player's 13 roll
 		time.Sleep(1400 * time.Millisecond)
 		is13Rolling = true
 		a.AddLogMsg("13 Roll:\n")
 		go a.roll13Dice()
-	}()
+	})
 }
 
 func (a *App) beginTriChoiceSequence() {
@@ -12942,12 +13111,12 @@ func (a *App) beginTriRound(mode string) {
 	}
 	a.setCurrentGameHistoryGame(gameLabel)
 
-	go func() {
+	SafeGo(func() {
 		// Combined ack already announced; delay then start player's Tri roll
 		time.Sleep(1400 * time.Millisecond)
 		isTriRolling = true
 		a.rollTriDice()
-	}()
+	})
 }
 
 // beginDoubleTroubleRound starts the Double Trouble (2-dice) round.
@@ -12965,10 +13134,10 @@ func (a *App) beginDoubleTroubleRound() {
 	isDTRolling = true
 	a.setCurrentGameHistoryGame("DT")
 
-	go func() {
+	SafeGo(func() {
 		time.Sleep(1400 * time.Millisecond)
 		a.rollDoubleTroubleDice()
-	}()
+	})
 }
 
 // beginUOChoiceSequence prompts the player to choose Over or Under for the Under/Over-7 game.
@@ -13155,6 +13324,11 @@ func (a *App) beginUnderOverRound(mode string) {
 				if shouldShout {
 					lastTradeCoverageShoutAt = now
 					go func(m string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logPanic(r, "GOROUTINE")
+			}
+		}()
 						time.Sleep(350 * time.Millisecond)
 						sendShout(m)
 					}(msg)
@@ -13188,11 +13362,11 @@ func (a *App) beginUnderOverRound(mode string) {
 	}
 	a.setCurrentGameHistoryGame(gameLabel)
 
-	go func() {
+	SafeGo(func() {
 		time.Sleep(1400 * time.Millisecond)
 		isUORolling = true
 		a.rollUnderOverDice()
-	}()
+	})
 }
 
 // rollUnderOverDice rolls the two configured dice (slots 1 and 5 -> indices 0 and 4).
@@ -13441,10 +13615,10 @@ func (a *App) evaluateUnderOverRound() {
 	}
 
 	// Ensure the winner message is delivered before reopening the dealer
-	go func() {
+	SafeGo(func() {
 		time.Sleep(1200 * time.Millisecond)
 		a.openDealerAfterRound()
-	}()
+	})
 }
 
 func (a *App) start13DealerTurn(reason string) {
@@ -13452,11 +13626,11 @@ func (a *App) start13DealerTurn(reason string) {
 	thirteenPlayerTurn = false
 	a.AddLogMsg(fmt.Sprintf("[13_DEBUG] dealer turn starting reason=%s playerTotal=%d dealerTotal=%d", reason, thirteenPlayerTotal, thirteenDealerTotal))
 	a.AddLogMsg("[GAME_SELECT] starting dealer roll")
-	go func() {
+	SafeGo(func() {
 		time.Sleep(700 * time.Millisecond)
 		is13Rolling = true
 		a.roll13Dice()
-	}()
+	})
 }
 
 func (a *App) finalize13Round(playerWins bool, reason string) {
@@ -13527,11 +13701,11 @@ func (a *App) startSixDealerTurn(reason string) {
 	sixPlayerTurn = false
 	a.AddLogMsg(fmt.Sprintf("[6_DEBUG] dealer turn starting reason=%s playerTotal=%d dealerTotal=%d", reason, sixPlayerTotal, sixDealerTotal))
 	a.AddLogMsg("[GAME_SELECT] starting dealer roll")
-	go func() {
+	SafeGo(func() {
 		time.Sleep(700 * time.Millisecond)
 		isSixRolling = true
 		a.rollSixDice()
-	}()
+	})
 }
 
 func (a *App) finalizeSixRound(playerWins bool, reason string) {
@@ -13716,12 +13890,12 @@ func (a *App) beginH18Round() {
 	h18RoundActive = true
 	a.setCurrentGameHistoryGame("H18")
 
-	go func() {
+	SafeGo(func() {
 		// Combined ack already announced; delay then start player's H18 roll
 		time.Sleep(1400 * time.Millisecond)
 		isH18Rolling = true
 		a.rollH18Dice()
-	}()
+	})
 }
 
 func (a *App) rollH18Dice() {
@@ -14904,7 +15078,7 @@ func (a *App) waitForSixDiceResults(slots []int, timeout time.Duration, reason s
 				diceList[slot].IsRolling = false
 				func() {
 					defer func() {
-						recover()
+						if r := recover(); r != nil { logPanic(r, "RECOVERED") }
 					}()
 					resultsWaitGroup.Done()
 				}()
@@ -14930,11 +15104,11 @@ func (a *App) beginPairUpRound() {
 
 	a.setCurrentGameHistoryGame("Pair Up")
 
-	go func() {
+	SafeGo(func() {
 		time.Sleep(1400 * time.Millisecond)
 		isPairUpRolling = true
 		a.rollPairUpDice()
-	}()
+	})
 }
 
 func (a *App) rollPairUpDice() {
@@ -15750,10 +15924,10 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay("uo7"))
 			a.AddLogMsg(fmt.Sprintf("[UO_DEBUG] risk re-roll choice=%q variant=%s mult=%d; executing risk roll", cleaned, variant, riskSessionPayoutMultiplier))
 			sendShout(ack)
-			go func() {
+			SafeGo(func() {
 				time.Sleep(1400 * time.Millisecond)
 				a.executeRiskRound()
-			}()
+			})
 			return
 		}
 
@@ -16007,10 +16181,10 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 				ack := fmt.Sprintf("%s! Starting, Player Roll", gameChoiceDisplay("uo7"))
 				a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] risk re-roll selected -> 7 (variant=%s mult=%d); executing risk roll", variant, riskSessionPayoutMultiplier))
 				sendShout(ack)
-				go func() {
+				SafeGo(func() {
 					time.Sleep(1400 * time.Millisecond)
 					a.executeRiskRound()
-				}()
+				})
 				return
 			}
 
@@ -16338,10 +16512,10 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			riskSessionPayoutMultiplier = 2
 			mutex.Unlock()
 			a.setCurrentGameHistoryGame(gameLabel)
-			go func() {
+			SafeGo(func() {
 				time.Sleep(1400 * time.Millisecond)
 				a.executeRiskRound()
-			}()
+			})
 		} else {
 			a.setCurrentGameHistoryGame("UO7")
 			a.beginUnderOverRound("over")
@@ -16363,10 +16537,10 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 			riskSessionPayoutMultiplier = 2
 			mutex.Unlock()
 			a.setCurrentGameHistoryGame(gameLabel)
-			go func() {
+			SafeGo(func() {
 				time.Sleep(1400 * time.Millisecond)
 				a.executeRiskRound()
-			}()
+			})
 		} else {
 			a.setCurrentGameHistoryGame("UO7")
 			a.beginUnderOverRound("under")
@@ -16723,11 +16897,11 @@ func (a *App) beginMidHouseRound(choice string) {
 	midHouseChoice = choice
 	a.setCurrentGameHistoryGame("MidHouse")
 
-	go func() {
+	SafeGo(func() {
 		time.Sleep(1400 * time.Millisecond)
 		isMidHouseRolling = true
 		a.rollMidHouseDice()
-	}()
+	})
 }
 
 func (a *App) rollMidHouseDice() {
@@ -16783,7 +16957,7 @@ func (a *App) rollMidHouseDice() {
 
 func (a *App) startDealerShoutPolling() {
 	a.AddLogMsg("[SHOUT_POLL] worker started and entering loop")
-	go func() {
+	SafeGo(func() {
 		// Wait a bit for DB to stabilize on startup
 		time.Sleep(5 * time.Second)
 		
@@ -16854,7 +17028,7 @@ func (a *App) startDealerShoutPolling() {
 				a.AddLogMsg(fmt.Sprintf("[SHOUT_POLL] Successfully shouted and completed ID %d", id))
 			}
 		}
-	}()
+	})
 }
 
 func resetMidHouseSequence() {
