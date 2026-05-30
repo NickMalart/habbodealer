@@ -2078,11 +2078,13 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 			a.raffleHeroImageURL = att.URL
 			a.raffleHeroAttachmentID = att.ID
 			a.raffleHeroAttachmentFile = att.Filename
+			a.logDebug("[DISCORD_DEBUG] POST Saved Hero ID=%s", att.ID)
 		}
 		if strings.HasPrefix(lowName, "sponsor-room") {
 			a.sponsorImageURL = att.URL
 			a.sponsorAttachmentID = att.ID
 			a.sponsorAttachmentFile = att.Filename
+			a.logDebug("[DISCORD_DEBUG] POST Saved Sponsor ID=%s", att.ID)
 		}
 	}
 	
@@ -2093,6 +2095,19 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		a.currentSession.SponsorImageURL = a.sponsorImageURL
 		a.currentSession.SponsorAttachmentID = a.sponsorAttachmentID
 		a.currentSession.SponsorAttachmentFile = a.sponsorAttachmentFile
+	} else if session != nil {
+		// Update history array as well so Resuming the session brings the IDs forward
+		for i := range a.sessions {
+			if a.sessions[i].DBID == session.DBID {
+				a.sessions[i].HeroImageURL = a.raffleHeroImageURL
+				a.sessions[i].HeroAttachmentID = a.raffleHeroAttachmentID
+				a.sessions[i].HeroAttachmentFile = a.raffleHeroAttachmentFile
+				a.sessions[i].SponsorImageURL = a.sponsorImageURL
+				a.sessions[i].SponsorAttachmentID = a.sponsorAttachmentID
+				a.sessions[i].SponsorAttachmentFile = a.sponsorAttachmentFile
+				break
+			}
+		}
 	}
 	a.mu.Unlock()
 
