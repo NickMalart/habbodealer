@@ -2027,9 +2027,22 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	a.sponsorFileName = ""
 
 	if strings.TrimSpace(respPayload.ID) != "" {
-		a.raffleMessageID = strings.TrimSpace(respPayload.ID)
+		newMsgID := strings.TrimSpace(respPayload.ID)
+		a.raffleMessageID = newMsgID
+		
+		// 1. Update current session if matching
 		if a.currentSession != nil && session != nil && a.currentSession.DBID == session.DBID {
-			a.currentSession.WebhookMessageID = strings.TrimSpace(respPayload.ID)
+			a.currentSession.WebhookMessageID = newMsgID
+		}
+		
+		// 2. Update history list if found (crucial for future Resume)
+		if session != nil {
+			for i := range a.sessions {
+				if a.sessions[i].DBID == session.DBID {
+					a.sessions[i].WebhookMessageID = newMsgID
+					break
+				}
+			}
 		}
 	}
 	
