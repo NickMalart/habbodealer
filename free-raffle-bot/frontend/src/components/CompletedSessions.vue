@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed } from 'vue';
+import RepostModal from './RepostModal.vue';
 
 const props = defineProps({
   state: Object
@@ -9,6 +10,9 @@ const emit = defineEmits(['refresh']);
 const proofDataUrl = ref('');
 const proofFileName = ref('');
 const uploadingId = ref(null);
+
+const showRepostModal = ref(false);
+const selectedSession = ref(null);
 
 const completedSessions = computed(() => {
   const all = [...props.state.sessions];
@@ -21,6 +25,26 @@ const completedSessions = computed(() => {
 async function call(name, ...args) {
   if (window.go && window.go.main && window.go.main.App && window.go.main.App[name]) {
     return window.go.main.App[name](...args);
+  }
+}
+
+function openRepostModal(session) {
+  selectedSession.value = session;
+  showRepostModal.value = true;
+}
+
+async function handleRepost(data) {
+  try {
+    const res = await call('RepostSessionWebhook', data.dbId, data.heroDataUrl, data.heroFileName, data.sponsorDataUrl, data.sponsorFileName);
+    if (res !== 'ok') {
+      alert(`Repost response: ${res}`);
+    } else {
+      alert('Raffle successfully reposted to Discord!');
+    }
+    showRepostModal.value = false;
+    emit('refresh');
+  } catch (err) {
+    alert(`Repost error: ${err}`);
   }
 }
 
@@ -69,10 +93,11 @@ async function postProof(dbID) {
 
     <div v-for="s in completedSessions" :key="s.id" class="card" style="background:rgba(255,255,255,0.02); margin-bottom:10px;">
       <div class="row" style="justify-content: space-between;">
-        <div>
+        <div style="text-align:right;">
           <h3 style="margin:0;">#{{ s.id }} - {{ s.raffleName || 'Raffle' }}</h3>
           <div class="muted" style="font-size:13px;">Winner: <strong>{{ s.winnerName }}</strong> | Ended: {{ new Date(s.endedAt || s.winnerDrawnAt).toLocaleString() }}</div>
         </div>
+        <button class="alt" @click="openRepostModal(s)">Repost to Discord</button>
       </div>
 
       <div style="margin-top:10px; border-top:1px solid rgba(255,255,255,0.05); padding-top:10px;">
@@ -90,5 +115,12 @@ async function postProof(dbID) {
         </div>
       </div>
     </div>
+
+    <RepostModal 
+      v-if="showRepostModal" 
+      :session="selectedSession" 
+      @close="showRepostModal = false" 
+      @repost="handleRepost" 
+    />
   </div>
 </template>

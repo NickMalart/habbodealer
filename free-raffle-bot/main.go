@@ -1088,6 +1088,61 @@ func (a *App) RepostRaffleWebhook() string {
 	return "ok"
 }
 
+func (a *App) RepostSessionWebhook(sessionDBID int64, heroDataUrl, heroFileName, sponsorDataUrl, sponsorFileName string) string {
+	a.mu.Lock()
+	var target *RaffleSession
+	if a.currentSession != nil && a.currentSession.DBID == sessionDBID {
+		target = a.currentSession
+	} else {
+		for i := range a.sessions {
+			if a.sessions[i].DBID == sessionDBID {
+				target = &a.sessions[i]
+				break
+			}
+		}
+	}
+
+	if target == nil {
+		a.mu.Unlock()
+		return "session not found"
+	}
+
+	// Create a copy for the webhook logic
+	sess := copySession(target)
+	sess.WebhookMessageID = "" // Force a new POST
+
+	// If new images are provided, override them in the copy
+	if heroDataUrl != "" {
+		a.raffleHeroDataURL = heroDataUrl
+		a.raffleHeroFileName = heroFileName
+		sess.HeroImageURL = ""
+		sess.HeroAttachmentID = ""
+		sess.HeroAttachmentFile = ""
+	}
+	if sponsorDataUrl != "" {
+		a.sponsorDataURL = sponsorDataUrl
+		a.sponsorFileName = sponsorFileName
+		sess.SponsorImageURL = ""
+		sess.SponsorAttachmentID = ""
+		sess.SponsorAttachmentFile = ""
+	}
+	a.mu.Unlock()
+
+	if err := a.postOrUpdateRaffleWebhook(sess, true, "repost-history"); err != nil {
+		a.logDebug("repost session failed session=%d err=%v", sessionDBID, err)
+		return err.Error()
+	}
+
+	// If it was the current session, update the live message ID
+	a.mu.Lock()
+	if a.currentSession != nil && a.currentSession.DBID == sessionDBID {
+		a.raffleMessageID = a.currentSession.WebhookMessageID
+	}
+	a.mu.Unlock()
+
+	return "ok"
+}
+
 func (a *App) UpsertManualParticipant(username string, betCount int, tickets int) (RaffleState, error) {
 	name := normalizeUsername(username)
 	key := normalizeUsernameKey(name)
@@ -1546,15 +1601,6 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		{"name": "🎟️ Ticket Rules", "value": "1st bet = 1 Ticket + Every 5th = 1 FREE Ticket.", "inline": false},
 		{"name": "📣 Heads Up", "value": "Ticket board below updates automatically whenever someone earns tickets.", "inline": false},
 	}
-	if sponsorEnabled && sponsorName != "" {
-		sponsorVal := sponsorName
-		if sponsorRoomName != "" {
-			sponsorVal = fmt.Sprintf("**%s**\n📍 Room: *%s*", sponsorName, sponsorRoomName)
-		}
-		promoEmbedFields = append([]map[string]interface{}{
-			{"name": "💎 Sponsored By", "value": sponsorVal, "inline": false},
-		}, promoEmbedFields...)
-	}
 
 	promoEmbed := map[string]interface{}{
 		"title":       fmt.Sprintf("🎁 WHAT'S UP FOR GRABS 🎁"),
@@ -1565,10 +1611,30 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		"timestamp":   now.Format(time.RFC3339),
 	}
 
-	if sponsorEnabled && sponsorAttachmentID != "" && sponsorAttachmentFile != "" {
-		promoEmbed["thumbnail"] = map[string]interface{}{"url": "attachment://" + sponsorAttachmentFile}
-	} else if sponsorEnabled && sponsorImageURL != "" {
-		promoEmbed["thumbnail"] = map[string]interface{}{"url": sponsorImageURL}
+	if heroAttachmentID != "" && heroAttachmentFile != "" {
+		promoEmbed["image"] = map[string]interface{}{"url": "attachment://" + heroAttachmentFile}
+	} else if heroImageURL != "" {
+		promoEmbed["image"] = map[string]interface{}{"url": heroImageURL}
+	}
+
+	var sponsorEmbed map[string]interface{}
+	if sponsorEnabled && sponsorName != "" {
+		sponsorVal := sponsorName
+		if sponsorRoomName != "" {
+			sponsorVal = fmt.Sprintf("**%s**\n📍 Room: *%s*", sponsorName, sponsorRoomName)
+		}
+		sponsorEmbed = map[string]interface{}{
+			"title": "💎 RAFFLE SPONSOR 💎",
+			"description": sponsorVal,
+			"color": 0xE67E22, // Orange
+			"footer": map[string]interface{}{"text": "💎 Thank you for supporting our raffles!"},
+			"timestamp": now.Format(time.RFC3339),
+		}
+		if sponsorAttachmentID != "" && sponsorAttachmentFile != "" {
+			sponsorEmbed["thumbnail"] = map[string]interface{}{"url": "attachment://" + sponsorAttachmentFile}
+		} else if sponsorImageURL != "" {
+			sponsorEmbed["thumbnail"] = map[string]interface{}{"url": sponsorImageURL}
+		}
 	}
 
 	trackerFields := []map[string]interface{}{
@@ -1620,16 +1686,16 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		trackerEmbed["image"] = map[string]interface{}{"url": strings.TrimSpace(session.WinnerProofURL)}
 	}
 
-	if heroAttachmentID != "" && heroAttachmentFile != "" {
-		promoEmbed["image"] = map[string]interface{}{"url": "attachment://" + heroAttachmentFile}
-	} else if heroImageURL != "" {
-		promoEmbed["image"] = map[string]interface{}{"url": heroImageURL}
+	embeds := []interface{}{promoEmbed}
+	if sponsorEmbed != nil {
+		embeds = append(embeds, sponsorEmbed)
 	}
+	embeds = append(embeds, trackerEmbed)
 
 	payload := map[string]interface{}{
 		"username": "Roll Origins Raffles",
 		"content":  headerLine,
-		"embeds":   []interface{}{promoEmbed, trackerEmbed},
+		"embeds":   embeds,
 		"allowed_mentions": map[string]interface{}{
 			"parse": []string{},
 		},

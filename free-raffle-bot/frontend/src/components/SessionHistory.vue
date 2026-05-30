@@ -1,5 +1,6 @@
 <script setup>
 import { ref } from 'vue';
+import RepostModal from './RepostModal.vue';
 
 const props = defineProps({
   state: Object
@@ -11,12 +12,35 @@ const tallyData = ref(null);
 const tallyLoading = ref(false);
 const tallyError = ref('');
 
+const showRepostModal = ref(false);
+const selectedSession = ref(null);
+
 async function call(name, ...args) {
   if (window.go && window.go.main && window.go.main.App && window.go.main.App[name]) {
     return window.go.main.App[name](...args);
   }
   console.error(`Backend method ${name} not available.`);
   throw new Error(`Backend method ${name} is not available.`);
+}
+
+function openRepostModal(session) {
+  selectedSession.value = session;
+  showRepostModal.value = true;
+}
+
+async function handleRepost(data) {
+  try {
+    const res = await call('RepostSessionWebhook', data.dbId, data.heroDataUrl, data.heroFileName, data.sponsorDataUrl, data.sponsorFileName);
+    if (res !== 'ok') {
+      alert(`Repost response: ${res}`);
+    } else {
+      alert('Raffle successfully reposted to Discord!');
+    }
+    showRepostModal.value = false;
+    emit('refresh');
+  } catch (err) {
+    alert(`Repost error: ${err}`);
+  }
 }
 
 async function loadTally(dbID) {
@@ -75,12 +99,20 @@ async function deleteSession(dbID) {
           <td>{{ s.winnerName || 'N/A' }}</td>
           <td style="display:flex;gap:4px;">
             <button class="alt" @click="resumeSession(s.dbId)">Resume</button>
+            <button class="alt" @click="openRepostModal(s)">Repost</button>
             <button class="alt" @click="loadTally(s.dbId)">Tally</button>
             <button class="stop" @click="deleteSession(s.dbId)">Delete</button>
           </td>
         </tr>
       </tbody>
     </table>
+
+    <RepostModal 
+      v-if="showRepostModal" 
+      :session="selectedSession" 
+      @close="showRepostModal = false" 
+      @repost="handleRepost" 
+    />
   </div>
 
   <div class="card" v-if="showTally">
