@@ -3187,9 +3187,6 @@ func (a *App) loadGameHistoryFromDB(limit int) ([]GameHistoryEntry, error) {
 	}())+`
 		)
 	`, owner)
-		WHERE owner_key = $1
-		ORDER BY entry_id, item_type, item_index
-	`, owner)
 	if err != nil {
 		return nil, err
 	}
