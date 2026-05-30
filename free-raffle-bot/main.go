@@ -1025,7 +1025,13 @@ func (a *App) CreateRaffle(name, prize string, qty int, heroDataUrl, heroFileNam
 		a.rafflePrizeQty = 1
 	}
 
-	if heroDataUrl != "" {
+	// If no new image is provided, clear the global IDs so we don't accidentally reuse
+	// attachment IDs from a previous message. We keep the ImageURL (CDN link) as a fallback
+	// so the user still has an image, but it won't try to use invalid Discord Attachment IDs.
+	if heroDataUrl == "" {
+		a.raffleHeroAttachmentID = ""
+		a.raffleHeroAttachmentFile = ""
+	} else {
 		a.raffleHeroDataURL = heroDataUrl
 		a.raffleHeroFileName = heroFileName
 		a.raffleHeroImageURL = ""
@@ -1037,7 +1043,10 @@ func (a *App) CreateRaffle(name, prize string, qty int, heroDataUrl, heroFileNam
 	a.sponsorName = strings.TrimSpace(sponsorName)
 	a.sponsorRoomName = strings.TrimSpace(sponsorRoom)
 	
-	if sponsorHeroDataUrl != "" {
+	if sponsorHeroDataUrl == "" {
+		a.sponsorAttachmentID = ""
+		a.sponsorAttachmentFile = ""
+	} else {
 		a.sponsorDataURL = sponsorHeroDataUrl
 		a.sponsorFileName = sponsorHeroFileName
 		a.sponsorImageURL = ""
@@ -1503,24 +1512,27 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 		heroImageURL = strings.TrimSpace(session.HeroImageURL)
 		heroAttachmentID = strings.TrimSpace(session.HeroAttachmentID)
 		heroAttachmentFile = strings.TrimSpace(session.HeroAttachmentFile)
+		messageID = strings.TrimSpace(session.WebhookMessageID)
 
 		// If this is the current session, we might have unsaved/pending hero data in the bot state.
 		// We also allow this for "repost-history" so new images can be sent.
 		if sessionOverride == nil || (a.currentSession != nil && session.DBID == a.currentSession.DBID) || reason == "repost-history" {
 			heroDataURL = strings.TrimSpace(a.raffleHeroDataURL)
 			heroFileName = strings.TrimSpace(a.raffleHeroFileName)
+			
+			// Only fallback to global CDN URL if session doesn't have one
 			if heroImageURL == "" {
 				heroImageURL = strings.TrimSpace(a.raffleHeroImageURL)
 			}
-			if heroAttachmentID == "" {
+			
+			// DANGER: Only fallback to global Attachment IDs if they belong to the SAME message ID.
+			// Reusing attachment IDs from Message A in Message B will fail or show 'old images'.
+			if heroAttachmentID == "" && messageID != "" && messageID == strings.TrimSpace(a.raffleMessageID) {
 				heroAttachmentID = strings.TrimSpace(a.raffleHeroAttachmentID)
-			}
-			if heroAttachmentFile == "" {
 				heroAttachmentFile = strings.TrimSpace(a.raffleHeroAttachmentFile)
 			}
 		}
 
-		messageID = strings.TrimSpace(session.WebhookMessageID)
 		if messageID == "" && sessionOverride == nil {
 			messageID = strings.TrimSpace(a.raffleMessageID)
 		}
@@ -1551,16 +1563,18 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	sponsorAttachmentFile := strings.TrimSpace(session.SponsorAttachmentFile)
 	sponsorDataURL := ""
 	sponsorFileName := ""
+	
 	if sessionOverride == nil || (a.currentSession != nil && session.DBID == a.currentSession.DBID) || reason == "repost-history" {
 		sponsorDataURL = strings.TrimSpace(a.sponsorDataURL)
 		sponsorFileName = strings.TrimSpace(a.sponsorFileName)
+		
 		if sponsorImageURL == "" {
 			sponsorImageURL = strings.TrimSpace(a.sponsorImageURL)
 		}
-		if sponsorAttachmentID == "" {
+		
+		// DANGER: Only fallback to global Attachment IDs if they belong to the SAME message ID.
+		if sponsorAttachmentID == "" && messageID != "" && messageID == strings.TrimSpace(a.raffleMessageID) {
 			sponsorAttachmentID = strings.TrimSpace(a.sponsorAttachmentID)
-		}
-		if sponsorAttachmentFile == "" {
 			sponsorAttachmentFile = strings.TrimSpace(a.sponsorAttachmentFile)
 		}
 	}
@@ -1587,8 +1601,14 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	}
 
 	statusText := "started"
+	statusIcon := "🟢"
+	if strings.TrimSpace(session.WinnerName) != "" {
+		statusText = "winner drawn"
+		statusIcon = "🏆"
+	}
 	if strings.TrimSpace(session.EndedAt) != "" {
 		statusText = "ended"
+		statusIcon = "🔴"
 	}
 
 	startLine := session.StartedAt
@@ -1659,7 +1679,7 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 	}
 
 	trackerFields := []map[string]interface{}{
-		{"name": "📌 Status", "value": "🟢 " + statusText, "inline": true},
+		{"name": "📌 Status", "value": statusIcon + " " + statusText, "inline": true},
 		{"name": "👥 Participants", "value": strconv.Itoa(len(participants)), "inline": true},
 		{"name": "🎟️ Total Tickets", "value": strconv.Itoa(totalTickets), "inline": true},
 		{"name": "🧾 Raffle ID", "value": strconv.FormatInt(session.DBID, 10), "inline": false},
@@ -1965,6 +1985,23 @@ func (a *App) postOrUpdateRaffleWebhook(sessionOverride *RaffleSession, allowMan
 				if session != nil { a.saveSessionMeta(session.DBID) }
 				return nil
 			}
+
+			errStr := strings.TrimSpace(string(patchBody))
+			if resp.StatusCode == 404 {
+				a.logDebug("[DISCORD_DEBUG] Message not found (404). Falling back to POST. Error: %s", errStr)
+				a.mu.Lock()
+				a.raffleMessageID = ""
+				if a.currentSession != nil {
+					a.currentSession.WebhookMessageID = ""
+				}
+				a.mu.Unlock()
+			} else {
+				a.logDebug("[DISCORD_DEBUG] PATCH failed with status %d: %s", resp.StatusCode, errStr)
+				return fmt.Errorf("discord PATCH failed with status %d: %s", resp.StatusCode, errStr)
+			}
+		} else {
+			a.logDebug("[DISCORD_DEBUG] PATCH request error: %v", err)
+			return fmt.Errorf("discord PATCH request error: %w", err)
 		}
 	}
 
