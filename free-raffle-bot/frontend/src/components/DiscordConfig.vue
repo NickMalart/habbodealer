@@ -1,5 +1,6 @@
 <script setup>
 import { ref, watch } from 'vue';
+import RepostModal from './RepostModal.vue';
 
 const props = defineProps({
   state: Object
@@ -14,6 +15,8 @@ const heroImageDataUrl = ref('');
 const heroImageFileName = ref('');
 const winnerProofDataUrl = ref('');
 const winnerProofFileName = ref('');
+
+const showRepostModal = ref(false);
 
 watch(() => props.state, (newState) => {
   raffleName.value = newState.raffleName || '';
@@ -39,7 +42,6 @@ function handleHeroImageChange(event) {
     heroImageFileName.value = file.name;
     document.getElementById('heroImagePreview').src = e.target.result;
     document.getElementById('heroImagePreview').style.display = 'block';
-    document.getElementById('heroImageMeta').textContent = `Selected: ${file.name}`;
   };
   reader.readAsDataURL(file);
 }
@@ -53,7 +55,6 @@ function handleWinnerProofImageChange(event) {
     winnerProofFileName.value = file.name;
     document.getElementById('winnerProofPreview').src = e.target.result;
     document.getElementById('winnerProofPreview').style.display = 'block';
-    document.getElementById('winnerProofMeta').textContent = `Selected proof photo: ${file.name}`;
   };
   reader.readAsDataURL(file);
 }
@@ -78,7 +79,6 @@ async function postOrUpdateRaffleWebhook() {
       heroImageFileName.value = '';
       document.getElementById('heroImage').value = '';
       document.getElementById('heroImagePreview').style.display = 'none';
-      document.getElementById('heroImageMeta').textContent = 'No hero image selected.';
     }
     emit('refresh');
   } catch (err) {
@@ -86,17 +86,18 @@ async function postOrUpdateRaffleWebhook() {
   }
 }
 
-async function repostRaffleWebhook() {
-  if (!confirm('This will send a brand-new Discord message (the old one stays). Continue?')) return;
+async function handleRepost(data) {
   try {
-    await saveDiscordCfg(); // Save before posting
-    const result = await call('RepostRaffleWebhook');
-    if (result !== 'ok') {
-      alert(`Repost response: ${result}`);
+    const res = await call('RepostSessionWebhook', data.dbId, data.heroDataUrl, data.heroFileName, data.sponsorDataUrl, data.sponsorFileName, data.startAt, data.endAt);
+    if (res !== 'ok') {
+      alert(`Repost response: ${res}`);
+    } else {
+      alert('Active raffle successfully reposted to Discord!');
     }
+    showRepostModal.value = false;
     emit('refresh');
   } catch (err) {
-    alert(`Could not repost: ${err}`);
+    alert(`Repost error: ${err}`);
   }
 }
 
@@ -152,7 +153,6 @@ async function postWinnerProof() {
       <label for="heroImage" style="min-width: 140px;">Hero Image</label>
       <div>
         <input id="heroImage" type="file" accept="image/*" @change="handleHeroImageChange" />
-        <div id="heroImageMeta" class="muted" style="margin-top:6px;">No hero image selected.</div>
         <img id="heroImagePreview" class="raffle-hero-preview" style="margin-top:8px;display:none;" alt="Raffle hero preview" />
       </div>
     </div>
@@ -166,7 +166,7 @@ async function postWinnerProof() {
     <div class="row" style="margin-top: 12px;">
       <button class="alt" @click="saveDiscordCfg">Save Settings</button>
       <button @click="postOrUpdateRaffleWebhook">Post / Update Raffle</button>
-      <button class="alt" @click="repostRaffleWebhook">Repost to Discord</button>
+      <button class="alt" @click="showRepostModal = true" v-if="state.currentSession">Repost to Discord</button>
       <button class="alt" @click="drawWinner">Draw Winner</button>
     </div>
 
@@ -181,7 +181,6 @@ async function postWinnerProof() {
         <label for="winnerProofImage" style="min-width: 140px;">Winner Proof</label>
         <div>
           <input id="winnerProofImage" type="file" accept="image/*" @change="handleWinnerProofImageChange" />
-          <div id="winnerProofMeta" class="muted" style="margin-top:6px;">Upload proof photo.</div>
           <img id="winnerProofPreview" class="raffle-hero-preview" style="margin-top:8px;display:none;" alt="Winner proof preview" />
         </div>
       </div>
@@ -189,5 +188,12 @@ async function postWinnerProof() {
         <button class="alt" @click="postWinnerProof">Post Winner Proof</button>
       </div>
     </div>
+
+    <RepostModal 
+      v-if="showRepostModal && state.currentSession" 
+      :session="state.currentSession" 
+      @close="showRepostModal = false" 
+      @repost="handleRepost" 
+    />
   </div>
 </template>
