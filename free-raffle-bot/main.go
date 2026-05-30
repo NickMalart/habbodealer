@@ -3583,6 +3583,9 @@ func (a *App) ensureTables() error {
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS sponsor_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS sponsor_name TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS sponsor_room_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS sponsor_image_url TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS sponsor_attachment_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS sponsor_attachment_file TEXT NOT NULL DEFAULT ''`,
 		// Fix existing rows that still have the old hardcoded defaults
 		`UPDATE raffle_sessions SET raffle_name = 'Flame Raffle' WHERE raffle_name = 'Weekend Raffle'`,
 		`UPDATE raffle_sessions SET prize_name = 'Purple Dragon Lamp' WHERE prize_name = 'Mystery Prize'`,
@@ -3659,6 +3662,9 @@ func (a *App) loadSessionsFromDB() error {
 		sponsorEnabled     bool
 		sponsorName        string
 		sponsorRoomName    string
+		sponsorImageURL    string
+		sponsorAttachmentID string
+		sponsorAttachmentFile string
 	}
 	sessionsByID := map[int64]*RaffleSession{}
 	orderedIDs := make([]int64, 0)
@@ -3671,7 +3677,8 @@ func (a *App) loadSessionsFromDB() error {
 			&s.webhookMessageID,
 			&s.raffleName, &s.prizeName, &s.prizeQty, &s.heroImageURL, &s.heroAttachmentID, &s.heroAttachmentFile,
 			&s.winnerName, &s.winnerTickets, &s.winnerOdds, &s.winnerDrawnAt, &s.winnerMethod, &s.winnerSummary,
-			&s.winnerProofURL, &s.winnerProofID, &s.winnerProofFile, &s.sponsorEnabled, &s.sponsorName, &s.sponsorRoomName); err != nil {
+			&s.winnerProofURL, &s.winnerProofID, &s.winnerProofFile, &s.sponsorEnabled, &s.sponsorName, &s.sponsorRoomName,
+			&s.sponsorImageURL, &s.sponsorAttachmentID, &s.sponsorAttachmentFile); err != nil {
 			return err
 		}
 		rs := &RaffleSession{
@@ -3702,6 +3709,9 @@ func (a *App) loadSessionsFromDB() error {
 			SponsorEnabled:     s.sponsorEnabled,
 			SponsorName:        strings.TrimSpace(s.sponsorName),
 			SponsorRoomName:    strings.TrimSpace(s.sponsorRoomName),
+			SponsorImageURL:    strings.TrimSpace(s.sponsorImageURL),
+			SponsorAttachmentID: strings.TrimSpace(s.sponsorAttachmentID),
+			SponsorAttachmentFile: strings.TrimSpace(s.sponsorAttachmentFile),
 		}
 		if s.winnerDrawnAt != nil {
 			rs.WinnerDrawnAt = s.winnerDrawnAt.UTC().Format(time.RFC3339)
