@@ -52,17 +52,35 @@ type App struct {
 	parserScript string
 
 	db *pgxpool.Pool
+
+	autoGrantRights   bool
+	lastGrantedRights map[string]time.Time
 }
 
 // NewApp creates a new App application struct
 func NewApp(ext *g.Ext) *App {
 	a := &App{
-		ext:          ext,
-		gearthStatus: "disconnected",
-		roomUsers:    make(map[int]RoomUser),
+		ext:               ext,
+		gearthStatus:      "disconnected",
+		roomUsers:         make(map[int]RoomUser),
+		lastGrantedRights: make(map[string]time.Time),
 	}
 	a.initParser()
 	return a
+}
+
+// ToggleAutoGrantRights enables or disables automatic rights assignment
+func (a *App) ToggleAutoGrantRights(enabled bool) {
+	a.autoGrantRights = enabled
+	log.Printf("[RIGHTS] Auto-grant enabled: %t", enabled)
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "auto_grant_rights_updated", enabled)
+	}
+}
+
+// GetAutoGrantRights returns whether auto-grant is enabled
+func (a *App) GetAutoGrantRights() bool {
+	return a.autoGrantRights
 }
 
 func (a *App) initParser() {
@@ -191,6 +209,8 @@ func (a *App) GetRoomRights() ([]string, error) {
 }
 
 func (a *App) setupExt() {
+	a.ext.Headers().Add("ASSIGNRIGHTS", g.Header{Dir: g.Out, Value: 96})
+
 	a.ext.Initialized(func(e g.InitArgs) {
 		log.Printf("G-Earth initialized (connected=%t)", e.Connected)
 		a.gearthStatus = "initialized"
@@ -252,7 +272,7 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		log.Printf("[ROOM_USERS_DEBUG] Parser execution failed: %v", err)
-		log.Printf("[ROOM_USERS_DEBUG] Parser stderr: %s", stderr.String())
+		log.Printf("[ROOM_USERS_DEBUG_ERR] Parser stderr: %s", stderr.String())
 		return
 	}
 
@@ -265,6 +285,16 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 
 	log.Printf("[ROOM_USERS_DEBUG] Parsed %d users from packet", len(users))
 
+	// Get authorized users from DB if auto-grant is enabled
+	var authorizedUsers []string
+	if a.autoGrantRights {
+		var err error
+		authorizedUsers, err = a.GetRoomRights()
+		if err != nil {
+			log.Printf("[RIGHTS] Failed to fetch authorized users: %v", err)
+		}
+	}
+
 	a.roomUsersMu.Lock()
 	for _, u := range users {
 		log.Printf("[ROOM_USERS_DEBUG] User detected: %s (ChatID: %d, TradeID: %d)", u.Username, u.ChatID, u.TradeID)
@@ -272,6 +302,28 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 			Name:    u.Username,
 			ChatID:  u.ChatID,
 			TradeID: u.TradeID,
+		}
+
+		// Auto-grant rights if enabled and user is authorized
+		if a.autoGrantRights && len(authorizedUsers) > 0 {
+			isAuthorized := false
+			for _, auth := range authorizedUsers {
+				if strings.EqualFold(auth, u.Username) {
+					isAuthorized = true
+					break
+				}
+			}
+
+			if isAuthorized {
+				lastGrant, seen := a.lastGrantedRights[u.Username]
+				// Only grant if never granted or granted more than 2 minutes ago
+				if !seen || time.Since(lastGrant) > 2*time.Minute {
+					log.Printf("[RIGHTS] Auto-granting rights to %s", u.Username)
+					// Packet header 96, payload "A'" + username
+					a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), "A'"+u.Username)
+					a.lastGrantedRights[u.Username] = time.Now()
+				}
+			}
 		}
 	}
 	a.roomUsersMu.Unlock()

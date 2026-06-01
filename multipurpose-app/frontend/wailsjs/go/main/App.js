@@ -6,6 +6,10 @@ export function AddRoomRight(arg1) {
   return window['go']['main']['App']['AddRoomRight'](arg1);
 }
 
+export function GetAutoGrantRights() {
+  return window['go']['main']['App']['GetAutoGrantRights']();
+}
+
 export function GetGEarthStatus() {
   return window['go']['main']['App']['GetGEarthStatus']();
 }
@@ -32,4 +36,8 @@ export function RequestRoomUsers() {
 
 export function ShowWindow() {
   return window['go']['main']['App']['ShowWindow']();
+}
+
+export function ToggleAutoGrantRights(arg1) {
+  return window['go']['main']['App']['ToggleAutoGrantRights'](arg1);
 }

@@ -1,7 +1,7 @@
 <script setup>
 import { reactive, onMounted } from 'vue'
 import { EventsOn } from '../wailsjs/runtime'
-import { GetGEarthStatus, GetRoomUsers, GetRoomRights, AddRoomRight, RemoveRoomRight } from '../wailsjs/go/main/App'
+import { GetGEarthStatus, GetRoomUsers, GetRoomRights, AddRoomRight, RemoveRoomRight, ToggleAutoGrantRights, GetAutoGrantRights } from '../wailsjs/go/main/App'
 
 const state = reactive({
   gearth: {
@@ -12,8 +12,17 @@ const state = reactive({
   },
   roomUsers: [],
   roomRights: [],
-  newRightName: ''
+  newRightName: '',
+  autoGrantRights: false
 })
+
+async function toggleAutoGrant() {
+  try {
+    await ToggleAutoGrantRights(!state.autoGrantRights)
+  } catch (err) {
+    console.error('Failed to toggle auto-grant:', err)
+  }
+}
 
 async function refreshRights() {
   try {
@@ -57,6 +66,9 @@ onMounted(async () => {
   // Get initial rights
   await refreshRights()
 
+  // Get initial auto-grant status
+  state.autoGrantRights = await GetAutoGrantRights()
+
   EventsOn('gearth_status', (data) => {
     state.gearth.status = data.status
     if (data.host) state.gearth.host = data.host
@@ -66,6 +78,10 @@ onMounted(async () => {
 
   EventsOn('room_users_updated', (users) => {
     state.roomUsers = users
+  })
+
+  EventsOn('auto_grant_rights_updated', (enabled) => {
+    state.autoGrantRights = enabled
   })
 })
 </script>
@@ -84,7 +100,16 @@ onMounted(async () => {
     <main>
       <div class="container">
         <div class="card rights-mgmt">
-          <h2>Room Rights Management</h2>
+          <div class="card-header">
+            <h2>Room Rights Management</h2>
+            <div class="toggle-container">
+              <label class="switch">
+                <input type="checkbox" :checked="state.autoGrantRights" @change="toggleAutoGrant">
+                <span class="slider round"></span>
+              </label>
+              <span class="toggle-label">Auto-Grant</span>
+            </div>
+          </div>
           <div class="add-right-form">
             <input 
               v-model="state.newRightName" 
@@ -179,6 +204,93 @@ header {
   border-radius: 8px;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
   text-align: left;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  border-bottom: 2px solid #3498db;
+  padding-bottom: 0.5rem;
+}
+
+.card-header h2 {
+  margin: 0;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+/* Switch Styles */
+.toggle-container {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 20px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 14px;
+  width: 14px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+input:checked + .slider {
+  background-color: #2ecc71;
+}
+
+input:focus + .slider {
+  box-shadow: 0 0 1px #2ecc71;
+}
+
+input:checked + .slider:before {
+  -webkit-transform: translateX(20px);
+  -ms-transform: translateX(20px);
+  transform: translateX(20px);
+}
+
+.slider.round {
+  border-radius: 34px;
+}
+
+.slider.round:before {
+  border-radius: 50%;
+}
+
+.toggle-label {
+  font-size: 0.9rem;
+  font-weight: bold;
+  color: #95a5a6;
 }
 
 .rights-mgmt .add-right-form {

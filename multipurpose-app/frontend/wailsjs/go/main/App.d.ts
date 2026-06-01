@@ -4,6 +4,8 @@ import {main} from '../models';
 
 export function AddRoomRight(arg1:string):Promise<void>;
 
+export function GetAutoGrantRights():Promise<boolean>;
+
 export function GetGEarthStatus():Promise<Record<string, any>>;
 
 export function GetRoomRights():Promise<Array<string>>;
@@ -17,3 +19,5 @@ export function RemoveRoomRight(arg1:string):Promise<void>;
 export function RequestRoomUsers():Promise<void>;
 
 export function ShowWindow():Promise<void>;
+
+export function ToggleAutoGrantRights(arg1:boolean):Promise<void>;
