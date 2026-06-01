@@ -1,6 +1,7 @@
 <script setup>
 import { reactive, onMounted } from 'vue'
 import { EventsOn } from '../wailsjs/runtime'
+import { GetGEarthStatus } from '../wailsjs/go/main/App'
 
 const state = reactive({
   gearth: {
@@ -11,7 +12,13 @@ const state = reactive({
   }
 })
 
-onMounted(() => {
+onMounted(async () => {
+  // Get initial status
+  const initialStatus = await GetGEarthStatus()
+  state.gearth.status = initialStatus.status
+  if (initialStatus.host) state.gearth.host = initialStatus.host
+  if (initialStatus.port) state.gearth.port = initialStatus.port
+
   EventsOn('gearth_status', (data) => {
     state.gearth.status = data.status
     if (data.host) state.gearth.host = data.host

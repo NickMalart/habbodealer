@@ -11,14 +11,18 @@ import (
 
 // App struct
 type App struct {
-	ctx context.Context
-	ext *g.Ext
+	ctx         context.Context
+	ext         *g.Ext
+	gearthStatus string
+	gearthHost   string
+	gearthPort   int
 }
 
 // NewApp creates a new App application struct
 func NewApp(ext *g.Ext) *App {
 	return &App{
-		ext: ext,
+		ext:         ext,
+		gearthStatus: "disconnected",
 	}
 }
 
@@ -33,27 +37,42 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) setupExt() {
 	a.ext.Initialized(func(e g.InitArgs) {
 		log.Printf("G-Earth initialized (connected=%t)", e.Connected)
-		runtime.EventsEmit(a.ctx, "gearth_status", map[string]interface{}{
-			"status":    "initialized",
-			"connected": e.Connected,
-		})
+		a.gearthStatus = "initialized"
+		if e.Connected {
+			a.gearthStatus = "connected"
+		}
+		a.emitStatus()
 	})
 
 	a.ext.Connected(func(e g.ConnectArgs) {
 		log.Printf("G-Earth connected (%s:%d)", e.Host, e.Port)
-		runtime.EventsEmit(a.ctx, "gearth_status", map[string]interface{}{
-			"status": "connected",
-			"host":   e.Host,
-			"port":   e.Port,
-		})
+		a.gearthStatus = "connected"
+		a.gearthHost = e.Host
+		a.gearthPort = e.Port
+		a.emitStatus()
 	})
 
 	a.ext.Disconnected(func() {
 		log.Printf("G-Earth disconnected")
-		runtime.EventsEmit(a.ctx, "gearth_status", map[string]interface{}{
-			"status": "disconnected",
-		})
+		a.gearthStatus = "disconnected"
+		a.emitStatus()
 	})
+}
+
+func (a *App) emitStatus() {
+	if a.ctx == nil {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "gearth_status", a.GetGEarthStatus())
+}
+
+// GetGEarthStatus returns the current G-Earth connection status
+func (a *App) GetGEarthStatus() map[string]interface{} {
+	return map[string]interface{}{
+		"status": a.gearthStatus,
+		"host":   a.gearthHost,
+		"port":   a.gearthPort,
+	}
 }
 
 func (a *App) runExt() {
