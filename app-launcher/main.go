@@ -140,6 +140,17 @@ func knownBuildTargets() []buildTarget {
 			},
 			OutExe: filepath.Join("exit-building", "build", "bin", "exit-building.exe"),
 		},
+		{
+			ID:        "multipurpose-app",
+			Name:      "Multipurpose App",
+			SrcDir:    "multipurpose-app",
+			BuildType: "wails",
+			CleanPaths: []string{
+				filepath.Join("multipurpose-app", "build", "bin", "multipurpose-app.exe"),
+				filepath.Join("multipurpose-app", "multipurpose-app.exe"),
+			},
+			OutExe: filepath.Join("multipurpose-app", "build", "bin", "multipurpose-app.exe"),
+		},
 	}
 }
 
