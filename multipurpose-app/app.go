@@ -73,8 +73,48 @@ func NewApp(ext *g.Ext) *App {
 func (a *App) ToggleAutoGrantRights(enabled bool) {
 	a.autoGrantRights = enabled
 	log.Printf("[RIGHTS] Auto-grant enabled: %t", enabled)
+	
+	if enabled {
+		// Immediately check current room users
+		go a.checkAndGrantRightsToCurrentUsers()
+	}
+
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "auto_grant_rights_updated", enabled)
+	}
+}
+
+func (a *App) checkAndGrantRightsToCurrentUsers() {
+	authorizedUsers, err := a.GetRoomRights()
+	if err != nil {
+		log.Printf("[RIGHTS] Failed to fetch authorized users for immediate check: %v", err)
+		return
+	}
+
+	if len(authorizedUsers) == 0 {
+		return
+	}
+
+	a.roomUsersMu.Lock()
+	defer a.roomUsersMu.Unlock()
+
+	for _, u := range a.roomUsers {
+		isAuthorized := false
+		for _, auth := range authorizedUsers {
+			if strings.EqualFold(auth, u.Name) {
+				isAuthorized = true
+				break
+			}
+		}
+
+		if isAuthorized {
+			lastGrant, seen := a.lastGrantedRights[u.Name]
+			if !seen || time.Since(lastGrant) > 2*time.Minute {
+				log.Printf("[RIGHTS] Immediate auto-granting rights to %s", u.Name)
+				a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), "A'"+u.Name)
+				a.lastGrantedRights[u.Name] = time.Now()
+			}
+		}
 	}
 }
 
