@@ -221,40 +221,53 @@ func (a *App) setupExt() {
 }
 
 func (a *App) handleRoomUsers(e *g.Intercept) {
+	log.Printf("[ROOM_USERS_DEBUG] Intercepted packet header=%d len=%d dir=%v", e.Packet.Header.Value, len(e.Packet.Data), e.Packet.Header.Dir)
+
 	if a.parserScript == "" || a.pythonExec == "" {
+		log.Printf("[ROOM_USERS_DEBUG] Parser missing: script=%q exec=%q", a.parserScript, a.pythonExec)
 		return
 	}
 
 	tmpFile, err := os.CreateTemp("", "users28_*.bin")
 	if err != nil {
+		log.Printf("[ROOM_USERS_DEBUG] Failed to create temp file: %v", err)
 		return
 	}
 	tmpPath := tmpFile.Name()
 	defer os.Remove(tmpPath)
 
 	if _, err := tmpFile.Write(e.Packet.Data); err != nil {
+		log.Printf("[ROOM_USERS_DEBUG] Failed to write temp file: %v", err)
 		tmpFile.Close()
 		return
 	}
 	tmpFile.Close()
 
+	log.Printf("[ROOM_USERS_DEBUG] Running parser: %s %s --input %s --json", a.pythonExec, a.parserScript, tmpPath)
 	cmd := exec.Command(a.pythonExec, a.parserScript, "--input", tmpPath, "--json")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		log.Printf("[ROOM_USERS_DEBUG] Parser execution failed: %v", err)
+		log.Printf("[ROOM_USERS_DEBUG] Parser stderr: %s", stderr.String())
 		return
 	}
 
 	var users []ParsedUsers28User
 	if err := json.Unmarshal(stdout.Bytes(), &users); err != nil {
+		log.Printf("[ROOM_USERS_DEBUG] Failed to unmarshal parser output: %v", err)
+		log.Printf("[ROOM_USERS_DEBUG] Raw output: %s", stdout.String())
 		return
 	}
 
+	log.Printf("[ROOM_USERS_DEBUG] Parsed %d users from packet", len(users))
+
 	a.roomUsersMu.Lock()
-	// If it's a full USERS packet (header 28), we might want to clear old ones, 
-	// but USERS28 often comes in fragments or updates. 
-	// For simplicity, we'll just update/add.
 	for _, u := range users {
+		log.Printf("[ROOM_USERS_DEBUG] User detected: %s (ChatID: %d, TradeID: %d)", u.Username, u.ChatID, u.TradeID)
 		a.roomUsers[u.ChatID] = RoomUser{
 			Name:    u.Username,
 			ChatID:  u.ChatID,
