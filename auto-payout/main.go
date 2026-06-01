@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +35,8 @@ var assets embed.FS
 
 //go:embed scripts/parse_users28.py
 var users28Parser []byte
+
+var itemRegex = regexp.MustCompile(`(?:CF_\d+_[a-z][a-z0-9_.-]*|[a-z][a-z0-9_.-]*_[a-z0-9_.-]+)(?:\*\d+)?`)
 
 const (
 	maxOpenTradeDuration = 2 * time.Minute
@@ -70,9 +73,10 @@ type ParsedUsers28User struct {
 }
 
 type TradeItem struct {
-	Name     string `json:"name"`
-	Quantity int    `json:"quantity"`
-	RawData  string `json:"raw_data,omitempty"`
+	Name           string `json:"name"`
+	Quantity       int    `json:"quantity"`
+	IsUnrecognized bool   `json:"is_unrecognized,omitempty"`
+	RawData        string `json:"raw_data,omitempty"`
 }
 
 // TradeState represents brief information about the currently active trade
@@ -2235,6 +2239,7 @@ func decodeLeadingVL64(data []byte) (int, bool) {
 
 func (a *App) parseTradeItems(data []byte, allowedNamesCache []string, partner string, banker string, roomUsers map[string]bool) []TradeItem {
 	counts := map[string]int{}
+	unrecognized := map[string]int{}
 	fields := bytes.Split(data, []byte{0x02})
 
 	// Pre-normalize allowed names from DB for faster matching
@@ -2298,12 +2303,20 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string, partner s
 
 		if bestMatch != nil {
 			counts[bestMatch.baseName]++
+		} else {
+			// If not an allowed item, check if it looks like an item at all
+			if match := itemRegex.FindString(lowField); match != "" {
+				unrecognized[match]++
+			}
 		}
 	}
 
 	var items []TradeItem
 	for name, qty := range counts {
 		items = append(items, TradeItem{Name: name, Quantity: qty})
+	}
+	for name, qty := range unrecognized {
+		items = append(items, TradeItem{Name: name, Quantity: qty, IsUnrecognized: true})
 	}
 	return items
 }
@@ -2449,11 +2462,34 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 
 			// Map of matched allowed item -> qty
 			matchedItems := make(map[string]int)
+			allFoundItems := make(map[string]int)
+			unrecognizedItems := make(map[string]int)
+			
 			for _, it := range lastItems {
-				// We already filtered items in parseTradeItems to ONLY include exact matches
-				// against the allowed cache, so we can just use the name directly.
 				low := strings.ToLower(strings.TrimSpace(it.Name))
-				matchedItems[low] += it.Quantity
+				allFoundItems[low] += it.Quantity
+				if it.IsUnrecognized {
+					unrecognizedItems[low] += it.Quantity
+				} else {
+					matchedItems[low] += it.Quantity
+				}
+			}
+
+			// SECURITY CHECK: If there are ANY items in the trade that we didn't explicitly match
+			// to our allowed list, we MUST block the trade. This prevents "hidden" items.
+			if len(allFoundItems) != len(matchedItems) {
+				var unrecognized []string
+				for n := range unrecognizedItems {
+					unrecognized = append(unrecognized, n)
+				}
+				a.AddLog(fmt.Sprintf("[SECURITY] Blocking trade: %d item types found but only %d are authorized. Unrecognized: %v", len(allFoundItems), len(matchedItems), unrecognized))
+				a.queueShout(partnerName, fmt.Sprintf("%s, trade rejected: unauthorized items detected.", partnerName))
+				if a.ctx != nil {
+					go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "unauthorized_items_detected", "player": partnerName, "total_found": len(allFoundItems), "authorized_found": len(matchedItems), "unrecognized": unrecognized})
+				}
+				e.Block()
+				a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+				return
 			}
 
 			// If we couldn't parse items, fallback to previous substring check
@@ -2496,72 +2532,72 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 				return
 			}
 
-		// 2. Check payout coverage: ensure dealer hand + incoming items can cover
-		// the required payout assuming a 2x multiplier. If not, block the trade.
-		// Skip this check if in split-banker mode (strip scan skipped).
-		if !a.GetSkipStripScan() {
-			mult := 2
-			// Snapshot last parsed items (incoming counts)
-			a.tradeMu.Lock()
-			lastItemsCopy := make([]TradeItem, len(a.lastTradeItems))
-			copy(lastItemsCopy, a.lastTradeItems)
-			a.tradeMu.Unlock()
+			// 2. Check payout coverage: ensure dealer hand + incoming items can cover
+			// the required payout assuming a 2x multiplier. If not, block the trade.
+			// Skip this check if in split-banker mode (strip scan skipped).
+			if !a.GetSkipStripScan() {
+				mult := 2
+				// Snapshot last parsed items (incoming counts)
+				a.tradeMu.Lock()
+				lastItemsCopy := make([]TradeItem, len(a.lastTradeItems))
+				copy(lastItemsCopy, a.lastTradeItems)
+				a.tradeMu.Unlock()
 
-			// Build hand map from current inventory (base name -> qty)
-			handMap := make(map[string]int)
-			a.inventoryMu.RLock()
-			for name, ids := range a.inventory {
-				base := name
-				if star := strings.LastIndex(name, "*"); star > 0 {
-					base = name[:star]
-				}
-				handMap[base] += len(ids)
-			}
-			a.inventoryMu.RUnlock()
-
-			// Build incoming map from observed partner items
-			incomingMap := make(map[string]int)
-			for _, it := range lastItemsCopy {
-				n := strings.ToLower(strings.TrimSpace(it.Name))
-				base := n
-				if star := strings.LastIndex(n, "*"); star > 0 {
-					base = n[:star]
-				}
-				incomingMap[base] += it.Quantity
-			}
-
-			// Compute required payouts from matchedItems
-			required := make(map[string]int)
-			for k, q := range matchedItems {
-				base := k
-				if star := strings.LastIndex(k, "*"); star > 0 {
-					base = k[:star]
-				}
-				required[base] += q * mult
-			}
-
-			// Detect shortages
-			short := false
-			for name, need := range required {
-				have := handMap[name]
-				inc := incomingMap[name]
-				available := have + inc
-				if available < need {
-					short = true
-					a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: insufficient payout stock for %s required=%d available=%d (hand=%d incoming=%d)", name, need, available, have, inc))
-					a.queueShout(partnerName, fmt.Sprintf("%s, trade cancelled. Please wait for the Banker to restock before betting.", partnerName))
-					if a.ctx != nil {
-						go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "insufficient_payout_stock", "player": partnerName, "item": name, "required": need, "available": available, "hand": have, "incoming": inc})
+				// Build hand map from current inventory (base name -> qty)
+				handMap := make(map[string]int)
+				a.inventoryMu.RLock()
+				for name, ids := range a.inventory {
+					base := name
+					if star := strings.LastIndex(name, "*"); star > 0 {
+						base = name[:star]
 					}
-					break
+					handMap[base] += len(ids)
+				}
+				a.inventoryMu.RUnlock()
+
+				// Build incoming map from observed partner items
+				incomingMap := make(map[string]int)
+				for _, it := range lastItemsCopy {
+					n := strings.ToLower(strings.TrimSpace(it.Name))
+					base := n
+					if star := strings.LastIndex(n, "*"); star > 0 {
+						base = n[:star]
+					}
+					incomingMap[base] += it.Quantity
+				}
+
+				// Compute required payouts from matchedItems
+				required := make(map[string]int)
+				for k, q := range matchedItems {
+					base := k
+					if star := strings.LastIndex(k, "*"); star > 0 {
+						base = k[:star]
+					}
+					required[base] += q * mult
+				}
+
+				// Detect shortages
+				short := false
+				for name, need := range required {
+					have := handMap[name]
+					inc := incomingMap[name]
+					available := have + inc
+					if available < need {
+						short = true
+						a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: insufficient payout stock for %s required=%d available=%d (hand=%d incoming=%d)", name, need, available, have, inc))
+						a.queueShout(partnerName, fmt.Sprintf("%s, trade cancelled. Please wait for the Banker to restock before betting.", partnerName))
+						if a.ctx != nil {
+							go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "insufficient_payout_stock", "player": partnerName, "item": name, "required": need, "available": available, "hand": have, "incoming": inc})
+						}
+						break
+					}
+				}
+				if short {
+					e.Block()
+					a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+					return
 				}
 			}
-			if short {
-				e.Block()
-				a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
-				return
-			}
-		}
 
 			// Enforce configured limits per-settings
 			maxQty := a.getIntSetting("max_qty_per_unique", 10)
@@ -2581,12 +2617,13 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 				}
 			}
 
-			// Check unique count
-			if maxUnique > 0 && len(matchedItems) > maxUnique {
-				a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: player offered %d unique stocked items (limit %d)", len(matchedItems), maxUnique))
+			// Check unique count (total items found in trade, matched or not)
+			totalUnique := len(matchedItems) + len(unrecognizedItems)
+			if maxUnique > 0 && totalUnique > maxUnique {
+				a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: player offered %d unique items (limit %d)", totalUnique, maxUnique))
 				a.queueShout(partnerName, fmt.Sprintf("%s, please consolidate your trade. I can only process %d unique item types at once.", partnerName, maxUnique))
 				if a.ctx != nil {
-					go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "max_unique_exceeded", "player": partnerName, "unique_offered": len(matchedItems), "max_unique": maxUnique, "items": matchedItems})
+					go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "max_unique_exceeded", "player": partnerName, "unique_offered": totalUnique, "max_unique": maxUnique, "items": matchedItems, "unrecognized": unrecognizedItems})
 				}
 				e.Block()
 				a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
