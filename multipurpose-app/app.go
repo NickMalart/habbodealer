@@ -60,6 +60,13 @@ func (a *App) runExt() {
 	a.ext.Run()
 }
 
+// ShowWindow shows the application window
+func (a *App) ShowWindow() {
+	if a.ctx != nil {
+		runtime.WindowShow(a.ctx)
+	}
+}
+
 // Greet returns a greeting for the given name
 func (a *App) Greet(name string) string {
 	return fmt.Sprintf("Hello %s, It's show time!", name)

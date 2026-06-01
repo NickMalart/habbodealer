@@ -24,6 +24,10 @@ func main() {
 	// Create an instance of the app structure
 	app := NewApp(ext)
 
+	ext.Activated(func() {
+		app.ShowWindow()
+	})
+
 	// Create application with options
 	err := wails.Run(&options.App{
 		Title:  "Multipurpose App",
