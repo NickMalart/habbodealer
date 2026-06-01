@@ -426,16 +426,22 @@ func (a *App) LaunchApp(appID string, port string) string {
 	a.processes[instanceKey] = cmd.Process
 	a.mu.Unlock()
 
-	prefix := fmt.Sprintf("[%s] ", item.Name)
-	go a.streamToLog(stdout, prefix, "info")
-	go a.streamToLog(stderr, prefix, "error")
+	// Consume stdout and stderr but do not stream them to the build log.
+	go func() {
+		defer stdout.Close()
+		_, _ = io.Copy(io.Discard, stdout)
+	}()
+	go func() {
+		defer stderr.Close()
+		_, _ = io.Copy(io.Discard, stderr)
+	}()
 
 	go func(key string, c *exec.Cmd, name string) {
 		_ = c.Wait()
 		a.mu.Lock()
 		delete(a.processes, key)
 		a.mu.Unlock()
-		a.emitLog(fmt.Sprintf("[%s] Process exited", name), "info")
+		// No longer emitting "Process exited" to build log to keep it clean.
 	}(instanceKey, cmd, item.Name)
 
 	a.RefreshApps()
