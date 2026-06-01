@@ -6,8 +6,16 @@ export function GetGEarthStatus() {
   return window['go']['main']['App']['GetGEarthStatus']();
 }
 
+export function GetRoomUsers() {
+  return window['go']['main']['App']['GetRoomUsers']();
+}
+
 export function Greet(arg1) {
   return window['go']['main']['App']['Greet'](arg1);
+}
+
+export function RequestRoomUsers() {
+  return window['go']['main']['App']['RequestRoomUsers']();
 }
 
 export function ShowWindow() {

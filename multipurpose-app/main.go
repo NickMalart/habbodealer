@@ -8,6 +8,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	g "xabbo.b7c.io/goearth"
+	"xabbo.b7c.io/goearth/shockwave/in"
 )
 
 //go:embed all:frontend/dist
@@ -27,6 +28,8 @@ func main() {
 	ext.Activated(func() {
 		app.ShowWindow()
 	})
+
+	ext.Intercept(in.USERS, in.SPACENODEUSERS).With(app.handleRoomUsers)
 
 	// Create application with options
 	err := wails.Run(&options.App{
