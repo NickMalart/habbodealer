@@ -2483,9 +2483,30 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 					unrecognized = append(unrecognized, n)
 				}
 				a.AddLog(fmt.Sprintf("[SECURITY] Blocking trade: %d item types found but only %d are authorized. Unrecognized: %v", len(allFoundItems), len(matchedItems), unrecognized))
-				a.queueShout(partnerName, fmt.Sprintf("%s, trade rejected: unauthorized items detected.", partnerName))
+				
+				// Fetch display names for a more helpful shout
+				displayNames := []string{}
+				if a.db != nil {
+					rows, err := a.db.Query(context.Background(), "SELECT display_name FROM public.stocked_items WHERE is_active = TRUE")
+					if err == nil {
+						for rows.Next() {
+							var dn string
+							if err := rows.Scan(&dn); err == nil {
+								displayNames = append(displayNames, dn)
+							}
+						}
+						rows.Close()
+					}
+				}
+				
+				shoutMsg := fmt.Sprintf("%s, trade rejected: unauthorized items detected.", partnerName)
+				if len(displayNames) > 0 {
+					shoutMsg = fmt.Sprintf("%s, trade rejected: we only accept %s.", partnerName, strings.Join(displayNames, ", "))
+				}
+				
+				a.queueShout(partnerName, shoutMsg)
 				if a.ctx != nil {
-					go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "unauthorized_items_detected", "player": partnerName, "total_found": len(allFoundItems), "authorized_found": len(matchedItems), "unrecognized": unrecognized})
+					go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "unauthorized_items_detected", "player": partnerName, "total_found": len(allFoundItems), "authorized_found": len(matchedItems), "unrecognized": unrecognized, "accepted_display": displayNames})
 				}
 				e.Block()
 				a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
