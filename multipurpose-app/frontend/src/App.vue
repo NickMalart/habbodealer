@@ -1,7 +1,7 @@
 <script setup>
 import { reactive, onMounted } from 'vue'
 import { EventsOn } from '../wailsjs/runtime'
-import { GetGEarthStatus, GetRoomUsers } from '../wailsjs/go/main/App'
+import { GetGEarthStatus, GetRoomUsers, GetRoomRights, AddRoomRight, RemoveRoomRight } from '../wailsjs/go/main/App'
 
 const state = reactive({
   gearth: {
@@ -10,8 +10,39 @@ const state = reactive({
     port: 0,
     connected: false
   },
-  roomUsers: []
+  roomUsers: [],
+  roomRights: [],
+  newRightName: ''
 })
+
+async function refreshRights() {
+  try {
+    const rights = await GetRoomRights()
+    state.roomRights = rights || []
+  } catch (err) {
+    console.error('Failed to get rights:', err)
+  }
+}
+
+async function addRight() {
+  if (!state.newRightName.trim()) return
+  try {
+    await AddRoomRight(state.newRightName)
+    state.newRightName = ''
+    await refreshRights()
+  } catch (err) {
+    console.error('Failed to add right:', err)
+  }
+}
+
+async function removeRight(name) {
+  try {
+    await RemoveRoomRight(name)
+    await refreshRights()
+  } catch (err) {
+    console.error('Failed to remove right:', err)
+  }
+}
 
 onMounted(async () => {
   // Get initial status
@@ -22,6 +53,9 @@ onMounted(async () => {
 
   // Get initial users
   state.roomUsers = await GetRoomUsers()
+  
+  // Get initial rights
+  await refreshRights()
 
   EventsOn('gearth_status', (data) => {
     state.gearth.status = data.status
@@ -49,6 +83,27 @@ onMounted(async () => {
     </header>
     <main>
       <div class="container">
+        <div class="card rights-mgmt">
+          <h2>Room Rights Management</h2>
+          <div class="add-right-form">
+            <input 
+              v-model="state.newRightName" 
+              placeholder="Enter username" 
+              @keyup.enter="addRight"
+            />
+            <button @click="addRight">Add User</button>
+          </div>
+          <div v-if="state.roomRights.length === 0" class="empty-msg">
+            No users have rights yet.
+          </div>
+          <ul v-else class="rights-list">
+            <li v-for="name in state.roomRights" :key="name">
+              <span class="user-name">{{ name }}</span>
+              <button class="btn-remove" @click="removeRight(name)">Remove</button>
+            </li>
+          </ul>
+        </div>
+
         <div class="card users-list">
           <h2>Users in Room ({{ state.roomUsers.length }})</h2>
           <div v-if="state.roomUsers.length === 0" class="empty-msg">
@@ -124,6 +179,60 @@ header {
   border-radius: 8px;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
   text-align: left;
+}
+
+.rights-mgmt .add-right-form {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.rights-mgmt input {
+  flex: 1;
+  padding: 0.5rem;
+  border-radius: 4px;
+  border: 1px solid #3e4f5f;
+  background: #1b2636;
+  color: white;
+}
+
+.rights-mgmt button {
+  padding: 0.5rem 1rem;
+  background: #3498db;
+  border: none;
+  border-radius: 4px;
+  color: white;
+  cursor: pointer;
+}
+
+.rights-mgmt button:hover {
+  background: #2980b9;
+}
+
+.rights-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.rights-list li {
+  padding: 0.5rem;
+  border-bottom: 1px solid #3e4f5f;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.btn-remove {
+  padding: 0.2rem 0.5rem !important;
+  background: #e74c3c !important;
+  font-size: 0.8rem;
+}
+
+.btn-remove:hover {
+  background: #c0392b !important;
 }
 
 .users-list ul {

@@ -15,10 +15,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	g "xabbo.b7c.io/goearth"
 	"xabbo.b7c.io/goearth/shockwave/out"
 )
+
+const dbURL = "postgresql://neondb_owner:npg_S9jFTYzdQx3l@ep-aged-king-a77p1t8b-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 
 // ParsedUsers28User matches the JSON output of parse_users28.py
 type ParsedUsers28User struct {
@@ -47,6 +50,8 @@ type App struct {
 
 	pythonExec   string
 	parserScript string
+
+	db *pgxpool.Pool
 }
 
 // NewApp creates a new App application struct
@@ -89,6 +94,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.setupExt()
 	go a.runExt()
+	go a.initDatabase()
 
 	// Periodically request room users if connected
 	go func() {
@@ -104,6 +110,84 @@ func (a *App) startup(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+func (a *App) initDatabase() {
+	config, err := pgxpool.ParseConfig(dbURL)
+	if err != nil {
+		log.Printf("Failed to parse database URL: %v", err)
+		return
+	}
+
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		log.Printf("Failed to connect to database: %v", err)
+		return
+	}
+
+	a.db = pool
+
+	// Create table if not exists
+	_, err = a.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS room_rights (
+			id SERIAL PRIMARY KEY,
+			username TEXT UNIQUE NOT NULL,
+			added_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		log.Printf("Failed to create room_rights table: %v", err)
+	} else {
+		log.Printf("Database initialized and room_rights table verified.")
+	}
+}
+
+// AddRoomRight adds a user to the room rights list in the database
+func (a *App) AddRoomRight(username string) error {
+	if a.db == nil {
+		return fmt.Errorf("database not connected")
+	}
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return fmt.Errorf("username cannot be empty")
+	}
+
+	_, err := a.db.Exec(context.Background(), 
+		"INSERT INTO room_rights (username) VALUES ($1) ON CONFLICT (username) DO NOTHING", 
+		username)
+	return err
+}
+
+// RemoveRoomRight removes a user from the room rights list in the database
+func (a *App) RemoveRoomRight(username string) error {
+	if a.db == nil {
+		return fmt.Errorf("database not connected")
+	}
+	_, err := a.db.Exec(context.Background(), "DELETE FROM room_rights WHERE username = $1", username)
+	return err
+}
+
+// GetRoomRights returns the list of usernames with room rights from the database
+func (a *App) GetRoomRights() ([]string, error) {
+	if a.db == nil {
+		return nil, fmt.Errorf("database not connected")
+	}
+
+	rows, err := a.db.Query(context.Background(), "SELECT username FROM room_rights ORDER BY username ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []string
+	for rows.Next() {
+		var username string
+		if err := rows.Scan(&username); err != nil {
+			return nil, err
+		}
+		users = append(users, username)
+	}
+	return users, nil
 }
 
 func (a *App) setupExt() {
@@ -239,4 +323,3 @@ func (a *App) ShowWindow() {
 func (a *App) Greet(name string) string {
 	return fmt.Sprintf("Hello %s, It's show time!", name)
 }
-
