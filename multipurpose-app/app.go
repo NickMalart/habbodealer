@@ -144,10 +144,18 @@ func (a *App) checkAndGrantRightsToCurrentUsers() {
 		if isAuthorized {
 			lastGrant, seen := a.lastGrantedRights[u.Name]
 			if !seen || time.Since(lastGrant) > 2*time.Minute {
-				a.AddLog(fmt.Sprintf("ACTION: Immediate auto-granting rights to %s", u.Name))
+				a.AddLog(fmt.Sprintf("ACTION: Sequence start for %s", u.Name))
 
-				// Payload should only be the username. G-Earth handles the header encoding (96 -> "A`").
+				// Step 1: Select User (39 -> "A'")
+				a.AddLog(fmt.Sprintf("SEND: SELECTUSER (39) for %s", u.Name))
+				a.ext.Send(g.Out.Id("SELECTUSER"), u.Name)
+
+				time.Sleep(150 * time.Millisecond)
+
+				// Step 2: Assign Rights (96 -> "A`")
+				a.AddLog(fmt.Sprintf("SEND: ASSIGNRIGHTS (96) for %s", u.Name))
 				a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), u.Name)
+
 				a.lastGrantedRights[u.Name] = time.Now()
 			} else {
 				a.AddLog(fmt.Sprintf("SKIP: %s already granted recently (%.1fs ago)", u.Name, time.Since(lastGrant).Seconds()))
@@ -295,6 +303,7 @@ func (a *App) GetRoomRights() ([]string, error) {
 }
 
 func (a *App) setupExt() {
+	a.ext.Headers().Add("SELECTUSER", g.Header{Dir: g.Out, Value: 39})
 	a.ext.Headers().Add("ASSIGNRIGHTS", g.Header{Dir: g.Out, Value: 96})
 
 	a.ext.Initialized(func(e g.InitArgs) {
@@ -393,10 +402,19 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 				lastGrant, seen := a.lastGrantedRights[u.Username]
 				// Only grant if never granted or granted more than 2 minutes ago
 				if !seen || time.Since(lastGrant) > 2*time.Minute {
-					a.AddLog(fmt.Sprintf("ACTION: Auto-granting rights to %s", u.Username))
+					a.AddLog(fmt.Sprintf("ACTION: Sequence start for %s", u.Username))
 
-					// Payload should only be the username. G-Earth handles the header encoding (96 -> "A`").
+					// Step 1: Select User (39)
+					a.AddLog(fmt.Sprintf("SEND: SELECTUSER (39) for %s", u.Username))
+					a.ext.Send(g.Out.Id("SELECTUSER"), u.Username)
+
+					// Small delay to mimic human speed
+					time.Sleep(150 * time.Millisecond)
+
+					// Step 2: Assign Rights (96)
+					a.AddLog(fmt.Sprintf("SEND: ASSIGNRIGHTS (96) for %s", u.Username))
 					a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), u.Username)
+
 					a.lastGrantedRights[u.Username] = time.Now()
 				}
 			}
