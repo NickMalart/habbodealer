@@ -929,62 +929,68 @@ func (a *App) PostStatsToDiscord() string {
 
 	// Range for today
 	now := time.Now()
-	start := now.Format("2006-01-02") + "T00:00:00"
-	end := now.Format("2006-01-02") + "T23:59:59"
+	startToday := now.Format("2006-01-02") + "T00:00:00"
+	endToday := now.Format("2006-01-02") + "T23:59:59"
 
-	stats := a.GetStats(start, end)
-	ledger := a.GetLedgerStats(start, end)
+	statsToday := a.GetStats(startToday, endToday)
+	ledgerToday := a.GetLedgerStats(startToday, endToday)
+	
+	// Lifetime stats
+	statsLife := a.GetStats("", "")
+	ledgerLife := a.GetLedgerStats("", "")
 
 	webhookURL := "https://discord.com/api/webhooks/1511213717495480420/vetU71FR77VIkho415V8dhbOWPAhWheKjyeFMPzDKJ3mD6hF7LeZABIS36wSvif_twoD"
 
 	embed := DiscordEmbed{
-		Title:       "🎰 Casino Daily Performance Report",
-		Description: fmt.Sprintf("Reporting stats for **%s**", now.Format("Monday, Jan 2 2006")),
-		Color:       0x3498db, // Blue
+		Title:       "🎰 Casino Performance Report",
+		Description: fmt.Sprintf("Daily and Lifetime summary for **%s**", now.Format("Monday, Jan 2 2006")),
+		Color:       0xf1c40f, // Gold
 		Timestamp:   now.Format(time.RFC3339),
 	}
-	embed.Footer.Text = "Casino Statistics Dashboard • Auto-generated"
+	embed.Footer.Text = "Casino Statistics Dashboard • All-time Tracking"
 
-	// Summary Field
-	summary := fmt.Sprintf("🔹 **Total Rounds:** %d\n🔹 **Dealer Win Rate:** %.1f%%\n🔹 **Casino Edge:** %+.1f%%",
-		stats.Overall.TotalRounds,
-		stats.Overall.DealerWinRate,
-		stats.Overall.DealerWinRate-stats.Overall.PlayerWinRate)
-	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "📊 Overview", Value: summary, Inline: false})
+	// 1. Daily Summary
+	dailySummary := fmt.Sprintf("🔹 **Rounds:** %d\n🔹 **Edge:** %+.1f%%",
+		statsToday.Overall.TotalRounds,
+		statsToday.Overall.DealerWinRate-statsToday.Overall.PlayerWinRate)
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "📅 Today's Stats", Value: dailySummary, Inline: true})
 
-	// Top Games
+	// 2. Lifetime Summary
+	lifeSummary := fmt.Sprintf("🏆 **Total Rounds:** %d\n🏆 **Overall Edge:** %+.1f%%",
+		statsLife.Overall.TotalRounds,
+		statsLife.Overall.DealerWinRate-statsLife.Overall.PlayerWinRate)
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "👑 Lifetime Stats", Value: lifeSummary, Inline: true})
+
+	// Spacer
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "\u200b", Value: "\u200b", Inline: false})
+
+	// Top Games (Today)
 	var topGames []string
-	sortedGames := make([]GameStats, 0, len(stats.ByGame))
-	for _, g := range stats.ByGame {
+	sortedGames := make([]GameStats, 0, len(statsToday.ByGame))
+	for _, g := range statsToday.ByGame {
 		sortedGames = append(sortedGames, g)
 	}
 	sort.Slice(sortedGames, func(i, j int) bool { return sortedGames[i].TotalRounds > sortedGames[j].TotalRounds })
 
 	for i, g := range sortedGames {
-		if i >= 3 {
-			break
-		}
+		if i >= 3 { break }
 		topGames = append(topGames, fmt.Sprintf("**%s**: %d rds (Edge: %+.1f%%)", g.Game, g.TotalRounds, g.DealerWinRate-g.PlayerWinRate))
 	}
 	if len(topGames) > 0 {
-		embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "🎮 Top Games", Value: strings.Join(topGames, "\n"), Inline: true})
+		embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "🎮 Top Games (Today)", Value: strings.Join(topGames, "\n"), Inline: true})
 	}
 
-	// Item Profits
+	// Item Profits (Lifetime)
 	var itemSummary []string
-	sort.Slice(ledger, func(i, j int) bool { return ledger[i].Net > ledger[j].Net })
-	for i, it := range ledger {
-		if i >= 5 {
-			break
-		}
+	sort.Slice(ledgerLife, func(i, j int) bool { return ledgerLife[i].Net > ledgerLife[j].Net })
+	for i, it := range ledgerLife {
+		if i >= 5 { break }
 		sign := "📈"
-		if it.Net < 0 {
-			sign = "📉"
-		}
+		if it.Net < 0 { sign = "📉" }
 		itemSummary = append(itemSummary, fmt.Sprintf("%s **%s**: %d", sign, it.Name, it.Net))
 	}
 	if len(itemSummary) > 0 {
-		embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "💰 Item Profits (Net)", Value: strings.Join(itemSummary, "\n"), Inline: true})
+		embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "💰 Lifetime Profits (Net)", Value: strings.Join(itemSummary, "\n"), Inline: true})
 	}
 
 	payload := DiscordWebhookPayload{
@@ -1004,7 +1010,7 @@ func (a *App) PostStatsToDiscord() string {
 		return fmt.Sprintf("Discord returned status: %s", resp.Status)
 	}
 
-	return "Stats posted successfully to Discord!"
+	return "Stats (including Lifetime) posted successfully to Discord!"
 }
 
 func main() {
