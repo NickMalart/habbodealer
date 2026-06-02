@@ -148,13 +148,15 @@ func (a *App) checkAndGrantRightsToCurrentUsers() {
 
 				// Step 1: Select User (39 -> "A'")
 				a.AddLog(fmt.Sprintf("SEND: SELECTUSER (39) for %s", u.Name))
-				a.ext.Send(g.Out.Id("SELECTUSER"), u.Name)
+				a.AddLog(fmt.Sprintf("BYTES: %x", []byte(u.Name)))
+				a.ext.Send(g.Out.Id("SELECTUSER"), []byte(u.Name))
 
 				time.Sleep(150 * time.Millisecond)
 
 				// Step 2: Assign Rights (96 -> "A`")
 				a.AddLog(fmt.Sprintf("SEND: ASSIGNRIGHTS (96) for %s", u.Name))
-				a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), u.Name)
+				a.AddLog(fmt.Sprintf("BYTES: %x", []byte(u.Name)))
+				a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), []byte(u.Name))
 
 				a.lastGrantedRights[u.Name] = time.Now()
 			} else {
@@ -406,14 +408,16 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 
 					// Step 1: Select User (39)
 					a.AddLog(fmt.Sprintf("SEND: SELECTUSER (39) for %s", u.Username))
-					a.ext.Send(g.Out.Id("SELECTUSER"), u.Username)
+					a.AddLog(fmt.Sprintf("BYTES: %x", []byte(u.Username)))
+					a.ext.Send(g.Out.Id("SELECTUSER"), []byte(u.Username))
 
 					// Small delay to mimic human speed
 					time.Sleep(150 * time.Millisecond)
 
 					// Step 2: Assign Rights (96)
 					a.AddLog(fmt.Sprintf("SEND: ASSIGNRIGHTS (96) for %s", u.Username))
-					a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), u.Username)
+					a.AddLog(fmt.Sprintf("BYTES: %x", []byte(u.Username)))
+					a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), []byte(u.Username))
 
 					a.lastGrantedRights[u.Username] = time.Now()
 				}
