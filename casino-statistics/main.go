@@ -513,9 +513,9 @@ func (a *App) GetPlayerGameStats(playerName, startDate, endDate string) []GameSt
 
 		gs.TotalRounds++
 		if isPlayerWin {
-			ps.PlayerWins++
+			gs.PlayerWins++
 		} else {
-			ps.DealerWins++
+			gs.DealerWins++
 		}
 	}
 
@@ -960,6 +960,18 @@ func (a *App) PostStatsToDiscord() string {
 		statsLife.Overall.TotalRounds,
 		statsLife.Overall.DealerWinRate-statsLife.Overall.PlayerWinRate)
 	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "👑 Lifetime Stats", Value: lifeSummary, Inline: true})
+
+	// 3. Today's Profits
+	var todayProfits []string
+	sort.Slice(ledgerToday, func(i, j int) bool { return ledgerToday[i].Net > ledgerToday[j].Net })
+	for i, it := range ledgerToday {
+		if i >= 3 { break }
+		sign := "🔸"
+		todayProfits = append(todayProfits, fmt.Sprintf("%s **%s**: %d", sign, it.Name, it.Net))
+	}
+	if len(todayProfits) > 0 {
+		embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "💵 Today's Net", Value: strings.Join(todayProfits, "\n"), Inline: true})
+	}
 
 	// Spacer
 	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "\u200b", Value: "\u200b", Inline: false})
