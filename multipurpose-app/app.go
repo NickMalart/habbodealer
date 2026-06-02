@@ -144,14 +144,10 @@ func (a *App) checkAndGrantRightsToCurrentUsers() {
 		if isAuthorized {
 			lastGrant, seen := a.lastGrantedRights[u.Name]
 			if !seen || time.Since(lastGrant) > 2*time.Minute {
-				a.AddLog(fmt.Sprintf("ACTION: Granting rights to %s (ChatID: %d)", u.Name, u.ChatID))
+				a.AddLog(fmt.Sprintf("ACTION: Immediate auto-granting rights to %s", u.Name))
 
-				// Packet format: "A" + ChatID (as raw byte) + Username
-				payload := []byte("A")
-				payload = append(payload, byte(u.ChatID))
-				payload = append(payload, []byte(u.Name)...)
-
-				a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), payload)
+				// Payload should only be the username. G-Earth handles the header encoding (96 -> "A`").
+				a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), u.Name)
 				a.lastGrantedRights[u.Name] = time.Now()
 			} else {
 				a.AddLog(fmt.Sprintf("SKIP: %s already granted recently (%.1fs ago)", u.Name, time.Since(lastGrant).Seconds()))
@@ -331,8 +327,6 @@ func (a *App) setupExt() {
 }
 
 func (a *App) handleRoomUsers(e *g.Intercept) {
-	// a.AddLog(fmt.Sprintf("DEBUG: Intercepted packet header=%d len=%d", e.Packet.Header.Value, len(e.Packet.Data)))
-
 	if a.parserScript == "" || a.pythonExec == "" {
 		return
 	}
@@ -399,14 +393,10 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 				lastGrant, seen := a.lastGrantedRights[u.Username]
 				// Only grant if never granted or granted more than 2 minutes ago
 				if !seen || time.Since(lastGrant) > 2*time.Minute {
-					a.AddLog(fmt.Sprintf("ACTION: Auto-granting rights to %s (ChatID: %d)", u.Username, u.ChatID))
+					a.AddLog(fmt.Sprintf("ACTION: Auto-granting rights to %s", u.Username))
 
-					// Packet format: "A" + ChatID (as raw byte) + Username
-					payload := []byte("A")
-					payload = append(payload, byte(u.ChatID))
-					payload = append(payload, []byte(u.Username)...)
-
-					a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), payload)
+					// Payload should only be the username. G-Earth handles the header encoding (96 -> "A`").
+					a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), u.Username)
 					a.lastGrantedRights[u.Username] = time.Now()
 				}
 			}
