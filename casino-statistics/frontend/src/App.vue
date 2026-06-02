@@ -2,10 +2,20 @@
 import { ref, onMounted, computed } from 'vue'
 import * as Events from './wailsjs/runtime/runtime'
 import { GetStats, GetPlayerStats, GetPlayerGameStats, GetPlayers, GetBlockedPlayers, ToggleBlockPlayer, GetDbStatus, GetSettings, SaveSettings, GetOwnerKey, GetLedgerStats, GetPlayerLedgerStats, PostStatsToDiscord } from './wailsjs/go/main/App'
-// ... rest of imports ...
 
 const activeTab = ref('dashboard')
-// ... other refs ...
+const dbStatus = ref('Unknown')
+const ownerKey = ref('Unknown')
+const stats = ref({
+  overall: { totalRounds: 0, playerWins: 0, dealerWins: 0, playerWinRate: 0, dealerWinRate: 0 },
+  byGame: {}
+})
+const playerStats = ref([])
+const ledgerStats = ref([])
+const blockedPlayers = ref([])
+const searchQuery = ref('')
+const playerSubTab = ref('active')
+const isRefreshing = ref(false)
 const isPostingDiscord = ref(false)
 
 async function handlePostDiscord() {
