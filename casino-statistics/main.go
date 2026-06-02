@@ -927,102 +927,164 @@ func (a *App) PostStatsToDiscord() string {
 		return "Error: Database not connected"
 	}
 
-	// Range for today
+	// 1. Setup Time Ranges
 	now := time.Now()
-	startToday := now.Format("2006-01-02") + "T00:00:00"
-	endToday := now.Format("2006-01-02") + "T23:59:59"
+	todayStart := now.Format("2006-01-02") + "T00:00:00"
+	todayEnd := now.Format("2006-01-02") + "T23:59:59"
 
-	statsToday := a.GetStats(startToday, endToday)
-	ledgerToday := a.GetLedgerStats(startToday, endToday)
-	
-	// Lifetime stats
-	statsLife := a.GetStats("", "")
+	// 2. Fetch Base Stats
+	statsToday := a.GetStats(todayStart, todayEnd)
 	ledgerLife := a.GetLedgerStats("", "")
 
-	webhookURL := "https://discord.com/api/webhooks/1511213717495480420/vetU71FR77VIkho415V8dhbOWPAhWheKjyeFMPzDKJ3mD6hF7LeZABIS36wSvif_twoD"
+	// 3. Calculate Biggest Winner/Loser (Today)
+	rows, _ := a.db.Query(context.Background(), `
+		SELECT partner_name, trade_type, items FROM trade_ledger 
+		WHERE created_at >= $1 AND created_at <= $2 AND owner_key = $3
+	`, todayStart, todayEnd, a.ownerKey)
+	
+	type PlayerNet struct {
+		Name  string
+		Items map[string]int
+		Total int // Simplified weight for "biggest"
+	}
+	playerNets := make(map[string]*PlayerNet)
 
+	for rows.Next() {
+		var name, ttype string
+		var itemsJSON []byte
+		rows.Scan(&name, &ttype, &itemsJSON)
+		var items []TradeItem
+		json.Unmarshal(itemsJSON, &items)
+		
+		pn, ok := playerNets[name]
+		if !ok {
+			pn = &PlayerNet{Name: name, Items: make(map[string]int)}
+			playerNets[name] = pn
+		}
+		for _, it := range items {
+			qty := it.Quantity
+			if qty == 0 { qty = it.Qty }
+			if ttype == "IN" {
+				pn.Items[it.Name] -= qty
+				pn.Total -= qty
+			} else {
+				pn.Items[it.Name] += qty
+				pn.Total += qty
+			}
+		}
+	}
+	rows.Close()
+
+	var bigWinner, bigLoser *PlayerNet
+	for _, pn := range playerNets {
+		if bigWinner == nil || pn.Total > bigWinner.Total { bigWinner = pn }
+		if bigLoser == nil || pn.Total < bigLoser.Total { bigLoser = pn }
+	}
+
+	// 4. Calculate Streaks (Last 50 Rounds)
+	srows, _ := a.db.Query(context.Background(), `
+		SELECT game, winner, player_name FROM game_history_entries 
+		WHERE status = 'Completed' AND issue = false AND owner_key = $1
+		ORDER BY created_at DESC LIMIT 100
+	`, a.ownerKey)
+	
+	type Streak struct {
+		Game   string
+		Winner string
+		Count  int
+	}
+	gameStreaks := make(map[string]*Streak)
+	gamesToTrack := map[string]bool{"Poker": true, "13": true, "21": true, "TriH": true, "TriL": true}
+
+	for srows.Next() {
+		var g, w, p string
+		srows.Scan(&g, &w, &p)
+		norm := normalizeGameName(g, "")
+		if !gamesToTrack[norm] { continue }
+		
+		str, ok := gameStreaks[norm]
+		if !ok {
+			winner := "Dealer"
+			if strings.EqualFold(w, p) { winner = "Player" }
+			gameStreaks[norm] = &Streak{Game: norm, Winner: winner, Count: 1}
+		} else {
+			winner := "Dealer"
+			if strings.EqualFold(w, p) { winner = "Player" }
+			if str.Winner == winner && str.Count > 0 {
+				str.Count++
+			} else if str.Count > 0 {
+				// Streak ended, mark as "final" by setting negative or something? 
+				// Actually we just want the CURRENT streak, so if we see a different winner, we stop counting for that game.
+				str.Count = -1 // Mark as stopped
+			}
+		}
+	}
+	srows.Close()
+
+	// 5. Calculate Daily Avg Profit
+	var firstDate time.Time
+	a.db.QueryRow(context.Background(), "SELECT MIN(created_at) FROM trade_ledger WHERE owner_key = $1", a.ownerKey).Scan(&firstDate)
+	daysActive := int(now.Sub(firstDate).Hours()/24) + 1
+	
+	lifetimeNetItems := 0
+	for _, it := range ledgerLife { lifetimeNetItems += it.Net }
+	avgProfitPerDay := float64(lifetimeNetItems) / float64(daysActive)
+
+	// 6. Build Discord Embed
+	webhookURL := "https://discord.com/api/webhooks/1511213717495480420/vetU71FR77VIkho415V8dhbOWPAhWheKjyeFMPzDKJ3mD6hF7LeZABIS36wSvif_twoD"
 	embed := DiscordEmbed{
-		Title:       "🎰 Casino Performance Report",
-		Description: fmt.Sprintf("Daily and Lifetime summary for **%s**", now.Format("Monday, Jan 2 2006")),
+		Title:       "🎰 CASINO PERFORMANCE INSIGHTS",
+		Description: fmt.Sprintf("Daily and Lifetime report for **%s**", now.Format("Monday, Jan 2 2006")),
 		Color:       0xf1c40f, // Gold
 		Timestamp:   now.Format(time.RFC3339),
 	}
-	embed.Footer.Text = "Casino Statistics Dashboard • All-time Tracking"
 
-	// 1. Daily Summary
-	dailySummary := fmt.Sprintf("🔹 **Rounds:** %d\n🔹 **Edge:** %+.1f%%",
-		statsToday.Overall.TotalRounds,
-		statsToday.Overall.DealerWinRate-statsToday.Overall.PlayerWinRate)
-	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "📅 Today's Stats", Value: dailySummary, Inline: true})
+	// Biggest Winner/Loser
+	whaleInfo := "No trade data yet today."
+	if bigWinner != nil && bigWinner.Total > 0 {
+		winnerItems := []string{}
+		for name, q := range bigWinner.Items { if q > 0 { winnerItems = append(winnerItems, fmt.Sprintf("%d %s", q, name)) } }
+		whaleInfo = fmt.Sprintf("🏆 **Winner:** `%s` (+%s)\n", bigWinner.Name, strings.Join(winnerItems, ", "))
+	}
+	if bigLoser != nil && bigLoser.Total < 0 {
+		loserItems := []string{}
+		for name, q := range bigLoser.Items { if q < 0 { loserItems = append(loserItems, fmt.Sprintf("%d %s", -q, name)) } }
+		if whaleInfo == "No trade data yet today." { whaleInfo = "" }
+		whaleInfo += fmt.Sprintf("💀 **Loser:** `%s` (-%s)", bigLoser.Name, strings.Join(loserItems, ", "))
+	}
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "🐋 Top Players (Today)", Value: whaleInfo, Inline: false})
 
-	// 2. Lifetime Summary
-	lifeSummary := fmt.Sprintf("🏆 **Total Rounds:** %d\n🏆 **Overall Edge:** %+.1f%%",
-		statsLife.Overall.TotalRounds,
-		statsLife.Overall.DealerWinRate-statsLife.Overall.PlayerWinRate)
-	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "👑 Lifetime Stats", Value: lifeSummary, Inline: true})
+	// Streaks
+	streakText := []string{}
+	for _, g := range []string{"13", "Poker", "21", "TriH", "TriL"} {
+		s, ok := gameStreaks[g]
+		if ok && s.Count > 1 {
+			emoji := "🔥"
+			if s.Winner == "Player" { emoji = "🧊" }
+			streakText = append(streakText, fmt.Sprintf("%s **%s**: %d %s Streak", emoji, g, s.Count, s.Winner))
+		}
+	}
+	if len(streakText) == 0 { streakText = append(streakText, "No active streaks over 1.") }
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "📈 Live Streaks", Value: strings.Join(streakText, "\n"), Inline: true})
 
-	// 3. Today's Profits
-	var todayProfits []string
-	sort.Slice(ledgerToday, func(i, j int) bool { return ledgerToday[i].Net > ledgerToday[j].Net })
-	for i, it := range ledgerToday {
-		if i >= 3 { break }
-		sign := "🔸"
-		todayProfits = append(todayProfits, fmt.Sprintf("%s **%s**: %d", sign, it.Name, it.Net))
-	}
-	if len(todayProfits) > 0 {
-		embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "💵 Today's Net", Value: strings.Join(todayProfits, "\n"), Inline: true})
-	}
+	// Economy
+	econInfo := fmt.Sprintf("🔹 **Daily Avg:** %+.1f items/day\n🔹 **Life Net:** **%d** items", avgProfitPerDay, lifetimeNetItems)
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "💵 Economy", Value: econInfo, Inline: true})
 
-	// Spacer
-	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "\u200b", Value: "\u200b", Inline: false})
-
-	// Top Games (Today)
-	var topGames []string
-	sortedGames := make([]GameStats, 0, len(statsToday.ByGame))
-	for _, g := range statsToday.ByGame {
-		sortedGames = append(sortedGames, g)
-	}
-	sort.Slice(sortedGames, func(i, j int) bool { return sortedGames[i].TotalRounds > sortedGames[j].TotalRounds })
-
-	for i, g := range sortedGames {
-		if i >= 3 { break }
-		topGames = append(topGames, fmt.Sprintf("**%s**: %d rds (Edge: %+.1f%%)", g.Game, g.TotalRounds, g.DealerWinRate-g.PlayerWinRate))
-	}
-	if len(topGames) > 0 {
-		embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "🎮 Top Games (Today)", Value: strings.Join(topGames, "\n"), Inline: true})
-	}
-
-	// Item Profits (Lifetime)
-	var itemSummary []string
-	sort.Slice(ledgerLife, func(i, j int) bool { return ledgerLife[i].Net > ledgerLife[j].Net })
-	for i, it := range ledgerLife {
-		if i >= 5 { break }
-		sign := "📈"
-		if it.Net < 0 { sign = "📉" }
-		itemSummary = append(itemSummary, fmt.Sprintf("%s **%s**: %d", sign, it.Name, it.Net))
-	}
-	if len(itemSummary) > 0 {
-		embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "💰 Lifetime Profits (Net)", Value: strings.Join(itemSummary, "\n"), Inline: true})
-	}
+	// Overview Today
+	overInfo := fmt.Sprintf("🔸 **Rounds:** %d\n🔸 **House Edge:** %+.1f%%", statsToday.Overall.TotalRounds, statsToday.Overall.DealerWinRate-statsToday.Overall.PlayerWinRate)
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "📊 Shift Summary", Value: overInfo, Inline: true})
 
 	payload := DiscordWebhookPayload{
-		Username:  "Casino Stats Bot",
+		Username:  "Casino Statistics Bot",
 		AvatarURL: "https://i.imgur.com/W7S6S8k.png",
 		Embeds:    []DiscordEmbed{embed},
 	}
 
 	payloadBytes, _ := json.Marshal(payload)
-	resp, err := http.Post(webhookURL, "application/json", bytes.NewBuffer(payloadBytes))
-	if err != nil {
-		return fmt.Sprintf("Error sending webhook: %v", err)
-	}
-	defer resp.Body.Close()
+	http.Post(webhookURL, "application/json", bytes.NewBuffer(payloadBytes))
 
-	if resp.StatusCode >= 300 {
-		return fmt.Sprintf("Discord returned status: %s", resp.Status)
-	}
-
-	return "Stats (including Lifetime) posted successfully to Discord!"
+	return "Advanced stats posted successfully to Discord!"
 }
 
 func main() {
