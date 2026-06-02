@@ -932,7 +932,13 @@ func (a *App) PostStatsToDiscord() string {
 	todayStart := now.Format("2006-01-02") + "T00:00:00"
 	todayEnd := now.Format("2006-01-02") + "T23:59:59"
 
-	// 2. Fetch Global Stats
+	// Fetch Blocked List for filtering
+	blocked := make(map[string]bool)
+	for _, p := range a.GetBlockedPlayers() {
+		blocked[strings.ToLower(strings.TrimSpace(p))] = true
+	}
+
+	// 2. Fetch Global Stats (GetStats/GetLedgerStats already filter blocked players)
 	statsToday := a.GetStats(todayStart, todayEnd)
 	ledgerToday := a.GetLedgerStats(todayStart, todayEnd)
 	statsLife := a.GetStats("", "")
@@ -954,6 +960,11 @@ func (a *App) PostStatsToDiscord() string {
 		var name, ttype string
 		var itemsJSON []byte
 		rows.Scan(&name, &ttype, &itemsJSON)
+
+		if blocked[strings.ToLower(strings.TrimSpace(name))] {
+			continue
+		}
+
 		var items []TradeItem
 		json.Unmarshal(itemsJSON, &items)
 		
@@ -991,6 +1002,11 @@ func (a *App) PostStatsToDiscord() string {
 	for srows.Next() {
 		var g, w, p string
 		srows.Scan(&g, &w, &p)
+
+		if blocked[strings.ToLower(strings.TrimSpace(p))] {
+			continue
+		}
+
 		norm := normalizeGameName(g, "")
 		if !gamesToTrack[norm] { continue }
 		
@@ -1043,6 +1059,7 @@ func (a *App) PostStatsToDiscord() string {
 		dealerLoss,
 		statsToday.Overall.DealerWinRate-statsToday.Overall.PlayerWinRate)
 	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "📅 Todays Stats", Value: todayStats, Inline: false})
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "\u200b", Value: "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", Inline: false})
 
 	// SECTION 2: TOP GAMES TODAY (Top 2)
 	var topGames []string
@@ -1055,6 +1072,7 @@ func (a *App) PostStatsToDiscord() string {
 	}
 	if len(topGames) == 0 { topGames = append(topGames, "No games today.") }
 	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "🎮 Top Games Today", Value: strings.Join(topGames, "\n"), Inline: false})
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "\u200b", Value: "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", Inline: false})
 
 	// SECTION 3: TODAYES NET
 	var todayNet []string
@@ -1066,6 +1084,7 @@ func (a *App) PostStatsToDiscord() string {
 	}
 	if len(todayNet) == 0 { todayNet = append(todayNet, "No items today.") }
 	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "💰 Todayes Net", Value: strings.Join(todayNet, "\n"), Inline: false})
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "\u200b", Value: "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", Inline: false})
 
 	// SECTION 4: TOP PLAYERS TODAY
 	whaleInfo := "Winner: None\nLoser: None"
@@ -1075,6 +1094,7 @@ func (a *App) PostStatsToDiscord() string {
 		if bigLoser != nil && bigLoser.Total < 0 { whaleInfo += fmt.Sprintf("💀 **Loser:** `%s` (%d items)", bigLoser.Name, bigLoser.Total) }
 	}
 	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "🐋 Top Players Today", Value: whaleInfo, Inline: false})
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "\u200b", Value: "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", Inline: false})
 
 	// SECTION 5: HEAT MAP
 	heatInfo := ""
@@ -1085,6 +1105,7 @@ func (a *App) PostStatsToDiscord() string {
 		heatInfo += fmt.Sprintf("🧊 **Player Streak:** %d wins on %s", bestPlayerStreak.Count, bestPlayerStreak.Game)
 	} else { heatInfo += "🧊 **Player Streak:** None" }
 	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "📈 Heat Map", Value: heatInfo, Inline: false})
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "\u200b", Value: "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", Inline: false})
 
 	// SECTION 6: LIFETIME SUMMARY
 	lifeItems := []string{}
