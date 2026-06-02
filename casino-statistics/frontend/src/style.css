@@ -155,6 +155,30 @@ th {
   cursor: not-allowed;
 }
 
+.discord-btn {
+  background: #5865f2;
+  border: none;
+  color: white;
+  padding: 0.4rem 0.8rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: bold;
+  transition: background 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.discord-btn:hover:not(:disabled) {
+  background: #4752c4;
+}
+
+.discord-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .player-win {
   color: #e74c3c;
 }

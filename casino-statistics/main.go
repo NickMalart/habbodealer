@@ -1,16 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wailsapp/wails/v2"
@@ -69,6 +72,29 @@ type LedgerItemStats struct {
 	TotalIn  int    `json:"totalIn"`
 	TotalOut int    `json:"totalOut"`
 	Net      int    `json:"net"`
+}
+
+type DiscordEmbedField struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Inline bool   `json:"inline"`
+}
+
+type DiscordEmbed struct {
+	Title       string              `json:"title"`
+	Description string              `json:"description"`
+	Color       int                 `json:"color"`
+	Fields      []DiscordEmbedField `json:"fields"`
+	Timestamp   string              `json:"timestamp"`
+	Footer      struct {
+		Text string `json:"text"`
+	} `json:"footer"`
+}
+
+type DiscordWebhookPayload struct {
+	Username  string         `json:"username"`
+	AvatarURL string         `json:"avatar_url"`
+	Embeds    []DiscordEmbed `json:"embeds"`
 }
 
 type App struct {
@@ -487,9 +513,9 @@ func (a *App) GetPlayerGameStats(playerName, startDate, endDate string) []GameSt
 
 		gs.TotalRounds++
 		if isPlayerWin {
-			gs.PlayerWins++
+			ps.PlayerWins++
 		} else {
-			gs.DealerWins++
+			ps.DealerWins++
 		}
 	}
 
@@ -534,10 +560,10 @@ func normalizeGameName(game string, choice string) string {
 	if strings.Contains(g, "mid") || strings.Contains(g, "house") || g == "mh" {
 		c := strings.TrimSpace(strings.ToLower(choice))
 		if strings.Contains(c, "u10") {
-			return "U10"
+			return "MidHouse U10"
 		}
 		if strings.Contains(c, "o11") {
-			return "O11"
+			return "MidHouse O11"
 		}
 		return "MidHouse"
 	}
@@ -546,26 +572,20 @@ func normalizeGameName(game string, choice string) string {
 	if strings.Contains(g, "uo") || strings.Contains(g, "under") || strings.Contains(g, "over") {
 		c := strings.TrimSpace(strings.ToLower(choice))
 
-		// Check for specific words first to avoid 'uo_over' matching 'u'
-		if strings.Contains(c, "over") {
+		if strings.Contains(c, "over") || c == "o" {
 			return "O7"
 		}
-		if strings.Contains(c, "under") {
+		if strings.Contains(c, "under") || c == "u" {
 			return "U7"
 		}
-
-		// Then check for single letters
-		if c == "o" {
-			return "O7"
-		}
-		if c == "u" {
-			return "U7"
-		}
-
 		if c == "7" || strings.Contains(c, "7") {
 			return "7"
 		}
-		// Fallback to U7 if choice is unclear
+		
+		// If it's just "uo" or "uo7" without choice, return UO
+		if g == "uo" || g == "uo7" {
+			return "UO"
+		}
 		return "U7"
 	}
 
@@ -583,7 +603,7 @@ func normalizeGameName(game string, choice string) string {
 		return "TriL"
 	}
 	if strings.Contains(g, "pair") || strings.Contains(g, "pu") {
-		return "PU"
+		return "Pair Up"
 	}
 
 	switch g {
@@ -600,6 +620,10 @@ func normalizeGameName(game string, choice string) string {
 	case "bandit", "onearmbandit", "oab":
 		return "Bandit"
 	default:
+		// Try to capitalize first letter if it's a short word
+		if len(g) > 0 {
+			return strings.Title(g)
+		}
 		return "Other"
 	}
 }
@@ -895,6 +919,92 @@ func (a *App) GetPlayerLedgerStats(playerName, startDate, endDate string) []Ledg
 	})
 
 	return result
+}
+
+func (a *App) PostStatsToDiscord() string {
+	a.initWg.Wait()
+	if a.db == nil {
+		return "Error: Database not connected"
+	}
+
+	// Range for today
+	now := time.Now()
+	start := now.Format("2006-01-02") + "T00:00:00"
+	end := now.Format("2006-01-02") + "T23:59:59"
+
+	stats := a.GetStats(start, end)
+	ledger := a.GetLedgerStats(start, end)
+
+	webhookURL := "https://discord.com/api/webhooks/1511213717495480420/vetU71FR77VIkho415V8dhbOWPAhWheKjyeFMPzDKJ3mD6hF7LeZABIS36wSvif_twoD"
+
+	embed := DiscordEmbed{
+		Title:       "🎰 Casino Daily Performance Report",
+		Description: fmt.Sprintf("Reporting stats for **%s**", now.Format("Monday, Jan 2 2006")),
+		Color:       0x3498db, // Blue
+		Timestamp:   now.Format(time.RFC3339),
+	}
+	embed.Footer.Text = "Casino Statistics Dashboard • Auto-generated"
+
+	// Summary Field
+	summary := fmt.Sprintf("🔹 **Total Rounds:** %d\n🔹 **Dealer Win Rate:** %.1f%%\n🔹 **Casino Edge:** %+.1f%%",
+		stats.Overall.TotalRounds,
+		stats.Overall.DealerWinRate,
+		stats.Overall.DealerWinRate-stats.Overall.PlayerWinRate)
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "📊 Overview", Value: summary, Inline: false})
+
+	// Top Games
+	var topGames []string
+	sortedGames := make([]GameStats, 0, len(stats.ByGame))
+	for _, g := range stats.ByGame {
+		sortedGames = append(sortedGames, g)
+	}
+	sort.Slice(sortedGames, func(i, j int) bool { return sortedGames[i].TotalRounds > sortedGames[j].TotalRounds })
+
+	for i, g := range sortedGames {
+		if i >= 3 {
+			break
+		}
+		topGames = append(topGames, fmt.Sprintf("**%s**: %d rds (Edge: %+.1f%%)", g.Game, g.TotalRounds, g.DealerWinRate-g.PlayerWinRate))
+	}
+	if len(topGames) > 0 {
+		embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "🎮 Top Games", Value: strings.Join(topGames, "\n"), Inline: true})
+	}
+
+	// Item Profits
+	var itemSummary []string
+	sort.Slice(ledger, func(i, j int) bool { return ledger[i].Net > ledger[j].Net })
+	for i, it := range ledger {
+		if i >= 5 {
+			break
+		}
+		sign := "📈"
+		if it.Net < 0 {
+			sign = "📉"
+		}
+		itemSummary = append(itemSummary, fmt.Sprintf("%s **%s**: %d", sign, it.Name, it.Net))
+	}
+	if len(itemSummary) > 0 {
+		embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "💰 Item Profits (Net)", Value: strings.Join(itemSummary, "\n"), Inline: true})
+	}
+
+	payload := DiscordWebhookPayload{
+		Username:  "Casino Stats Bot",
+		AvatarURL: "https://i.imgur.com/W7S6S8k.png",
+		Embeds:    []DiscordEmbed{embed},
+	}
+
+	payloadBytes, _ := json.Marshal(payload)
+	resp, err := http.Post(webhookURL, "application/json", bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return fmt.Sprintf("Error sending webhook: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		return fmt.Sprintf("Discord returned status: %s", resp.Status)
+	}
+
+	return "Stats posted successfully to Discord!"
 }
 
 func main() {

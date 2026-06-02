@@ -1,21 +1,27 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import * as Events from './wailsjs/runtime/runtime'
-import { GetStats, GetPlayerStats, GetPlayerGameStats, GetPlayers, GetBlockedPlayers, ToggleBlockPlayer, GetDbStatus, GetSettings, SaveSettings, GetOwnerKey, GetLedgerStats, GetPlayerLedgerStats } from './wailsjs/go/main/App'
+import { GetStats, GetPlayerStats, GetPlayerGameStats, GetPlayers, GetBlockedPlayers, ToggleBlockPlayer, GetDbStatus, GetSettings, SaveSettings, GetOwnerKey, GetLedgerStats, GetPlayerLedgerStats, PostStatsToDiscord } from './wailsjs/go/main/App'
+// ... rest of imports ...
 
 const activeTab = ref('dashboard')
-const dbStatus = ref('Unknown')
-const ownerKey = ref('Unknown')
-const stats = ref({
-  overall: { totalRounds: 0, playerWins: 0, dealerWins: 0, playerWinRate: 0, dealerWinRate: 0 },
-  byGame: {}
-})
-const playerStats = ref([])
-const ledgerStats = ref([])
-const blockedPlayers = ref([])
-const searchQuery = ref('')
-const playerSubTab = ref('active')
-const isRefreshing = ref(false)
+// ... other refs ...
+const isPostingDiscord = ref(false)
+
+async function handlePostDiscord() {
+  if (isPostingDiscord.value) return
+  isPostingDiscord.value = true
+  logMessage('Posting stats to Discord...')
+  try {
+    const res = await PostStatsToDiscord()
+    logMessage(res)
+    alert(res)
+  } catch (err) {
+    logMessage(`ERROR posting to Discord: ${err.message || err}`)
+  } finally {
+    isPostingDiscord.value = false
+  }
+}
 
 // Modal State
 const showPlayerModal = ref(false)
@@ -306,6 +312,14 @@ onMounted(async () => {
   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
     <h1 style="margin: 0; font-size: 1.2rem;">Casino Statistics</h1>
     <div style="display: flex; align-items: center; gap: 1rem;">
+      <button 
+        @click="handlePostDiscord" 
+        class="discord-btn" 
+        :disabled="isPostingDiscord"
+      >
+        <span v-if="isPostingDiscord">Posting...</span>
+        <span v-else>📢 Post to Discord</span>
+      </button>
       <button 
         @click="refreshStats" 
         class="refresh-btn" 

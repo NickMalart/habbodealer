@@ -165,10 +165,10 @@ func normalizeGameName(game string) string {
 		return "Tri"
 	}
 	if strings.Contains(g, "pair") || strings.Contains(g, "pu") {
-		return "PU"
+		return "Pair Up"
 	}
 	if strings.Contains(g, "uo") || strings.Contains(g, "under") || strings.Contains(g, "over") {
-		return "UO7"
+		return "UO"
 	}
 	switch g {
 	case "poker", "pkr":
@@ -186,21 +186,24 @@ func normalizeGameName(game string) string {
 	case "midhouse", "mh":
 		return "MidHouse"
 	default:
+		if len(g) > 0 {
+			return strings.Title(g)
+		}
 		return ""
 	}
 }
 
 func isFinanciallyCountableRound(entry GameHistoryEntry) bool {
-	if totalTradeItemQuantity(entry.BetItems) == 0 {
-		return false
-	}
-	if normalizeGameName(entry.Game) == "" {
-		return false
-	}
+	// Relaxed check: if it's completed and has a winner, it's countable for win rates
 	if entry.Issue {
 		return false
 	}
-	if entry.CompletedAt != "" || strings.TrimSpace(entry.Winner) != "" || strings.ToLower(strings.TrimSpace(entry.Status)) == "completed" {
+	g := normalizeGameName(entry.Game)
+	if g == "" {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(entry.Status))
+	if status == "completed" || status == "completed (keep)" || strings.TrimSpace(entry.Winner) != "" {
 		return true
 	}
 	return false
@@ -229,11 +232,13 @@ func parseEntryTime(entry GameHistoryEntry) time.Time {
 	if s == "" {
 		return time.Time{}
 	}
+	// Try RFC3339 first
 	t, err := time.Parse(time.RFC3339, s)
-	if err != nil {
-		return time.Time{}
+	if err == nil {
+		return t
 	}
-	return t
+	// Fallback to a common format if needed
+	return time.Time{}
 }
 
 func maxInt(a, b int) int {
@@ -275,14 +280,21 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 	stats := CasinoStats{
 		GeneratedAt: time.Now().Format(time.RFC3339),
 		Range:       StatsRange{Key: rangeKey},
-		Overall:     CasinoStatsSummary{},
+		Overall: CasinoStatsSummary{
+			BetItemCounts:    make(map[string]int),
+			PayoutItemCounts: make(map[string]int),
+			NetItemCounts:    make(map[string]int),
+		},
 		ByGame: map[string]GameStats{
-			"PU":    {Game: "PU"},
-			"O7":    {Game: "O7"},
-			"U7":    {Game: "U7"},
-			"7":     {Game: "7"},
-			"TriL":  {Game: "TriL"},
-			"TriH": {Game: "TriH"},
+			"PU":       {Game: "PU"},
+			"O7":       {Game: "O7"},
+			"U7":       {Game: "U7"},
+			"7":        {Game: "7"},
+			"TriL":     {Game: "TriL"},
+			"TriH":     {Game: "TriH"},
+			"MidHouse": {Game: "MidHouse"},
+			"UO":       {Game: "UO"},
+			"Pair Up":  {Game: "Pair Up"},
 		},
 	}
 
@@ -300,9 +312,10 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 	// Use DB if available for accurate stats across all history without OOM
 	db, owner := a.getHistoryDB()
 	if db != nil {
+		// 1. Fetch Game History
 		rows, err := db.Query(context.Background(), `
 			SELECT
-				player_name, started_at, updated_at, completed_at, game, winner, status, issue, notes, choice, bet_items_json
+				player_name, started_at, updated_at, completed_at, game, winner, status, issue, notes, choice
 			FROM game_history_entries
 			WHERE owner_key = $1
 		`, owner)
@@ -310,22 +323,89 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 			defer rows.Close()
 			for rows.Next() {
 				var e GameHistoryEntry
-				var notesRaw, betItemsRaw []byte
+				var notesRaw []byte
 				if err := rows.Scan(
-					&e.PlayerName, &e.StartedAt, &e.UpdatedAt, &e.CompletedAt, &e.Game, &e.Winner, &e.Status, &e.Issue, &notesRaw, &e.Choice, &betItemsRaw,
+					&e.PlayerName, &e.StartedAt, &e.UpdatedAt, &e.CompletedAt, &e.Game, &e.Winner, &e.Status, &e.Issue, &notesRaw, &e.Choice,
 				); err != nil {
 					continue
 				}
 				if len(notesRaw) > 0 {
 					_ = json.Unmarshal(notesRaw, &e.Notes)
 				}
-				if len(betItemsRaw) > 0 {
-					_ = json.Unmarshal(betItemsRaw, &e.BetItems)
-				}
 
 				a.processStatsEntry(&stats, e, rangeKey, start, end)
 			}
 		}
+
+		// 2. Fetch Item Ledger for "Ahead or Not" tracking
+		lrows, err := db.Query(context.Background(), `
+			SELECT trade_type, items, created_at
+			FROM trade_ledger
+			WHERE owner_key = $1
+		`, owner)
+		if err == nil {
+			defer lrows.Close()
+			itemStatsMap := make(map[string]*ItemStats)
+			for lrows.Next() {
+				var ttype string
+				var itemsJSON []byte
+				var created time.Time
+				if err := lrows.Scan(&ttype, &itemsJSON, &created); err != nil {
+					continue
+				}
+
+				if rangeKey == "today" {
+					if created.Before(start) || created.After(end) {
+						continue
+					}
+				}
+
+				var items []TradeItem
+				if err := json.Unmarshal(itemsJSON, &items); err != nil {
+					continue
+				}
+
+				for _, it := range items {
+					name := it.Name
+					if name == "" {
+						name = it.RawName
+					}
+					if name == "" {
+						continue
+					}
+
+					qty := it.Quantity
+					if qty == 0 {
+						qty = it.Qty
+					}
+
+					is, ok := itemStatsMap[name]
+					if !ok {
+						is = &ItemStats{Name: name}
+						itemStatsMap[name] = is
+					}
+
+					if ttype == "IN" {
+						is.BetIn += qty
+						stats.Overall.TotalBetItemsIn += qty
+						stats.Overall.BetItemCounts[name] += qty
+					} else {
+						is.PayoutOut += qty
+						stats.Overall.TotalPayoutItemsOut += qty
+						stats.Overall.PayoutItemCounts[name] += qty
+					}
+				}
+			}
+
+			for _, is := range itemStatsMap {
+				is.Net = is.BetIn - is.PayoutOut
+				is.Status = itemStatusFromNet(is.Net)
+				stats.ByItem = append(stats.ByItem, *is)
+				stats.Overall.NetItemCounts[is.Name] = is.Net
+			}
+			stats.Overall.NetItems = stats.Overall.TotalBetItemsIn - stats.Overall.TotalPayoutItemsOut
+		}
+
 	} else {
 		// Fallback to in-memory if DB is not available (though it will only be recent history)
 		a.gameHistoryMu.Lock()
@@ -368,7 +448,7 @@ func (a *App) processStatsEntry(stats *CasinoStats, entry GameHistoryEntry, rang
 
 	// Determine normalized game key
 	g := normalizeGameName(entry.Game)
-	if g == "UO7" {
+	if g == "UO" {
 		choice := strings.ToLower(entry.Choice)
 		if strings.Contains(choice, "over") {
 			g = "O7"
@@ -377,7 +457,7 @@ func (a *App) processStatsEntry(stats *CasinoStats, entry GameHistoryEntry, rang
 		} else if choice == "7" {
 			g = "7"
 		} else {
-			g = "U7"
+			g = "UO"
 		}
 	}
 
