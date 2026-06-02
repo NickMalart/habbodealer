@@ -101,11 +101,6 @@ func (a *App) ToggleAutoGrantRights(enabled bool) {
 	a.autoGrantRights = enabled
 	a.AddLog(fmt.Sprintf("Auto-grant toggled: %t", enabled))
 
-	if enabled {
-		// Immediately check current room users
-		go a.checkAndGrantRightsToCurrentUsers()
-	}
-
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "auto_grant_rights_updated", enabled)
 	}
@@ -194,21 +189,6 @@ func (a *App) startup(ctx context.Context) {
 	a.setupExt()
 	go a.runExt()
 	go a.initDatabase()
-
-	// Periodically request room users if connected
-	go func() {
-		ticker := time.NewTicker(10 * time.Second)
-		for {
-			select {
-			case <-ticker.C:
-				if a.gearthStatus == "connected" {
-					a.RequestRoomUsers()
-				}
-			case <-a.ctx.Done():
-				return
-			}
-		}
-	}()
 }
 
 func (a *App) initDatabase() {
