@@ -384,6 +384,13 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 
 	a.roomUsersMu.Lock()
 	for _, u := range users {
+		// Cleanup old entries for this username (prevent duplicates if they rejoin with new ChatID)
+		for oldChatID, existingUser := range a.roomUsers {
+			if strings.EqualFold(existingUser.Name, u.Username) {
+				delete(a.roomUsers, oldChatID)
+			}
+		}
+
 		a.roomUsers[u.ChatID] = RoomUser{
 			Name:    u.Username,
 			ChatID:  u.ChatID,
