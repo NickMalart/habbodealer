@@ -144,16 +144,9 @@ func (a *App) checkAndGrantRightsToCurrentUsers() {
 		if isAuthorized {
 			lastGrant, seen := a.lastGrantedRights[u.Name]
 			if !seen || time.Since(lastGrant) > 2*time.Minute {
-				a.AddLog(fmt.Sprintf("ACTION: Sequence start for %s", u.Name))
+				a.AddLog(fmt.Sprintf("ACTION: Granting rights to %s", u.Name))
 
-				// Step 1: Select User (39 -> "A'")
-				a.AddLog(fmt.Sprintf("SEND: SELECTUSER (39) for %s", u.Name))
-				a.AddLog(fmt.Sprintf("BYTES: %x", []byte(u.Name)))
-				a.ext.Send(g.Out.Id("SELECTUSER"), []byte(u.Name))
-
-				time.Sleep(150 * time.Millisecond)
-
-				// Step 2: Assign Rights (96 -> "A`")
+				// SEND: ASSIGNRIGHTS (96 -> "A`")
 				a.AddLog(fmt.Sprintf("SEND: ASSIGNRIGHTS (96) for %s", u.Name))
 				a.AddLog(fmt.Sprintf("BYTES: %x", []byte(u.Name)))
 				a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), []byte(u.Name))
@@ -305,7 +298,6 @@ func (a *App) GetRoomRights() ([]string, error) {
 }
 
 func (a *App) setupExt() {
-	a.ext.Headers().Add("SELECTUSER", g.Header{Dir: g.Out, Value: 39})
 	a.ext.Headers().Add("ASSIGNRIGHTS", g.Header{Dir: g.Out, Value: 96})
 
 	a.ext.Initialized(func(e g.InitArgs) {
@@ -411,17 +403,9 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 				lastGrant, seen := a.lastGrantedRights[u.Username]
 				// Only grant if never granted or granted more than 2 minutes ago
 				if !seen || time.Since(lastGrant) > 2*time.Minute {
-					a.AddLog(fmt.Sprintf("ACTION: Sequence start for %s", u.Username))
+					a.AddLog(fmt.Sprintf("ACTION: Granting rights to %s", u.Username))
 
-					// Step 1: Select User (39)
-					a.AddLog(fmt.Sprintf("SEND: SELECTUSER (39) for %s", u.Username))
-					a.AddLog(fmt.Sprintf("BYTES: %x", []byte(u.Username)))
-					a.ext.Send(g.Out.Id("SELECTUSER"), []byte(u.Username))
-
-					// Small delay to mimic human speed
-					time.Sleep(150 * time.Millisecond)
-
-					// Step 2: Assign Rights (96)
+					// SEND: ASSIGNRIGHTS (96 -> "A`")
 					a.AddLog(fmt.Sprintf("SEND: ASSIGNRIGHTS (96) for %s", u.Username))
 					a.AddLog(fmt.Sprintf("BYTES: %x", []byte(u.Username)))
 					a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), []byte(u.Username))
