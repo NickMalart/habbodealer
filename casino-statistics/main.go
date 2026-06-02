@@ -1045,7 +1045,7 @@ func (a *App) PostStatsToDiscord() string {
 	// 6. Build Discord Embed
 	webhookURL := "https://discord.com/api/webhooks/1511213717495480420/vetU71FR77VIkho415V8dhbOWPAhWheKjyeFMPzDKJ3mD6hF7LeZABIS36wSvif_twoD"
 	embed := DiscordEmbed{
-		Title: "🎰 CASINO LIVE PERFORMANCE",
+		Title: fmt.Sprintf("🎰 CASINO PERFORMANCE [%s]", now.Format("Monday, Jan 2 @ 3:04 PM")),
 		Color: 0xf1c40f, // Gold
 		Timestamp: now.Format(time.RFC3339),
 	}
