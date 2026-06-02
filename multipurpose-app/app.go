@@ -55,6 +55,9 @@ type App struct {
 
 	autoGrantRights   bool
 	lastGrantedRights map[string]time.Time
+
+	logs   []string
+	logsMu sync.Mutex
 }
 
 // NewApp creates a new App application struct
@@ -64,16 +67,40 @@ func NewApp(ext *g.Ext) *App {
 		gearthStatus:      "disconnected",
 		roomUsers:         make(map[int]RoomUser),
 		lastGrantedRights: make(map[string]time.Time),
+		logs:              make([]string, 0),
 	}
 	a.initParser()
 	return a
 }
 
+// AddLog adds a log message and emits it to the frontend
+func (a *App) AddLog(msg string) {
+	fullMsg := fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), msg)
+	a.logsMu.Lock()
+	a.logs = append(a.logs, fullMsg)
+	if len(a.logs) > 100 {
+		a.logs = a.logs[len(a.logs)-100:]
+	}
+	a.logsMu.Unlock()
+
+	log.Println(msg)
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "new_log", fullMsg)
+	}
+}
+
+// GetLogs returns the stored logs
+func (a *App) GetLogs() []string {
+	a.logsMu.Lock()
+	defer a.logsMu.Unlock()
+	return a.logs
+}
+
 // ToggleAutoGrantRights enables or disables automatic rights assignment
 func (a *App) ToggleAutoGrantRights(enabled bool) {
 	a.autoGrantRights = enabled
-	log.Printf("[RIGHTS] Auto-grant enabled: %t", enabled)
-	
+	a.AddLog(fmt.Sprintf("Auto-grant toggled: %t", enabled))
+
 	if enabled {
 		// Immediately check current room users
 		go a.checkAndGrantRightsToCurrentUsers()
@@ -85,20 +112,27 @@ func (a *App) ToggleAutoGrantRights(enabled bool) {
 }
 
 func (a *App) checkAndGrantRightsToCurrentUsers() {
+	a.AddLog("Running immediate auto-grant check...")
 	authorizedUsers, err := a.GetRoomRights()
 	if err != nil {
-		log.Printf("[RIGHTS] Failed to fetch authorized users for immediate check: %v", err)
+		a.AddLog(fmt.Sprintf("ERROR: Failed to fetch authorized users from DB: %v", err))
 		return
 	}
 
+	a.AddLog(fmt.Sprintf("Found %d authorized users in database.", len(authorizedUsers)))
 	if len(authorizedUsers) == 0 {
 		return
 	}
 
-	a.roomUsersMu.Lock()
-	defer a.roomUsersMu.Unlock()
-
+	a.roomUsersMu.RLock()
+	users := make([]RoomUser, 0, len(a.roomUsers))
 	for _, u := range a.roomUsers {
+		users = append(users, u)
+	}
+	a.roomUsersMu.RUnlock()
+
+	a.AddLog(fmt.Sprintf("Checking %d users currently in room...", len(users)))
+	for _, u := range users {
 		isAuthorized := false
 		for _, auth := range authorizedUsers {
 			if strings.EqualFold(auth, u.Name) {
@@ -110,9 +144,17 @@ func (a *App) checkAndGrantRightsToCurrentUsers() {
 		if isAuthorized {
 			lastGrant, seen := a.lastGrantedRights[u.Name]
 			if !seen || time.Since(lastGrant) > 2*time.Minute {
-				log.Printf("[RIGHTS] Immediate auto-granting rights to %s", u.Name)
-				a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), "A'"+u.Name)
+				a.AddLog(fmt.Sprintf("ACTION: Granting rights to %s (ChatID: %d)", u.Name, u.ChatID))
+
+				// Packet format: "A" + ChatID (as raw byte) + Username
+				payload := []byte("A")
+				payload = append(payload, byte(u.ChatID))
+				payload = append(payload, []byte(u.Name)...)
+
+				a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), payload)
 				a.lastGrantedRights[u.Name] = time.Now()
+			} else {
+				a.AddLog(fmt.Sprintf("SKIP: %s already granted recently (%.1fs ago)", u.Name, time.Since(lastGrant).Seconds()))
 			}
 		}
 	}
@@ -173,13 +215,13 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) initDatabase() {
 	config, err := pgxpool.ParseConfig(dbURL)
 	if err != nil {
-		log.Printf("Failed to parse database URL: %v", err)
+		a.AddLog(fmt.Sprintf("ERROR: Failed to parse database URL: %v", err))
 		return
 	}
 
 	pool, err := pgxpool.NewWithConfig(context.Background(), config)
 	if err != nil {
-		log.Printf("Failed to connect to database: %v", err)
+		a.AddLog(fmt.Sprintf("ERROR: Failed to connect to database: %v", err))
 		return
 	}
 
@@ -194,9 +236,9 @@ func (a *App) initDatabase() {
 		)
 	`)
 	if err != nil {
-		log.Printf("Failed to create room_rights table: %v", err)
+		a.AddLog(fmt.Sprintf("ERROR: Database table initialization failed: %v", err))
 	} else {
-		log.Printf("Database initialized and room_rights table verified.")
+		a.AddLog("Database initialized and room_rights table verified.")
 	}
 }
 
@@ -210,9 +252,13 @@ func (a *App) AddRoomRight(username string) error {
 		return fmt.Errorf("username cannot be empty")
 	}
 
-	_, err := a.db.Exec(context.Background(), 
-		"INSERT INTO room_rights (username) VALUES ($1) ON CONFLICT (username) DO NOTHING", 
+	a.AddLog(fmt.Sprintf("DB: Adding right for %s", username))
+	_, err := a.db.Exec(context.Background(),
+		"INSERT INTO room_rights (username) VALUES ($1) ON CONFLICT (username) DO NOTHING",
 		username)
+	if err != nil {
+		a.AddLog(fmt.Sprintf("ERROR: DB add failed: %v", err))
+	}
 	return err
 }
 
@@ -221,7 +267,11 @@ func (a *App) RemoveRoomRight(username string) error {
 	if a.db == nil {
 		return fmt.Errorf("database not connected")
 	}
+	a.AddLog(fmt.Sprintf("DB: Removing right for %s", username))
 	_, err := a.db.Exec(context.Background(), "DELETE FROM room_rights WHERE username = $1", username)
+	if err != nil {
+		a.AddLog(fmt.Sprintf("ERROR: DB remove failed: %v", err))
+	}
 	return err
 }
 
@@ -252,7 +302,7 @@ func (a *App) setupExt() {
 	a.ext.Headers().Add("ASSIGNRIGHTS", g.Header{Dir: g.Out, Value: 96})
 
 	a.ext.Initialized(func(e g.InitArgs) {
-		log.Printf("G-Earth initialized (connected=%t)", e.Connected)
+		a.AddLog(fmt.Sprintf("G-Earth initialized (connected=%t)", e.Connected))
 		a.gearthStatus = "initialized"
 		if e.Connected {
 			a.gearthStatus = "connected"
@@ -261,7 +311,7 @@ func (a *App) setupExt() {
 	})
 
 	a.ext.Connected(func(e g.ConnectArgs) {
-		log.Printf("G-Earth connected (%s:%d)", e.Host, e.Port)
+		a.AddLog(fmt.Sprintf("G-Earth connected to %s:%d", e.Host, e.Port))
 		a.gearthStatus = "connected"
 		a.gearthHost = e.Host
 		a.gearthPort = e.Port
@@ -270,7 +320,7 @@ func (a *App) setupExt() {
 	})
 
 	a.ext.Disconnected(func() {
-		log.Printf("G-Earth disconnected")
+		a.AddLog("G-Earth disconnected")
 		a.gearthStatus = "disconnected"
 		a.emitStatus()
 		a.roomUsersMu.Lock()
@@ -281,29 +331,25 @@ func (a *App) setupExt() {
 }
 
 func (a *App) handleRoomUsers(e *g.Intercept) {
-	log.Printf("[ROOM_USERS_DEBUG] Intercepted packet header=%d len=%d dir=%v", e.Packet.Header.Value, len(e.Packet.Data), e.Packet.Header.Dir)
+	// a.AddLog(fmt.Sprintf("DEBUG: Intercepted packet header=%d len=%d", e.Packet.Header.Value, len(e.Packet.Data)))
 
 	if a.parserScript == "" || a.pythonExec == "" {
-		log.Printf("[ROOM_USERS_DEBUG] Parser missing: script=%q exec=%q", a.parserScript, a.pythonExec)
 		return
 	}
 
 	tmpFile, err := os.CreateTemp("", "users28_*.bin")
 	if err != nil {
-		log.Printf("[ROOM_USERS_DEBUG] Failed to create temp file: %v", err)
 		return
 	}
 	tmpPath := tmpFile.Name()
 	defer os.Remove(tmpPath)
 
 	if _, err := tmpFile.Write(e.Packet.Data); err != nil {
-		log.Printf("[ROOM_USERS_DEBUG] Failed to write temp file: %v", err)
 		tmpFile.Close()
 		return
 	}
 	tmpFile.Close()
 
-	log.Printf("[ROOM_USERS_DEBUG] Running parser: %s %s --input %s --json", a.pythonExec, a.parserScript, tmpPath)
 	cmd := exec.Command(a.pythonExec, a.parserScript, "--input", tmpPath, "--json")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	var stdout bytes.Buffer
@@ -311,19 +357,15 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		log.Printf("[ROOM_USERS_DEBUG] Parser execution failed: %v", err)
-		log.Printf("[ROOM_USERS_DEBUG_ERR] Parser stderr: %s", stderr.String())
+		a.AddLog(fmt.Sprintf("ERROR: Parser failed: %v", err))
 		return
 	}
 
 	var users []ParsedUsers28User
 	if err := json.Unmarshal(stdout.Bytes(), &users); err != nil {
-		log.Printf("[ROOM_USERS_DEBUG] Failed to unmarshal parser output: %v", err)
-		log.Printf("[ROOM_USERS_DEBUG] Raw output: %s", stdout.String())
+		a.AddLog(fmt.Sprintf("ERROR: Failed to parse user data: %v", err))
 		return
 	}
-
-	log.Printf("[ROOM_USERS_DEBUG] Parsed %d users from packet", len(users))
 
 	// Get authorized users from DB if auto-grant is enabled
 	var authorizedUsers []string
@@ -331,13 +373,12 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 		var err error
 		authorizedUsers, err = a.GetRoomRights()
 		if err != nil {
-			log.Printf("[RIGHTS] Failed to fetch authorized users: %v", err)
+			a.AddLog(fmt.Sprintf("ERROR: Auto-grant authorized list fetch failed: %v", err))
 		}
 	}
 
 	a.roomUsersMu.Lock()
 	for _, u := range users {
-		log.Printf("[ROOM_USERS_DEBUG] User detected: %s (ChatID: %d, TradeID: %d)", u.Username, u.ChatID, u.TradeID)
 		a.roomUsers[u.ChatID] = RoomUser{
 			Name:    u.Username,
 			ChatID:  u.ChatID,
@@ -358,9 +399,14 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 				lastGrant, seen := a.lastGrantedRights[u.Username]
 				// Only grant if never granted or granted more than 2 minutes ago
 				if !seen || time.Since(lastGrant) > 2*time.Minute {
-					log.Printf("[RIGHTS] Auto-granting rights to %s", u.Username)
-					// Packet header 96, payload "A'" + username
-					a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), "A'"+u.Username)
+					a.AddLog(fmt.Sprintf("ACTION: Auto-granting rights to %s (ChatID: %d)", u.Username, u.ChatID))
+
+					// Packet format: "A" + ChatID (as raw byte) + Username
+					payload := []byte("A")
+					payload = append(payload, byte(u.ChatID))
+					payload = append(payload, []byte(u.Username)...)
+
+					a.ext.Send(g.Out.Id("ASSIGNRIGHTS"), payload)
 					a.lastGrantedRights[u.Username] = time.Now()
 				}
 			}

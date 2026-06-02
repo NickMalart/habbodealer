@@ -1,7 +1,16 @@
 <script setup>
-import { reactive, onMounted } from 'vue'
+import { reactive, onMounted, ref, nextTick } from 'vue'
 import { EventsOn } from '../wailsjs/runtime'
-import { GetGEarthStatus, GetRoomUsers, GetRoomRights, AddRoomRight, RemoveRoomRight, ToggleAutoGrantRights, GetAutoGrantRights } from '../wailsjs/go/main/App'
+import { 
+  GetGEarthStatus, 
+  GetRoomUsers, 
+  GetRoomRights, 
+  AddRoomRight, 
+  RemoveRoomRight, 
+  ToggleAutoGrantRights, 
+  GetAutoGrantRights,
+  GetLogs
+} from '../wailsjs/go/main/App'
 
 const state = reactive({
   gearth: {
@@ -13,8 +22,12 @@ const state = reactive({
   roomUsers: [],
   roomRights: [],
   newRightName: '',
-  autoGrantRights: false
+  autoGrantRights: false,
+  logs: [],
+  activeTab: 'mgmt' // 'mgmt' | 'debug'
 })
+
+const logContainer = ref(null)
 
 async function toggleAutoGrant() {
   try {
@@ -53,6 +66,14 @@ async function removeRight(name) {
   }
 }
 
+function scrollToBottom() {
+  nextTick(() => {
+    if (logContainer.value) {
+      logContainer.value.scrollTop = logContainer.value.scrollHeight
+    }
+  })
+}
+
 onMounted(async () => {
   // Get initial status
   const initialStatus = await GetGEarthStatus()
@@ -69,6 +90,10 @@ onMounted(async () => {
   // Get initial auto-grant status
   state.autoGrantRights = await GetAutoGrantRights()
 
+  // Get initial logs
+  state.logs = await GetLogs()
+  scrollToBottom()
+
   EventsOn('gearth_status', (data) => {
     state.gearth.status = data.status
     if (data.host) state.gearth.host = data.host
@@ -82,6 +107,12 @@ onMounted(async () => {
 
   EventsOn('auto_grant_rights_updated', (enabled) => {
     state.autoGrantRights = enabled
+  })
+
+  EventsOn('new_log', (log) => {
+    state.logs.push(log)
+    if (state.logs.length > 100) state.logs.shift()
+    scrollToBottom()
   })
 })
 </script>
@@ -97,8 +128,14 @@ onMounted(async () => {
         </span>
       </div>
     </header>
+
+    <div class="tabs">
+      <button :class="{ active: state.activeTab === 'mgmt' }" @click="state.activeTab = 'mgmt'">Management</button>
+      <button :class="{ active: state.activeTab === 'debug' }" @click="state.activeTab = 'debug'">Debug Logs</button>
+    </div>
+
     <main>
-      <div class="container">
+      <div v-if="state.activeTab === 'mgmt'" class="container">
         <div class="card rights-mgmt">
           <div class="card-header">
             <h2>Room Rights Management</h2>
@@ -144,11 +181,17 @@ onMounted(async () => {
             </li>
           </ul>
         </div>
+      </div>
 
-        <div class="card features">
-          <h2>Features</h2>
-          <p>This app will contain various functions.</p>
-          <!-- Future functions will be added here -->
+      <div v-else-if="state.activeTab === 'debug'" class="container">
+        <div class="card debug-card">
+          <h2>System Logs</h2>
+          <div class="log-viewer" ref="logContainer">
+            <div v-for="(log, index) in state.logs" :key="index" class="log-line">
+              {{ log }}
+            </div>
+            <div v-if="state.logs.length === 0" class="empty-msg">No logs yet.</div>
+          </div>
         </div>
       </div>
     </main>
@@ -162,11 +205,34 @@ onMounted(async () => {
   -moz-osx-font-smoothing: grayscale;
   text-align: center;
   color: #ffffff;
-  margin-top: 40px;
+  margin-top: 20px;
 }
 
 header {
-  margin-bottom: 2rem;
+  margin-bottom: 1.5rem;
+}
+
+.tabs {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.tabs button {
+  padding: 0.5rem 1.5rem;
+  background: #2c3e50;
+  border: 1px solid #3e4f5f;
+  color: #95a5a6;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tabs button.active {
+  background: #3498db;
+  color: white;
+  border-color: #3498db;
 }
 
 .status-badge {
@@ -192,7 +258,7 @@ header {
 .container {
   display: flex;
   flex-direction: column;
-  gap: 2rem;
+  gap: 1.5rem;
   max-width: 800px;
   margin: 0 auto;
   padding: 0 1rem;
@@ -351,7 +417,7 @@ input:checked + .slider:before {
   list-style: none;
   padding: 0;
   margin: 1rem 0 0;
-  max-height: 400px;
+  max-height: 300px;
   overflow-y: auto;
 }
 
@@ -377,6 +443,32 @@ input:checked + .slider:before {
   color: #95a5a6;
 }
 
+.debug-card h2 {
+  color: #f1c40f;
+  border-bottom: 2px solid #f1c40f;
+  margin-top: 0;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+}
+
+.log-viewer {
+  background: #1b2636;
+  padding: 1rem;
+  border-radius: 4px;
+  height: 500px;
+  overflow-y: auto;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.85rem;
+  color: #2ecc71;
+  text-align: left;
+}
+
+.log-line {
+  margin-bottom: 0.2rem;
+  border-bottom: 1px solid #2c3e50;
+  padding-bottom: 0.1rem;
+}
+
 .empty-msg {
   margin-top: 1rem;
   color: #95a5a6;
@@ -390,8 +482,6 @@ h1 {
 h2 {
   color: #3498db;
   margin-top: 0;
-  border-bottom: 2px solid #3498db;
-  padding-bottom: 0.5rem;
 }
 
 body {
