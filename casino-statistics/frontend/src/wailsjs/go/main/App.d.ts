@@ -22,6 +22,8 @@ export function GetSettings(arg1:string):Promise<string>;
 
 export function GetStats(arg1:string,arg2:string):Promise<main.CasinoStats>;
 
+export function PostStatsToDiscord():Promise<string>;
+
 export function SaveSettings(arg1:string,arg2:string):Promise<void>;
 
 export function ToggleBlockPlayer(arg1:string):Promise<void>;

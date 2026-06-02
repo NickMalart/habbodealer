@@ -42,6 +42,10 @@ export function GetStats(arg1, arg2) {
   return window['go']['main']['App']['GetStats'](arg1, arg2);
 }
 
+export function PostStatsToDiscord() {
+  return window['go']['main']['App']['PostStatsToDiscord']();
+}
+
 export function SaveSettings(arg1, arg2) {
   return window['go']['main']['App']['SaveSettings'](arg1, arg2);
 }
