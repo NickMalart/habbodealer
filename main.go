@@ -16313,8 +16313,8 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	}
 
 	e.Block()
-	if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isSixRolling || isUORolling || isDTRolling || isHitting || is13Hitting || isSixHitting || isClosing {
-		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %s selected but dice are busy (pkr:%t tri:%t bj:%t 13:%t 6:%t uo:%t dt:%t hit:%t 13h:%t 6h:%t closing:%t)", choice, isPokerRolling, isTriRolling, isBJRolling, is13Rolling, isSixRolling, isUORolling, isDTRolling, isHitting, is13Hitting, isSixHitting, isClosing))
+	if dealerGameActive() || isClosing {
+		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %s selected but dice are busy (gameActive:true closing:%t)", choice, isClosing))
 		return
 	}
 

@@ -35,6 +35,11 @@ func sendMessageWithDelay(message string) {
 
 // Wait for all dice results and evaluate the poker hand
 func (a *App) evaluatePokerHand() {
+	if pokerSequenceStage == 0 {
+		a.AddLogMsg("[POKER_GUARD] evaluatePokerHand called but pokerSequenceStage is 0; skipping logic")
+		return
+	}
+
 	result := evaluatePokerRules(diceList)
 	hand := a.toPokerString(diceList)
 	logRollResult := fmt.Sprintf("Poker Result: %s\n", hand)
@@ -78,8 +83,14 @@ func (a *App) evaluatePokerHand() {
 		}
 		winnerMsg := fmt.Sprintf("%s Wins - %s: %s | Dealer: %s", winnerName, playerName, pokerSequencePlayerHand, hand)
 
-		a.AddLogMsg(fmt.Sprintf("[POKER_RULES] player=%d dealer=%d winner=%s", pokerSequencePlayerResult.Category, result.Category, winnerMsg))
-		log.Printf("[POKER_RULES] player=%d dealer=%d winner=%s", pokerSequencePlayerResult.Category, result.Category, winnerMsg)
+		a.AddLogMsg(fmt.Sprintf("[POKER_RULES] player_cat=%d player_tie=%v dealer_cat=%d dealer_tie=%v winner=%s", 
+			pokerSequencePlayerResult.Category, pokerSequencePlayerResult.Tiebreaks, 
+			result.Category, result.Tiebreaks, 
+			winnerMsg))
+		log.Printf("[POKER_RULES] player_cat=%d player_tie=%v dealer_cat=%d dealer_tie=%v winner=%s", 
+			pokerSequencePlayerResult.Category, pokerSequencePlayerResult.Tiebreaks, 
+			result.Category, result.Tiebreaks, 
+			winnerMsg)
 
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", winnerMsg))
 		log.Printf("[GAME_SELECT] shouting: %q", winnerMsg)
