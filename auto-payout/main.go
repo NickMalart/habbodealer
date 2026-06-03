@@ -36,7 +36,7 @@ var assets embed.FS
 //go:embed scripts/parse_users28.py
 var users28Parser []byte
 
-var itemRegex = regexp.MustCompile(`(?:CF_\d+_[a-z][a-z0-9_.-]*|[a-z][a-z0-9_.-]*_[a-z0-9_.-]+)(?:\*\d+)?`)
+var itemRegex = regexp.MustCompile(`(?:CF_\d+_[a-z][a-z0-9_.-]*|[a-z][a-z0-9_.-]+_[a-z0-9_.-]+)(?:\*\d+)?`)
 
 const (
 	maxOpenTradeDuration = 2 * time.Minute
