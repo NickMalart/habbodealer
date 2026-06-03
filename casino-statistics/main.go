@@ -932,6 +932,13 @@ func (a *App) PostStatsToDiscord() string {
 	todayStart := now.Format("2006-01-02") + "T00:00:00"
 	todayEnd := now.Format("2006-01-02") + "T23:59:59"
 
+	// Weekly start (Monday)
+	daysSinceMonday := int(now.Weekday()) - 1
+	if daysSinceMonday < 0 {
+		daysSinceMonday = 6 // Sunday
+	}
+	weekStart := now.AddDate(0, 0, -daysSinceMonday).Format("2006-01-02") + "T00:00:00"
+
 	// Fetch Blocked List for filtering
 	blocked := make(map[string]bool)
 	for _, p := range a.GetBlockedPlayers() {
@@ -941,6 +948,8 @@ func (a *App) PostStatsToDiscord() string {
 	// 2. Fetch Global Stats (GetStats/GetLedgerStats already filter blocked players)
 	statsToday := a.GetStats(todayStart, todayEnd)
 	ledgerToday := a.GetLedgerStats(todayStart, todayEnd)
+	statsWeek := a.GetStats(weekStart, todayEnd)
+	ledgerWeek := a.GetLedgerStats(weekStart, todayEnd)
 	statsLife := a.GetStats("", "")
 	ledgerLife := a.GetLedgerStats("", "")
 
@@ -1105,6 +1114,28 @@ func (a *App) PostStatsToDiscord() string {
 		heatInfo += fmt.Sprintf("🧊 **Player Streak:** %d wins on %s", bestPlayerStreak.Count, bestPlayerStreak.Game)
 	} else { heatInfo += "🧊 **Player Streak:** None" }
 	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "📈 Heat Map", Value: heatInfo, Inline: false})
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "\u200b", Value: "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", Inline: false})
+
+	// SECTION 5.5: WEEKLY STATS
+	dealerLossWeek := statsWeek.Overall.TotalRounds - statsWeek.Overall.DealerWins
+	weekStats := fmt.Sprintf("Total Rounds: %d\nDealer Wins: %d\nDealer Loss: %d\nHouse Edge: %+.1f%%",
+		statsWeek.Overall.TotalRounds,
+		statsWeek.Overall.DealerWins,
+		dealerLossWeek,
+		statsWeek.Overall.DealerWinRate-statsWeek.Overall.PlayerWinRate)
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "📅 Weekly Stats", Value: weekStats, Inline: false})
+
+	var weekNet []string
+	sort.Slice(ledgerWeek, func(i, j int) bool { return ledgerWeek[i].Net > ledgerWeek[j].Net })
+	for i, it := range ledgerWeek {
+		if i >= 10 { break }
+		sign := "📈"
+		if it.Net < 0 { sign = "📉" }
+		weekNet = append(weekNet, fmt.Sprintf("%s %s: %d", sign, it.Name, it.Net))
+	}
+	if len(weekNet) == 0 { weekNet = append(weekNet, "No items this week.") }
+	if len(ledgerWeek) > 10 { weekNet = append(weekNet, fmt.Sprintf("... and %d more types", len(ledgerWeek)-10)) }
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "💰 Weekly Net", Value: strings.Join(weekNet, "\n"), Inline: false})
 	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "\u200b", Value: "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", Inline: false})
 
 	// SECTION 6: LIFETIME SUMMARY
