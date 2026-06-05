@@ -80,7 +80,9 @@ func (a *App) evaluateDoubleTroubleRound() {
 	resultText := fmt.Sprintf("%d", total)
 	winnerMsg := fmt.Sprintf("%s Wins - Total: %s", winnerName, resultText)
 
-	sendMessageWithDelay(winnerMsg)
+	if !ChatIsDisabled {
+		sendMessageWithDelay(winnerMsg)
+	}
 
 	payoutTargetID := lastTradePartnerID
 	payoutTargetName := playerName

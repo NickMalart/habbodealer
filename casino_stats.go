@@ -368,15 +368,12 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 				for _, it := range items {
 					name := it.Name
 					if name == "" {
-						name = it.RawName
-					}
-					if name == "" {
 						continue
 					}
 
 					qty := it.Quantity
 					if qty == 0 {
-						qty = it.Qty
+						continue
 					}
 
 					is, ok := itemStatsMap[name]

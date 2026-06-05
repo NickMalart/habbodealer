@@ -6643,7 +6643,7 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 			return
 		}
 
-		msg, ok := a.buildRiskPromptLocked()
+		msg, ok := a.buildRiskPromptLocked("")
 		mutex.Unlock()
 		if !canPrompt || !ok {
 			return
@@ -7114,7 +7114,7 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			if dealerRisk < curMax {
 				curMax = dealerRisk
 			}
-			msg := fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, curMax)
+			msg, _ := a.buildRiskPromptLocked("")
 			mutex.Unlock()
 			sendMessageWithDelay(msg)
 			a.startRiskDecisionTimeoutMonitor(p)
@@ -7273,14 +7273,14 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		if dealerRisk < curMax {
 			curMax = dealerRisk
 		}
-		msg := fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, curMax)
+		msg, _ := a.buildRiskPromptLocked("")
 		mutex.Unlock()
 		sendMessageWithDelay(msg)
 		a.startRiskDecisionTimeoutMonitor(p)
 	}(displayMax, partner)
 }
 
-func (a *App) buildRiskPromptLocked() (string, bool) {
+func (a *App) buildRiskPromptLocked(prefix string) (string, bool) {
 	if !riskSessionActive || playerRisk <= 0 || dealerRisk <= 0 {
 		return "", false
 	}
@@ -7296,7 +7296,11 @@ func (a *App) buildRiskPromptLocked() (string, bool) {
 		return "", false
 	}
 
-	return fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, curMax), true
+	msg := fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, curMax)
+	if prefix != "" {
+		msg = prefix + ". " + msg
+	}
+	return msg, true
 }
 
 // finalizeRiskKeep converts the current `playerRisk` internal bank into a
@@ -7779,7 +7783,7 @@ func (a *App) startRiskDecisionTimeoutMonitor(player string) {
 				mutex.Unlock()
 				return
 			}
-			reminder, ok := a.buildRiskPromptLocked()
+			reminder, ok := a.buildRiskPromptLocked("")
 			mutex.Unlock()
 			if !ok {
 				return
@@ -10165,15 +10169,12 @@ func (a *App) openDealerAfterRound() {
 	} else {
 		awaitingTradeOpen = true
 		dealerAcceptingTrades = true
-		if shouldAnnounceDealerOpen() {
-			dealerTradeWindowOpen = true
-			openMsg := a.dealerOpenMessage()
-			a.AddLogMsg(fmt.Sprintf("[DEALER_REOPEN] shouting: %q", openMsg))
-			go sendMessageWithDelay(openMsg)
-		} else {
-			dealerTradeWindowOpen = false
-			log.Printf("[DEALER_REOPEN] dealer open skipped (muted or no dice)")
-		}
+		
+		// Silent Reopen: If a game just ended, don't shout "Dealer Open" at all.
+		// Players already know the dealer is there.
+		dealerTradeWindowOpen = true
+		a.AddLogMsg("[DEALER_REOPEN] dealer reopened silently (no shout)")
+
 		startDealerOpenHeartbeat(a)
 	}
 }
@@ -13813,8 +13814,6 @@ func (a *App) finalizeTriRound() {
 		playerWins = false
 	}
 
-	// Respect computed `playerWins`; removed temporary forced-win test code.
-
 	winnerName := "Dealer"
 	if playerWins {
 		winnerName = playerName
@@ -13846,12 +13845,6 @@ func (a *App) finalizeTriRound() {
 
 	a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] shouting: %q", winnerMsg))
 
-	if !ChatIsDisabled {
-		waitForUnmute(90 * time.Second)
-		time.Sleep(800 * time.Millisecond)
-		sendMessageWithDelay(winnerMsg)
-	}
-
 	payoutTargetID := lastTradePartnerID
 	payoutTargetName := playerName
 	resetTriSequence()
@@ -13873,6 +13866,12 @@ func (a *App) finalizeTriRound() {
 			params := map[string]interface{}{"mode": triMode}
 			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "Tri", params)
 			return
+		}
+
+		if !ChatIsDisabled {
+			waitForUnmute(90 * time.Second)
+			time.Sleep(800 * time.Millisecond)
+			sendMessageWithDelay(winnerMsg)
 		}
 		startPayout(a, payoutTargetID, payoutTargetName)
 		return
@@ -17058,3 +17057,4 @@ func resetMidHouseSequence() {
 	awaitingMHChoicePartnerID = 0
 	awaitingMHChoicePartnerName = ""
 }
+

@@ -520,7 +520,7 @@ func (a *App) evaluate13Hand() {
 		log.Printf("[13] prompting decision: %q", prompt)
 		if !ChatIsDisabled && !isMuted {
 			a.AddLogMsg("[13_DEBUG] sending hit/stay prompt to chat")
-			log.Printf("[13_DEBUG] sending hit/stay prompt to chat")
+			log.Printf("[BJ_DEBUG] sending hit/stay prompt to chat")
 			sendMessageWithDelay(prompt)
 			a.startThirteenDecisionTimeoutMonitor(awaiting13DecisionPartnerName)
 		} else {
@@ -728,7 +728,7 @@ func (a *App) evaluateSixHand() {
 	}
 	a.finalizeSixRound(false, "dealer beat-or-tie")
 	isSixRolling = false
-	isSixHitting = false
+	isHitting = false
 }
 
 // Wait for all dice results and evaluate the tri hand
@@ -847,8 +847,7 @@ func (a *App) evaluatePairUpRound() {
 				go a.applyRiskOutcome(true)
 				return
 			}
-			params := map[string]interface{}{}
-			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "PU", params)
+			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "PU", nil)
 			return
 		}
 		startPayout(a, payoutTargetID, payoutTargetName)
