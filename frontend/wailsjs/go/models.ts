@@ -472,6 +472,8 @@ export namespace main {
 	export class TradeItem {
 	    name: string;
 	    quantity: number;
+	    raw_name?: string;
+	    qty?: number;
 	    rawData: string;
 	
 	    static createFrom(source: any = {}) {
@@ -482,6 +484,8 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.quantity = source["quantity"];
+	        this.raw_name = source["raw_name"];
+	        this.qty = source["qty"];
 	        this.rawData = source["rawData"];
 	    }
 	}

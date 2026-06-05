@@ -456,6 +456,8 @@ var (
 type TradeItem struct {
 	Name     string `json:"name"`
 	Quantity int    `json:"quantity"`
+	RawName  string `json:"raw_name,omitempty"`
+	Qty      int    `json:"qty,omitempty"`
 	RawData  string `json:"rawData"` // Store raw field for debugging
 }
 
