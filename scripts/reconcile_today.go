@@ -14,9 +14,10 @@ func main() {
 	pool, _ := pgxpool.New(ctx, dbURL)
 	defer pool.Close()
 
-	now := time.Now()
-	todayStart := now.Format("2006-01-02") + "T00:00:00"
-	todayEnd := now.Format("2006-01-02") + "T23:59:59"
+	loc := time.FixedZone("GMT+10", 10*60*60)
+	now := time.Now().In(loc)
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).Format(time.RFC3339)
+	todayEnd := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, loc).Format(time.RFC3339)
 
 	fmt.Println("--- GAME HISTORY FOR TODAY ---")
 	grows, _ := pool.Query(ctx, `

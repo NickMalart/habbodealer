@@ -928,16 +928,17 @@ func (a *App) PostStatsToDiscord() string {
 	}
 
 	// 1. Setup Time Ranges
-	now := time.Now()
-	todayStart := now.Format("2006-01-02") + "T00:00:00"
-	todayEnd := now.Format("2006-01-02") + "T23:59:59"
+	loc := time.FixedZone("GMT+10", 10*60*60)
+	now := time.Now().In(loc)
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).Format(time.RFC3339)
+	todayEnd := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, loc).Format(time.RFC3339)
 
 	// Weekly start (Monday)
 	daysSinceMonday := int(now.Weekday()) - 1
 	if daysSinceMonday < 0 {
 		daysSinceMonday = 6 // Sunday
 	}
-	weekStart := now.AddDate(0, 0, -daysSinceMonday).Format("2006-01-02") + "T00:00:00"
+	weekStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -daysSinceMonday).Format(time.RFC3339)
 
 	// Fetch Blocked List for filtering
 	blocked := make(map[string]bool)

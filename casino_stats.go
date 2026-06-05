@@ -277,8 +277,9 @@ func unionItemNames(a map[string]int, b map[string]int) []string {
 // BuildCasinoStats computes statistics for the provided time range key.
 // Supported rangeKey: all_time, today, last_7_days, last_30_days
 func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
+	loc := time.FixedZone("GMT+10", 10*60*60)
 	stats := CasinoStats{
-		GeneratedAt: time.Now().Format(time.RFC3339),
+		GeneratedAt: time.Now().In(loc).Format(time.RFC3339),
 		Range:       StatsRange{Key: rangeKey},
 		Overall: CasinoStatsSummary{
 			BetItemCounts:    make(map[string]int),
@@ -300,9 +301,9 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 
 	var start, end time.Time
 	if rangeKey == "today" {
-		now := time.Now()
+		loc := time.FixedZone("GMT+10", 10*60*60)
+		now := time.Now().In(loc)
 		y, m, d := now.Date()
-		loc := now.Location()
 		start = time.Date(y, m, d, 0, 0, 0, 0, loc)
 		end = start.Add(24 * time.Hour)
 		stats.Range.StartAt = start.Format(time.RFC3339)
