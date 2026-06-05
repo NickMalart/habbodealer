@@ -16315,7 +16315,7 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 	}
 
 	e.Block()
-	if dealerGameActive() || isClosing {
+	if (dealerGameActive() && !awaitingGameChoice) || isClosing {
 		a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] %s selected but dice are busy (gameActive:true closing:%t)", choice, isClosing))
 		return
 	}
