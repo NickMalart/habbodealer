@@ -8,6 +8,7 @@ import {
   GetStatus,
   ResetHammer,
   SimulateDrop,
+  SimulatePacket,
   StopSimulation,
   GetIsSimulating
 } from '../wailsjs/go/main/App'
@@ -60,6 +61,10 @@ function handleToggleSimulation() {
   }
 }
 
+function handleSimulate() {
+  SimulatePacket()
+}
+
 function handleClearLogs() {
   logs.value = []
 }
@@ -95,6 +100,8 @@ function handleClearLogs() {
           {{ isSimulating ? 'Stop Sim' : 'Start Sim' }}
         </button>
       </div>
+
+      <button @click="handleSimulate" class="btn-walk">Simulate Packet Arrival</button>
       
       <button @click="handleClearLogs" class="btn-clear">Clear Logs</button>
     </div>

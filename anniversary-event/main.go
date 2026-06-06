@@ -518,6 +518,22 @@ func (a *App) SetHammerHeld(held bool) {
 	a.addLog(fmt.Sprintf("Hammer held set to: %v", held))
 }
 
+func (a *App) SimulatePacket() {
+	packetHex := "415d393030303030303032024d746f62795f68616d6d65720252425044494948312e3002302c302c300202483002484d4d"
+	data, err := hex.DecodeString(packetHex)
+	if err != nil {
+		a.addLog(fmt.Sprintf("Error decoding simulation packet: %v", err))
+		return
+	}
+
+	a.mu.Lock()
+	a.collectEnabled = true
+	a.mu.Unlock()
+
+	a.addLog("📥 Simulating Incoming ACTIVEOBJECT_ADD (Hammer)")
+	a.handleActiveObjectAdd(data)
+}
+
 func (a *App) SimulateDrop() {
 	a.mu.Lock()
 	if a.isSimulating {
