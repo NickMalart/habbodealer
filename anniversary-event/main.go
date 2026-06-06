@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"strings"
@@ -45,7 +46,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext = g.NewExt(g.ExtInfo{
 		Title:       "Anniversary Bot",
 		Description: "Automates Toby Hammer and Presents",
-		Version:     "1.0.2",
+		Version:     "1.0.3",
 		Author:      "Gemini CLI",
 	})
 
@@ -60,7 +61,7 @@ func (a *App) startup(ctx context.Context) {
 		a.AddLog("Extension activated!")
 	})
 
-	// Intercept ACTIVEOBJECT_ADD
+	// Intercept ACTIVEOBJECT_ADD and REMOVE
 	a.ext.Intercept(g.In.Id("ACTIVEOBJECT_ADD")).With(a.handleObjectAdd)
 	a.ext.Intercept(g.In.Id("ACTIVEOBJECT_REMOVE")).With(a.handleObjectRemove)
 
@@ -103,25 +104,52 @@ func (a *App) handleObjectAdd(e *g.Intercept) {
 	data := e.Packet.Data
 	packetStr := string(data)
 	
-	// Check for targets first
 	isHammer := strings.Contains(packetStr, "toby_hammer")
 	isPresent := strings.Contains(packetStr, "Manniv_present_gen")
 
 	if isHammer || isPresent {
-		a.AddLog(fmt.Sprintf("[DEBUG] Incoming Object Packet (Len: %d): %s", len(data), packetStr))
+		a.AddLog(fmt.Sprintf("[DEBUG] Incoming Object: %s", packetStr))
+		a.AddLog(fmt.Sprintf("[HEX] %s", hex.EncodeToString(data)))
 	}
 
 	if busy {
 		return
 	}
 	
+	targetName := ""
 	if isHammer && !hammerHeld {
-		a.AddLog(">>> TOBY HAMMER DETECTED! <<<")
-		go a.processObject(packetStr, "toby_hammer")
+		targetName = "toby_hammer"
 	} else if isPresent && hammerHeld {
-		a.AddLog(">>> ANNIVERSARY PRESENT DETECTED! <<<")
-		go a.processObject(packetStr, "Manniv_present_gen")
+		targetName = "Manniv_present_gen"
 	}
+
+	if targetName != "" {
+		// Extract ID immediately to set activeTargetID and block others
+		id := a.extractID(packetStr)
+		if id != "" {
+			a.mu.Lock()
+			a.activeTargetID = id
+			a.mu.Unlock()
+			a.AddLog(fmt.Sprintf(">>> %s DETECTED (ID: %s) <<<", strings.ToUpper(targetName), id))
+			go a.processObject(packetStr, targetName, id)
+		}
+	}
+}
+
+func (a *App) extractID(packetStr string) string {
+	for i := 0; i < len(packetStr)-8; i++ {
+		isDigit := true
+		for j := 0; j < 9; j++ {
+			if packetStr[i+j] < '0' || packetStr[i+j] > '9' {
+				isDigit = false
+				break
+			}
+		}
+		if isDigit {
+			return packetStr[i : i+9]
+		}
+	}
+	return ""
 }
 
 func (a *App) handleObjectRemove(e *g.Intercept) {
@@ -153,15 +181,7 @@ func (a *App) handleObjectRemove(e *g.Intercept) {
 	}
 }
 
-func (a *App) processObject(packetStr string, targetName string) {
-	// Find index of targetName
-	nameIdx := strings.Index(packetStr, targetName)
-	if nameIdx == -1 {
-		a.AddLog(fmt.Sprintf("[ERROR] %s found in Contains but not in Index search?", targetName))
-		return
-	}
-	a.AddLog(fmt.Sprintf("[DEBUG] Found '%s' at index %d", targetName, nameIdx))
-	
+func (a *App) processObject(packetStr string, targetName string, id string) {
 	locIdx := -1
 	searchMethod := ""
 	if dotIdx := strings.LastIndex(packetStr, "1.0"); dotIdx != -1 {
@@ -181,36 +201,14 @@ func (a *App) processObject(packetStr string, targetName string) {
 	
 	if locIdx < 0 || locIdx+4 >= len(packetStr) {
 		a.AddLog(fmt.Sprintf("[ERROR] Could not parse location string. Packet tail: %q", packetStr[max(0, len(packetStr)-20):]))
+		a.mu.Lock()
+		a.activeTargetID = ""
+		a.mu.Unlock()
 		return
 	}
 	
 	locStr := packetStr[locIdx : locIdx+4]
 	a.AddLog(fmt.Sprintf("[DEBUG] Extracted LocString %q via %s", locStr, searchMethod))
-	
-	// Extract ID
-	var id string
-	for i := 0; i < len(packetStr)-8; i++ {
-		isDigit := true
-		for j := 0; j < 9; j++ {
-			if packetStr[i+j] < '0' || packetStr[i+j] > '9' {
-				isDigit = false
-				break
-			}
-		}
-		if isDigit {
-			id = packetStr[i : i+9]
-			break
-		}
-	}
-	
-	if id == "" {
-		a.AddLog("[ERROR] Could not find 9-digit ID in packet.")
-		return
-	}
-	
-	a.mu.Lock()
-	a.activeTargetID = id
-	a.mu.Unlock()
 	
 	a.AddLog(fmt.Sprintf("Pursuing %s (ID: %s) at Coords [%d, %d]", targetName, id, int(locStr[0])-64, int(locStr[2])-64))
 	
@@ -232,12 +230,12 @@ func (a *App) processObject(packetStr string, targetName string) {
 	}
 	
 	// 2. Interact
-	a.UpdateStatus(fmt.Sprintf("OPENING %s", strings.ToUpper(targetName)))
+	a.UpdateStatus(fmt.Sprintf("INTERACTING WITH %s", strings.ToUpper(targetName)))
 	a.Interact(id)
 	time.Sleep(1000 * time.Millisecond)
 	
 	// If it was the hammer, mark it as held
-	if targetName == "toby_hammer" {
+	if strings.Contains(targetName, "hammer") {
 		a.mu.Lock()
 		a.hammerHeld = true
 		a.activeTargetID = ""
@@ -248,7 +246,7 @@ func (a *App) processObject(packetStr string, targetName string) {
 		a.mu.Lock()
 		a.activeTargetID = ""
 		a.mu.Unlock()
-		a.AddLog(fmt.Sprintf(">>> SUCCESS: Opened %s <<<", targetName))
+		a.AddLog(fmt.Sprintf(">>> SUCCESS: Interaction with %s complete <<<", targetName))
 		a.UpdateStatus("WAITING FOR PRESENTS")
 	}
 }
@@ -264,8 +262,9 @@ func (a *App) MoveToLoc(locStr string) {
 	if a.ext == nil {
 		return
 	}
-	payload := "Su" + locStr + "H"
-	a.AddLog(fmt.Sprintf("Sending Move: %s", payload))
+	// Data part is locStr + "H"
+	payload := locStr + "H"
+	a.AddLog(fmt.Sprintf("Sending Move Data: %s", payload))
 	a.ext.Send(g.Out.Id("ORIGINS_MOVE"), []byte(payload))
 }
 
@@ -273,7 +272,9 @@ func (a *App) Interact(id string) {
 	if a.ext == nil {
 		return
 	}
-	payload := fmt.Sprintf("AJ @I%s@A0", id)
+	// Data part is @I[ID]@A0
+	payload := fmt.Sprintf("@I%s@A0", id)
+	a.AddLog(fmt.Sprintf("Sending Interact Data: %s", payload))
 	a.ext.Send(g.Out.Id("SETSTUFFDATA"), []byte(payload))
 }
 
