@@ -69,8 +69,9 @@ func (a *App) startup(ctx context.Context) {
 
 	// Register headers for Habbo Origins (Shockwave)
 	a.ext.Headers().Add("STATUS", g.Header{Dir: g.In, Value: 34})
-	a.ext.Headers().Add("OBJECTS", g.Header{Dir: g.In, Value: 32})
-	a.ext.Headers().Add("REMOVE_ITEM", g.Header{Dir: g.In, Value: 84})
+	a.ext.Headers().Add("ACTIVEOBJECT_ADD", g.Header{Dir: g.In, Value: 93})
+	a.ext.Headers().Add("ACTIVEOBJECT_REMOVE", g.Header{Dir: g.In, Value: 94})
+	a.ext.Headers().Add("ACTIVEOBJECT_UPDATE", g.Header{Dir: g.In, Value: 95})
 	a.ext.Headers().Add("SetStuffData", g.Header{Dir: g.Out, Value: 74})
 	a.ext.Headers().Add("Move", g.Header{Dir: g.Out, Value: 1269})
 	a.ext.Headers().Add("CarryItem", g.Header{Dir: g.Out, Value: 97})
@@ -82,8 +83,9 @@ func (a *App) startup(ctx context.Context) {
 	})
 
 	// Intercept packets
-	a.ext.Intercept(g.In.Id("OBJECTS")).With(a.handleObjects)
-	a.ext.Intercept(g.In.Id("REMOVE_ITEM")).With(a.handleObjectRemove)
+	a.ext.Intercept(g.In.Id("ACTIVEOBJECT_ADD")).With(a.handleObjectAdd)
+	a.ext.Intercept(g.In.Id("ACTIVEOBJECT_REMOVE")).With(a.handleObjectRemove)
+	a.ext.Intercept(g.In.Id("ACTIVEOBJECT_UPDATE")).With(a.handleObjectAdd)
 	a.ext.Intercept(g.In.Id("STATUS")).With(a.handleStatus)
 	
 	// Log all outgoing for debugging
@@ -268,7 +270,7 @@ func (a *App) getWaitingStatus() string {
 
 func (a *App) handleObjectAdd(e *g.Intercept) {
 	data := e.Packet.Data
-	// Split by the STX delimiter (0x02)
+	// Shockwave ACTIVEOBJECT_ADD (93) format: ID[2]Name[2]Loc[2]...
 	parts := bytes.Split(data, []byte{0x02})
 	if len(parts) < 3 {
 		return
@@ -276,14 +278,15 @@ func (a *App) handleObjectAdd(e *g.Intercept) {
 
 	id := string(parts[0])
 	name := string(parts[1])
-	locFull := string(parts[2]) // e.g. "SAPBIIH0.0"
+	locFull := string(parts[2]) 
 
 	a.addObject(id, name, locFull)
 }
 
 func (a *App) addObject(id, name, locFull string) {
-	isHammer := strings.Contains(name, "toby_hammer")
-	isPresent := strings.Contains(name, "Manniv_present_gen")
+	// Origins often prefixes names with 'M' for active objects
+	isHammer := strings.Contains(strings.ToLower(name), "hammer")
+	isPresent := strings.Contains(strings.ToLower(name), "present")
 
 	if !isHammer && !isPresent {
 		return
@@ -310,7 +313,7 @@ func (a *App) addObject(id, name, locFull string) {
 	}
 	a.mu.Unlock()
 
-	a.AddLog(fmt.Sprintf("[ROOM] Added %s (ID: %s) at EncodedLoc: %s", cleanName, id, loc))
+	a.AddLog(fmt.Sprintf("[ROOM] Detected %s (ID: %s) at %s", cleanName, id, loc))
 }
 
 func (a *App) removeObject(id string) {
