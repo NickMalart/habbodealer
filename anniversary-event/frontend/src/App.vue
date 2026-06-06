@@ -4,13 +4,16 @@ import {EventsOn} from '../wailsjs/runtime'
 import {
   ToggleEvent,
   ResetHammer,
+  SetHammerHeld,
   GetLogs,
-  GetStatus
+  GetStatus,
+  GetHammerHeld
 } from '../wailsjs/go/main/App'
 
 const logs = ref([])
 const enabled = ref(false)
 const status = ref('IDLE')
+const hammerHeld = ref(false)
 
 onMounted(() => {
   GetLogs().then(result => {
@@ -21,12 +24,20 @@ onMounted(() => {
     status.value = result
   })
 
+  GetHammerHeld().then(result => {
+    hammerHeld.value = result
+  })
+
   EventsOn('logsUpdate', newLogs => {
     logs.value = newLogs
   })
 
   EventsOn('statusUpdate', newStatus => {
     status.value = newStatus
+  })
+
+  EventsOn('hammerHeldUpdate', held => {
+    hammerHeld.value = held
   })
 })
 
@@ -37,6 +48,10 @@ function handleToggle() {
 
 function handleReset() {
   ResetHammer()
+}
+
+function handleIHaveHammer() {
+  SetHammerHeld(true)
 }
 
 function handleCopyLogs() {
@@ -63,8 +78,15 @@ function handleCopyLogs() {
         </button>
       </div>
 
+      <div class="state-badges">
+        <div :class="['badge', hammerHeld ? 'held' : 'not-held']">
+          🔨 Hammer: {{ hammerHeld ? 'HELD' : 'MISSING' }}
+        </div>
+      </div>
+
       <div class="controls">
-        <button @click="handleReset" class="btn-reset">Reset Hammer State</button>
+        <button v-if="!hammerHeld" @click="handleIHaveHammer" class="btn-have-hammer">I already have Hammer</button>
+        <button v-else @click="handleReset" class="btn-reset">Reset Hammer State</button>
         <button @click="handleCopyLogs" class="btn-copy">Copy Logs</button>
       </div>
     </div>
@@ -108,27 +130,55 @@ function handleCopyLogs() {
   align-items: center;
   gap: 0.75rem;
   background-color: #1a1f29;
-  padding: 1.5rem;
+  padding: 1rem;
   border-radius: 8px;
   border: 1px solid #2d3446;
 }
 
 .status-indicator {
   font-weight: bold;
-  font-size: 1.2rem;
-  padding: 0.5rem 2rem;
+  font-size: 1.1rem;
+  padding: 0.5rem 1.5rem;
   border-radius: 20px;
+  width: 100%;
+  text-align: center;
+  box-sizing: border-box;
 }
 
 .active {
   background-color: #2e7d32;
   color: #a5d6a7;
-  box-shadow: 0 0 10px rgba(46, 125, 50, 0.5);
+  box-shadow: 0 0 10px rgba(46, 125, 50, 0.3);
 }
 
 .inactive {
   background-color: #c62828;
   color: #ef9a9a;
+}
+
+.state-badges {
+  display: flex;
+  justify-content: center;
+}
+
+.badge {
+  padding: 0.4rem 1rem;
+  border-radius: 4px;
+  font-weight: bold;
+  font-size: 0.9rem;
+  border: 1px solid transparent;
+}
+
+.held {
+  background-color: #1565c0;
+  color: #bbdefb;
+  border-color: #1e88e5;
+}
+
+.not-held {
+  background-color: #424242;
+  color: #bdbdbd;
+  border-color: #616161;
 }
 
 .controls {
@@ -137,8 +187,8 @@ function handleCopyLogs() {
 }
 
 button {
-  padding: 0.75rem 1rem;
-  font-size: 1rem;
+  padding: 0.75rem 0.5rem;
+  font-size: 0.9rem;
   cursor: pointer;
   border: none;
   border-radius: 4px;
@@ -162,8 +212,12 @@ button:hover {
   width: 100%;
 }
 
+.btn-have-hammer {
+  background-color: #0288d1;
+}
+
 .btn-reset {
-  background-color: #ff9800;
+  background-color: #fb8c00;
 }
 
 .btn-copy {

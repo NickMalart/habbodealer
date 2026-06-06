@@ -352,9 +352,33 @@ func (a *App) ResetHammer() {
 	a.activeTargetID = ""
 	enabled := a.enabled
 	a.mu.Unlock()
-	a.AddLog("Hammer state reset.")
+	a.AddLog("Hammer state reset manually.")
 	if enabled {
 		a.UpdateStatus("WAITING FOR HAMMER")
+	}
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "hammerHeldUpdate", false)
+	}
+}
+
+func (a *App) SetHammerHeld(held bool) {
+	a.mu.Lock()
+	a.hammerHeld = held
+	enabled := a.enabled
+	a.mu.Unlock()
+	
+	msg := "Hammer marked as NOT HELD."
+	if held {
+		msg = "Hammer marked as HELD manually."
+	}
+	a.AddLog(msg)
+	
+	if enabled {
+		a.UpdateStatus(a.getWaitingStatus())
+	}
+	
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "hammerHeldUpdate", held)
 	}
 }
 
