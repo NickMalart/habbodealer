@@ -2,89 +2,51 @@
 import {ref, onMounted} from 'vue'
 import {EventsOn} from '../wailsjs/runtime'
 import {
-  ToggleEvent,
-  ResetHammer,
-  SetHammerHeld,
-  SimulateDrop,
-  StopSimulation,
+  TestMove,
   GetLogs,
+  ToggleCollect,
   GetStatus,
-  GetHammerHeld,
-  LogRoomState,
-  TestMove
+  ResetHammer
 } from '../wailsjs/go/main/App'
 
 const logs = ref([])
-const enabled = ref(false)
-const status = ref('IDLE')
-const hammerHeld = ref(false)
-const simulating = ref(false)
-const testCoords = ref('SAPB')
+const hexInput = ref('53755042514348')
+const collectEnabled = ref(false)
+const status = ref('READY')
 
 onMounted(() => {
   GetLogs().then(result => {
     logs.value = result
   })
 
-  GetStatus().then(result => {
-    status.value = result
-  })
-
-  GetHammerHeld().then(result => {
-    hammerHeld.value = result
-  })
+  const updateStatus = () => {
+    GetStatus().then(s => {
+      status.value = s
+    })
+  }
+  updateStatus()
+  setInterval(updateStatus, 2000)
 
   EventsOn('logsUpdate', newLogs => {
     logs.value = newLogs
   })
-
-  EventsOn('statusUpdate', newStatus => {
-    status.value = newStatus
-  })
-
-  EventsOn('hammerHeldUpdate', held => {
-    hammerHeld.value = held
-  })
-
-  EventsOn('simulatingUpdate', active => {
-    simulating.value = active
-  })
 })
 
-function handleToggle() {
-  enabled.value = !enabled.value
-  ToggleEvent(enabled.value)
+function handleWalk() {
+  TestMove(hexInput.value)
 }
 
-function handleReset() {
+function handleToggleCollect() {
+  collectEnabled.value = !collectEnabled.value
+  ToggleCollect(collectEnabled.value)
+}
+
+function handleResetHammer() {
   ResetHammer()
 }
 
-function handleIHaveHammer() {
-  SetHammerHeld(true)
-}
-
-function handleSimulate() {
-  SimulateDrop()
-}
-
-function handleStopSimulate() {
-  StopSimulation()
-}
-
-function handleCopyLogs() {
-  const text = logs.value.join('\n')
-  navigator.clipboard.writeText(text).then(() => {
-    alert('Logs copied to clipboard!')
-  })
-}
-
-function handleLogRoom() {
-  LogRoomState()
-}
-
-function handleTestMove() {
-  TestMove(testCoords.value)
+function handleClearLogs() {
+  logs.value = []
 }
 </script>
 
@@ -92,38 +54,29 @@ function handleTestMove() {
   <div class="container">
     <div class="header">
       <h1>Anniversary Bot</h1>
+      <div class="status-bar" :class="status.includes('HOLDING') ? 'status-active' : 'status-waiting'">
+        {{ status }}
+      </div>
     </div>
 
-    <div class="actions">
-      <div class="status-box">
-        <div :class="['status-indicator', enabled ? 'active' : 'inactive']">
-          {{ status }}
-        </div>
-        <button @click="handleToggle" :class="enabled ? 'btn-stop' : 'btn-start'">
-          {{ enabled ? 'Disable' : 'Enable' }}
-        </button>
+    <div class="controls">
+      <div class="input-group">
+        <label>Hex / Byte Packet (Manual):</label>
+        <input v-model="hexInput" placeholder="e.g. 53755042514348" class="hex-input">
       </div>
+      <button @click="handleWalk" class="btn-walk">Walk / Send Packet</button>
+      
+      <div class="divider"></div>
+      
+      <button @click="handleToggleCollect" :class="collectEnabled ? 'btn-stop' : 'btn-start'">
+        {{ collectEnabled ? 'Disable Auto-Collector' : 'Enable Auto-Collector' }}
+      </button>
 
-      <div class="state-badges">
-        <div :class="['badge', hammerHeld ? 'held' : 'not-held']">
-          🔨 Hammer: {{ hammerHeld ? 'HELD' : 'MISSING' }}
-        </div>
-      </div>
-
-      <div class="debug-controls">
-        <input v-model="testCoords" placeholder="Coords (e.g. SAPB)" class="debug-input">
-        <button @click="handleTestMove" class="btn-test">Test Move</button>
-        <button @click="handleLogRoom" class="btn-log-room">Log Room</button>
-      </div>
-
-      <div class="controls">
-        <button v-if="!hammerHeld" @click="handleIHaveHammer" class="btn-have-hammer">I already have Hammer</button>
-        <button v-else @click="handleReset" class="btn-reset">Reset Hammer State</button>
-        <button @click="simulating ? handleStopSimulate() : handleSimulate()" :class="simulating ? 'btn-stop-sim' : 'btn-simulate'">
-          {{ simulating ? 'Stop Simulation' : 'Simulate Drop' }}
-        </button>
-        <button @click="handleCopyLogs" class="btn-copy">Copy Logs</button>
-      </div>
+      <button @click="handleResetHammer" class="btn-reset">
+        Reset Hammer Status
+      </button>
+      
+      <button @click="handleClearLogs" class="btn-clear">Clear Logs</button>
     </div>
 
     <div class="logs">
@@ -141,174 +94,140 @@ function handleTestMove() {
   height: 100vh;
   padding: 1rem;
   box-sizing: border-box;
-  background-color: #0e1219;
+  background-color: #121212;
   color: #e0e0e0;
-  font-family: sans-serif;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
 .header h1 {
-  margin: 0 0 1rem 0;
+  margin: 0 0 0.5rem 0;
   font-size: 1.5rem;
   text-align: center;
+  color: #bb86fc;
 }
 
-.actions {
-  margin-bottom: 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.status-box {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.75rem;
-  background-color: #1a1f29;
-  padding: 1rem;
-  border-radius: 8px;
-  border: 1px solid #2d3446;
-}
-
-.status-indicator {
-  font-weight: bold;
-  font-size: 1.1rem;
-  padding: 0.5rem 1.5rem;
-  border-radius: 20px;
-  width: 100%;
+.status-bar {
   text-align: center;
-  box-sizing: border-box;
-}
-
-.active {
-  background-color: #2e7d32;
-  color: #a5d6a7;
-  box-shadow: 0 0 10px rgba(46, 125, 50, 0.3);
-}
-
-.inactive {
-  background-color: #c62828;
-  color: #ef9a9a;
-}
-
-.state-badges {
-  display: flex;
-  justify-content: center;
-}
-
-.badge {
-  padding: 0.4rem 1rem;
+  padding: 0.4rem;
+  margin-bottom: 1rem;
   border-radius: 4px;
   font-weight: bold;
   font-size: 0.9rem;
-  border: 1px solid transparent;
 }
 
-.held {
-  background-color: #1565c0;
-  color: #bbdefb;
-  border-color: #1e88e5;
-}
-
-.not-held {
-  background-color: #424242;
-  color: #bdbdbd;
-  border-color: #616161;
-}
-
-.debug-controls {
-  display: flex;
-  gap: 0.5rem;
-  background-color: #1a1f29;
-  padding: 0.75rem;
-  border-radius: 8px;
-  border: 1px solid #3d4456;
-}
-
-.debug-input {
-  background-color: #0e1219;
-  border: 1px solid #2d3446;
+.status-active {
+  background-color: #4caf50;
   color: white;
-  padding: 0.5rem;
-  border-radius: 4px;
-  width: 80px;
 }
 
-.btn-test {
-  background-color: #3949ab;
-}
-
-.btn-log-room {
-  background-color: #00897b;
+.status-waiting {
+  background-color: #ff9800;
+  color: white;
 }
 
 .controls {
   display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  background-color: #1e1e1e;
+  padding: 1rem;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+}
+
+.input-group {
+  display: flex;
+  flex-direction: column;
   gap: 0.5rem;
 }
 
-button {
-  padding: 0.75rem 0.5rem;
+.input-group label {
   font-size: 0.9rem;
+  color: #b0b0b0;
+}
+
+.hex-input {
+  background-color: #2c2c2c;
+  border: 1px solid #3d3d3d;
+  color: #ffffff;
+  padding: 0.75rem;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 1rem;
+}
+
+button {
+  padding: 0.75rem;
+  font-size: 1rem;
+  font-weight: bold;
   cursor: pointer;
   border: none;
   border-radius: 4px;
-  color: white;
   transition: all 0.2s;
-  flex-grow: 1;
 }
 
-button:hover {
-  opacity: 0.9;
-  transform: translateY(-1px);
+.btn-walk {
+  background-color: #03dac6;
+  color: #000000;
+}
+
+.btn-walk:hover {
+  background-color: #01bfa5;
 }
 
 .btn-start {
   background-color: #4caf50;
-  width: 100%;
+  color: #ffffff;
+}
+
+.btn-start:hover {
+  background-color: #43a047;
 }
 
 .btn-stop {
   background-color: #f44336;
-  width: 100%;
+  color: #ffffff;
 }
 
-.btn-have-hammer {
-  background-color: #0288d1;
+.btn-stop:hover {
+  background-color: #e53935;
 }
 
 .btn-reset {
-  background-color: #fb8c00;
+  background-color: #ff9800;
+  color: #ffffff;
 }
 
-.btn-simulate {
-  background-color: #9c27b0;
+.divider {
+  height: 1px;
+  background-color: #333;
+  margin: 0.5rem 0;
 }
 
-.btn-stop-sim {
-  background-color: #7b1fa2;
-  border: 1px solid #ce93d8;
-}
-
-.btn-copy {
-  background-color: #607d8b;
+.btn-clear {
+  background-color: #3700b3;
+  color: #ffffff;
+  font-size: 0.8rem;
+  padding: 0.5rem;
 }
 
 .logs {
   flex-grow: 1;
   overflow-y: auto;
-  background-color: #1a1f29;
-  padding: 0.5rem;
-  border-radius: 4px;
-  font-family: monospace;
+  background-color: #1e1e1e;
+  padding: 0.75rem;
+  border-radius: 8px;
+  font-family: 'Consolas', monospace;
   font-size: 0.85rem;
-  border: 1px solid #2d3446;
+  border: 1px solid #333;
 }
 
 .log-entry {
-  margin-bottom: 0.25rem;
-  border-bottom: 1px solid #232a37;
-  padding-bottom: 0.25rem;
+  margin-bottom: 0.4rem;
+  border-bottom: 1px solid #2d2d2d;
+  padding-bottom: 0.4rem;
   word-break: break-all;
+  color: #cfd8dc;
 }
 </style>

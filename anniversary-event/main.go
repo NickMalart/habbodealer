@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"embed"
 	"encoding/hex"
@@ -21,558 +20,365 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-type TargetItem struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Loc       string    `json:"loc"`
-	AddedAt   time.Time `json:"-"`
-	IsPresent bool      `json:"isPresent"`
-}
+var ext = g.NewExt(g.ExtInfo{
+	Title:       "Anniversary Bot",
+	Description: "Auto Hammer & Present Collector",
+	Version:     "1.1.0",
+	Author:      "Dubbo",
+})
 
 type App struct {
-	ctx     context.Context
-	ext     *g.Ext
-	mu      sync.Mutex
-	logs    []string
-	enabled bool
-	status  string
+	ctx            context.Context
+	mu             sync.Mutex
+	logs           []string
+	collectEnabled bool
+	myID           int
+	myX, myY       int
+	isWalking      bool
+	targetID       string
+	targetX, targetY int
+	targetType     string // "hammer" or "present"
+	hasHammer      bool
+	presents       map[string]presentInfo
+	hammerTimer    *time.Timer
+}
 
-	// Simulation state
-	simulating bool
-
-	// Event State
-	hammerHeld        bool
-	activeTargetID    string
-	consecutiveMisses int
-	
-	// Room State
-	roomItems map[string]TargetItem
-
-	// Phase control
-	currentPhase string
-	phaseTimer   *time.Timer
+type presentInfo struct {
+	id   string
+	data []byte // The 4 bytes
+	x, y int
 }
 
 func NewApp() *App {
 	return &App{
-		logs:      []string{"Anniversary Bot initialized..."},
-		status:    "IDLE",
-		roomItems: make(map[string]TargetItem),
-		currentPhase: "IDLE",
+		logs:     []string{},
+		presents: make(map[string]presentInfo),
 	}
+}
+
+func decodePos(b1, b2 byte) int {
+	return int(b1-64)*64 + int(b2-64)
+}
+
+func encodePos(v int) (byte, byte) {
+	return byte(v/64 + 64), byte(v%64 + 64)
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	go a.runExt()
+}
 
-	a.ext = g.NewExt(g.ExtInfo{
-		Title:       "Anniversary Bot",
-		Description: "Automates Toby Hammer and Presents",
-		Version:     "1.1.5",
-		Author:      "Gemini CLI",
+func (a *App) runExt() {
+	ext.Activated(func() {
+		if a.ctx != nil {
+			runtime.WindowShow(a.ctx)
+		}
 	})
 
-	// Register headers for Habbo Origins (Shockwave)
-	a.ext.Headers().Add("STATUS", g.Header{Dir: g.In, Value: 34})
-	a.ext.Headers().Add("OBJECTS", g.Header{Dir: g.In, Value: 32})
-	a.ext.Headers().Add("ACTIVEOBJECT_ADD", g.Header{Dir: g.In, Value: 93})
-	a.ext.Headers().Add("ACTIVEOBJECT_REMOVE", g.Header{Dir: g.In, Value: 94})
-	a.ext.Headers().Add("ACTIVEOBJECT_UPDATE", g.Header{Dir: g.In, Value: 95})
-	a.ext.Headers().Add("BULLETIN", g.Header{Dir: g.In, Value: 680})
-	
-	a.ext.Headers().Add("SetStuffData", g.Header{Dir: g.Out, Value: 74})
-	a.ext.Headers().Add("Move", g.Header{Dir: g.Out, Value: 1269})
-	a.ext.Headers().Add("CarryItem", g.Header{Dir: g.Out, Value: 97})
-	a.ext.Headers().Add("LookTo", g.Header{Dir: g.Out, Value: 79})
-	a.ext.Headers().Add("Chat", g.Header{Dir: g.Out, Value: 52})
+	// Register Headers
+	ext.Headers().Add("USER_OBJECT", g.Header{Dir: g.In, Value: 5})
+	ext.Headers().Add("STATUS", g.Header{Dir: g.In, Value: 34})
+	ext.Headers().Add("ACTIVEOBJECT_ADD", g.Header{Dir: g.In, Value: 93})
+	ext.Headers().Add("ACTIVEOBJECT_REMOVE", g.Header{Dir: g.In, Value: 94})
+	ext.Headers().Add("PICKUP", g.Header{Dir: g.Out, Value: 74})
+	ext.Headers().Add("MOVE", g.Header{Dir: g.Out, Value: 1269})
 
-	a.ext.Activated(func() {
-		a.ShowWindow()
-		a.AddLog("Extension activated!")
-	})
-
-	// Intercept packets
-	a.ext.Intercept(g.In.Id("OBJECTS")).With(a.handleObjects)
-	a.ext.Intercept(g.In.Id("ACTIVEOBJECT_ADD")).With(a.handleObjectAdd)
-	a.ext.Intercept(g.In.Id("ACTIVEOBJECT_UPDATE")).With(a.handleObjectAdd)
-	a.ext.Intercept(g.In.Id("ACTIVEOBJECT_REMOVE")).With(a.handleObjectRemove)
-	a.ext.Intercept(g.In.Id("STATUS")).With(a.handleStatus)
-	a.ext.Intercept(g.In.Id("BULLETIN")).With(a.handleBulletin)
-
-	// Start the logic loop
-	go a.pursuitLoop()
-
-	a.AddLog("Extension registered. Waiting for connection...")
-	go a.ext.Run()
-}
-
-func (a *App) AddLog(msg string) {
-	fullMsg := fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), msg)
-	log.Println(fullMsg)
-	a.mu.Lock()
-	a.logs = append(a.logs, fullMsg)
-	if len(a.logs) > 50 {
-		a.logs = a.logs[len(a.logs)-50:]
-	}
-	logsCopy := make([]string, len(a.logs))
-	copy(logsCopy, a.logs)
-	a.mu.Unlock()
-	if a.ctx != nil {
-		go runtime.EventsEmit(a.ctx, "logsUpdate", logsCopy)
-	}
-}
-
-func (a *App) handleObjects(e *g.Intercept) {
-	data := e.Packet.Data
-	parts := bytes.Split(data, []byte{0x02})
-	if len(parts) < 2 { return }
-	
-	for i := 1; i < len(parts)-3; i += 4 {
-		id := string(parts[i])
-		name := string(parts[i+1])
-		loc := string(parts[i+2])
-		a.addObject(id, name, loc)
-	}
-}
-
-func (a *App) handleObjectAdd(e *g.Intercept) {
-	data := e.Packet.Data
-	parts := bytes.Split(data, []byte{0x02})
-	if len(parts) < 3 { return }
-
-	id := string(parts[0])
-	numericID := ""
-	for i := 0; i <= len(id)-1; i++ {
-		if id[i] >= '0' && id[i] <= '9' {
-			start := i
-			for i < len(id) && id[i] >= '0' && id[i] <= '9' { i++ }
-			numericID = id[start:i]
-			break
-		}
-	}
-	if numericID != "" { id = numericID }
-	
-	name := string(parts[1])
-	locFull := string(parts[2]) 
-	a.addObject(id, name, locFull)
-}
-
-func (a *App) addObject(id, name, locFull string) {
-	nameLower := strings.ToLower(name)
-	isHammer := strings.Contains(nameLower, "hammer")
-	isPresent := strings.Contains(nameLower, "present")
-
-	if !isHammer && !isPresent {
-		return
-	}
-
-	loc := locFull
-	if iihIdx := strings.Index(locFull, "IIH"); iihIdx != -1 {
-		loc = locFull[:iihIdx]
-	} else if dotIdx := strings.Index(locFull, "1.0"); dotIdx != -1 {
-		loc = locFull[:dotIdx]
-	}
-	loc = strings.TrimSpace(strings.TrimRight(loc, "\x02"))
-
-	cleanName := "present"
-	if isHammer {
-		cleanName = "toby_hammer"
-	}
-
-	a.mu.Lock()
-	a.roomItems[id] = TargetItem{
-		ID:        id,
-		Name:      cleanName,
-		Loc:       loc,
-		AddedAt:   time.Now(),
-		IsPresent: isPresent,
-	}
-	a.mu.Unlock()
-
-	a.AddLog(fmt.Sprintf("[ROOM] Detected %s (ID: %s) at %s", cleanName, id, loc))
-}
-
-func (a *App) handleObjectRemove(e *g.Intercept) {
-	data := string(e.Packet.Data)
-	id := ""
-	for i := 0; i <= len(data)-9; i++ {
-		sub := data[i : i+9]
-		isDigit := true
-		for _, c := range sub {
-			if c < '0' || c > '9' { isDigit = false; break }
-		}
-		if isDigit { id = sub; break }
-	}
-	if id != "" { a.removeObject(id) }
-}
-
-func (a *App) removeObject(id string) {
-	a.mu.Lock()
-	if _, exists := a.roomItems[id]; exists {
-		delete(a.roomItems, id)
-		if a.activeTargetID == id { a.activeTargetID = "" }
-		a.mu.Unlock()
-		a.AddLog(fmt.Sprintf("[ROOM] Removed ID %s", id))
-	} else {
-		a.mu.Unlock()
-	}
-}
-
-func (a *App) handleStatus(e *g.Intercept) {
-	// Status tracking
-}
-
-func (a *App) handleBulletin(e *g.Intercept) {
-	data := string(e.Packet.Data)
-	if strings.Contains(data, "Anniversary Present") {
-		if strings.Contains(data, "found nothing") {
-			a.AddLog("[EVENT] Opened present: Found nothing.")
-		} else {
-			a.AddLog("[EVENT] Opened present: Item found!")
-		}
-	}
-}
-
-func (a *App) pursuitLoop() {
-	a.AddLog("[CORE] Pursuit loop started.")
-	lastHeartbeat := time.Now()
-	
-	for {
-		time.Sleep(1000 * time.Millisecond)
-		
+	// Intercept USER_OBJECT (Header 5) to get our own ID
+	ext.Intercept(g.In.Id("USER_OBJECT")).With(func(e *g.Intercept) {
+		id := e.Packet.ReadInt()
 		a.mu.Lock()
-		enabled := a.enabled
-		activeID := a.activeTargetID
-		hammerHeld := a.hammerHeld
-		
-		items := make([]TargetItem, 0, len(a.roomItems))
-		for _, it := range a.roomItems { items = append(items, it) }
+		a.myID = id
 		a.mu.Unlock()
+		a.addLog(fmt.Sprintf("Detected my player ID: %d", id))
+	})
 
-		if !enabled {
-			continue
-		}
-
-		// Heartbeat logging every 5 seconds when idle
-		if time.Since(lastHeartbeat) > 5*time.Second {
-			goal := "TOBY_HAMMER"
-			if hammerHeld { goal = "PRESENTS" }
-			status := "BUSY"
-			if activeID == "" { status = "IDLE" }
-			
-			a.AddLog(fmt.Sprintf("[STATUS] State: %s | Goal: %s | Items in room: %d", status, goal, len(items)))
-			lastHeartbeat = time.Now()
-		}
-
-		if activeID != "" {
-			continue
-		}
-
-		var bestTarget *TargetItem
-		if !hammerHeld {
-			for i := range items {
-				if items[i].Name == "toby_hammer" {
-					bestTarget = &items[i]
-					break
-				}
+	// Intercept STATUS (Header 34) to track our position and hammer status
+	ext.Intercept(g.In.Id("STATUS")).With(func(e *g.Intercept) {
+		data := string(e.Packet.Data)
+		entries := strings.Split(data, "\x02")
+		for _, entry := range entries {
+			if len(entry) < 6 {
+				continue
 			}
-		} else {
-			var newestTarget *TargetItem
-			for i := range items {
-				if items[i].IsPresent {
-					if newestTarget == nil || items[i].AddedAt.After(newestTarget.AddedAt) {
-						newestTarget = &items[i]
+			// ID is 2 bytes
+			id := decodePos(entry[0], entry[1])
+			
+			a.mu.Lock()
+			if id == a.myID {
+				a.myX = decodePos(entry[2], entry[3])
+				a.myY = decodePos(entry[4], entry[5])
+				
+				// Detect hammer being held (e.g. /hmr 1/)
+				if strings.Contains(entry, "hmr 1/") {
+					if !a.hasHammer {
+						a.addLog("Detected hammer in hand.")
+						a.hasHammer = true
+						a.startHammerTimer()
 					}
 				}
+
+				// Check if we arrived at target
+				if a.collectEnabled && a.isWalking && a.myX == a.targetX && a.myY == a.targetY {
+					a.isWalking = false
+					go a.handleArrival()
+				}
 			}
-			bestTarget = newestTarget
-		}
-
-		if bestTarget != nil {
-			a.mu.Lock()
-			a.activeTargetID = bestTarget.ID
 			a.mu.Unlock()
-			go a.executePursuit(*bestTarget)
 		}
-	}
-}
+	})
 
-func (a *App) executePursuit(target TargetItem) {
-	a.AddLog(fmt.Sprintf(">>> PURSUING %s (ID: %s) <<<", strings.ToUpper(target.Name), target.ID))
-	
-	if target.Name == "toby_hammer" {
-		// Phase 1: Talk to Hammer (Use it)
-		a.UpdateStatus("TALKING TO HAMMER")
-		a.Interact(target.ID)
-		
-		// Phase 2: Wait 6s
-		a.AddLog("Waiting 6 seconds before walking to tile...")
-		time.Sleep(6 * time.Second)
-		
-		// Phase 3: Walk onto tile
-		a.UpdateStatus("WALKING ONTO TILE")
-		a.MoveToLoc(target.Loc, false)
-		
-		// Wait for pickup (hammer removed)
-		for i := 0; i < 10; i++ {
-			time.Sleep(1 * time.Second)
-			a.mu.Lock()
-			_, exists := a.roomItems[target.ID]
-			a.mu.Unlock()
-			if !exists {
-				a.AddLog("Hammer picked up!")
-				a.SetHammerHeld(true)
-				break
-			}
-		}
-		
-		a.mu.Lock()
-		a.activeTargetID = ""
-		a.mu.Unlock()
-		a.UpdateStatus(a.getWaitingStatus())
-		return
-	}
-
-	if target.IsPresent {
-		// Phase 5: Walk next to it
-		a.UpdateStatus("MOVING TO PRESENT")
-		a.MoveToLoc(target.Loc, true)
-		
-		// Phase 6: Wait 6s once near it
-		a.AddLog("Waiting 6 seconds near present...")
-		time.Sleep(6 * time.Second)
-		
-		// Phase 7: Open it
-		a.mu.Lock()
-		_, stillExists := a.roomItems[target.ID]
-		if !stillExists {
-			a.activeTargetID = ""
-			a.mu.Unlock()
-			a.AddLog("[ABORT] Present is gone.")
-			a.UpdateStatus(a.getWaitingStatus())
+	// Intercept ACTIVEOBJECT_ADD (Header 93) to detect hammers and presents
+	ext.Intercept(g.In.Id("ACTIVEOBJECT_ADD")).With(func(e *g.Intercept) {
+		data := string(e.Packet.Data)
+		fields := strings.Split(data, "\x02")
+		if len(fields) < 3 {
 			return
 		}
-		a.mu.Unlock()
 
-		a.UpdateStatus("OPENING PRESENT")
-		a.Interact(target.ID)
-		time.Sleep(2000 * time.Millisecond)
+		id := fields[0]
+		name := fields[1]
+		loc := fields[2]
+		if len(loc) < 4 {
+			return
+		}
+		ox := decodePos(loc[0], loc[1])
+		oy := decodePos(loc[2], loc[3])
 
 		a.mu.Lock()
-		a.activeTargetID = ""
+		defer a.mu.Unlock()
+
+		if strings.Contains(name, "hammer") {
+			a.addLog(fmt.Sprintf("🔨 Hammer appeared! ID=%s at (%d, %d)", id, ox, oy))
+			if !a.collectEnabled || a.hasHammer || a.isWalking {
+				return
+			}
+			a.startWalking(id, "hammer", ox, oy, loc[:4])
+		} else if strings.Contains(name, "present") {
+			a.addLog(fmt.Sprintf("🎁 Present appeared! ID=%s at (%d, %d)", id, ox, oy))
+			a.presents[id] = presentInfo{id: id, data: []byte(loc[:4]), x: ox, y: oy}
+			
+			if !a.collectEnabled || !a.hasHammer || a.isWalking {
+				return
+			}
+			a.seekNextPresent()
+		}
+	})
+
+	// Intercept ACTIVEOBJECT_REMOVE (Header 94) to clear targets
+	ext.Intercept(g.In.Id("ACTIVEOBJECT_REMOVE")).With(func(e *g.Intercept) {
+		id := string(e.Packet.Data)
+		a.mu.Lock()
+		delete(a.presents, id)
+		if a.targetID == id {
+			a.addLog(fmt.Sprintf("Target %s removed, stopping.", id))
+			a.isWalking = false
+			a.targetID = ""
+		}
 		a.mu.Unlock()
-		a.UpdateStatus(a.getWaitingStatus())
-	}
+	})
+
+	ext.Run()
 }
 
-func (a *App) legacyInjectOut(data []byte) {
-	if a.ext == nil || len(data) < 2 { return }
-	// Shockwave header: (c1-64)*64 + (c2-64)
-	headerValue := uint16(data[0]-64)*64 + uint16(data[1]-64)
-	a.ext.SendPacket(&g.Packet{
-		Header: g.Header{Dir: g.Out, Value: headerValue},
-		Data:   data[2:],
+func (a *App) startHammerTimer() {
+	if a.hammerTimer != nil {
+		a.hammerTimer.Stop()
+	}
+	a.hammerTimer = time.AfterFunc(5*time.Minute, func() {
+		a.mu.Lock()
+		a.hasHammer = false
+		a.addLog("Hammer timer expired. Internal state reset.")
+		a.mu.Unlock()
 	})
 }
 
-func (a *App) MoveToLoc(locStr string, walkNextTo bool) {
-	if a.ext == nil { return }
-	
-	// Clean the input: remove prefix if present
-	locStr = strings.TrimPrefix(locStr, "Su")
-	// Remove any existing 'H' terminator for processing
-	locStr = strings.TrimSuffix(locStr, "H")
-	
-	coords := []byte(locStr)
-	if len(coords) < 2 { return }
+func (a *App) ResetHammer() {
+	a.mu.Lock()
+	a.hasHammer = false
+	if a.hammerTimer != nil {
+		a.hammerTimer.Stop()
+	}
+	a.mu.Unlock()
+	a.addLog("Hammer status reset manually.")
+}
 
-	if walkNextTo {
-		if coords[0] > 64 { 
-			coords[0]-- 
-		} else if coords[1] > 64 {
-			coords[1]--
+func (a *App) startWalking(id string, itemType string, ox, oy int, rawLoc string) {
+	a.mu.Lock()
+	mx, my := a.myX, a.myY
+	a.mu.Unlock()
+
+	tx, ty := ox, oy
+	finalLoc := []byte(rawLoc)
+
+	if itemType == "present" {
+		// Walk to a neighbor
+		tx, ty = a.getBestNeighbor(ox, oy, mx, my)
+		b1, b2 := encodePos(tx)
+		b3, b4 := encodePos(ty)
+		finalLoc = []byte{b1, b2, b3, b4}
+	}
+
+	a.mu.Lock()
+	a.targetID = id
+	a.targetType = itemType
+	a.targetX = tx
+	a.targetY = ty
+	a.isWalking = true
+	a.mu.Unlock()
+
+	a.addLog(fmt.Sprintf("Walking to %s... To(%d,%d)", itemType, tx, ty))
+	// MOVE packet: Su + 4 bytes target + 6 bytes suffix
+	ext.Send(g.Out.Id("MOVE"), append(finalLoc, []byte("pljSZM")...))
+}
+
+func (a *App) getBestNeighbor(px, py, mx, my int) (int, int) {
+	neighbors := [][2]int{
+		{px + 1, py}, {px - 1, py}, {px, py + 1}, {px, py - 1},
+	}
+	bestX, bestY := px+1, py
+	minDist := 999999
+	for _, n := range neighbors {
+		dist := abs(n[0]-mx) + abs(n[1]-my)
+		if dist < minDist {
+			minDist = dist
+			bestX, bestY = n[0], n[1]
 		}
 	}
-	
-	// Payload for 'Move' (1269 -> 'Su') is [Coords] + 'H'
-	// The user confirms 'SuSASCH' works, where 'Su' is header and 'SASCH' is data.
-	finalData := append(coords, 'H')
-	
-	a.AddLog(fmt.Sprintf("Move: Su%s", string(finalData)))
-	
-	// Construct the full legacy packet: 'Su' + data
-	fullPacket := append([]byte{'S', 'u'}, finalData...)
-	a.legacyInjectOut(fullPacket)
-	
-	// Also send LookTo (79 -> 'AO') to face the tile
-	if len(coords) >= 2 {
-		lookData := append(coords, 'H') // Or just coords? Origins LookTo usually has 'H' too
-		lookPacket := append([]byte{'A', 'O'}, lookData...)
-		a.legacyInjectOut(lookPacket)
+	return bestX, bestY
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
 	}
+	return v
 }
 
-func (a *App) Interact(id string) {
-	if a.ext == nil { return }
-	// Header 74 = 'AJ'
-	data := "@I" + id + "@A0"
-	a.AddLog(fmt.Sprintf("Interact ID %s", id))
-	fullPacket := append([]byte{'A', 'J'}, []byte(data)...)
-	a.legacyInjectOut(fullPacket)
-}
-
-func (a *App) CarryItem(itemID string) {
-	if a.ext == nil { return }
-	// Header 97 = 'Aa'
-	a.AddLog(fmt.Sprintf("CarryItem ID %s", itemID))
-	fullPacket := append([]byte{'A', 'a'}, []byte(itemID)...)
-	a.legacyInjectOut(fullPacket)
-}
-
-func (a *App) getWaitingStatus() string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if !a.enabled { return "IDLE" }
-	if a.hammerHeld { return "WAITING FOR PRESENTS" }
-	return "WAITING FOR HAMMER"
-}
-
-func (a *App) ToggleEvent(enabled bool) {
-	a.mu.Lock()
-	a.enabled = enabled
-	a.activeTargetID = ""
-	a.consecutiveMisses = 0
-	if !enabled {
-		a.simulating = false
-		a.roomItems = make(map[string]TargetItem)
-		a.mu.Unlock()
-		a.UpdateStatus("IDLE")
-		a.AddLog("Bot DISABLED.")
-	} else {
-		held := a.hammerHeld
-		a.mu.Unlock()
-		if held { a.UpdateStatus("WAITING FOR PRESENTS") } else { a.UpdateStatus("WAITING FOR HAMMER") }
-		a.AddLog("Bot ENABLED.")
-	}
-}
-
-func (a *App) SimulateDrop() {
-	a.mu.Lock()
-	if a.simulating { a.mu.Unlock(); return }
-	a.simulating = true
-	a.hammerHeld = false
-	a.mu.Unlock()
-
-	a.AddLog("--- SIMULATION STARTED ---")
-	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "simulatingUpdate", true)
-		runtime.EventsEmit(a.ctx, "hammerHeldUpdate", false)
-	}
-	
-	go func() {
-		defer func() {
-			a.mu.Lock()
-			a.simulating = false
-			a.mu.Unlock()
-			a.AddLog("--- SIMULATION ENDED ---")
-			if a.ctx != nil { runtime.EventsEmit(a.ctx, "simulatingUpdate", false) }
-		}()
-		// Simulation using user's example coordinates
-		// PBPC is the requested walking tile for the hammer
-		a.addObject("sim_h", "toby_hammer", "PBPCIIH1.0")
-		a.AddLog("[SIM] Hammer spawned at PBPC. Bot should Talk -> Wait 6s -> Walk.")
-		
-		// Wait for bot to "pick up"
-		time.Sleep(15 * time.Second)
-		
-		a.SetHammerHeld(true)
-		a.removeObject("sim_h")
-		time.Sleep(2 * time.Second)
-		
-		locs := []string{"PAQC", "RASE"}
-		for i, l := range locs {
-			id := fmt.Sprintf("sim_p%d", i)
-			a.addObject(id, "present", l+"IIH1.0")
-			a.AddLog(fmt.Sprintf("[SIM] Present %d spawned at %s. Bot should Walk -> Wait 6s -> Open.", i, l))
-			time.Sleep(15 * time.Second)
-			a.removeObject(id)
-			time.Sleep(1 * time.Second)
-		}
-	}()
-}
-
-func (a *App) StopSimulation() {
-	a.mu.Lock()
-	a.simulating = false
-	a.mu.Unlock()
-}
-
-func (a *App) ResetHammer() { a.SetHammerHeld(false) }
-
-func (a *App) SetHammerHeld(held bool) {
-	a.mu.Lock()
-	a.hammerHeld = held
-	a.mu.Unlock()
-	a.AddLog(fmt.Sprintf("Hammer state: %v", held))
-	a.UpdateStatus(a.getWaitingStatus())
-	if a.ctx != nil { runtime.EventsEmit(a.ctx, "hammerHeldUpdate", held) }
-}
-
-func (a *App) UpdateStatus(status string) {
-	a.mu.Lock()
-	a.status = status
-	a.mu.Unlock()
-	if a.ctx != nil { runtime.EventsEmit(a.ctx, "statusUpdate", status) }
-}
-
-func (a *App) GetStatus() string {
-	a.mu.Lock(); defer a.mu.Unlock(); return a.status
-}
-
-func (a *App) GetHammerHeld() bool {
-	a.mu.Lock(); defer a.mu.Unlock(); return a.hammerHeld
-}
-
-func (a *App) GetLogs() []string {
-	a.mu.Lock(); defer a.mu.Unlock(); return a.logs
-}
-
-func (a *App) LogRoomState() {
-	a.mu.Lock(); defer a.mu.Unlock()
-	a.AddLog(fmt.Sprintf("--- ROOM STATE (%d) ---", len(a.roomItems)))
-	for id, it := range a.roomItems { a.AddLog(fmt.Sprintf("[%s] %s @ %s", id, it.Name, it.Loc)) }
-}
-
-func (a *App) TestMove(coords string) {
-	if a.ext == nil { return }
-	
-	// If input is hex (e.g. 53755042504348), inject it directly as-is
-	if b, err := hex.DecodeString(coords); err == nil && len(b) >= 2 {
-		a.AddLog(fmt.Sprintf("TestMove: Injecting TOTAL RAW hex %s", coords))
-		// For Shockwave, header is encoded as (c1-64)*64 + (c2-64)
-		headerValue := uint16(b[0]-64)*64 + uint16(b[1]-64)
-		a.ext.SendPacket(&g.Packet{Header: g.Header{Dir: g.Out, Value: headerValue}, Data: b[2:]})
+func (a *App) seekNextPresent() {
+	if len(a.presents) == 0 {
 		return
 	}
-	
-	// Otherwise, treat as coordinates and use MoveToLoc
-	a.AddLog(fmt.Sprintf("TestMove: Testing location %s", coords))
-	a.MoveToLoc(coords, false)
+	// Pick any present for now
+	for id, p := range a.presents {
+		a.startWalking(id, "present", p.x, p.y, string(p.data))
+		break
+	}
 }
 
-func (a *App) ShowWindow() {
-	if a.ctx != nil { runtime.WindowShow(a.ctx) }
+func (a *App) handleArrival() {
+	a.mu.Lock()
+	id := a.targetID
+	itemType := a.targetType
+	enabled := a.collectEnabled
+	a.mu.Unlock()
+	
+	if !enabled || id == "" {
+		return
+	}
+
+	if itemType == "hammer" {
+		a.addLog("Arrived at hammer. Waiting 6s...")
+		time.Sleep(6 * time.Second)
+		a.addLog(fmt.Sprintf("Picking up hammer %s...", id))
+		a.pickup(id)
+		
+		a.mu.Lock()
+		a.hasHammer = true
+		a.startHammerTimer()
+		a.mu.Unlock()
+	} else {
+		a.addLog(fmt.Sprintf("Arrived next to present %s. Picking up...", id))
+		a.pickup(id)
+	}
+
+	// Seek next if we have hammer
+	a.mu.Lock()
+	if a.hasHammer {
+		a.seekNextPresent()
+	}
+	a.mu.Unlock()
 }
+
+func (a *App) pickup(id string) {
+	// AJ @I ID @A0
+	pickupData := []byte("@I" + id + "@A0")
+	ext.Send(g.Out.Id("PICKUP"), pickupData)
+}
+
+func (a *App) ToggleCollect(enabled bool) {
+	a.mu.Lock()
+	a.collectEnabled = enabled
+	a.mu.Unlock()
+	a.addLog(fmt.Sprintf("Auto-Collect: %v", enabled))
+}
+
+func (a *App) addLog(msg string) {
+	a.mu.Lock()
+	a.logs = append(a.logs, msg)
+	if len(a.logs) > 100 {
+		a.logs = a.logs[1:]
+	}
+	a.mu.Unlock()
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "logsUpdate", a.logs)
+	}
+}
+
+func (a *App) TestMove(input string) {
+	data, err := hex.DecodeString(input)
+	if err != nil || len(data) < 2 {
+		a.addLog(fmt.Sprintf("Invalid or too short hex: %s", input))
+		return
+	}
+	headerVal := uint16(int(data[1]-64) + int(data[0]-64)*64)
+	a.addLog(fmt.Sprintf("Sending packet: Header=%d, DataHex=%x", headerVal, data[2:]))
+	ext.Headers().Add("TEST_MOVE", g.Header{Dir: g.Out, Value: headerVal})
+	ext.Send(g.Out.Id("TEST_MOVE"), data[2:])
+}
+
+func (a *App) ToggleEvent(enabled bool) { a.addLog(fmt.Sprintf("Toggle Event: %v", enabled)) }
+func (a *App) SetHammerHeld(held bool) {
+	a.mu.Lock()
+	a.hasHammer = held
+	a.mu.Unlock()
+	a.addLog(fmt.Sprintf("Hammer held set to: %v", held))
+}
+func (a *App) SimulateDrop() { a.addLog("Simulate Drop stub") }
+func (a *App) StopSimulation() { a.addLog("Stop Simulation stub") }
+func (a *App) GetLogs() []string { return a.logs }
+func (a *App) GetStatus() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.hasHammer {
+		return "HOLDING HAMMER"
+	}
+	return "WAITING FOR HAMMER"
+}
+func (a *App) GetHammerHeld() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.hasHammer
+}
+func (a *App) LogRoomState() { a.addLog("Log Room State stub") }
 
 func main() {
 	app := NewApp()
+
 	err := wails.Run(&options.App{
 		Title:  "Anniversary Bot",
 		Width:  400,
-		Height: 600,
-		AssetServer: &assetserver.Options{ Assets: assets },
+		Height: 500,
+		AssetServer: &assetserver.Options{
+			Assets: assets,
+		},
 		OnStartup: app.startup,
-		Bind: []interface{}{ app },
+		Bind: []interface{}{
+			app,
+		},
 	})
-	if err != nil { log.Fatal(err) }
+
+	if err != nil {
+		log.Fatal(err)
+	}
 }
