@@ -63,19 +63,18 @@ func (a *App) startup(ctx context.Context) {
 	a.ext = g.NewExt(g.ExtInfo{
 		Title:       "Anniversary Bot",
 		Description: "Automates Toby Hammer and Presents",
-		Version:     "1.0.5",
+		Version:     "1.0.6",
 		Author:      "Gemini CLI",
 	})
 
-	// Register headers
-	a.ext.Headers().Add("ACTIVEOBJECT_ADD", g.Header{Dir: g.In, Value: 93})
-	a.ext.Headers().Add("ACTIVEOBJECT_REMOVE", g.Header{Dir: g.In, Value: 94})
+	// Register headers for Habbo Origins (Shockwave)
+	a.ext.Headers().Add("STATUS", g.Header{Dir: g.In, Value: 34})
+	a.ext.Headers().Add("OBJECTS", g.Header{Dir: g.In, Value: 32})
+	a.ext.Headers().Add("REMOVE_ITEM", g.Header{Dir: g.In, Value: 84})
 	a.ext.Headers().Add("SetStuffData", g.Header{Dir: g.Out, Value: 74})
-	a.ext.Headers().Add("Move", g.Header{Dir: g.Out, Value: 75})
+	a.ext.Headers().Add("Move", g.Header{Dir: g.Out, Value: 1269})
 	a.ext.Headers().Add("CarryItem", g.Header{Dir: g.Out, Value: 97})
-	a.ext.Headers().Add("TREASURE_MAP", g.Header{Dir: g.In, Value: 3601})
-	a.ext.Headers().Add("BACKPACK_UPDATE", g.Header{Dir: g.In, Value: 1241})
-	a.ext.Headers().Add("NOTIFICATION", g.Header{Dir: g.In, Value: 680})
+	a.ext.Headers().Add("Pong", g.Header{Dir: g.Out, Value: 196})
 
 	a.ext.Activated(func() {
 		a.ShowWindow()
@@ -83,17 +82,36 @@ func (a *App) startup(ctx context.Context) {
 	})
 
 	// Intercept packets
-	a.ext.Intercept(g.In.Id("ACTIVEOBJECT_ADD")).With(a.handleObjectAdd)
-	a.ext.Intercept(g.In.Id("ACTIVEOBJECT_REMOVE")).With(a.handleObjectRemove)
-	a.ext.Intercept(g.In.Id("TREASURE_MAP")).With(a.handleReward)
-	a.ext.Intercept(g.In.Id("BACKPACK_UPDATE")).With(a.handleReward)
-	a.ext.Intercept(g.In.Id("NOTIFICATION")).With(a.handleReward)
+	a.ext.Intercept(g.In.Id("OBJECTS")).With(a.handleObjects)
+	a.ext.Intercept(g.In.Id("REMOVE_ITEM")).With(a.handleObjectRemove)
+	a.ext.Intercept(g.In.Id("STATUS")).With(a.handleStatus)
 
 	// Start the logic loop
 	go a.pursuitLoop()
 
 	a.AddLog("Extension registered. Waiting for connection...")
 	go a.ext.Run()
+}
+
+func (a *App) handleObjects(e *g.Intercept) {
+	data := e.Packet.Data
+	// Shockwave OBJECTS (32) format: [numObjects][2]ID[2]Name[2]Loc[2]StuffData[2]...
+	parts := bytes.Split(data, []byte{0x02})
+	if len(parts) < 2 {
+		return
+	}
+
+	// Skip the first part (number of objects)
+	for i := 1; i < len(parts)-3; i += 4 {
+		id := string(parts[i])
+		name := string(parts[i+1])
+		loc := string(parts[i+2])
+		a.addObject(id, name, loc)
+	}
+}
+
+func (a *App) handleStatus(e *g.Intercept) {
+	// Status (34) can be used to track own position if needed
 }
 
 func (a *App) pursuitLoop() {
