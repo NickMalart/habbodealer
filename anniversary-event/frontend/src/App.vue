@@ -4,19 +4,29 @@ import {EventsOn} from '../wailsjs/runtime'
 import {
   ToggleEvent,
   ResetHammer,
-  GetLogs
+  GetLogs,
+  GetStatus
 } from '../wailsjs/go/main/App'
 
 const logs = ref([])
 const enabled = ref(false)
+const status = ref('IDLE')
 
 onMounted(() => {
   GetLogs().then(result => {
     logs.value = result
   })
 
+  GetStatus().then(result => {
+    status.value = result
+  })
+
   EventsOn('logsUpdate', newLogs => {
     logs.value = newLogs
+  })
+
+  EventsOn('statusUpdate', newStatus => {
+    status.value = newStatus
   })
 })
 
@@ -46,7 +56,7 @@ function handleCopyLogs() {
     <div class="actions">
       <div class="status-box">
         <div :class="['status-indicator', enabled ? 'active' : 'inactive']">
-          {{ enabled ? 'RUNNING' : 'IDLE' }}
+          {{ status }}
         </div>
         <button @click="handleToggle" :class="enabled ? 'btn-stop' : 'btn-start'">
           {{ enabled ? 'Disable' : 'Enable' }}

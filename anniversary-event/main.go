@@ -25,6 +25,7 @@ type App struct {
 	mu      sync.Mutex
 	logs    []string
 	enabled bool
+	status  string
 
 	// Event State
 	hammerHeld bool
@@ -32,7 +33,8 @@ type App struct {
 
 func NewApp() *App {
 	return &App{
-		logs: []string{"Anniversary Bot initialized..."},
+		logs:   []string{"Anniversary Bot initialized..."},
+		status: "IDLE",
 	}
 }
 
@@ -42,7 +44,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext = g.NewExt(g.ExtInfo{
 		Title:       "Anniversary Bot",
 		Description: "Automates Toby Hammer and Presents",
-		Version:     "1.0.0",
+		Version:     "1.0.1",
 		Author:      "Gemini CLI",
 	})
 
@@ -65,6 +67,21 @@ func (a *App) startup(ctx context.Context) {
 	go a.ext.Run()
 }
 
+func (a *App) UpdateStatus(status string) {
+	a.mu.Lock()
+	a.status = status
+	a.mu.Unlock()
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "statusUpdate", status)
+	}
+}
+
+func (a *App) GetStatus() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.status
+}
+
 func (a *App) handleObjectAdd(e *g.Intercept) {
 	a.mu.Lock()
 	enabled := a.enabled
@@ -75,16 +92,7 @@ func (a *App) handleObjectAdd(e *g.Intercept) {
 		return
 	}
 
-	// Packet structure for 93: [ID][Name][...][LocationString]
-	// We need to parse this carefully.
-	data := e.Packet.Data
-	
-	// ID is 9 digits, usually encoded as string or VL64? 
-	// Snapshot says "a 9-digit unique ID"
-	// Let's assume it's string for now if it's easy to find.
-	// Actually, let's use a simpler approach: scan the data for known names.
-	
-	packetStr := string(data)
+	packetStr := string(e.Packet.Data)
 	
 	if strings.Contains(packetStr, "toby_hammer") && !hammerHeld {
 		a.AddLog(">>> TOBY HAMMER DETECTED! <<<")
@@ -107,8 +115,6 @@ func (a *App) processObject(packetStr string, targetName string) {
 	}
 	
 	locIdx := -1
-	// Look for a pattern like [Char][Char][Char][Char]IIH or similar
-	// Location string is usually preceded by a delimiter or fixed offset
 	if dotIdx := strings.LastIndex(packetStr, "1.0"); dotIdx != -1 {
 		locIdx = dotIdx - 7
 	} else if dotIdx := strings.LastIndex(packetStr, ".0"); dotIdx != -1 {
@@ -116,7 +122,6 @@ func (a *App) processObject(packetStr string, targetName string) {
 	}
 
 	if locIdx < 0 || locIdx+4 >= len(packetStr) {
-		// Fallback: look for IIH
 		if iihIdx := strings.LastIndex(packetStr, "IIH"); iihIdx != -1 {
 			locIdx = iihIdx - 4
 		}
@@ -127,7 +132,7 @@ func (a *App) processObject(packetStr string, targetName string) {
 		return
 	}
 	
-	locStr := packetStr[locIdx : locIdx+4] // Take the first 4 chars (X, padding, Y, padding)
+	locStr := packetStr[locIdx : locIdx+4]
 	x := int(locStr[0]) - 64
 	y := int(locStr[2]) - 64
 	
@@ -157,17 +162,23 @@ func (a *App) processObject(packetStr string, targetName string) {
 	a.AddLog(fmt.Sprintf("Interacting with ID: %s", id))
 	
 	// 1. Move
+	a.UpdateStatus(fmt.Sprintf("MOVING TO %s", strings.ToUpper(targetName)))
 	a.MoveToLoc(locStr)
 	time.Sleep(800 * time.Millisecond)
 	
 	// 2. Interact
+	a.UpdateStatus(fmt.Sprintf("OPENING %s", strings.ToUpper(targetName)))
 	a.Interact(id)
+	time.Sleep(500 * time.Millisecond)
 	
 	if targetName == "toby_hammer" {
 		a.mu.Lock()
 		a.hammerHeld = true
 		a.mu.Unlock()
 		a.AddLog("Hammer marked as held. Now watching for presents.")
+		a.UpdateStatus("WAITING FOR PRESENTS")
+	} else {
+		a.UpdateStatus("WAITING FOR PRESENTS")
 	}
 }
 
@@ -175,7 +186,6 @@ func (a *App) MoveToLoc(locStr string) {
 	if a.ext == nil {
 		return
 	}
-	// Move payload: Su[4 chars]H
 	payload := "Su" + locStr + "H"
 	a.AddLog(fmt.Sprintf("Sending Move payload: %s", payload))
 	a.ext.Send(g.Out.Id("ORIGINS_MOVE"), []byte(payload))
@@ -185,10 +195,6 @@ func (a *App) Interact(id string) {
 	if a.ext == nil {
 		return
 	}
-	
-	// AJ @I[ID]@A0
-	// @I is length 9
-	// @A is 1
 	payload := fmt.Sprintf("AJ @I%s@A0", id)
 	a.AddLog(fmt.Sprintf("Interacting with %s", id))
 	a.ext.Send(g.Out.Id("SETSTUFFDATA"), []byte(payload))
@@ -199,8 +205,17 @@ func (a *App) ToggleEvent(enabled bool) {
 	a.enabled = enabled
 	if !enabled {
 		a.hammerHeld = false
+		a.mu.Unlock()
+		a.UpdateStatus("IDLE")
+	} else {
+		held := a.hammerHeld
+		a.mu.Unlock()
+		if held {
+			a.UpdateStatus("WAITING FOR PRESENTS")
+		} else {
+			a.UpdateStatus("WAITING FOR HAMMER")
+		}
 	}
-	a.mu.Unlock()
 	
 	status := "Enabled"
 	if !enabled {
@@ -212,8 +227,12 @@ func (a *App) ToggleEvent(enabled bool) {
 func (a *App) ResetHammer() {
 	a.mu.Lock()
 	a.hammerHeld = false
+	enabled := a.enabled
 	a.mu.Unlock()
 	a.AddLog("Hammer state reset.")
+	if enabled {
+		a.UpdateStatus("WAITING FOR HAMMER")
+	}
 }
 
 func (a *App) ShowWindow() {
