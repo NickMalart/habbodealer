@@ -57,9 +57,18 @@ wails build
 if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED' -ForegroundColor Red } else { Write-Host '  OK' -ForegroundColor Green }
 Pop-Location
 
+Write-Host ('
+=== [7/8] anniversary-event (wails build) ===') -ForegroundColor Cyan
+Remove-Item (Join-Path $root 'anniversary-event\build\bin\anniversary-bot.exe') -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $root 'anniversary-event\anniversary-bot.exe') -Force -ErrorAction SilentlyContinue
+Push-Location (Join-Path $root 'anniversary-event')
+wails build
+if ($LASTEXITCODE -ne 0) { Write-Host '  FAILED' -ForegroundColor Red } else { Write-Host '  OK' -ForegroundColor Green }
+Pop-Location
+
 if (-not $SkipLauncher) {
   Write-Host ('
-=== [7/7] app-launcher (wails build) ===') -ForegroundColor Cyan
+=== [8/8] app-launcher (wails build) ===') -ForegroundColor Cyan
   Remove-Item (Join-Path $root 'app-launcher\app-launcher.exe') -Force -ErrorAction SilentlyContinue
   Remove-Item (Join-Path $root 'app-launcher\build\bin\app-launcher.exe') -Force -ErrorAction SilentlyContinue
   Push-Location (Join-Path $root 'app-launcher')

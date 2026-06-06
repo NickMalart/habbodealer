@@ -26,6 +26,7 @@ type TargetItem struct {
 	Name      string
 	Loc       string
 	AddedAt   time.Time
+	IsPresent bool
 }
 
 type App struct {
@@ -40,8 +41,9 @@ type App struct {
 	simulating bool
 
 	// Event State
-	hammerHeld     bool
-	activeTargetID string
+	hammerHeld        bool
+	activeTargetID    string
+	consecutiveMisses int
 	
 	// Room State
 	roomItems map[string]TargetItem
@@ -70,6 +72,9 @@ func (a *App) startup(ctx context.Context) {
 	a.ext.Headers().Add("ACTIVEOBJECT_REMOVE", g.Header{Dir: g.In, Value: 94})
 	a.ext.Headers().Add("SETSTUFFDATA", g.Header{Dir: g.Out, Value: 74})
 	a.ext.Headers().Add("ORIGINS_MOVE", g.Header{Dir: g.Out, Value: 1269})
+	a.ext.Headers().Add("TREASURE_MAP", g.Header{Dir: g.In, Value: 3601})
+	a.ext.Headers().Add("BACKPACK_UPDATE", g.Header{Dir: g.In, Value: 1241})
+	a.ext.Headers().Add("NOTIFICATION", g.Header{Dir: g.In, Value: 680})
 
 	a.ext.Activated(func() {
 		a.ShowWindow()
@@ -79,6 +84,9 @@ func (a *App) startup(ctx context.Context) {
 	// Intercept packets
 	a.ext.Intercept(g.In.Id("ACTIVEOBJECT_ADD")).With(a.handleObjectAdd)
 	a.ext.Intercept(g.In.Id("ACTIVEOBJECT_REMOVE")).With(a.handleObjectRemove)
+	a.ext.Intercept(g.In.Id("TREASURE_MAP")).With(a.handleReward)
+	a.ext.Intercept(g.In.Id("BACKPACK_UPDATE")).With(a.handleReward)
+	a.ext.Intercept(g.In.Id("NOTIFICATION")).With(a.handleReward)
 
 	// Start the logic loop
 	go a.pursuitLoop()
@@ -145,7 +153,7 @@ func (a *App) executePursuit(target TargetItem) {
 	
 	// 1. Move
 	a.UpdateStatus(fmt.Sprintf("MOVING TO %s", strings.ToUpper(target.Name)))
-	a.MoveToLoc(target.Loc)
+	a.MoveToLoc(target)
 	
 	// Wait for move (5 seconds for safety)
 	time.Sleep(5000 * time.Millisecond)
@@ -178,6 +186,23 @@ func (a *App) executePursuit(target TargetItem) {
 		a.AddLog(">>> Hammer marked as held. <<<")
 		if a.ctx != nil {
 			runtime.EventsEmit(a.ctx, "hammerHeldUpdate", true)
+		}
+	} else if strings.Contains(target.Name, "present") {
+		// Recovery logic: if present still exists, increment miss count
+		_, stillExists := a.roomItems[target.ID]
+		if stillExists {
+			a.consecutiveMisses++
+			a.AddLog(fmt.Sprintf("[MISS] Present %s still exists. Miss count: %d", target.ID, a.consecutiveMisses))
+			if a.consecutiveMisses >= 3 {
+				a.hammerHeld = false
+				a.consecutiveMisses = 0
+				a.AddLog(">>> [RECOVERY] Too many misses. Resetting hammer state. <<<")
+				if a.ctx != nil {
+					runtime.EventsEmit(a.ctx, "hammerHeldUpdate", false)
+				}
+			}
+		} else {
+			a.consecutiveMisses = 0
 		}
 	}
 	a.activeTargetID = ""
@@ -230,10 +255,11 @@ func (a *App) addObject(id, name, locFull string) {
 
 	a.mu.Lock()
 	a.roomItems[id] = TargetItem{
-		ID:      id,
-		Name:    cleanName,
-		Loc:     loc,
-		AddedAt: time.Now(),
+		ID:        id,
+		Name:      cleanName,
+		Loc:       loc,
+		AddedAt:   time.Now(),
+		IsPresent: isPresent,
 	}
 	a.mu.Unlock()
 
@@ -304,12 +330,11 @@ func (a *App) SimulateDrop() {
 		a.removeObject("sim_hammer")
 		
 		// 2. Present Drops (simulating the 5-10 min window)
-		locs := []string{"RBIIH0.0", "KIIH0.0", "PCPDIIH0.0", "QCRDIIH0.0"}
-		for i := 1; i <= 8; i++ {
-			id := fmt.Sprintf("sim_present_%d", i)
-			loc := locs[i % len(locs)]
-			
-			a.addObject(id, "Manniv_present_gen", loc)
+		// We'll use coords that require 1-char vs 2-char logic
+		ids := []string{"sim_p1", "sim_p2", "sim_p3"}
+		locs := []string{"RASEIIH0.0", "KQAIIH0.0", "SCPDIIH0.0"}
+		for i, id := range ids {
+			a.addObject(id, "Manniv_present_gen", locs[i])
 			
 			// Wait for bot to pick it up (10s per present cycle)
 			for j := 0; j < 10; j++ {
@@ -377,12 +402,27 @@ func (a *App) GetHammerHeld() bool {
 	return a.hammerHeld
 }
 
-func (a *App) MoveToLoc(locStr string) {
+func (a *App) MoveToLoc(target TargetItem) {
 	if a.ext == nil {
 		return
 	}
-	// Payload is Coords + "H"
-	payload := []byte(locStr + "H")
+	
+	locStr := target.Loc
+	targetLoc := locStr
+	if target.IsPresent && len(locStr) > 0 {
+		// Try to walk to an adjacent tile for presents
+		// Decrement the first char to step one tile away
+		firstChar := locStr[0]
+		if firstChar > 35 { 
+			targetLoc = string(firstChar-1) + locStr[1:]
+		} else if len(locStr) > 1 {
+			// If first char is too small, try changing second
+			targetLoc = string(firstChar) + string(locStr[1]+1) + locStr[2:]
+		}
+	}
+
+	payload := []byte(targetLoc)
+	
 	a.AddLog(fmt.Sprintf("Sending Move: %s (Hex: %s)", string(payload), hex.EncodeToString(payload)))
 	a.ext.Send(g.Out.Id("ORIGINS_MOVE"), payload)
 }
@@ -391,10 +431,14 @@ func (a *App) Interact(id string) {
 	if a.ext == nil {
 		return
 	}
-	// Correct interaction: AJ@I[ID]@A0 (No space after AJ)
-	payload := []byte("AJ@I" + id + "@A0")
+	// Correct interaction: @I[ID]@A0 (Header AJ added by G-Earth)
+	payload := []byte("@I" + id + "@A0")
 	a.AddLog(fmt.Sprintf("Sending Interact: %s (Hex: %s)", string(payload), hex.EncodeToString(payload)))
 	a.ext.Send(g.Out.Id("SETSTUFFDATA"), payload)
+}
+
+func (a *App) handleReward(e *g.Intercept) {
+	a.AddLog(fmt.Sprintf("[REWARD] Received packet (ID %d): %s", e.Packet.Header.Value, string(e.Packet.Data)))
 }
 
 func (a *App) ToggleEvent(enabled bool) {
