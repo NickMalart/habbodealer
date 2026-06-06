@@ -263,7 +263,6 @@ func (a *App) startWalking(id string, itemType string, ox, oy int, rawLoc string
 		return
 	}
 	mx, my := a.myX, a.myY
-	sim := a.isSimulating
 	a.mu.Unlock()
 
 	// Walk to exact tile for hammer as requested, neighbor for present
@@ -370,59 +369,6 @@ func (a *App) SetMyPos(x, y int) {
 	a.myY = y
 	a.mu.Unlock()
 	a.addLog(fmt.Sprintf("Local position manually set to (%d, %d)", x, y))
-}
-
-func (a *App) simulateMovement(tx, ty int) {
-	for {
-		a.mu.Lock()
-		mx, my := a.myX, a.myY
-		id := a.myID
-		sim := a.isSimulating
-		isWalking := a.isWalking
-		a.mu.Unlock()
-
-		if !sim || !isWalking {
-			return
-		}
-
-		if mx == tx && my == ty {
-			a.addLog(fmt.Sprintf("[SIM] Arrived at (%d, %d)", mx, my))
-			return
-		}
-
-		// Move one tile
-		if mx < tx {
-			mx++
-		} else if mx > tx {
-			mx--
-		}
-		if my < ty {
-			my++
-		} else if my > ty {
-			my--
-		}
-
-		a.addLog(fmt.Sprintf("[SIM] Character stepped to (%d, %d)", mx, my))
-
-		// Emit simulated status packet locally and to client
-		// Format: ID X_byte Y_byte Z_byte /flat/0/0/0/
-		statusData := fmt.Sprintf("%s %c%c%c/flat/0/0/0", id, byte(mx+64), byte(my+64), byte(64))
-		
-		// If holding hammer, add it
-		a.mu.Lock()
-		if a.hasHammer {
-			statusData += "/hmr 1"
-		}
-		a.mu.Unlock()
-		statusData += "/"
-
-		// Update internal state
-		a.handleStatusPacket([]byte(statusData))
-		// Also send to client so they see the move
-		ext.Send(g.In.Id("STATUS"), []byte(statusData))
-
-		time.Sleep(1500 * time.Millisecond) // Clearer step-by-step movement
-	}
 }
 
 func (a *App) getBestNeighbor(px, py, mx, my int) (int, int) {
