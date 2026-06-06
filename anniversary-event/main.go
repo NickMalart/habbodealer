@@ -295,7 +295,11 @@ func (a *App) startWalking(id string, itemType string, ox, oy int, rawLoc string
 	}
 
 	a.addLog(fmt.Sprintf("🚶 Walking to %s (%d, %d) from (%d, %d). Packet Hex: 5375%x", itemType, tx, ty, mx, my, moveData))
-	ext.Send(g.Out.Id("MOVE"), moveData)
+	
+	// Mimic TestMove behavior for sending
+	a.addLog(fmt.Sprintf("Sending packet: Header=1269, DataHex=%x", moveData))
+	ext.Headers().Add("MOVE_S", g.Header{Dir: g.Out, Value: 1269})
+	ext.Send(g.Out.Id("MOVE_S"), moveData)
 
 	if sim {
 		// In simulation, we also move the character locally towards the target
@@ -538,7 +542,7 @@ func (a *App) SimulatePacket() {
 	// Force the bot to walk to the position defined in the packet (17, 21)
 	// Hammer ID from packet is "900000002"
 	a.addLog("🤖 [SIM] Forcing walk to Hammer at (17, 21)")
-	a.startWalking("900000002", "hammer", 17, 21, []byte("RBPD"))
+	a.startWalking("900000002", "hammer", 17, 21, "RBPD")
 }
 
 func (a *App) SimulateDrop() {
