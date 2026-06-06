@@ -445,11 +445,14 @@ func (a *App) ToggleEvent(enabled bool) {
 	a.mu.Lock()
 	a.enabled = enabled
 	a.activeTargetID = ""
+	a.consecutiveMisses = 0
 	if !enabled {
+		a.simulating = false // Force stop simulation
 		a.hammerHeld = false
 		a.roomItems = make(map[string]TargetItem)
 		a.mu.Unlock()
 		a.UpdateStatus("IDLE")
+		a.AddLog("Bot DISABLED. Simulation and pursuit stopped.")
 	} else {
 		held := a.hammerHeld
 		a.mu.Unlock()
@@ -458,6 +461,7 @@ func (a *App) ToggleEvent(enabled bool) {
 		} else {
 			a.UpdateStatus("WAITING FOR HAMMER")
 		}
+		a.AddLog("Bot ENABLED.")
 	}
 }
 
