@@ -1,7 +1,7 @@
 <script setup>
 import {ref, onMounted} from 'vue'
 import {EventsOn} from '../wailsjs/runtime'
-import {GetLogs} from '../wailsjs/go/main/App'
+import {GetLogs, RunSimulation} from '../wailsjs/go/main/App'
 
 const logs = ref([])
 
@@ -14,12 +14,20 @@ onMounted(() => {
     logs.value = newLogs
   })
 })
+
+function handleRunSimulation() {
+  RunSimulation()
+}
 </script>
 
 <template>
   <div class="container">
     <div class="header">
       <h1>Fresh Bot</h1>
+    </div>
+
+    <div class="controls">
+      <button @click="handleRunSimulation" class="btn-run">Run Simulation</button>
     </div>
 
     <div class="logs">
@@ -47,6 +55,28 @@ onMounted(() => {
   font-size: 1.5rem;
   text-align: center;
   color: #bb86fc;
+}
+
+.controls {
+  margin-bottom: 1rem;
+  display: flex;
+  justify-content: center;
+}
+
+.btn-run {
+  background-color: #03dac6;
+  color: #000000;
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+  font-weight: bold;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.btn-run:hover {
+  background-color: #01bfa5;
 }
 
 .logs {
