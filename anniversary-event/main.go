@@ -28,7 +28,8 @@ type App struct {
 	status  string
 
 	// Event State
-	hammerHeld bool
+	hammerHeld     bool
+	activeTargetID string
 }
 
 func NewApp() *App {
@@ -44,7 +45,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext = g.NewExt(g.ExtInfo{
 		Title:       "Anniversary Bot",
 		Description: "Automates Toby Hammer and Presents",
-		Version:     "1.0.1",
+		Version:     "1.0.2",
 		Author:      "Gemini CLI",
 	})
 
@@ -82,61 +83,109 @@ func (a *App) GetStatus() string {
 	return a.status
 }
 
+func (a *App) GetHammerHeld() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.hammerHeld
+}
+
 func (a *App) handleObjectAdd(e *g.Intercept) {
 	a.mu.Lock()
 	enabled := a.enabled
 	hammerHeld := a.hammerHeld
+	busy := a.activeTargetID != ""
 	a.mu.Unlock()
 
 	if !enabled {
 		return
 	}
 
-	packetStr := string(e.Packet.Data)
+	data := e.Packet.Data
+	packetStr := string(data)
 	
-	if strings.Contains(packetStr, "toby_hammer") && !hammerHeld {
+	// Check for targets first
+	isHammer := strings.Contains(packetStr, "toby_hammer")
+	isPresent := strings.Contains(packetStr, "Manniv_present_gen")
+
+	if isHammer || isPresent {
+		a.AddLog(fmt.Sprintf("[DEBUG] Incoming Object Packet (Len: %d): %s", len(data), packetStr))
+	}
+
+	if busy {
+		return
+	}
+	
+	if isHammer && !hammerHeld {
 		a.AddLog(">>> TOBY HAMMER DETECTED! <<<")
 		go a.processObject(packetStr, "toby_hammer")
-	} else if strings.Contains(packetStr, "Manniv_present_gen") && hammerHeld {
+	} else if isPresent && hammerHeld {
 		a.AddLog(">>> ANNIVERSARY PRESENT DETECTED! <<<")
 		go a.processObject(packetStr, "Manniv_present_gen")
 	}
 }
 
 func (a *App) handleObjectRemove(e *g.Intercept) {
-	// Optional: track if hammer was picked up
+	packetStr := string(e.Packet.Data)
+	
+	a.mu.Lock()
+	targetID := a.activeTargetID
+	a.mu.Unlock()
+
+	if strings.Contains(packetStr, "toby_hammer") || strings.Contains(packetStr, "Manniv_present_gen") {
+		a.AddLog(fmt.Sprintf("[DEBUG] Object Removed: %s", packetStr))
+	}
+	
+	if targetID != "" && strings.Contains(packetStr, targetID) {
+		a.AddLog(fmt.Sprintf("Target ID %s removed from room. Resetting search.", targetID))
+		a.mu.Lock()
+		a.activeTargetID = ""
+		enabled := a.enabled
+		held := a.hammerHeld
+		a.mu.Unlock()
+		
+		if enabled {
+			if held {
+				a.UpdateStatus("WAITING FOR PRESENTS")
+			} else {
+				a.UpdateStatus("WAITING FOR HAMMER")
+			}
+		}
+	}
 }
 
 func (a *App) processObject(packetStr string, targetName string) {
 	// Find index of targetName
 	nameIdx := strings.Index(packetStr, targetName)
 	if nameIdx == -1 {
+		a.AddLog(fmt.Sprintf("[ERROR] %s found in Contains but not in Index search?", targetName))
 		return
 	}
+	a.AddLog(fmt.Sprintf("[DEBUG] Found '%s' at index %d", targetName, nameIdx))
 	
 	locIdx := -1
+	searchMethod := ""
 	if dotIdx := strings.LastIndex(packetStr, "1.0"); dotIdx != -1 {
 		locIdx = dotIdx - 7
+		searchMethod = "1.0 offset"
 	} else if dotIdx := strings.LastIndex(packetStr, ".0"); dotIdx != -1 {
 		locIdx = dotIdx - 8
+		searchMethod = ".0 offset"
 	}
 
 	if locIdx < 0 || locIdx+4 >= len(packetStr) {
 		if iihIdx := strings.LastIndex(packetStr, "IIH"); iihIdx != -1 {
 			locIdx = iihIdx - 4
+			searchMethod = "IIH offset"
 		}
 	}
 	
 	if locIdx < 0 || locIdx+4 >= len(packetStr) {
-		a.AddLog("ERROR: Could not parse location string")
+		a.AddLog(fmt.Sprintf("[ERROR] Could not parse location string. Packet tail: %q", packetStr[max(0, len(packetStr)-20):]))
 		return
 	}
 	
 	locStr := packetStr[locIdx : locIdx+4]
-	x := int(locStr[0]) - 64
-	y := int(locStr[2]) - 64
-	
-	a.AddLog(fmt.Sprintf("Target %s found at (%d, %d) [Encoded: %s]", targetName, x, y, locStr))
+	a.AddLog(fmt.Sprintf("[DEBUG] Extracted LocString %q via %s", locStr, searchMethod))
 	
 	// Extract ID
 	var id string
@@ -155,31 +204,60 @@ func (a *App) processObject(packetStr string, targetName string) {
 	}
 	
 	if id == "" {
-		a.AddLog("ERROR: Could not find 9-digit ID")
+		a.AddLog("[ERROR] Could not find 9-digit ID in packet.")
 		return
 	}
 	
-	a.AddLog(fmt.Sprintf("Interacting with ID: %s", id))
+	a.mu.Lock()
+	a.activeTargetID = id
+	a.mu.Unlock()
+	
+	a.AddLog(fmt.Sprintf("Pursuing %s (ID: %s) at Coords [%d, %d]", targetName, id, int(locStr[0])-64, int(locStr[2])-64))
 	
 	// 1. Move
 	a.UpdateStatus(fmt.Sprintf("MOVING TO %s", strings.ToUpper(targetName)))
 	a.MoveToLoc(locStr)
-	time.Sleep(800 * time.Millisecond)
+	
+	// Wait for move to complete
+	time.Sleep(1200 * time.Millisecond)
+	
+	// Check if target is still active
+	a.mu.Lock()
+	stillActive := a.activeTargetID == id
+	a.mu.Unlock()
+	
+	if !stillActive {
+		a.AddLog(fmt.Sprintf("[ABORT] Target %s (ID: %s) was removed during movement.", targetName, id))
+		return
+	}
 	
 	// 2. Interact
 	a.UpdateStatus(fmt.Sprintf("OPENING %s", strings.ToUpper(targetName)))
 	a.Interact(id)
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(1000 * time.Millisecond)
 	
+	// If it was the hammer, mark it as held
 	if targetName == "toby_hammer" {
 		a.mu.Lock()
 		a.hammerHeld = true
+		a.activeTargetID = ""
 		a.mu.Unlock()
-		a.AddLog("Hammer marked as held. Now watching for presents.")
+		a.AddLog(">>> SUCCESS: Hammer Picked Up! <<<")
 		a.UpdateStatus("WAITING FOR PRESENTS")
 	} else {
+		a.mu.Lock()
+		a.activeTargetID = ""
+		a.mu.Unlock()
+		a.AddLog(fmt.Sprintf(">>> SUCCESS: Opened %s <<<", targetName))
 		a.UpdateStatus("WAITING FOR PRESENTS")
 	}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (a *App) MoveToLoc(locStr string) {
@@ -187,7 +265,7 @@ func (a *App) MoveToLoc(locStr string) {
 		return
 	}
 	payload := "Su" + locStr + "H"
-	a.AddLog(fmt.Sprintf("Sending Move payload: %s", payload))
+	a.AddLog(fmt.Sprintf("Sending Move: %s", payload))
 	a.ext.Send(g.Out.Id("ORIGINS_MOVE"), []byte(payload))
 }
 
@@ -196,13 +274,13 @@ func (a *App) Interact(id string) {
 		return
 	}
 	payload := fmt.Sprintf("AJ @I%s@A0", id)
-	a.AddLog(fmt.Sprintf("Interacting with %s", id))
 	a.ext.Send(g.Out.Id("SETSTUFFDATA"), []byte(payload))
 }
 
 func (a *App) ToggleEvent(enabled bool) {
 	a.mu.Lock()
 	a.enabled = enabled
+	a.activeTargetID = ""
 	if !enabled {
 		a.hammerHeld = false
 		a.mu.Unlock()
@@ -227,6 +305,7 @@ func (a *App) ToggleEvent(enabled bool) {
 func (a *App) ResetHammer() {
 	a.mu.Lock()
 	a.hammerHeld = false
+	a.activeTargetID = ""
 	enabled := a.enabled
 	a.mu.Unlock()
 	a.AddLog("Hammer state reset.")
