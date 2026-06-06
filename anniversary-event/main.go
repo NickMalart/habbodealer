@@ -154,12 +154,6 @@ func (a *App) handleStatusPacket(data []byte) {
 						a.startHammerTimerInternal()
 					}
 				}
-
-				// Check if we arrived at target
-				if a.collectEnabled && a.isWalking && a.myX == a.targetX && a.myY == a.targetY {
-					a.isWalking = false
-					go a.handleArrival()
-				}
 			}
 		}
 		a.mu.Unlock()
@@ -286,6 +280,9 @@ func (a *App) startWalking(id string, itemType string, ox, oy int, rawLoc string
 	a.isWalking = true
 	a.mu.Unlock()
 
+	// Start a monitoring goroutine to check position and trigger pickup
+	go a.monitorArrival(id, itemType, tx, ty)
+
 	// Construct MOVE packet (Header 1269 / Su)
 	// Format derived from working hex SuQBSEH:
 	// [TargetX+63][TargetY+45][OriginX+65][OriginY+49] + H
@@ -307,6 +304,51 @@ func (a *App) startWalking(id string, itemType string, ox, oy int, rawLoc string
 	if sim {
 		// In simulation, we also move the character locally towards the target
 		go a.simulateMovement(tx, ty)
+	}
+}
+
+func (a *App) monitorArrival(id, itemType string, tx, ty int) {
+	for {
+		a.mu.Lock()
+		mx, my := a.myX, a.myY
+		enabled := a.collectEnabled
+		targetID := a.targetID
+		a.mu.Unlock()
+
+		if !enabled || targetID != id {
+			return
+		}
+
+		if mx == tx && my == ty {
+			a.mu.Lock()
+			a.isWalking = false
+			a.mu.Unlock()
+			a.handleArrivalActions(id, itemType)
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+func (a *App) handleArrivalActions(id, itemType string) {
+	if itemType == "hammer" {
+		a.addLog("Arrived at hammer. Picking up...")
+		a.mu.Lock()
+		a.hasHammer = true
+		a.startHammerTimerInternal()
+		a.mu.Unlock()
+		a.emitLogs()
+		a.pickup(id)
+	} else {
+		a.addLog(fmt.Sprintf("Arrived next to present %s. Picking up...", id))
+		a.pickup(id)
+	}
+
+	a.mu.Lock()
+	hasHammer := a.hasHammer
+	a.mu.Unlock()
+	if hasHammer {
+		a.seekNextPresent()
 	}
 }
 
