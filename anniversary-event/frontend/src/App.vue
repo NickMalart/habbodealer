@@ -5,6 +5,7 @@ import {
   ToggleEvent,
   ResetHammer,
   SetHammerHeld,
+  SimulateDrop,
   GetLogs,
   GetStatus,
   GetHammerHeld
@@ -54,6 +55,10 @@ function handleIHaveHammer() {
   SetHammerHeld(true)
 }
 
+function handleSimulate() {
+  SimulateDrop()
+}
+
 function handleCopyLogs() {
   const text = logs.value.join('\n')
   navigator.clipboard.writeText(text).then(() => {
@@ -87,6 +92,7 @@ function handleCopyLogs() {
       <div class="controls">
         <button v-if="!hammerHeld" @click="handleIHaveHammer" class="btn-have-hammer">I already have Hammer</button>
         <button v-else @click="handleReset" class="btn-reset">Reset Hammer State</button>
+        <button @click="handleSimulate" class="btn-simulate">Simulate Drop</button>
         <button @click="handleCopyLogs" class="btn-copy">Copy Logs</button>
       </div>
     </div>
@@ -218,6 +224,10 @@ button:hover {
 
 .btn-reset {
   background-color: #fb8c00;
+}
+
+.btn-simulate {
+  background-color: #9c27b0;
 }
 
 .btn-copy {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"encoding/hex"
@@ -57,7 +58,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext = g.NewExt(g.ExtInfo{
 		Title:       "Anniversary Bot",
 		Description: "Automates Toby Hammer and Presents",
-		Version:     "1.0.4",
+		Version:     "1.0.5",
 		Author:      "Gemini CLI",
 	})
 
@@ -85,37 +86,42 @@ func (a *App) startup(ctx context.Context) {
 
 func (a *App) pursuitLoop() {
 	for {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(1000 * time.Millisecond)
 		
 		a.mu.Lock()
 		enabled := a.enabled
 		busy := a.activeTargetID != ""
 		hammerHeld := a.hammerHeld
-		items := a.roomItems
+		items := make([]TargetItem, 0, len(a.roomItems))
+		for _, it := range a.roomItems {
+			items = append(items, it)
+		}
 		a.mu.Unlock()
 
 		if !enabled || busy {
 			continue
 		}
 
-		// 1. Look for Hammer if not held
 		var bestTarget *TargetItem
+		
+		// 1. Look for Hammer if not held
 		if !hammerHeld {
 			for _, item := range items {
 				if strings.Contains(item.Name, "hammer") {
-					bestTarget = &item
-					break // Take any hammer immediately
+					target := item
+					bestTarget = &target
+					break
 				}
 			}
 		}
 
-		// 2. Look for Presents if hammer held (or no hammer found)
+		// 2. Look for Presents if hammer held
 		if bestTarget == nil && hammerHeld {
 			var newestTarget *TargetItem
-			for _, item := range items {
-				if strings.Contains(item.Name, "present") {
-					if newestTarget == nil || item.AddedAt.After(newestTarget.AddedAt) {
-						newestTarget = &item
+			for i := range items {
+				if strings.Contains(items[i].Name, "present") {
+					if newestTarget == nil || items[i].AddedAt.After(newestTarget.AddedAt) {
+						newestTarget = &items[i]
 					}
 				}
 			}
@@ -137,10 +143,10 @@ func (a *App) executePursuit(target TargetItem) {
 	// 1. Move
 	a.UpdateStatus(fmt.Sprintf("MOVING TO %s", strings.ToUpper(target.Name)))
 	a.MoveToLoc(target.Loc)
-
+	
 	// Wait for move (5 seconds for safety)
 	time.Sleep(5000 * time.Millisecond)
-
+	
 	// Check if still valid
 	a.mu.Lock()
 	_, stillExists := a.roomItems[target.ID]
@@ -152,6 +158,7 @@ func (a *App) executePursuit(target TargetItem) {
 		a.mu.Lock()
 		a.activeTargetID = ""
 		a.mu.Unlock()
+		a.UpdateStatus(a.getWaitingStatus())
 		return
 	}
 
@@ -159,16 +166,16 @@ func (a *App) executePursuit(target TargetItem) {
 	a.UpdateStatus(fmt.Sprintf("INTERACTING WITH %s", strings.ToUpper(target.Name)))
 	a.Interact(target.ID)
 	
-	// Give time for pickup (1.5 seconds)
-	time.Sleep(1500 * time.Millisecond)
+	// Give time for pickup (2 seconds)
+	time.Sleep(2000 * time.Millisecond)
 
 	a.mu.Lock()
 	if strings.Contains(target.Name, "hammer") {
-		// We don't mark hammerHeld here yet, we wait to see if it gets REMOVED or we assume success
-		// For now, let's assume if we sent the packet and it's removed, it worked.
-		// Actually, let's just mark it held if we finished the interaction.
 		a.hammerHeld = true
 		a.AddLog(">>> Hammer marked as held. <<<")
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "hammerHeldUpdate", true)
+		}
 	}
 	a.activeTargetID = ""
 	a.mu.Unlock()
@@ -186,49 +193,91 @@ func (a *App) getWaitingStatus() string {
 
 func (a *App) handleObjectAdd(e *g.Intercept) {
 	data := e.Packet.Data
-	packetStr := string(data)
-	
-	isHammer := strings.Contains(packetStr, "toby_hammer")
-	isPresent := strings.Contains(packetStr, "Manniv_present_gen")
+	// Split by the STX delimiter (0x02)
+	parts := bytes.Split(data, []byte{0x02})
+	if len(parts) < 3 {
+		return
+	}
+
+	id := string(parts[0])
+	name := string(parts[1])
+	locFull := string(parts[2]) // e.g. "SAPBIIH0.0"
+
+	a.addObject(id, name, locFull)
+}
+
+func (a *App) addObject(id, name, locFull string) {
+	isHammer := strings.Contains(name, "toby_hammer")
+	isPresent := strings.Contains(name, "Manniv_present_gen")
 
 	if !isHammer && !isPresent {
 		return
 	}
 
-	id := a.extractID(packetStr)
-	loc := a.extractLoc(packetStr)
-	name := "item"
-	if isHammer { name = "toby_hammer" } else { name = "present" }
-
-	if id != "" && loc != "" {
-		a.mu.Lock()
-		a.roomItems[id] = TargetItem{
-			ID:      id,
-			Name:    name,
-			Loc:     loc,
-			AddedAt: time.Now(),
-		}
-		a.mu.Unlock()
-		a.AddLog(fmt.Sprintf("[ROOM] Added %s (ID: %s) at Coords [%d, %d]", name, id, int(loc[0])-64, int(loc[2])-64))
+	// Extract coordinate part before IIH
+	loc := locFull
+	if iihIdx := strings.Index(locFull, "IIH"); iihIdx != -1 {
+		loc = locFull[:iihIdx]
 	}
+
+	cleanName := "present"
+	if isHammer {
+		cleanName = "toby_hammer"
+	}
+
+	a.mu.Lock()
+	a.roomItems[id] = TargetItem{
+		ID:      id,
+		Name:    cleanName,
+		Loc:     loc,
+		AddedAt: time.Now(),
+	}
+	a.mu.Unlock()
+
+	a.AddLog(fmt.Sprintf("[ROOM] Added %s (ID: %s) at EncodedLoc: %s", cleanName, id, loc))
+}
+
+func (a *App) SimulateDrop() {
+	a.AddLog("--- SIMULATING DROP ---")
+	
+	// Coordinates usually look like SAPB, RB, K, PCPD, etc.
+	// We'll use some known valid encoded locations from your logs:
+	// "SAPB" (Hammer loc in your logs)
+	// "RB"
+	// "K"
+	// "PCPD"
+	// "QCRD"
+	
+	go func() {
+		// 1. Hammer
+		a.addObject("999000001", "toby_hammer", "SAPBIIH0.0")
+		time.Sleep(200 * time.Millisecond)
+		
+		// 2. Some presents
+		a.addObject("999000002", "Manniv_present_gen1", "RBIIH0.0")
+		time.Sleep(200 * time.Millisecond)
+		a.addObject("999000003", "Manniv_present_gen2", "KIIH0.0")
+		time.Sleep(200 * time.Millisecond)
+		a.addObject("999000004", "Manniv_present_gen3", "PCPDIIH0.0")
+	}()
 }
 
 func (a *App) handleObjectRemove(e *g.Intercept) {
 	packetStr := string(e.Packet.Data)
-	
-	// Extract ID from remove packet (usually just the ID string)
 	id := ""
 	for i := 0; i < len(packetStr)-8; i++ {
-		isDigit := true
-		for j := 0; j < 9; j++ {
-			if packetStr[i+j] < '0' || packetStr[i+j] > '9' {
-				isDigit = false
+		if packetStr[i] >= '0' && packetStr[i] <= '9' {
+			isDigit := true
+			for j := 1; j < 9; j++ {
+				if packetStr[i+j] < '0' || packetStr[i+j] > '9' {
+					isDigit = false
+					break
+				}
+			}
+			if isDigit {
+				id = packetStr[i : i+9]
 				break
 			}
-		}
-		if isDigit {
-			id = packetStr[i : i+9]
-			break
 		}
 	}
 
@@ -245,40 +294,6 @@ func (a *App) handleObjectRemove(e *g.Intercept) {
 		}
 		a.mu.Unlock()
 	}
-}
-
-func (a *App) extractID(packetStr string) string {
-	for i := 0; i < len(packetStr)-8; i++ {
-		isDigit := true
-		for j := 0; j < 9; j++ {
-			if packetStr[i+j] < '0' || packetStr[i+j] > '9' {
-				isDigit = false
-				break
-			}
-		}
-		if isDigit {
-			return packetStr[i : i+9]
-		}
-	}
-	return ""
-}
-
-func (a *App) extractLoc(packetStr string) string {
-	locIdx := -1
-	if dotIdx := strings.LastIndex(packetStr, "1.0"); dotIdx != -1 {
-		locIdx = dotIdx - 7
-	} else if dotIdx := strings.LastIndex(packetStr, ".0"); dotIdx != -1 {
-		locIdx = dotIdx - 8
-	}
-	if locIdx < 0 || locIdx+4 >= len(packetStr) {
-		if iihIdx := strings.LastIndex(packetStr, "IIH"); iihIdx != -1 {
-			locIdx = iihIdx - 4
-		}
-	}
-	if locIdx >= 0 && locIdx+4 <= len(packetStr) {
-		return packetStr[locIdx : locIdx+4]
-	}
-	return ""
 }
 
 func (a *App) UpdateStatus(status string) {
@@ -306,6 +321,7 @@ func (a *App) MoveToLoc(locStr string) {
 	if a.ext == nil {
 		return
 	}
+	// Payload is Coords + "H"
 	payload := []byte(locStr + "H")
 	a.AddLog(fmt.Sprintf("Sending Move: %s (Hex: %s)", string(payload), hex.EncodeToString(payload)))
 	a.ext.Send(g.Out.Id("ORIGINS_MOVE"), payload)
@@ -315,7 +331,8 @@ func (a *App) Interact(id string) {
 	if a.ext == nil {
 		return
 	}
-	payload := []byte("AJ @I" + id + "@A0")
+	// Correct interaction: AJ@I[ID]@A0 (No space after AJ)
+	payload := []byte("AJ@I" + id + "@A0")
 	a.AddLog(fmt.Sprintf("Sending Interact: %s (Hex: %s)", string(payload), hex.EncodeToString(payload)))
 	a.ext.Send(g.Out.Id("SETSTUFFDATA"), payload)
 }
@@ -338,12 +355,6 @@ func (a *App) ToggleEvent(enabled bool) {
 			a.UpdateStatus("WAITING FOR HAMMER")
 		}
 	}
-	
-	status := "Enabled"
-	if !enabled {
-		status = "Disabled"
-	}
-	a.AddLog(fmt.Sprintf("Anniversary Bot %s", status))
 }
 
 func (a *App) ResetHammer() {
