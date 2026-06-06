@@ -216,8 +216,8 @@ func (a *App) processObject(packetStr string, targetName string, id string) {
 	a.UpdateStatus(fmt.Sprintf("MOVING TO %s", strings.ToUpper(targetName)))
 	a.MoveToLoc(locStr)
 	
-	// Wait for move to complete
-	time.Sleep(1200 * time.Millisecond)
+	// Wait for move to complete (2 seconds to be safe)
+	time.Sleep(2000 * time.Millisecond)
 	
 	// Check if target is still active
 	a.mu.Lock()
@@ -232,7 +232,9 @@ func (a *App) processObject(packetStr string, targetName string, id string) {
 	// 2. Interact
 	a.UpdateStatus(fmt.Sprintf("INTERACTING WITH %s", strings.ToUpper(targetName)))
 	a.Interact(id)
-	time.Sleep(1000 * time.Millisecond)
+	
+	// Give time to pick up / open (1.5 seconds)
+	time.Sleep(1500 * time.Millisecond)
 	
 	// If it was the hammer, mark it as held
 	if strings.Contains(targetName, "hammer") {
@@ -263,19 +265,19 @@ func (a *App) MoveToLoc(locStr string) {
 		return
 	}
 	// Data part is locStr + "H"
-	payload := locStr + "H"
-	a.AddLog(fmt.Sprintf("Sending Move Data: %s", payload))
-	a.ext.Send(g.Out.Id("ORIGINS_MOVE"), []byte(payload))
+	payload := []byte(locStr + "H")
+	a.AddLog(fmt.Sprintf("Sending Move Data: %s (Hex: %s)", string(payload), hex.EncodeToString(payload)))
+	a.ext.Send(g.Out.Id("ORIGINS_MOVE"), payload)
 }
 
 func (a *App) Interact(id string) {
 	if a.ext == nil {
 		return
 	}
-	// Data part is @I[ID]@A0
-	payload := fmt.Sprintf("@I%s@A0", id)
-	a.AddLog(fmt.Sprintf("Sending Interact Data: %s", payload))
-	a.ext.Send(g.Out.Id("SETSTUFFDATA"), []byte(payload))
+	// Data part is AJ @I[ID]@A0
+	payload := []byte("AJ @I" + id + "@A0")
+	a.AddLog(fmt.Sprintf("Sending Interact Data: %s (Hex: %s)", string(payload), hex.EncodeToString(payload)))
+	a.ext.Send(g.Out.Id("SETSTUFFDATA"), payload)
 }
 
 func (a *App) ToggleEvent(enabled bool) {
