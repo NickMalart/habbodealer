@@ -368,8 +368,18 @@ func (a *App) executePursuit(target TargetItem) {
 func (a *App) MoveToLoc(locStr string, walkNextTo bool) {
 	if a.ext == nil { return }
 	
+	// Strip 'Su' prefix if present
+	if strings.HasPrefix(locStr, "Su") {
+		locStr = locStr[2:]
+	}
+
 	coords := []byte(locStr)
 	if len(coords) < 2 { return }
+
+	// Origins coordinate packets should be exactly 2 chars (X, Y) + 'H'
+	if len(coords) > 2 {
+		coords = coords[:2]
+	}
 
 	if walkNextTo {
 		if coords[0] > 65 { 
@@ -378,11 +388,7 @@ func (a *App) MoveToLoc(locStr string, walkNextTo bool) {
 			coords[1]--
 		}
 	}
-
-	// Always ensure we have EXACTLY one 'H' at the end
-	for len(coords) > 0 && coords[len(coords)-1] == 'H' {
-		coords = coords[:len(coords)-1]
-	}
+	
 	coords = append(coords, 'H')
 	
 	a.AddLog(fmt.Sprintf("Move: %s", string(coords)))
