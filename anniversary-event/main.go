@@ -36,6 +36,9 @@ type App struct {
 	enabled bool
 	status  string
 
+	// Simulation state
+	simulating bool
+
 	// Event State
 	hammerHeld     bool
 	activeTargetID string
@@ -237,29 +240,87 @@ func (a *App) addObject(id, name, locFull string) {
 	a.AddLog(fmt.Sprintf("[ROOM] Added %s (ID: %s) at EncodedLoc: %s", cleanName, id, loc))
 }
 
+func (a *App) removeObject(id string) {
+	a.mu.Lock()
+	_, exists := a.roomItems[id]
+	if exists {
+		delete(a.roomItems, id)
+		a.AddLog(fmt.Sprintf("[ROOM] Removed ID %s", id))
+		if a.activeTargetID == id {
+			a.activeTargetID = ""
+			a.AddLog("Current target removed. Aborting pursuit.")
+		}
+	}
+	a.mu.Unlock()
+}
+
 func (a *App) SimulateDrop() {
-	a.AddLog("--- SIMULATING DROP ---")
-	
-	// Coordinates usually look like SAPB, RB, K, PCPD, etc.
-	// We'll use some known valid encoded locations from your logs:
-	// "SAPB" (Hammer loc in your logs)
-	// "RB"
-	// "K"
-	// "PCPD"
-	// "QCRD"
+	a.mu.Lock()
+	if a.simulating {
+		a.mu.Unlock()
+		return
+	}
+	a.simulating = true
+	a.mu.Unlock()
+
+	a.AddLog("--- SIMULATION STARTED (Hammer -> Presents Window) ---")
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "simulatingUpdate", true)
+	}
 	
 	go func() {
-		// 1. Hammer
-		a.addObject("999000001", "toby_hammer", "SAPBIIH0.0")
-		time.Sleep(200 * time.Millisecond)
+		defer func() {
+			a.mu.Lock()
+			a.simulating = false
+			a.mu.Unlock()
+			a.AddLog("--- SIMULATION ENDED ---")
+			if a.ctx != nil {
+				runtime.EventsEmit(a.ctx, "simulatingUpdate", false)
+			}
+		}()
+
+		// 1. Hammer Drop
+		a.addObject("sim_hammer", "toby_hammer", "SAPBIIH0.0")
 		
-		// 2. Some presents
-		a.addObject("999000002", "Manniv_present_gen1", "RBIIH0.0")
-		time.Sleep(200 * time.Millisecond)
-		a.addObject("999000003", "Manniv_present_gen2", "KIIH0.0")
-		time.Sleep(200 * time.Millisecond)
-		a.addObject("999000004", "Manniv_present_gen3", "PCPDIIH0.0")
+		// Wait for bot to likely interact (5s move + 2s interact + buffer)
+		for i := 0; i < 10; i++ {
+			time.Sleep(1 * time.Second)
+			a.mu.Lock()
+			simActive := a.simulating
+			a.mu.Unlock()
+			if !simActive { return }
+		}
+		
+		// Remove hammer (simulating pickup)
+		a.removeObject("sim_hammer")
+		
+		// 2. Present Drops (simulating the 5-10 min window)
+		locs := []string{"RBIIH0.0", "KIIH0.0", "PCPDIIH0.0", "QCRDIIH0.0"}
+		for i := 1; i <= 8; i++ {
+			id := fmt.Sprintf("sim_present_%d", i)
+			loc := locs[i % len(locs)]
+			
+			a.addObject(id, "Manniv_present_gen", loc)
+			
+			// Wait for bot to pick it up (10s per present cycle)
+			for j := 0; j < 10; j++ {
+				time.Sleep(1 * time.Second)
+				a.mu.Lock()
+				simActive := a.simulating
+				a.mu.Unlock()
+				if !simActive { return }
+			}
+			
+			a.removeObject(id)
+		}
 	}()
+}
+
+func (a *App) StopSimulation() {
+	a.mu.Lock()
+	a.simulating = false
+	a.mu.Unlock()
+	a.AddLog("Simulation stopped manually.")
 }
 
 func (a *App) handleObjectRemove(e *g.Intercept) {
@@ -282,17 +343,7 @@ func (a *App) handleObjectRemove(e *g.Intercept) {
 	}
 
 	if id != "" {
-		a.mu.Lock()
-		_, exists := a.roomItems[id]
-		if exists {
-			delete(a.roomItems, id)
-			a.AddLog(fmt.Sprintf("[ROOM] Removed ID %s", id))
-			if a.activeTargetID == id {
-				a.activeTargetID = ""
-				a.AddLog("Current target removed. Aborting pursuit.")
-			}
-		}
-		a.mu.Unlock()
+		a.removeObject(id)
 	}
 }
 

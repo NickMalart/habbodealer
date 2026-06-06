@@ -6,6 +6,7 @@ import {
   ResetHammer,
   SetHammerHeld,
   SimulateDrop,
+  StopSimulation,
   GetLogs,
   GetStatus,
   GetHammerHeld
@@ -15,6 +16,7 @@ const logs = ref([])
 const enabled = ref(false)
 const status = ref('IDLE')
 const hammerHeld = ref(false)
+const simulating = ref(false)
 
 onMounted(() => {
   GetLogs().then(result => {
@@ -40,6 +42,10 @@ onMounted(() => {
   EventsOn('hammerHeldUpdate', held => {
     hammerHeld.value = held
   })
+
+  EventsOn('simulatingUpdate', active => {
+    simulating.value = active
+  })
 })
 
 function handleToggle() {
@@ -57,6 +63,10 @@ function handleIHaveHammer() {
 
 function handleSimulate() {
   SimulateDrop()
+}
+
+function handleStopSimulate() {
+  StopSimulation()
 }
 
 function handleCopyLogs() {
@@ -92,7 +102,9 @@ function handleCopyLogs() {
       <div class="controls">
         <button v-if="!hammerHeld" @click="handleIHaveHammer" class="btn-have-hammer">I already have Hammer</button>
         <button v-else @click="handleReset" class="btn-reset">Reset Hammer State</button>
-        <button @click="handleSimulate" class="btn-simulate">Simulate Drop</button>
+        <button @click="simulating ? handleStopSimulate() : handleSimulate()" :class="simulating ? 'btn-stop-sim' : 'btn-simulate'">
+          {{ simulating ? 'Stop Simulation' : 'Simulate Drop' }}
+        </button>
         <button @click="handleCopyLogs" class="btn-copy">Copy Logs</button>
       </div>
     </div>
@@ -228,6 +240,11 @@ button:hover {
 
 .btn-simulate {
   background-color: #9c27b0;
+}
+
+.btn-stop-sim {
+  background-color: #7b1fa2;
+  border: 1px solid #ce93d8;
 }
 
 .btn-copy {
