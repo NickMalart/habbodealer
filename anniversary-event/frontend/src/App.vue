@@ -9,7 +9,9 @@ import {
   StopSimulation,
   GetLogs,
   GetStatus,
-  GetHammerHeld
+  GetHammerHeld,
+  LogRoomState,
+  TestMove
 } from '../wailsjs/go/main/App'
 
 const logs = ref([])
@@ -17,6 +19,7 @@ const enabled = ref(false)
 const status = ref('IDLE')
 const hammerHeld = ref(false)
 const simulating = ref(false)
+const testCoords = ref('SAPB')
 
 onMounted(() => {
   GetLogs().then(result => {
@@ -75,6 +78,14 @@ function handleCopyLogs() {
     alert('Logs copied to clipboard!')
   })
 }
+
+function handleLogRoom() {
+  LogRoomState()
+}
+
+function handleTestMove() {
+  TestMove(testCoords.value)
+}
 </script>
 
 <template>
@@ -97,6 +108,12 @@ function handleCopyLogs() {
         <div :class="['badge', hammerHeld ? 'held' : 'not-held']">
           🔨 Hammer: {{ hammerHeld ? 'HELD' : 'MISSING' }}
         </div>
+      </div>
+
+      <div class="debug-controls">
+        <input v-model="testCoords" placeholder="Coords (e.g. SAPB)" class="debug-input">
+        <button @click="handleTestMove" class="btn-test">Test Move</button>
+        <button @click="handleLogRoom" class="btn-log-room">Log Room</button>
       </div>
 
       <div class="controls">
@@ -197,6 +214,32 @@ function handleCopyLogs() {
   background-color: #424242;
   color: #bdbdbd;
   border-color: #616161;
+}
+
+.debug-controls {
+  display: flex;
+  gap: 0.5rem;
+  background-color: #1a1f29;
+  padding: 0.75rem;
+  border-radius: 8px;
+  border: 1px solid #3d4456;
+}
+
+.debug-input {
+  background-color: #0e1219;
+  border: 1px solid #2d3446;
+  color: white;
+  padding: 0.5rem;
+  border-radius: 4px;
+  width: 80px;
+}
+
+.btn-test {
+  background-color: #3949ab;
+}
+
+.btn-log-room {
+  background-color: #00897b;
 }
 
 .controls {
