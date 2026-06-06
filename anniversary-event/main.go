@@ -103,6 +103,7 @@ func (a *App) pursuitLoop() {
 		a.mu.Lock()
 		enabled := a.enabled
 		busy := a.activeTargetID != ""
+		simulating := a.simulating
 		hammerHeld := a.hammerHeld
 		items := make([]TargetItem, 0, len(a.roomItems))
 		for _, it := range a.roomItems {
@@ -110,7 +111,7 @@ func (a *App) pursuitLoop() {
 		}
 		a.mu.Unlock()
 
-		if !enabled || busy {
+		if !enabled || busy || simulating {
 			continue
 		}
 
