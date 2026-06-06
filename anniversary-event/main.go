@@ -137,10 +137,10 @@ func (a *App) executePursuit(target TargetItem) {
 	// 1. Move
 	a.UpdateStatus(fmt.Sprintf("MOVING TO %s", strings.ToUpper(target.Name)))
 	a.MoveToLoc(target.Loc)
-	
-	// Wait for move (2.5 seconds for safety)
-	time.Sleep(2500 * time.Millisecond)
-	
+
+	// Wait for move (5 seconds for safety)
+	time.Sleep(5000 * time.Millisecond)
+
 	// Check if still valid
 	a.mu.Lock()
 	_, stillExists := a.roomItems[target.ID]
