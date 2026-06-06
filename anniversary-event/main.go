@@ -72,6 +72,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ext.Headers().Add("ACTIVEOBJECT_REMOVE", g.Header{Dir: g.In, Value: 94})
 	a.ext.Headers().Add("SetStuffData", g.Header{Dir: g.Out, Value: 74})
 	a.ext.Headers().Add("Move", g.Header{Dir: g.Out, Value: 75})
+	a.ext.Headers().Add("CarryItem", g.Header{Dir: g.Out, Value: 97})
 	a.ext.Headers().Add("TREASURE_MAP", g.Header{Dir: g.In, Value: 3601})
 	a.ext.Headers().Add("BACKPACK_UPDATE", g.Header{Dir: g.In, Value: 1241})
 	a.ext.Headers().Add("NOTIFICATION", g.Header{Dir: g.In, Value: 680})
@@ -280,6 +281,16 @@ func (a *App) removeObject(id string) {
 	a.mu.Unlock()
 }
 
+func (a *App) CarryItem(itemID string) {
+	if a.ext == nil {
+		return
+	}
+	// Manual payload for CarryItem (usually item ID as string)
+	payload := []byte(itemID)
+	a.AddLog(fmt.Sprintf("Sending CarryItem: %s", itemID))
+	a.ext.Send(g.Out.Id("CarryItem"), payload)
+}
+
 func (a *App) SimulateDrop() {
 	a.mu.Lock()
 	if a.simulating {
@@ -292,7 +303,7 @@ func (a *App) SimulateDrop() {
 	a.consecutiveMisses = 0
 	a.mu.Unlock()
 
-	a.AddLog("--- SIMULATION STARTED (Hammer -> Presents Window) ---")
+	a.AddLog("--- DETAILED SIMULATION STARTED ---")
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "simulatingUpdate", true)
 		runtime.EventsEmit(a.ctx, "hammerHeldUpdate", false)
@@ -303,70 +314,63 @@ func (a *App) SimulateDrop() {
 			a.mu.Lock()
 			a.simulating = false
 			a.mu.Unlock()
-			a.AddLog("--- SIMULATION ENDED ---")
+			a.AddLog("--- SIMULATION COMPLETED ---")
 			if a.ctx != nil {
 				runtime.EventsEmit(a.ctx, "simulatingUpdate", false)
 			}
 		}()
 
-		// 1. Hammer Drop
-		a.AddLog("[SIM] Dropping Toby Hammer...")
-		a.addObject("sim_hammer", "toby_hammer", "SAPBIIH0.0")
+		// 1. Hammer Drop & Walk
+		hammerID := "sim_hammer"
+		hammerLoc := "SAPB"
+		a.AddLog(fmt.Sprintf("[SIM] Hammer appeared at %s. Walking to spot...", hammerLoc))
+		a.addObject(hammerID, "toby_hammer", hammerLoc+"IIH0.0")
 		
-		// Wait for bot to likely interact (5s move + 2s interact + buffer)
-		for i := 0; i < 8; i++ {
-			time.Sleep(1 * time.Second)
-			a.mu.Lock()
-			simActive := a.simulating
-			held := a.hammerHeld
-			a.mu.Unlock()
-			if !simActive { return }
-			if held { break } // Bot picked it up!
-		}
+		// Explicit move in simulation
+		a.MoveToLoc(TargetItem{ID: hammerID, Loc: hammerLoc, Name: "toby_hammer"})
+		time.Sleep(4 * time.Second)
+
+		// Pickup
+		a.AddLog("[SIM] Picking up Toby Hammer...")
+		a.Interact(hammerID)
+		time.Sleep(1 * time.Second)
+		
+		// Simulate holding
+		a.AddLog("[SIM] Now holding Toby Hammer (simulating hand object)...")
+		a.CarryItem("4342") // Item ID for Toby Hammer
 		
 		a.mu.Lock()
-		if !a.hammerHeld {
-			a.hammerHeld = true // Force held if bot was slow
-			a.AddLog(">>> [SIM] Hammer picked up (forced)! <<<")
-		} else {
-			a.AddLog(">>> [SIM] Hammer picked up by bot! <<<")
-		}
+		a.hammerHeld = true
 		a.mu.Unlock()
-		
 		if a.ctx != nil {
 			runtime.EventsEmit(a.ctx, "hammerHeldUpdate", true)
 		}
+		a.removeObject(hammerID)
+		time.Sleep(2 * time.Second)
+
+		// 2. Present Drops & Walks
+		ids := []string{"sim_p1", "sim_p2"}
+		locs := []string{"RASE", "KQA"}
 		
-		// Remove hammer from room after pickup
-		a.removeObject("sim_hammer")
-		time.Sleep(1 * time.Second)
-		
-		// 2. Present Drops
-		a.AddLog("[SIM] Starting present drops...")
-		ids := []string{"sim_p1", "sim_p2", "sim_p3"}
-		locs := []string{"RASEIIH0.0", "KQAIIH0.0", "SCPDIIH0.0"}
 		for i, id := range ids {
 			a.mu.Lock()
 			if !a.simulating { a.mu.Unlock(); return }
 			a.mu.Unlock()
 
-			a.AddLog(fmt.Sprintf("[SIM] Dropping Present %d...", i+1))
-			a.addObject(id, "Manniv_present_gen", locs[i])
+			a.AddLog(fmt.Sprintf("[SIM] Present %d appeared at %s", i+1, locs[i]))
+			a.addObject(id, "Manniv_present_gen", locs[i]+"IIH0.0")
 			
-			// Wait for bot to pick it up (10s per present cycle)
-			for j := 0; j < 10; j++ {
-				time.Sleep(1 * time.Second)
-				a.mu.Lock()
-				simActive := a.simulating
-				_, stillExists := a.roomItems[id]
-				a.mu.Unlock()
-				if !simActive { return }
-				if !stillExists { break } // Bot interacted and removed it
-			}
-			
-			// Simulating game removing the object after interact
-			a.removeObject(id)
+			a.AddLog(fmt.Sprintf("[SIM] Walking next to present %d...", i+1))
+			// Use IsPresent=true to trigger adjacency walk
+			a.MoveToLoc(TargetItem{ID: id, Loc: locs[i], Name: "present", IsPresent: true})
+			time.Sleep(4 * time.Second)
+
+			a.AddLog(fmt.Sprintf("[SIM] Opening present %d...", i+1))
+			a.Interact(id)
 			time.Sleep(2 * time.Second)
+			
+			a.removeObject(id)
+			time.Sleep(1 * time.Second)
 		}
 	}()
 }
