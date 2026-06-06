@@ -530,8 +530,9 @@ func (a *App) SimulatePacket() {
 	a.collectEnabled = true
 	a.mu.Unlock()
 
-	a.addLog("📥 Simulating Incoming ACTIVEOBJECT_ADD (Hammer)")
-	a.handleActiveObjectAdd(data)
+	a.addLog("📥 Sending Simulation Packet: ACTIVEOBJECT_ADD (Hammer)")
+	// Send to Incoming (server -> client) stream to trigger interceptors
+	ext.Send(g.In.Id("ACTIVEOBJECT_ADD"), data[2:])
 }
 
 func (a *App) SimulateDrop() {
