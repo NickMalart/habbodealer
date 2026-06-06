@@ -272,8 +272,11 @@ func (a *App) startWalking(id string, itemType string, ox, oy int, rawLoc string
 	sim := a.isSimulating
 	a.mu.Unlock()
 
-	// Always walk to a neighbor for both hammer and present
-	tx, ty := a.getBestNeighbor(ox, oy, mx, my)
+	// Walk to exact tile for hammer as requested, neighbor for present
+	tx, ty := ox, oy
+	if itemType == "present" {
+		tx, ty = a.getBestNeighbor(ox, oy, mx, my)
+	}
 
 	a.mu.Lock()
 	a.targetID = id
@@ -422,16 +425,33 @@ func (a *App) handleArrival() {
 	id := a.targetID
 	itemType := a.targetType
 	enabled := a.collectEnabled
+	tx, ty := a.targetX, a.targetY
 	a.mu.Unlock()
 	
 	if !enabled || id == "" {
 		return
 	}
 
+	// Poll every second to ensure we are actually on the target tile
+	for {
+		a.mu.Lock()
+		mx, my := a.myX, a.myY
+		a.mu.Unlock()
+		if mx == tx && my == ty {
+			break
+		}
+		time.Sleep(1 * time.Second)
+		// Check if enabled state changed or target changed
+		a.mu.Lock()
+		if !a.collectEnabled || a.targetID != id {
+			a.mu.Unlock()
+			return
+		}
+		a.mu.Unlock()
+	}
+
 	if itemType == "hammer" {
-		a.addLog("Arrived at hammer. Waiting 6s...")
-		time.Sleep(6 * time.Second)
-		a.addLog(fmt.Sprintf("Picking up hammer %s...", id))
+		a.addLog("Arrived at hammer. Picking up...")
 		
 		a.mu.Lock()
 		a.hasHammer = true
@@ -458,7 +478,11 @@ func (a *App) handleArrival() {
 func (a *App) pickup(id string) {
 	// ALWAYS send the packet
 	pickupData := []byte("@I" + id + "@A0")
-	ext.Send(g.Out.Id("PICKUP"), pickupData)
+
+	// Mimic TestMove behavior for sending
+	a.addLog(fmt.Sprintf("Sending packet: Header=74, DataHex=%x", pickupData))
+	ext.Headers().Add("PICKUP_S", g.Header{Dir: g.Out, Value: 74})
+	ext.Send(g.Out.Id("PICKUP_S"), pickupData)
 
 	a.mu.Lock()
 	sim := a.isSimulating
@@ -466,6 +490,10 @@ func (a *App) pickup(id string) {
 
 	if sim {
 		a.addLog(fmt.Sprintf("[SIM] Local cleanup of picked ID %s", id))
+		// Simulate object removal for the client (A^ID1)
+		removePacket := []byte(id + "1")
+		ext.Send(g.In.Id("ACTIVEOBJECT_REMOVE"), removePacket)
+
 		// Simulate object removal locally
 		a.handleActiveObjectRemove([]byte(id))
 	}
@@ -532,6 +560,7 @@ func (a *App) SimulatePacket() {
 
 	a.mu.Lock()
 	a.collectEnabled = true
+	a.isSimulating = true // Ensure local movement simulation is active
 	a.mu.Unlock()
 
 	a.addLog("📥 Sending Simulation Packet: ACTIVEOBJECT_ADD (Hammer)")
