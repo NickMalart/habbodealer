@@ -300,11 +300,6 @@ func (a *App) startWalking(id string, itemType string, ox, oy int, rawLoc string
 	a.addLog(fmt.Sprintf("Sending packet: Header=1269, DataHex=%x", moveData))
 	ext.Headers().Add("MOVE_S", g.Header{Dir: g.Out, Value: 1269})
 	ext.Send(g.Out.Id("MOVE_S"), moveData)
-
-	if sim {
-		// In simulation, we also move the character locally towards the target
-		go a.simulateMovement(tx, ty)
-	}
 }
 
 func (a *App) monitorArrival(id, itemType string, tx, ty int) {
@@ -331,7 +326,7 @@ func (a *App) monitorArrival(id, itemType string, tx, ty int) {
 		}
 
 		a.addLog(fmt.Sprintf("📡 [POLL] Checking position... Current: (%d, %d) | Target: (%d, %d)", mx, my, tx, ty))
-		time.Sleep(800 * time.Millisecond)
+		time.Sleep(1500 * time.Millisecond) // Slower polling for clearer sequence
 	}
 }
 
@@ -407,9 +402,9 @@ func (a *App) simulateMovement(tx, ty int) {
 			my--
 		}
 
-		a.addLog(fmt.Sprintf("[SIM] Moving to (%d, %d)...", mx, my))
+		a.addLog(fmt.Sprintf("[SIM] Character stepped to (%d, %d)", mx, my))
 
-		// Emit simulated status packet locally to advance the simulation
+		// Emit simulated status packet locally and to client
 		// Format: ID X_byte Y_byte Z_byte /flat/0/0/0/
 		statusData := fmt.Sprintf("%s %c%c%c/flat/0/0/0", id, byte(mx+64), byte(my+64), byte(64))
 		
@@ -421,9 +416,12 @@ func (a *App) simulateMovement(tx, ty int) {
 		a.mu.Unlock()
 		statusData += "/"
 
+		// Update internal state
 		a.handleStatusPacket([]byte(statusData))
+		// Also send to client so they see the move
+		ext.Send(g.In.Id("STATUS"), []byte(statusData))
 
-		time.Sleep(800 * time.Millisecond) // Walking speed simulation
+		time.Sleep(1500 * time.Millisecond) // Clearer step-by-step movement
 	}
 }
 
@@ -608,8 +606,6 @@ func (a *App) SimulatePacket() {
 	a.mu.Lock()
 	a.collectEnabled = true
 	a.isSimulating = true 
-	// Set starting position further away to see the walking/checking process
-	a.myX, a.myY = 20, 20
 	a.mu.Unlock()
 
 	a.addLog("📥 [SIM] Hammer appeared at (17, 21). Starting sequence...")
