@@ -13586,6 +13586,7 @@ func (a *App) evaluateUnderOverRound() {
 	payoutTargetID := lastTradePartnerID
 	payoutTargetName := playerName
 	uoRoundActive = false
+	isUORolling = false
 
 	// clear any awaiting choice state and mark the UO round finished
 	awaitingUOChoice = false
@@ -13682,6 +13683,8 @@ func (a *App) finalize13Round(playerWins bool, reason string) {
 
 	payoutTargetID := lastTradePartnerID
 	payoutTargetName := playerName
+	is13Rolling = false
+	is13Hitting = false
 	reset13Sequence()
 
 	if playerWins && payoutTargetID > 0 {
@@ -13757,6 +13760,8 @@ func (a *App) finalizeSixRound(playerWins bool, reason string) {
 
 	payoutTargetID := lastTradePartnerID
 	payoutTargetName := playerName
+	isSixRolling = false
+	isSixHitting = false
 	resetSixSequence()
 
 	if playerWins && payoutTargetID > 0 {
@@ -13856,6 +13861,7 @@ func (a *App) finalizeTriRound() {
 
 	payoutTargetID := lastTradePartnerID
 	payoutTargetName := playerName
+	isTriRolling = false
 	resetTriSequence()
 
 	if playerWins && payoutTargetID > 0 {
@@ -13999,6 +14005,7 @@ func (a *App) evaluateH18Round() {
 
 	payoutTargetID := lastTradePartnerID
 	payoutTargetName := playerName
+	isH18Rolling = false
 
 	if multiplier > 0 && payoutTargetID > 0 {
 		payoutMultiplierForRound = float64(multiplier)
@@ -15564,8 +15571,16 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 
 				// Prevent duplicate/parallel risk attempts — prefer the first.
 				mutex.Lock()
+				prompted := riskDecisionTimeoutActive
 				pending := awaitingGameChoice || riskPendingBet > 0
 				mutex.Unlock()
+
+				if !prompted {
+					a.AddLogMsg(fmt.Sprintf("[RISK] ignored r%d from %s: prompt not yet shown", amt, senderName))
+					e.Block()
+					return
+				}
+
 				if pending {
 					sendShoutTargeted(index, "Risk already placed; choose a game (or wait for the prompt).")
 					a.AddLogMsg(fmt.Sprintf("[RISK] ignored duplicate r%d from %s: already pending", amt, senderName))

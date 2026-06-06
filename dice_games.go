@@ -84,6 +84,7 @@ func (a *App) evaluateDoubleTroubleRound() {
 
 	payoutTargetID := lastTradePartnerID
 	payoutTargetName := playerName
+	isDTRolling = false
 
 	if playerWins && payoutTargetID > 0 {
 		a.setCurrentGameHistoryResults(resultText, "", playerName, "Payout Pending", false)
@@ -323,6 +324,7 @@ func (a *App) evaluateMidHouseRound() {
 
 	payoutTargetID := lastTradePartnerID
 	payoutTargetName := playerName
+	isMidHouseRolling = false
 
 	if playerWins && payoutTargetID > 0 {
 		payoutMultiplierForRound = 2.0

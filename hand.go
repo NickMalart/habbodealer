@@ -104,6 +104,7 @@ func (a *App) evaluatePokerHand() {
 		payoutTargetName := playerName
 		playerHand := pokerSequencePlayerHand
 		resetPokerSequence()
+		isPokerRolling = false
 
 		if winner == PokerWinnerPlayer && payoutTargetID > 0 {
 			a.setCurrentGameHistoryResults(playerHand, hand, playerName, "Payout Pending", false)
@@ -376,6 +377,8 @@ func (a *App) finalizeBlackjackRound(playerWins bool, reason string) {
 
 	payoutTargetID := lastTradePartnerID
 	payoutTargetName := playerName
+	isBJRolling = false
+	isHitting = false
 	resetBlackjackSequence()
 
 	if playerWins && payoutTargetID > 0 {
@@ -784,8 +787,8 @@ func (a *App) evaluateTriRound() {
 	}
 
 	triDealerTotal = total
-	a.finalizeTriRound()
 	isTriRolling = false
+	a.finalizeTriRound()
 }
 
 func (a *App) evaluatePairUpRound() {
@@ -832,6 +835,7 @@ func (a *App) evaluatePairUpRound() {
 
 	payoutTargetID := lastTradePartnerID
 	payoutTargetName := playerName
+	isPairUpRolling = false
 
 	if playerWins && payoutTargetID > 0 {
 		a.setCurrentGameHistoryResults(resultText, "", playerName, "Payout Pending", false)
