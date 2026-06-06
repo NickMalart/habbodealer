@@ -6,13 +6,17 @@ import {
   GetLogs,
   ToggleCollect,
   GetStatus,
-  ResetHammer
+  ResetHammer,
+  SimulateDrop,
+  StopSimulation,
+  GetIsSimulating
 } from '../wailsjs/go/main/App'
 
 const logs = ref([])
 const hexInput = ref('53755042514348')
 const collectEnabled = ref(false)
 const status = ref('READY')
+const isSimulating = ref(false)
 
 onMounted(() => {
   GetLogs().then(result => {
@@ -22,6 +26,9 @@ onMounted(() => {
   const updateStatus = () => {
     GetStatus().then(s => {
       status.value = s
+    })
+    GetIsSimulating().then(sim => {
+      isSimulating.value = sim
     })
   }
   updateStatus()
@@ -43,6 +50,14 @@ function handleToggleCollect() {
 
 function handleResetHammer() {
   ResetHammer()
+}
+
+function handleToggleSimulation() {
+  if (isSimulating.value) {
+    StopSimulation()
+  } else {
+    SimulateDrop()
+  }
 }
 
 function handleClearLogs() {
@@ -72,9 +87,14 @@ function handleClearLogs() {
         {{ collectEnabled ? 'Disable Auto-Collector' : 'Enable Auto-Collector' }}
       </button>
 
-      <button @click="handleResetHammer" class="btn-reset">
-        Reset Hammer Status
-      </button>
+      <div class="row">
+        <button @click="handleResetHammer" class="btn-reset">
+          Reset Hammer
+        </button>
+        <button @click="handleToggleSimulation" :class="isSimulating ? 'btn-stop' : 'btn-sim'">
+          {{ isSimulating ? 'Stop Sim' : 'Start Sim' }}
+        </button>
+      </div>
       
       <button @click="handleClearLogs" class="btn-clear">Clear Logs</button>
     </div>
@@ -197,6 +217,18 @@ button {
 .btn-reset {
   background-color: #ff9800;
   color: #ffffff;
+  flex: 1;
+}
+
+.btn-sim {
+  background-color: #2196f3;
+  color: #ffffff;
+  flex: 1;
+}
+
+.row {
+  display: flex;
+  gap: 0.5rem;
 }
 
 .divider {
