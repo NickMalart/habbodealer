@@ -376,28 +376,29 @@ func (a *App) MoveToLoc(locStr string, walkNextTo bool) {
 	coords := []byte(locStr)
 	if len(coords) < 2 { return }
 
-	// Origins coordinate packets should be exactly 2 chars (X, Y) + 'H'
-	if len(coords) > 2 {
-		coords = coords[:2]
+	// Remove any existing 'H' terminator for processing
+	for len(coords) > 0 && coords[len(coords)-1] == 'H' {
+		coords = coords[:len(coords)-1]
 	}
 
 	if walkNextTo {
-		if coords[0] > 65 { 
+		if coords[0] > 64 { 
 			coords[0]-- 
-		} else if coords[1] > 65 {
+		} else if coords[1] > 64 {
 			coords[1]--
 		}
 	}
 	
+	// Always end with 'H'
 	coords = append(coords, 'H')
 	
 	a.AddLog(fmt.Sprintf("Move: %s", string(coords)))
-	a.ext.Send(g.Out.Id("Move"), coords)
+	a.ext.Send(g.Out.Id("Move"), []byte(string(coords)))
 	
 	// Also send LookTo to face the tile
 	if len(coords) >= 3 {
 		lookCoords := coords[:len(coords)-1]
-		a.ext.Send(g.Out.Id("LookTo"), lookCoords)
+		a.ext.Send(g.Out.Id("LookTo"), []byte(string(lookCoords)))
 	}
 }
 
