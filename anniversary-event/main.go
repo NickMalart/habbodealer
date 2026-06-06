@@ -85,12 +85,29 @@ func (a *App) startup(ctx context.Context) {
 	a.ext.Intercept(g.In.Id("OBJECTS")).With(a.handleObjects)
 	a.ext.Intercept(g.In.Id("REMOVE_ITEM")).With(a.handleObjectRemove)
 	a.ext.Intercept(g.In.Id("STATUS")).With(a.handleStatus)
+	
+	// Log all outgoing for debugging
+	a.ext.Intercept(g.Out.Any).With(a.handleOutgoing)
 
 	// Start the logic loop
 	go a.pursuitLoop()
 
 	a.AddLog("Extension registered. Waiting for connection...")
 	go a.ext.Run()
+}
+
+func (a *App) handleOutgoing(e *g.Intercept) {
+	header := e.Packet.Header.Value
+	name := e.Packet.Header.Name
+	data := e.Packet.Data
+	a.AddLog(fmt.Sprintf("[OUT] Header %d (%s): %s (Hex: %s)", header, name, string(data), hex.EncodeToString(data)))
+}
+
+func (a *App) TestMove(coords string) {
+	if a.ext == nil { return }
+	payload := append([]byte(coords), 'H')
+	a.AddLog(fmt.Sprintf("[TEST] Sending Manual Move: %s", coords))
+	a.ext.Send(g.Out.Id("Move"), payload)
 }
 
 func (a *App) handleObjects(e *g.Intercept) {
@@ -451,27 +468,49 @@ func (a *App) GetHammerHeld() bool {
 	return a.hammerHeld
 }
 
+func (a *App) handleStatus(e *g.Intercept) {
+	data := string(e.Packet.Data)
+	// Shockwave STATUS (34) format: @b[X][Y][Z][Height]...
+	// e.g. @bIIKQA1.0
+	if len(data) >= 4 {
+		x := int(data[0]) - 64
+		y := int(data[1]) - 64
+		a.AddLog(fmt.Sprintf("[STATUS] Bot Position: (%d, %d) Raw: %s", x, y, data[:2]))
+	}
+}
+
 func (a *App) MoveToLoc(target TargetItem) {
 	if a.ext == nil {
 		return
 	}
-	
+
 	locStr := target.Loc
-	targetLoc := locStr
-	if target.IsPresent && len(locStr) > 0 {
-		// Try to walk to an adjacent tile for presents
-		firstChar := locStr[0]
-		if firstChar > 35 { 
-			targetLoc = string(firstChar-1) + locStr[1:]
-		} else if len(locStr) > 1 {
-			targetLoc = string(firstChar) + string(locStr[1]+1) + locStr[2:]
+	if len(locStr) < 2 {
+		return
+	}
+
+	// Shockwave Loc is usually X, Y, Z, Dir (Base64 encoded)
+	// SAPB -> X=19, Y=1, Z=16, Dir=2
+	// Move packet usually only needs X and Y
+	xChar := locStr[0]
+	yChar := locStr[1]
+
+	if target.IsPresent {
+		// Adjacency logic: step 1 tile away
+		if xChar > 65 {
+			xChar--
+		} else if yChar > 65 {
+			yChar--
 		}
 	}
 
-	// Payload is JUST the encoded coordinates + H terminator
-	payload := append([]byte(targetLoc), 'H')
-	
-	a.AddLog(fmt.Sprintf("Sending Move: %s (Hex: %s)", string(payload), hex.EncodeToString(payload)))
+	// Payload: [X Char][Y Char] + 'H'
+	payload := []byte{xChar, yChar, 'H'}
+
+	x := int(xChar) - 64
+	y := int(yChar) - 64
+
+	a.AddLog(fmt.Sprintf("Sending Move to (%d, %d) - Payload: %s (Hex: %s)", x, y, string(payload), hex.EncodeToString(payload)))
 	a.ext.Send(g.Out.Id("Move"), payload)
 }
 
@@ -479,9 +518,10 @@ func (a *App) Interact(id string) {
 	if a.ext == nil {
 		return
 	}
-	// Payload for SetStuffData in Shockwave is @I + ID + @A0
+	// Shockwave SetStuffData payload: @I + ID + @A0 (where ID is the string ID)
 	payload := []byte("@I" + id + "@A0")
-	a.AddLog(fmt.Sprintf("Sending Interact: %s (Hex: %s)", string(payload), hex.EncodeToString(payload)))
+	
+	a.AddLog(fmt.Sprintf("Sending Interact (Raw Bytes): %v (Hex: %s)", payload, hex.EncodeToString(payload)))
 	a.ext.Send(g.Out.Id("SetStuffData"), payload)
 }
 
