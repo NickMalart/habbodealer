@@ -287,11 +287,15 @@ func (a *App) SimulateDrop() {
 		return
 	}
 	a.simulating = true
+	// Ensure we start with no hammer in sim
+	a.hammerHeld = false
+	a.consecutiveMisses = 0
 	a.mu.Unlock()
 
 	a.AddLog("--- SIMULATION STARTED (Hammer -> Presents Window) ---")
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "simulatingUpdate", true)
+		runtime.EventsEmit(a.ctx, "hammerHeldUpdate", false)
 	}
 	
 	go func() {
@@ -306,34 +310,47 @@ func (a *App) SimulateDrop() {
 		}()
 
 		// 1. Hammer Drop
+		a.AddLog("[SIM] Dropping Toby Hammer...")
 		a.addObject("sim_hammer", "toby_hammer", "SAPBIIH0.0")
 		
 		// Wait for bot to likely interact (5s move + 2s interact + buffer)
-		for i := 0; i < 10; i++ {
+		for i := 0; i < 8; i++ {
 			time.Sleep(1 * time.Second)
 			a.mu.Lock()
 			simActive := a.simulating
+			held := a.hammerHeld
 			a.mu.Unlock()
 			if !simActive { return }
+			if held { break } // Bot picked it up!
 		}
 		
-		// Ensure it's marked as held for simulation purposes
 		a.mu.Lock()
-		a.hammerHeld = true
+		if !a.hammerHeld {
+			a.hammerHeld = true // Force held if bot was slow
+			a.AddLog(">>> [SIM] Hammer picked up (forced)! <<<")
+		} else {
+			a.AddLog(">>> [SIM] Hammer picked up by bot! <<<")
+		}
 		a.mu.Unlock()
-		a.AddLog(">>> [SIM] Hammer picked up! <<<")
+		
 		if a.ctx != nil {
 			runtime.EventsEmit(a.ctx, "hammerHeldUpdate", true)
 		}
 		
-		// Remove hammer (simulating pickup)
+		// Remove hammer from room after pickup
 		a.removeObject("sim_hammer")
+		time.Sleep(1 * time.Second)
 		
-		// 2. Present Drops (simulating the 5-10 min window)
-		// We'll use coords that require 1-char vs 2-char logic
+		// 2. Present Drops
+		a.AddLog("[SIM] Starting present drops...")
 		ids := []string{"sim_p1", "sim_p2", "sim_p3"}
 		locs := []string{"RASEIIH0.0", "KQAIIH0.0", "SCPDIIH0.0"}
 		for i, id := range ids {
+			a.mu.Lock()
+			if !a.simulating { a.mu.Unlock(); return }
+			a.mu.Unlock()
+
+			a.AddLog(fmt.Sprintf("[SIM] Dropping Present %d...", i+1))
 			a.addObject(id, "Manniv_present_gen", locs[i])
 			
 			// Wait for bot to pick it up (10s per present cycle)
@@ -341,11 +358,15 @@ func (a *App) SimulateDrop() {
 				time.Sleep(1 * time.Second)
 				a.mu.Lock()
 				simActive := a.simulating
+				_, stillExists := a.roomItems[id]
 				a.mu.Unlock()
 				if !simActive { return }
+				if !stillExists { break } // Bot interacted and removed it
 			}
 			
+			// Simulating game removing the object after interact
 			a.removeObject(id)
+			time.Sleep(2 * time.Second)
 		}
 	}()
 }
