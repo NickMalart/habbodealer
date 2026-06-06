@@ -130,6 +130,17 @@ func knownBuildTargets() []buildTarget {
 			OutExe: filepath.Join("pickup-drop", "build", "bin", "pickup-drop.exe"),
 		},
 		{
+			ID:        "anniversary-bot",
+			Name:      "Anniversary Bot",
+			SrcDir:    "anniversary-event",
+			BuildType: "wails",
+			CleanPaths: []string{
+				filepath.Join("anniversary-event", "build", "bin", "anniversary-bot.exe"),
+				filepath.Join("anniversary-event", "anniversary-bot.exe"),
+			},
+			OutExe: filepath.Join("anniversary-event", "build", "bin", "anniversary-bot.exe"),
+		},
+		{
 			ID:        "exit-building",
 			Name:      "Exit-Building",
 			SrcDir:    "exit-building",
