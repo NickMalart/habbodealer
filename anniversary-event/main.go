@@ -532,7 +532,13 @@ func (a *App) SimulatePacket() {
 
 	a.addLog("📥 Sending Simulation Packet: ACTIVEOBJECT_ADD (Hammer)")
 	// Send to Incoming (server -> client) stream to trigger interceptors
-	ext.Send(g.In.Id("ACTIVEOBJECT_ADD"), data[2:])
+	payload := data[2:]
+	ext.Send(g.In.Id("ACTIVEOBJECT_ADD"), payload)
+	
+	// Force the bot to walk to the position defined in the packet (17, 21)
+	// Hammer ID from packet is "900000002"
+	a.addLog("🤖 [SIM] Forcing walk to Hammer at (17, 21)")
+	a.startWalking("900000002", "hammer", 17, 21, []byte("RBPD"))
 }
 
 func (a *App) SimulateDrop() {
