@@ -308,6 +308,7 @@ func (a *App) startWalking(id string, itemType string, ox, oy int, rawLoc string
 }
 
 func (a *App) monitorArrival(id, itemType string, tx, ty int) {
+	a.addLog(fmt.Sprintf("🔍 [POLL] Starting position monitor for %s at (%d, %d)", itemType, tx, ty))
 	for {
 		a.mu.Lock()
 		mx, my := a.myX, a.myY
@@ -316,17 +317,21 @@ func (a *App) monitorArrival(id, itemType string, tx, ty int) {
 		a.mu.Unlock()
 
 		if !enabled || targetID != id {
+			a.addLog("🛑 [POLL] Monitor stopped (target changed or disabled)")
 			return
 		}
 
 		if mx == tx && my == ty {
+			a.addLog(fmt.Sprintf("🎯 [POLL] Match! Current (%d, %d) == Target (%d, %d)", mx, my, tx, ty))
 			a.mu.Lock()
 			a.isWalking = false
 			a.mu.Unlock()
 			a.handleArrivalActions(id, itemType)
 			return
 		}
-		time.Sleep(500 * time.Millisecond)
+
+		a.addLog(fmt.Sprintf("📡 [POLL] Checking position... Current: (%d, %d) | Target: (%d, %d)", mx, my, tx, ty))
+		time.Sleep(800 * time.Millisecond)
 	}
 }
 
@@ -602,18 +607,19 @@ func (a *App) SimulatePacket() {
 
 	a.mu.Lock()
 	a.collectEnabled = true
-	a.isSimulating = true // Ensure local movement simulation is active
+	a.isSimulating = true 
+	// Set starting position further away to see the walking/checking process
+	a.myX, a.myY = 20, 20
 	a.mu.Unlock()
 
-	a.addLog("📥 Sending Simulation Packet: ACTIVEOBJECT_ADD (Hammer)")
-	// Send to Incoming (server -> client) stream to trigger interceptors
+	a.addLog("📥 [SIM] Hammer appeared at (17, 21). Starting sequence...")
+	
+	// Send arrival packet to trigger detection logic
 	payload := data[2:]
 	ext.Send(g.In.Id("ACTIVEOBJECT_ADD"), payload)
 	
-	// Force the bot to walk to the position defined in the packet (17, 21)
-	// Hammer ID from packet is "900000002"
-	a.addLog("🤖 [SIM] Forcing walk to Hammer at (17, 21)")
-	a.startWalking("900000002", "hammer", 17, 21, "RBPD")
+	// Trigger local handler so the bot detects it and starts walking naturally
+	a.handleActiveObjectAdd(payload)
 }
 
 func (a *App) SimulateDrop() {
