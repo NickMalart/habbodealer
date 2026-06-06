@@ -99,7 +99,7 @@ func (a *App) runExt() {
 		a.mu.Lock()
 		a.myID = id
 		a.mu.Unlock()
-		a.addLog(fmt.Sprintf("Detected my player ID: %s", id))
+		a.addLog(fmt.Sprintf("🔑 Detected my player ID: %s", id))
 	})
 
 	// Intercept STATUS (Header 34) to track our position and hammer status
@@ -138,14 +138,34 @@ func (a *App) handleStatusPacket(data []byte) {
 		id := fields[0]
 		
 		a.mu.Lock()
-		if id == a.myID {
+		myID := a.myID
+		a.mu.Unlock()
+
+		// Auto-detect player ID if still on default
+		if myID == "12345" {
+			a.mu.Lock()
+			a.myID = id
+			myID = id
+			a.mu.Unlock()
+			a.addLog(fmt.Sprintf("✨ Auto-detected player ID from Status: %s", id))
+		}
+
+		if id == myID {
 			// Format: ID X Y Z Dir Status
 			// X and Y are often single bytes in fields[1]
 			loc := fields[1]
 			if len(loc) >= 2 {
-				a.myX = int(loc[0]) - 64
-				a.myY = int(loc[1]) - 64
-				
+				newX := int(loc[0]) - 64
+				newY := int(loc[1]) - 64
+
+				a.mu.Lock()
+				if a.myX != newX || a.myY != newY {
+					a.addLogInternal(fmt.Sprintf("📍 [MATCH] Position updated for %s: (%d, %d)", id, newX, newY))
+				}
+				a.myX = newX
+				a.myY = newY
+				// ...
+
 				// Detect hammer being held
 				if strings.Contains(entry, "hmr 1/") {
 					if !a.hasHammer {
@@ -154,9 +174,9 @@ func (a *App) handleStatusPacket(data []byte) {
 						a.startHammerTimerInternal()
 					}
 				}
+				a.mu.Unlock()
 			}
 		}
-		a.mu.Unlock()
 	}
 	a.emitLogs()
 }
@@ -331,7 +351,9 @@ func (a *App) monitorArrival(id, itemType string, tx, ty int) {
 
 func (a *App) handleArrivalActions(id, itemType string) {
 	if itemType == "hammer" {
-		a.addLog("Arrived at hammer. Picking up...")
+		a.addLog("Arrived at hammer. Waiting 6s before pickup...")
+		time.Sleep(6 * time.Second)
+		a.addLog("Picking up hammer...")
 		a.mu.Lock()
 		a.hasHammer = true
 		a.startHammerTimerInternal()
@@ -339,7 +361,8 @@ func (a *App) handleArrivalActions(id, itemType string) {
 		a.emitLogs()
 		a.pickup(id)
 	} else {
-		a.addLog(fmt.Sprintf("Arrived next to present %s. Picking up...", id))
+		a.addLog(fmt.Sprintf("Arrived next to present %s. Waiting 6s...", id))
+		time.Sleep(6 * time.Second)
 		a.pickup(id)
 	}
 
