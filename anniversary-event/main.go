@@ -96,6 +96,16 @@ func (a *App) startup(ctx context.Context) {
 	go a.ext.Run()
 }
 
+func (a *App) LogRoomState() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.AddLog(fmt.Sprintf("--- ROOM STATE (%d Items) ---", len(a.roomItems)))
+	for id, it := range a.roomItems {
+		a.AddLog(fmt.Sprintf("ID: %s | Name: %s | Loc: %s", id, it.Name, it.Loc))
+	}
+	a.AddLog("---------------------------")
+}
+
 func (a *App) handleOutgoing(e *g.Intercept) {
 	header := e.Packet.Header.Value
 	name := e.Packet.Header.Name
