@@ -365,21 +365,26 @@ func (a *App) executePursuit(target TargetItem) {
 	}
 }
 
+func (a *App) legacyInjectOut(data []byte) {
+	if a.ext == nil || len(data) < 2 { return }
+	// Shockwave header: (c1-64)*64 + (c2-64)
+	headerValue := uint16(data[0]-64)*64 + uint16(data[1]-64)
+	a.ext.SendPacket(&g.Packet{
+		Header: g.Header{Dir: g.Out, Value: headerValue},
+		Data:   data[2:],
+	})
+}
+
 func (a *App) MoveToLoc(locStr string, walkNextTo bool) {
 	if a.ext == nil { return }
 	
-	// Strip 'Su' prefix if present
-	if strings.HasPrefix(locStr, "Su") {
-		locStr = locStr[2:]
-	}
-
+	// Clean the input: remove prefix if present
+	locStr = strings.TrimPrefix(locStr, "Su")
+	// Remove any existing 'H' terminator for processing
+	locStr = strings.TrimSuffix(locStr, "H")
+	
 	coords := []byte(locStr)
 	if len(coords) < 2 { return }
-
-	// Remove any existing 'H' terminator for processing
-	for len(coords) > 0 && coords[len(coords)-1] == 'H' {
-		coords = coords[:len(coords)-1]
-	}
 
 	if walkNextTo {
 		if coords[0] > 64 { 
@@ -389,29 +394,39 @@ func (a *App) MoveToLoc(locStr string, walkNextTo bool) {
 		}
 	}
 	
-	// Always end with 'H'
-	coords = append(coords, 'H')
+	// Payload for 'Move' (1269 -> 'Su') is [Coords] + 'H'
+	// The user confirms 'SuSASCH' works, where 'Su' is header and 'SASCH' is data.
+	finalData := append(coords, 'H')
 	
-	a.AddLog(fmt.Sprintf("Move: %s", string(coords)))
-	a.ext.Send(g.Out.Id("Move"), []byte(string(coords)))
+	a.AddLog(fmt.Sprintf("Move: Su%s", string(finalData)))
 	
-	// Also send LookTo to face the tile
-	if len(coords) >= 3 {
-		lookCoords := coords[:len(coords)-1]
-		a.ext.Send(g.Out.Id("LookTo"), []byte(string(lookCoords)))
+	// Construct the full legacy packet: 'Su' + data
+	fullPacket := append([]byte{'S', 'u'}, finalData...)
+	a.legacyInjectOut(fullPacket)
+	
+	// Also send LookTo (79 -> 'AO') to face the tile
+	if len(coords) >= 2 {
+		lookData := append(coords, 'H') // Or just coords? Origins LookTo usually has 'H' too
+		lookPacket := append([]byte{'A', 'O'}, lookData...)
+		a.legacyInjectOut(lookPacket)
 	}
 }
 
 func (a *App) Interact(id string) {
 	if a.ext == nil { return }
+	// Header 74 = 'AJ'
 	data := "@I" + id + "@A0"
 	a.AddLog(fmt.Sprintf("Interact ID %s", id))
-	a.ext.Send(g.Out.Id("SetStuffData"), []byte(data))
+	fullPacket := append([]byte{'A', 'J'}, []byte(data)...)
+	a.legacyInjectOut(fullPacket)
 }
 
 func (a *App) CarryItem(itemID string) {
 	if a.ext == nil { return }
-	a.ext.Send(g.Out.Id("CarryItem"), []byte(itemID))
+	// Header 97 = 'Aa'
+	a.AddLog(fmt.Sprintf("CarryItem ID %s", itemID))
+	fullPacket := append([]byte{'A', 'a'}, []byte(itemID)...)
+	a.legacyInjectOut(fullPacket)
 }
 
 func (a *App) getWaitingStatus() string {
