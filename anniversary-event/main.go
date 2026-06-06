@@ -42,11 +42,15 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	runtime.WindowShow(ctx)
 	go a.runExt()
 }
 
 func (a *App) runExt() {
 	ext.Activated(func() {
+		if a.ctx != nil {
+			runtime.WindowShow(a.ctx)
+		}
 		a.addLog("Extension activated!")
 	})
 
