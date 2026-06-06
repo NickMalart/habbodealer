@@ -70,8 +70,8 @@ func (a *App) startup(ctx context.Context) {
 	// Register headers
 	a.ext.Headers().Add("ACTIVEOBJECT_ADD", g.Header{Dir: g.In, Value: 93})
 	a.ext.Headers().Add("ACTIVEOBJECT_REMOVE", g.Header{Dir: g.In, Value: 94})
-	a.ext.Headers().Add("SETSTUFFDATA", g.Header{Dir: g.Out, Value: 74})
-	a.ext.Headers().Add("ORIGINS_MOVE", g.Header{Dir: g.Out, Value: 1269})
+	a.ext.Headers().Add("SetStuffData", g.Header{Dir: g.Out, Value: 74})
+	a.ext.Headers().Add("Move", g.Header{Dir: g.Out, Value: 75})
 	a.ext.Headers().Add("TREASURE_MAP", g.Header{Dir: g.In, Value: 3601})
 	a.ext.Headers().Add("BACKPACK_UPDATE", g.Header{Dir: g.In, Value: 1241})
 	a.ext.Headers().Add("NOTIFICATION", g.Header{Dir: g.In, Value: 680})
@@ -442,20 +442,22 @@ func (a *App) MoveToLoc(target TargetItem) {
 		}
 	}
 
-	payload := []byte(targetLoc)
+	// Manual prefix Su and suffix H as seen in working Origins packets
+	payload := append([]byte("Su"), []byte(targetLoc)...)
+	payload = append(payload, 'H')
 	
 	a.AddLog(fmt.Sprintf("Sending Move: %s (Hex: %s)", string(payload), hex.EncodeToString(payload)))
-	a.ext.Send(g.Out.Id("ORIGINS_MOVE"), payload)
+	a.ext.Send(g.Out.Id("Move"), payload)
 }
 
 func (a *App) Interact(id string) {
 	if a.ext == nil {
 		return
 	}
-	// Correct interaction: @I[ID]@A0 (Header AJ added by G-Earth)
-	payload := []byte("@I" + id + "@A0")
+	// Manual prefix AJ as seen in verified Hex: 41 4a 40 49...
+	payload := []byte("AJ@I" + id + "@A0")
 	a.AddLog(fmt.Sprintf("Sending Interact: %s (Hex: %s)", string(payload), hex.EncodeToString(payload)))
-	a.ext.Send(g.Out.Id("SETSTUFFDATA"), payload)
+	a.ext.Send(g.Out.Id("SetStuffData"), payload)
 }
 
 func (a *App) handleReward(e *g.Intercept) {
