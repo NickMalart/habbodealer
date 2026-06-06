@@ -99,7 +99,7 @@ func (a *App) runExt() {
 		a.mu.Lock()
 		a.myID = id
 		a.mu.Unlock()
-		a.addLog(fmt.Sprintf("🔑 Detected my player ID: %s", id))
+		a.addLog(fmt.Sprintf("Detected my player ID: %s", id))
 	})
 
 	// Intercept STATUS (Header 34) to track our position and hammer status
@@ -486,7 +486,8 @@ func (a *App) SetHammerHeld(held bool) {
 }
 
 func (a *App) SimulatePacket() {
-	packetHex := "415d393030303030303032024d746f62795f68616d6d65720252425044494948312e3002302c302c300202483002484d4d"
+	// New packet provided: ID 900000001, loc QCSE -> (16, 22)
+	packetHex := "415d393030303030303031024d746f62795f68616d6d65720251435345494948312e3002302c302c300202483002484d4d"
 	data, err := hex.DecodeString(packetHex)
 	if err != nil {
 		a.addLog(fmt.Sprintf("Error decoding simulation packet: %v", err))
@@ -498,100 +499,14 @@ func (a *App) SimulatePacket() {
 	a.isSimulating = true 
 	a.mu.Unlock()
 
-	a.addLog("📥 [SIM] Hammer appeared at (17, 21). Starting sequence...")
+	a.addLog("📥 [SIM] Hammer appeared at (16, 22). Starting sequence...")
 	
-	// Send arrival packet to trigger detection logic
+	// Send arrival packet to client
 	payload := data[2:]
 	ext.Send(g.In.Id("ACTIVEOBJECT_ADD"), payload)
 	
-	// Trigger local handler so the bot detects it and starts walking naturally
+	// Trigger local handler so bot starts walking
 	a.handleActiveObjectAdd(payload)
-}
-
-func (a *App) SimulateDrop() {
-	a.mu.Lock()
-	if a.isSimulating {
-		a.mu.Unlock()
-		return
-	}
-	a.isSimulating = true
-	a.collectEnabled = true
-	a.simStop = make(chan struct{})
-	a.mu.Unlock()
-	
-	a.addLog("🚀 Starting full simulation run...")
-	
-	go func() {
-		stop := a.simStop
-		// Initial position
-		a.mu.Lock()
-		a.myX, a.myY = 18, 20
-		a.hasHammer = false
-		a.presents = make(map[string]presentInfo)
-		a.isWalking = false
-		a.mu.Unlock()
-		
-		a.addLog(fmt.Sprintf("[SIM] Bot brain initialized at (%d, %d)", 18, 20))
-		
-		// 1. Hammer drops at (18, 22)
-		time.Sleep(2 * time.Second)
-		a.addLog("[SIM] Brain detected Hammer at (18, 22). Deciding path...")
-		a.handleActiveObjectAdd([]byte("900000005\x02Mtoby_hammer\x02SCREIIH1.0"))
-		
-		// Wait for pickup
-		for {
-			select {
-			case <-stop: return
-			case <-time.After(1 * time.Second):
-				a.mu.Lock()
-				has := a.hasHammer
-				a.mu.Unlock()
-				if has {
-					goto gotHammer
-				}
-			}
-		}
-		
-	gotHammer:
-		a.addLog("✅ [SIM] Brain confirmed Hammer acquired. Watching for Present...")
-		time.Sleep(3 * time.Second)
-		
-		// 2. Present spawns at (18, 25)
-		a.addLog("[SIM] Brain detected Present at (18, 25). Calculating neighbor tile...")
-		a.handleActiveObjectAdd([]byte("900000006\x02Manniv_present_gen3\x02QCRBIIH0.0"))
-		
-		// Wait for present to be picked up
-		for {
-			select {
-			case <-stop: return
-			case <-time.After(1 * time.Second):
-				a.mu.Lock()
-				targets := len(a.presents)
-				a.mu.Unlock()
-				if targets == 0 {
-					a.addLog("🏁 [SIM] Brain confirmed Present collected. Simulation successful.")
-					a.mu.Lock()
-					a.isSimulating = false
-					a.mu.Unlock()
-					return
-				}
-			}
-		}
-	}()
-}
-
-func (a *App) StopSimulation() {
-	a.mu.Lock()
-	if !a.isSimulating {
-		a.mu.Unlock()
-		return
-	}
-	a.isSimulating = false
-	if a.simStop != nil {
-		close(a.simStop)
-	}
-	a.mu.Unlock()
-	a.addLog("Simulation stopped.")
 }
 
 func (a *App) GetLogs() []string { return a.logs }

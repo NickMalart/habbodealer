@@ -7,9 +7,7 @@ import {
   ToggleCollect,
   GetStatus,
   ResetHammer,
-  SimulateDrop,
   SimulatePacket,
-  StopSimulation,
   GetIsSimulating
 } from '../wailsjs/go/main/App'
 
@@ -53,14 +51,6 @@ function handleResetHammer() {
   ResetHammer()
 }
 
-function handleToggleSimulation() {
-  if (isSimulating.value) {
-    StopSimulation()
-  } else {
-    SimulateDrop()
-  }
-}
-
 function handleSimulate() {
   SimulatePacket()
 }
@@ -92,18 +82,13 @@ function handleClearLogs() {
         {{ collectEnabled ? 'Disable Auto-Collector' : 'Enable Auto-Collector' }}
       </button>
 
-      <div class="row">
-        <button @click="handleResetHammer" class="btn-reset">
-          Reset Hammer
-        </button>
-        <button @click="handleToggleSimulation" :class="isSimulating ? 'btn-stop' : 'btn-sim'">
-          {{ isSimulating ? 'Stop Sim' : 'Start Sim' }}
-        </button>
+      <div class="control-row">
+        <button @click="handleSimulate" class="btn-sim">Simulate Hammer</button>
+        <button @click="handleResetHammer" class="btn-reset">Reset Hammer</button>
       </div>
 
-      <button @click="handleSimulate" class="btn-walk">Simulate Packet Arrival</button>
-      
       <button @click="handleClearLogs" class="btn-clear">Clear Logs</button>
+
     </div>
 
     <div class="logs">
