@@ -291,6 +291,15 @@ func (a *App) SimulateDrop() {
 			if !simActive { return }
 		}
 		
+		// Ensure it's marked as held for simulation purposes
+		a.mu.Lock()
+		a.hammerHeld = true
+		a.mu.Unlock()
+		a.AddLog(">>> [SIM] Hammer picked up! <<<")
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "hammerHeldUpdate", true)
+		}
+		
 		// Remove hammer (simulating pickup)
 		a.removeObject("sim_hammer")
 		
