@@ -22,11 +22,11 @@ import (
 var assets embed.FS
 
 type TargetItem struct {
-	ID        string
-	Name      string
-	Loc       string
-	AddedAt   time.Time
-	IsPresent bool
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Loc       string    `json:"loc"`
+	AddedAt   time.Time `json:"-"`
+	IsPresent bool      `json:"isPresent"`
 }
 
 type App struct {
@@ -273,13 +273,14 @@ func (a *App) removeObject(id string) {
 	_, exists := a.roomItems[id]
 	if exists {
 		delete(a.roomItems, id)
-		a.AddLog(fmt.Sprintf("[ROOM] Removed ID %s", id))
 		if a.activeTargetID == id {
 			a.activeTargetID = ""
-			a.AddLog("Current target removed. Aborting pursuit.")
 		}
+		a.mu.Unlock()
+		a.AddLog(fmt.Sprintf("[ROOM] Removed ID %s", id))
+	} else {
+		a.mu.Unlock()
 	}
-	a.mu.Unlock()
 }
 
 func (a *App) CarryItem(itemID string) {
@@ -324,21 +325,19 @@ func (a *App) SimulateDrop() {
 		// 1. Hammer Drop & Walk
 		hammerID := "sim_hammer"
 		hammerLoc := "SAPB"
-		a.AddLog(fmt.Sprintf("[SIM] Hammer appeared at %s. Walking to spot...", hammerLoc))
+		a.AddLog(fmt.Sprintf("[SIM] 1/4 Hammer appearing at %s...", hammerLoc))
 		a.addObject(hammerID, "toby_hammer", hammerLoc+"IIH0.0")
 		
-		// Explicit move in simulation
+		a.AddLog("[SIM] 2/4 Walking to hammer spot...")
 		a.MoveToLoc(TargetItem{ID: hammerID, Loc: hammerLoc, Name: "toby_hammer"})
 		time.Sleep(4 * time.Second)
 
-		// Pickup
-		a.AddLog("[SIM] Picking up Toby Hammer...")
+		a.AddLog("[SIM] 3/4 Picking up Toby Hammer...")
 		a.Interact(hammerID)
 		time.Sleep(1 * time.Second)
 		
-		// Simulate holding
-		a.AddLog("[SIM] Now holding Toby Hammer (simulating hand object)...")
-		a.CarryItem("4342") // Item ID for Toby Hammer
+		a.AddLog("[SIM] 4/4 Simulating CarryItem packet...")
+		a.CarryItem("4342") 
 		
 		a.mu.Lock()
 		a.hammerHeld = true
@@ -347,6 +346,8 @@ func (a *App) SimulateDrop() {
 			runtime.EventsEmit(a.ctx, "hammerHeldUpdate", true)
 		}
 		a.removeObject(hammerID)
+		
+		a.AddLog("[SIM] Hammer sequence done. Waiting 2s for first present...")
 		time.Sleep(2 * time.Second)
 
 		// 2. Present Drops & Walks
@@ -355,14 +356,17 @@ func (a *App) SimulateDrop() {
 		
 		for i, id := range ids {
 			a.mu.Lock()
-			if !a.simulating { a.mu.Unlock(); return }
+			simActive := a.simulating
 			a.mu.Unlock()
+			if !simActive { 
+				a.AddLog("[SIM] Simulation stopped early.")
+				return 
+			}
 
-			a.AddLog(fmt.Sprintf("[SIM] Present %d appeared at %s", i+1, locs[i]))
+			a.AddLog(fmt.Sprintf("[SIM] Present %d/2 appeared at %s", i+1, locs[i]))
 			a.addObject(id, "Manniv_present_gen", locs[i]+"IIH0.0")
 			
 			a.AddLog(fmt.Sprintf("[SIM] Walking next to present %d...", i+1))
-			// Use IsPresent=true to trigger adjacency walk
 			a.MoveToLoc(TargetItem{ID: id, Loc: locs[i], Name: "present", IsPresent: true})
 			time.Sleep(4 * time.Second)
 
@@ -375,6 +379,7 @@ func (a *App) SimulateDrop() {
 		}
 	}()
 }
+
 
 func (a *App) StopSimulation() {
 	a.mu.Lock()
