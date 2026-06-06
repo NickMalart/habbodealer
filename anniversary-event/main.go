@@ -299,9 +299,6 @@ func (a *App) startWalking(id string, itemType string, ox, oy int, rawLoc string
 	a.isWalking = true
 	a.mu.Unlock()
 
-	// Start a monitoring goroutine to check position and trigger pickup
-	go a.monitorArrival(id, itemType, tx, ty)
-
 	// Construct MOVE packet (Header 1269 / Su)
 	// Format derived from working hex SuQBSEH:
 	// [TargetX+63][TargetY+45][OriginX+65][OriginY+49] + H
@@ -319,41 +316,21 @@ func (a *App) startWalking(id string, itemType string, ox, oy int, rawLoc string
 	a.addLog(fmt.Sprintf("Sending packet: Header=1269, DataHex=%x", moveData))
 	ext.Headers().Add("MOVE_S", g.Header{Dir: g.Out, Value: 1269})
 	ext.Send(g.Out.Id("MOVE_S"), moveData)
-}
 
-func (a *App) monitorArrival(id, itemType string, tx, ty int) {
-	a.addLog(fmt.Sprintf("🔍 [POLL] Starting position monitor for %s at (%d, %d)", itemType, tx, ty))
-	for {
+	// Simple timer-based pickup: Wait 6s for the walk to complete, then pick up
+	go func() {
+		a.addLog(fmt.Sprintf("⏳ Waiting 6s for walk to complete (%s)...", itemType))
+		time.Sleep(6 * time.Second)
 		a.mu.Lock()
-		mx, my := a.myX, a.myY
-		enabled := a.collectEnabled
-		targetID := a.targetID
+		a.isWalking = false
 		a.mu.Unlock()
-
-		if !enabled || targetID != id {
-			a.addLog("🛑 [POLL] Monitor stopped (target changed or disabled)")
-			return
-		}
-
-		if mx == tx && my == ty {
-			a.addLog(fmt.Sprintf("🎯 [POLL] Match! Current (%d, %d) == Target (%d, %d)", mx, my, tx, ty))
-			a.mu.Lock()
-			a.isWalking = false
-			a.mu.Unlock()
-			a.handleArrivalActions(id, itemType)
-			return
-		}
-
-		a.addLog(fmt.Sprintf("📡 [POLL] Checking position... Current: (%d, %d) | Target: (%d, %d)", mx, my, tx, ty))
-		time.Sleep(1500 * time.Millisecond) // Slower polling for clearer sequence
-	}
+		a.handleArrivalActions(id, itemType)
+	}()
 }
 
 func (a *App) handleArrivalActions(id, itemType string) {
 	if itemType == "hammer" {
-		a.addLog("Arrived at hammer. Waiting 6s before pickup...")
-		time.Sleep(6 * time.Second)
-		a.addLog("Picking up hammer...")
+		a.addLog("Walk time complete. Picking up hammer...")
 		a.mu.Lock()
 		a.hasHammer = true
 		a.startHammerTimerInternal()
@@ -361,8 +338,7 @@ func (a *App) handleArrivalActions(id, itemType string) {
 		a.emitLogs()
 		a.pickup(id)
 	} else {
-		a.addLog(fmt.Sprintf("Arrived next to present %s. Waiting 6s...", id))
-		time.Sleep(6 * time.Second)
+		a.addLog(fmt.Sprintf("Walk time complete. Picking up present %s...", id))
 		a.pickup(id)
 	}
 
@@ -431,61 +407,6 @@ func (a *App) seekNextPresent() {
 
 	if nextP != nil {
 		a.startWalking(nextP.id, "present", nextP.x, nextP.y, string(nextP.data))
-	}
-}
-
-func (a *App) handleArrival() {
-	a.mu.Lock()
-	id := a.targetID
-	itemType := a.targetType
-	enabled := a.collectEnabled
-	tx, ty := a.targetX, a.targetY
-	a.mu.Unlock()
-	
-	if !enabled || id == "" {
-		return
-	}
-
-	// Poll every second to ensure we are actually on the target tile
-	for {
-		a.mu.Lock()
-		mx, my := a.myX, a.myY
-		a.mu.Unlock()
-		if mx == tx && my == ty {
-			break
-		}
-		time.Sleep(1 * time.Second)
-		// Check if enabled state changed or target changed
-		a.mu.Lock()
-		if !a.collectEnabled || a.targetID != id {
-			a.mu.Unlock()
-			return
-		}
-		a.mu.Unlock()
-	}
-
-	if itemType == "hammer" {
-		a.addLog("Arrived at hammer. Picking up...")
-		
-		a.mu.Lock()
-		a.hasHammer = true
-		a.startHammerTimerInternal()
-		a.mu.Unlock()
-		a.emitLogs()
-		
-		a.pickup(id)
-	} else {
-		a.addLog(fmt.Sprintf("Arrived next to present %s. Picking up...", id))
-		a.pickup(id)
-	}
-
-	// Seek next if we have hammer
-	a.mu.Lock()
-	hasHammer := a.hasHammer
-	a.mu.Unlock()
-
-	if hasHammer {
-		a.seekNextPresent()
 	}
 }
 
