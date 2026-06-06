@@ -460,19 +460,16 @@ func (a *App) MoveToLoc(target TargetItem) {
 	targetLoc := locStr
 	if target.IsPresent && len(locStr) > 0 {
 		// Try to walk to an adjacent tile for presents
-		// Decrement the first char to step one tile away
 		firstChar := locStr[0]
 		if firstChar > 35 { 
 			targetLoc = string(firstChar-1) + locStr[1:]
 		} else if len(locStr) > 1 {
-			// If first char is too small, try changing second
 			targetLoc = string(firstChar) + string(locStr[1]+1) + locStr[2:]
 		}
 	}
 
-	// Manual prefix Su and suffix H as seen in working Origins packets
-	payload := append([]byte("Su"), []byte(targetLoc)...)
-	payload = append(payload, 'H')
+	// Payload is JUST the encoded coordinates + H terminator
+	payload := append([]byte(targetLoc), 'H')
 	
 	a.AddLog(fmt.Sprintf("Sending Move: %s (Hex: %s)", string(payload), hex.EncodeToString(payload)))
 	a.ext.Send(g.Out.Id("Move"), payload)
@@ -482,8 +479,8 @@ func (a *App) Interact(id string) {
 	if a.ext == nil {
 		return
 	}
-	// Manual prefix AJ as seen in verified Hex: 41 4a 40 49...
-	payload := []byte("AJ@I" + id + "@A0")
+	// Payload for SetStuffData in Shockwave is @I + ID + @A0
+	payload := []byte("@I" + id + "@A0")
 	a.AddLog(fmt.Sprintf("Sending Interact: %s (Hex: %s)", string(payload), hex.EncodeToString(payload)))
 	a.ext.Send(g.Out.Id("SetStuffData"), payload)
 }
