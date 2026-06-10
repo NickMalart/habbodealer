@@ -2259,10 +2259,10 @@ func decodeLeadingVL64(data []byte) (int, bool) {
 
 func (a *App) parseTradeItems(data []byte, allowedNamesCache []string, partner string, banker string, roomUsers map[string]bool) []TradeItem {
 	counts := map[string]int{}
+	unrecognized := map[string]int{}
 	fields := bytes.Split(data, []byte{0x02})
 
 	type allowedItem struct {
-		raw      string
 		lower    string
 		baseName string
 	}
@@ -2278,39 +2278,74 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string, partner s
 			base = base[:idx]
 		}
 		activeItems = append(activeItems, allowedItem{
-			raw:      n,
 			lower:    low,
 			baseName: base,
 		})
 	}
 
-	for _, field := range fields {
+	for i := 0; i < len(fields); i++ {
+		field := fields[i]
 		if len(field) == 0 {
 			continue
 		}
-		lowField := strings.ToLower(strings.TrimSpace(string(field)))
-		if lowField == "" {
-			continue
-		}
+		s := string(field)
+		lowField := strings.ToLower(s)
 
-		var bestMatch *allowedItem
-		for i := range activeItems {
-			it := &activeItems[i]
-			if strings.Contains(lowField, it.lower) || strings.Contains(lowField, it.baseName) {
-				if bestMatch == nil || len(it.baseName) > len(bestMatch.baseName) {
-					bestMatch = it
-				}
+		isFloor := false
+		isWall := false
+
+		// Floor Furniture check: name followed 2 slots later by II marker
+		if i+2 < len(fields) {
+			marker := string(fields[i+2])
+			if strings.HasPrefix(marker, "II") {
+				isFloor = true
 			}
 		}
 
-		if bestMatch != nil {
-			counts[bestMatch.baseName]++
+		// Wall Furniture check: name followed 1 slot later by wall_ marker
+		if !isFloor && i+1 < len(fields) {
+			marker := string(fields[i+1])
+			if strings.HasPrefix(marker, "wall_") {
+				isWall = true
+			}
+		}
+
+		if isFloor || isWall {
+			// Extract actual item name (strip prefixes often added by Shockwave)
+			cleanName := lowField
+			if idx := strings.LastIndex(cleanName, "HYDH"); idx != -1 {
+				cleanName = cleanName[idx+4:]
+			} else if idx := strings.LastIndex(cleanName, "XDH"); idx != -1 {
+				cleanName = cleanName[idx+3:]
+			} else if idx := strings.LastIndex(cleanName, "m[123]"); idx != -1 {
+				cleanName = cleanName[idx+6:]
+			} else if idx := strings.LastIndex(cleanName, "i"); idx != -1 && isWall {
+				// Wall items often have 'i' prefix
+				cleanName = cleanName[idx+1:]
+			}
+
+			matched := false
+			for j := range activeItems {
+				it := &activeItems[j]
+				if cleanName == it.lower || cleanName == it.baseName || strings.HasPrefix(cleanName, it.baseName+"*") {
+					counts[it.baseName]++
+					matched = true
+					break
+				}
+			}
+
+			if !matched {
+				unrecognized[cleanName]++
+			}
 		}
 	}
 
 	var items []TradeItem
 	for name, qty := range counts {
 		items = append(items, TradeItem{Name: name, Quantity: qty})
+	}
+	for name, qty := range unrecognized {
+		items = append(items, TradeItem{Name: name, Quantity: qty, IsUnrecognized: true})
 	}
 	return items
 }
@@ -2450,8 +2485,33 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 
 			// Map of matched allowed item -> qty
 			matchedItems := make(map[string]int)
+			unrecognizedItems := make(map[string]int)
 			for _, it := range lastItems {
-				matchedItems[strings.ToLower(strings.TrimSpace(it.Name))] += it.Quantity
+				low := strings.ToLower(strings.TrimSpace(it.Name))
+				if it.IsUnrecognized {
+					unrecognizedItems[low] += it.Quantity
+				} else {
+					matchedItems[low] += it.Quantity
+				}
+			}
+
+			// SECURITY CHECK: If there are ANY real furniture items in the trade (identified
+			// by the II/wall markers in parseTradeItems) that are NOT on our authorized list,
+			// we must block the trade.
+			if len(unrecognizedItems) > 0 {
+				var unrecognized []string
+				for n := range unrecognizedItems {
+					unrecognized = append(unrecognized, n)
+				}
+				a.AddLog(fmt.Sprintf("[SECURITY] Blocking trade: unauthorized furniture detected: %v", unrecognized))
+				a.queueShout(partnerName, fmt.Sprintf("%s, trade rejected: unauthorized items detected.", partnerName))
+				
+				if a.ctx != nil {
+					go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "unauthorized_items_detected", "player": partnerName, "unrecognized": unrecognized})
+				}
+				e.Block()
+				a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+				return
 			}
 
 			if len(matchedItems) == 0 {
