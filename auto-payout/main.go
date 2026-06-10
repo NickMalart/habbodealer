@@ -2311,23 +2311,12 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string, partner s
 		}
 
 		if isFloor || isWall {
-			// Extract actual item name (strip prefixes often added by Shockwave)
-			cleanName := lowField
-			if idx := strings.LastIndex(cleanName, "HYDH"); idx != -1 {
-				cleanName = cleanName[idx+4:]
-			} else if idx := strings.LastIndex(cleanName, "XDH"); idx != -1 {
-				cleanName = cleanName[idx+3:]
-			} else if idx := strings.LastIndex(cleanName, "m[123]"); idx != -1 {
-				cleanName = cleanName[idx+6:]
-			} else if idx := strings.LastIndex(cleanName, "i"); idx != -1 && isWall {
-				// Wall items often have 'i' prefix
-				cleanName = cleanName[idx+1:]
-			}
-
 			matched := false
+			// Check if any of our authorized items exist as a substring within this furniture field.
 			for j := range activeItems {
 				it := &activeItems[j]
-				if cleanName == it.lower || cleanName == it.baseName || strings.HasPrefix(cleanName, it.baseName+"*") {
+				// We check for the baseName (canonical name from DB) within the raw field data
+				if strings.Contains(lowField, it.lower) || strings.Contains(lowField, it.baseName) {
 					counts[it.baseName]++
 					matched = true
 					break
@@ -2335,7 +2324,9 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string, partner s
 			}
 
 			if !matched {
-				unrecognized[cleanName]++
+				// If it's definitely a furniture item (has the marker) but doesn't match
+				// any of our authorized substrings, then it's a security risk.
+				unrecognized[lowField]++
 			}
 		}
 	}
