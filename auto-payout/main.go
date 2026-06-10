@@ -38,6 +38,22 @@ var users28Parser []byte
 
 var itemRegex = regexp.MustCompile(`(?:CF_\d+_[a-z][a-z0-9_.-]*|[a-z][a-z0-9_.-]+_[a-z0-9_.-]+)(?:\*\d+)?`)
 
+var figurePrefixes = []string{
+	"hd-", "hr-", "ch-", "lg-", "sh-",
+	"ha-", "he-", "ea-", "fa-", "ca-",
+	"cc-", "wa-", "cp-",
+}
+
+func isUsersPacket(data []byte) bool {
+	s := strings.ToLower(string(data))
+	for _, p := range figurePrefixes {
+		if strings.Contains(s, p) {
+			return true
+		}
+	}
+	return false
+}
+
 const (
 	maxOpenTradeDuration = 2 * time.Minute
 	banDuration          = 5 * time.Minute
@@ -2200,6 +2216,10 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 }
 
 func (a *App) handleTradeItems(e *g.Intercept) {
+	if isUsersPacket(e.Packet.Data) {
+		return
+	}
+
 	a.tradeMu.Lock()
 	a.currentTradeItems = string(e.Packet.Data)
 	allowedCache := a.allowedNamesCache
@@ -2284,6 +2304,7 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string, partner s
 		if lowField == lowPartner || lowField == lowBanker || roomUsers[lowField] ||
 			lowField == "credit" || lowField == "pixel" || lowField == "shell" ||
 			strings.HasPrefix(lowField, "ii") || strings.HasPrefix(lowField, "ih") ||
+			isUsersPacket([]byte(lowField)) ||
 			len(lowField) < 3 {
 			continue
 		}
