@@ -2259,14 +2259,12 @@ func decodeLeadingVL64(data []byte) (int, bool) {
 
 func (a *App) parseTradeItems(data []byte, allowedNamesCache []string, partner string, banker string, roomUsers map[string]bool) []TradeItem {
 	counts := map[string]int{}
-	unrecognized := map[string]int{}
 	fields := bytes.Split(data, []byte{0x02})
 
-	// Pre-normalize allowed names from DB for faster matching
 	type allowedItem struct {
 		raw      string
 		lower    string
-		baseName string // Name without * quantity
+		baseName string
 	}
 	var activeItems []allowedItem
 	for _, n := range allowedNamesCache {
@@ -2286,35 +2284,18 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string, partner s
 		})
 	}
 
-	lowPartner := strings.ToLower(strings.TrimSpace(partner))
-	lowBanker := strings.ToLower(strings.TrimSpace(banker))
-
 	for _, field := range fields {
 		if len(field) == 0 {
 			continue
 		}
-		s := strings.TrimSpace(string(field))
-		if s == "" {
+		lowField := strings.ToLower(strings.TrimSpace(string(field)))
+		if lowField == "" {
 			continue
 		}
 
-		lowField := strings.ToLower(s)
-
-		// Skip fields that match known metadata to reduce false matches
-		if lowField == lowPartner || lowField == lowBanker || roomUsers[lowField] ||
-			lowField == "credit" || lowField == "pixel" || lowField == "shell" ||
-			strings.HasPrefix(lowField, "ii") || strings.HasPrefix(lowField, "ih") ||
-			isUsersPacket([]byte(lowField)) ||
-			len(lowField) < 3 {
-			continue
-		}
-
-		// Iterate through active items from DB and check if they exist as a substring
-		// in this packet field. We look for the best (longest) match.
 		var bestMatch *allowedItem
 		for i := range activeItems {
 			it := &activeItems[i]
-			// Check for either the full name or the base name (no * qty)
 			if strings.Contains(lowField, it.lower) || strings.Contains(lowField, it.baseName) {
 				if bestMatch == nil || len(it.baseName) > len(bestMatch.baseName) {
 					bestMatch = it
@@ -2324,20 +2305,12 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string, partner s
 
 		if bestMatch != nil {
 			counts[bestMatch.baseName]++
-		} else {
-			// If not an allowed item, check if it looks like an item at all
-			if match := itemRegex.FindString(lowField); match != "" {
-				unrecognized[match]++
-			}
 		}
 	}
 
 	var items []TradeItem
 	for name, qty := range counts {
 		items = append(items, TradeItem{Name: name, Quantity: qty})
-	}
-	for name, qty := range unrecognized {
-		items = append(items, TradeItem{Name: name, Quantity: qty, IsUnrecognized: true})
 	}
 	return items
 }
@@ -2470,12 +2443,6 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 		a.AddLog(fmt.Sprintf("[DEBUG] Current trade packet data: %s", safeItems))
 
 		if len(allowedNames) > 0 {
-			// Build allowed name set
-			allowedSet := make(map[string]bool)
-			for _, n := range allowedNames {
-				allowedSet[strings.ToLower(strings.TrimSpace(n))] = true
-			}
-
 			// Snapshot last parsed items (if any)
 			a.tradeMu.Lock()
 			lastItems := a.lastTradeItems
@@ -2483,94 +2450,15 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 
 			// Map of matched allowed item -> qty
 			matchedItems := make(map[string]int)
-			allFoundItems := make(map[string]int)
-			unrecognizedItems := make(map[string]int)
-			
 			for _, it := range lastItems {
-				low := strings.ToLower(strings.TrimSpace(it.Name))
-				allFoundItems[low] += it.Quantity
-				if it.IsUnrecognized {
-					unrecognizedItems[low] += it.Quantity
-				} else {
-					matchedItems[low] += it.Quantity
-				}
+				matchedItems[strings.ToLower(strings.TrimSpace(it.Name))] += it.Quantity
 			}
 
-			// SECURITY CHECK: If there are ANY items in the trade that we didn't explicitly match
-			// to our allowed list, we MUST block the trade. This prevents "hidden" items.
-			if len(allFoundItems) != len(matchedItems) {
-				var unrecognized []string
-				for n := range unrecognizedItems {
-					unrecognized = append(unrecognized, n)
-				}
-				a.AddLog(fmt.Sprintf("[SECURITY] Blocking trade: %d item types found but only %d are authorized. Unrecognized: %v", len(allFoundItems), len(matchedItems), unrecognized))
-				
-				// Fetch display names for a more helpful shout
-				displayNames := []string{}
-				if a.db != nil {
-					rows, err := a.db.Query(context.Background(), "SELECT display_name FROM public.stocked_items WHERE is_active = TRUE")
-					if err == nil {
-						for rows.Next() {
-							var dn string
-							if err := rows.Scan(&dn); err == nil {
-								displayNames = append(displayNames, dn)
-							}
-						}
-						rows.Close()
-					}
-				}
-				
-				shoutMsg := fmt.Sprintf("%s, trade rejected: unauthorized items detected.", partnerName)
-				if len(displayNames) > 0 {
-					shoutMsg = fmt.Sprintf("%s, trade rejected: we only accept %s.", partnerName, strings.Join(displayNames, ", "))
-				}
-				
-				a.queueShout(partnerName, shoutMsg)
-				if a.ctx != nil {
-					go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "unauthorized_items_detected", "player": partnerName, "total_found": len(allFoundItems), "authorized_found": len(matchedItems), "unrecognized": unrecognized, "accepted_display": displayNames})
-				}
+			if len(matchedItems) == 0 {
+				a.AddLog("[FILTER] Blocking acceptance: no authorized items found in trade.")
+				a.queueShout(partnerName, fmt.Sprintf("%s, trade rejected: no authorized items found.", partnerName))
 				e.Block()
 				a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
-				return
-			}
-
-			// If we couldn't parse items, fallback to previous substring check
-			if len(matchedItems) == 0 {
-				matched := false
-				lowerItems := strings.ToLower(items)
-				for _, name := range allowedNames {
-					if strings.Contains(lowerItems, strings.ToLower(name)) {
-						matched = true
-						a.AddLog(fmt.Sprintf("[FILTER] Validated trade: matched stocked item '%s' (fallback)", name))
-						break
-					}
-				}
-				if !matched {
-					a.AddLog("[FILTER] Blocking acceptance: no stocked items found in trade.")
-					a.queueShout(partnerName, fmt.Sprintf("%s, trade rejected: no authorized items found.", partnerName))
-					if a.ctx != nil {
-						go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "no_stocked_items", "player": partnerName, "allowed": allowedNames})
-					}
-					e.Block()
-					// Send TRADE_CLOSE to force the window shut for them
-					a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
-					return
-				}
-
-				// Accept by fallback since we can't determine counts
-				go func() {
-					time.Sleep(1500 * time.Millisecond)
-					a.tradeMu.Lock()
-					active := a.tradeActive
-					a.tradeMu.Unlock()
-					if active {
-						a.AddLog("Automatically accepting trade (Stage 1 - fallback)...")
-						a.ext.Send(g.Out.Id("TRADE_ACCEPT_OUT"))
-						if a.ctx != nil {
-							go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "accepted", "reason": "fallback_no_counts", "player": partnerName, "allowed": allowedNames})
-						}
-					}
-				}()
 				return
 			}
 
@@ -2628,9 +2516,6 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 						short = true
 						a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: insufficient payout stock for %s required=%d available=%d (hand=%d incoming=%d)", name, need, available, have, inc))
 						a.queueShout(partnerName, fmt.Sprintf("%s, trade cancelled. Please wait for the Banker to restock before betting.", partnerName))
-						if a.ctx != nil {
-							go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "insufficient_payout_stock", "player": partnerName, "item": name, "required": need, "available": available, "hand": have, "incoming": inc})
-						}
 						break
 					}
 				}
@@ -2650,9 +2535,6 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 				if maxQty > 0 && qty > maxQty {
 					a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: %s offered %d which exceeds max per-unique %d", itName, qty, maxQty))
 					a.queueShout(partnerName, fmt.Sprintf("%s, trade cancelled: quantity exceeds the limit of %d.", partnerName, maxQty))
-					if a.ctx != nil {
-						go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "max_qty_exceeded", "player": partnerName, "item": itName, "qty": qty, "max_qty": maxQty})
-					}
 					e.Block()
 					a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
 					return
@@ -2660,13 +2542,9 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 			}
 
 			// Check unique count (total items found in trade, matched or not)
-			totalUnique := len(matchedItems) + len(unrecognizedItems)
-			if maxUnique > 0 && totalUnique > maxUnique {
-				a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: player offered %d unique items (limit %d)", totalUnique, maxUnique))
+			if maxUnique > 0 && len(matchedItems) > maxUnique {
+				a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: player offered %d unique items (limit %d)", len(matchedItems), maxUnique))
 				a.queueShout(partnerName, fmt.Sprintf("%s, please consolidate your trade. I can only process %d unique item types at once.", partnerName, maxUnique))
-				if a.ctx != nil {
-					go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "max_unique_exceeded", "player": partnerName, "unique_offered": totalUnique, "max_unique": maxUnique, "items": matchedItems, "unrecognized": unrecognizedItems})
-				}
 				e.Block()
 				a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
 				return
@@ -2690,22 +2568,6 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 				}
 			}()
 
-		} else {
-			a.AddLog("[DEBUG] No active stocked items found in cache. This might be because the database fetch failed or no items are active. Allowing trade by default to prevent lockout.")
-			// Automatically accept the trade if filter is essentially disabled
-			go func() {
-				time.Sleep(1500 * time.Millisecond)
-				a.tradeMu.Lock()
-				active := a.tradeActive
-				a.tradeMu.Unlock()
-				if active {
-					a.AddLog("Automatically accepting trade (Stage 1 - No Filter)...")
-					a.ext.Send(g.Out.Id("TRADE_ACCEPT_OUT"))
-					if a.ctx != nil {
-						go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "accepted", "reason": "no_filter", "player": partnerName})
-					}
-				}
-			}()
 		}
 	}
 }
