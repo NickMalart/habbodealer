@@ -2283,40 +2283,35 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string, partner s
 		})
 	}
 
+	used := make(map[int]bool)
 	for i := 0; i < len(fields); i++ {
-		field := fields[i]
-		if len(field) == 0 {
-			continue
-		}
-		s := string(field)
-		lowField := strings.ToLower(s)
+		field := string(fields[i])
 
 		isFloor := false
 		isWall := false
+		nameIdx := -1
 
-		// Floor Furniture check: name followed 2 slots later by II marker
-		if i+2 < len(fields) {
-			marker := string(fields[i+2])
-			if strings.HasPrefix(marker, "II") {
-				isFloor = true
-			}
+		// Floor Detection: 'II' marker at index i, name is at i-2
+		if strings.HasPrefix(field, "II") && i >= 2 {
+			isFloor = true
+			nameIdx = i - 2
 		}
 
-		// Wall Furniture check: name followed 1 slot later by wall_ marker
-		if !isFloor && i+1 < len(fields) {
-			marker := string(fields[i+1])
-			if strings.HasPrefix(marker, "wall_") {
-				isWall = true
-			}
+		// Wall Detection: 'wall_' marker at index i, name is at i-1
+		if !isFloor && strings.HasPrefix(field, "wall_") && i >= 1 {
+			isWall = true
+			nameIdx = i - 1
 		}
 
-		if isFloor || isWall {
+		if (isFloor || isWall) && nameIdx >= 0 && !used[nameIdx] {
+			lowNameField := strings.ToLower(string(fields[nameIdx]))
+			used[nameIdx] = true
+
 			matched := false
 			// Check if any of our authorized items exist as a substring within this furniture field.
 			for j := range activeItems {
 				it := &activeItems[j]
-				// We check for the baseName (canonical name from DB) within the raw field data
-				if strings.Contains(lowField, it.lower) || strings.Contains(lowField, it.baseName) {
+				if strings.Contains(lowNameField, it.lower) || strings.Contains(lowNameField, it.baseName) {
 					counts[it.baseName]++
 					matched = true
 					break
@@ -2326,7 +2321,7 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string, partner s
 			if !matched {
 				// If it's definitely a furniture item (has the marker) but doesn't match
 				// any of our authorized substrings, then it's a security risk.
-				unrecognized[lowField]++
+				unrecognized[lowNameField]++
 			}
 		}
 	}
