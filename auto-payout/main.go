@@ -2308,21 +2308,32 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string, partner s
 			used[nameIdx] = true
 
 			matched := false
-			// Check if any of our authorized items exist as a substring within this furniture field.
+			matchDetail := ""
+			// 1. Check if it contains any of our authorized items (substring match)
 			for j := range activeItems {
 				it := &activeItems[j]
 				if strings.Contains(lowNameField, it.lower) || strings.Contains(lowNameField, it.baseName) {
 					counts[it.baseName]++
 					matched = true
+					matchDetail = fmt.Sprintf("Matched %s", it.baseName)
 					break
 				}
 			}
 
 			if !matched {
-				// If it's definitely a furniture item (has the marker) but doesn't match
-				// any of our authorized substrings, then it's a security risk.
-				unrecognized[lowNameField]++
+				// 2. If no authorized match, only treat as 'unrecognized' if it looks like a real item.
+				// This prevents metadata like '0,0,0' or numbers from triggering rejections.
+				if itemRegex.MatchString(lowNameField) {
+					unrecognized[lowNameField]++
+					matchDetail = "UNRECOGNIZED FURNITURE"
+				} else {
+					matchDetail = "METADATA/NOISE (Ignored)"
+				}
 			}
+
+			a.AddLog(fmt.Sprintf("[DEBUG-TRADE] Found %s candidate at field[%d]: '%s' | %s", 
+				func() string { if isFloor { return "Floor" }; return "Wall" }(),
+				nameIdx, lowNameField, matchDetail))
 		}
 	}
 
