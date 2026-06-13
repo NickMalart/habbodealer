@@ -347,6 +347,13 @@ func (b *BanList) Remove(key string) {
 	b.mu.Unlock()
 }
 
+// Clear removes all bans from the memory map.
+func (b *BanList) Clear() {
+	b.mu.Lock()
+	b.bans = make(map[string]BanInfo)
+	b.mu.Unlock()
+}
+
 // PurgeExpired removes all expired bans from the in-memory map.
 // Returns true if any bans were removed.
 func (b *BanList) PurgeExpired() bool {
@@ -847,6 +854,17 @@ func (a *App) ClearBan(key string) error {
 	}
 	a.RemoveBan(key)
 	a.AddLog(fmt.Sprintf("Ban cleared: %s", key))
+	if a.ctx != nil {
+		go runtime.EventsEmit(a.ctx, "banListUpdate", a.GetBanList())
+	}
+	return nil
+}
+
+func (a *App) ReloadBans() error {
+	if a.banList != nil {
+		a.banList.Clear()
+	}
+	a.loadBansFromDB()
 	if a.ctx != nil {
 		go runtime.EventsEmit(a.ctx, "banListUpdate", a.GetBanList())
 	}

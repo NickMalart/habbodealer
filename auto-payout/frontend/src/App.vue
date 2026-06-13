@@ -73,7 +73,10 @@
           </div>
 
           <div class="card banlist-card">
-            <h3>Ban List</h3>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px">
+              <h3 style="margin:0">Ban List</h3>
+              <button @click="reloadBans" class="btn-small">Reload from DB</button>
+            </div>
             <div v-if="banList.length">
               <div v-for="b in banList" :key="b.key" class="ban-entry" style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #222">
                 <div style="flex:1">
@@ -255,6 +258,13 @@ onMounted(() => {
     window.runtime.EventsOn('banListUpdate', data => { banList.value = data })
   }
 })
+
+const reloadBans = async () => {
+  if (!window.go?.main?.App) return
+  try {
+    await window.go.main.App.ReloadBans()
+  } catch (e) { alert('Reload failed: ' + e) }
+}
 
 const clearBan = async (key) => {
   if (!window.go?.main?.App) return
