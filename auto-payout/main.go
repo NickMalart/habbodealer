@@ -258,20 +258,66 @@ func NewBanList() *BanList {
 	return &BanList{bans: make(map[string]BanInfo)}
 }
 
-func (b *BanList) Add(key string, d time.Duration, message string) {
+func (b *BanList) Add(key string, d time.Duration, message string) BanInfo {
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	var expiry time.Time
 	if d == 0 {
-		// Lifetime: set to a very far future date
 		expiry = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
 	} else {
 		expiry = time.Now().Add(d)
 	}
-	b.bans[key] = BanInfo{
+	info := BanInfo{
 		ExpiresAt: expiry,
 		Message:   message,
 	}
-	b.mu.Unlock()
+	b.bans[key] = info
+	return info
+}
+
+// AddBan adds a ban to memory and DB.
+func (a *App) AddBan(key string, d time.Duration, message string) {
+	info := a.banList.Add(key, d, message)
+	a.syncBanToDB(key, info)
+}
+
+// RemoveBan removes a ban from memory and DB.
+func (a *App) RemoveBan(key string) {
+	a.banList.Remove(key)
+	a.removeBanFromDB(key)
+}
+
+// syncBanToDB persists a ban to the database.
+func (a *App) syncBanToDB(key string, info BanInfo) {
+	if a.db == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		query := `INSERT INTO public.banned_players (ban_key, expires_at, message) 
+		          VALUES ($1, $2, $3) 
+		          ON CONFLICT (ban_key) DO UPDATE SET expires_at = EXCLUDED.expires_at, message = EXCLUDED.message`
+		_, err := a.db.Exec(ctx, query, key, info.ExpiresAt, info.Message)
+		if err != nil {
+			a.AddLog("ERROR: syncBanToDB failed: " + err.Error())
+		}
+	}()
+}
+
+// removeBanFromDB deletes a ban from the database.
+func (a *App) removeBanFromDB(key string) {
+	if a.db == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := a.db.Exec(ctx, "DELETE FROM public.banned_players WHERE ban_key = $1", key)
+		if err != nil {
+			a.AddLog("ERROR: removeBanFromDB failed: " + err.Error())
+		}
+	}()
 }
 
 func (b *BanList) IsBanned(key string) bool {
@@ -383,10 +429,10 @@ func (a *App) banMonitor() {
 				a.AddLog(fmt.Sprintf("[BAN] Trade with %s (id=%d) open > %s — banning for %s", name, id, maxOpenTradeDuration, banDuration))
 				msg := fmt.Sprintf("%s you are banned from placing a bet", name)
 				if name != "" {
-					a.banList.Add("name:"+strings.ToLower(normalizeName(name)), banDuration, msg)
+					a.AddBan("name:"+strings.ToLower(normalizeName(name)), banDuration, msg)
 				}
 				if id > 0 {
-					a.banList.Add(fmt.Sprintf("tradeid:%d", id), banDuration, msg)
+					a.AddBan(fmt.Sprintf("tradeid:%d", id), banDuration, msg)
 				}
 
 				// Notify frontend of updated banlist
@@ -407,6 +453,48 @@ func (a *App) banMonitor() {
 				a.lastTradePartnerID = 0
 				a.tradeStartedAt = time.Time{}
 				a.tradeMu.Unlock()
+			}
+		case <-a.ctx.Done():
+			return
+		}
+	}
+}
+
+func (a *App) loadBansFromDB() {
+	if a.db == nil {
+		return
+	}
+	a.AddLog("Loading active bans from database...")
+	rows, err := a.db.Query(context.Background(), "SELECT ban_key, expires_at, message FROM public.banned_players WHERE expires_at > NOW()")
+	if err != nil {
+		a.AddLog("ERROR: loadBansFromDB failed: " + err.Error())
+		return
+	}
+	defer rows.Close()
+
+	count := 0
+	for rows.Next() {
+		var key, msg string
+		var exp time.Time
+		if err := rows.Scan(&key, &exp, &msg); err == nil {
+			a.banList.Add(key, exp.Sub(time.Now()), msg)
+			count++
+		}
+	}
+	a.AddLog(fmt.Sprintf("Loaded %d active bans from DB.", count))
+}
+
+func (a *App) cleanupBans() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if a.db != nil {
+				_, err := a.db.Exec(context.Background(), "DELETE FROM public.banned_players WHERE expires_at <= NOW()")
+				if err != nil {
+					a.AddLog("ERROR: cleanupBans failed: " + err.Error())
+				}
 			}
 		case <-a.ctx.Done():
 			return
@@ -521,6 +609,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.initDatabase()
 	a.loadPayoutsFromDB()
+	a.loadBansFromDB()
 	a.initParser()
 
 	a.ext = g.NewExt(g.ExtInfo{
@@ -585,6 +674,7 @@ func (a *App) startup(ctx context.Context) {
 	a.AddLog("Extension registered. Waiting for connection...")
 	go a.ext.Run()
 	go a.banMonitor()
+	go a.cleanupBans()
 	go a.tradeTicker()
 	go a.payoutMonitor()
 	go a.dbPoller()
@@ -676,7 +766,7 @@ func (a *App) ClearBan(key string) error {
 	if a.banList == nil {
 		return nil
 	}
-	a.banList.Remove(key)
+	a.RemoveBan(key)
 	a.AddLog(fmt.Sprintf("Ban cleared: %s", key))
 	if a.ctx != nil {
 		go runtime.EventsEmit(a.ctx, "banListUpdate", a.GetBanList())
@@ -713,7 +803,7 @@ func (a *App) BanPlayer(name string, duration string, message string) error {
 	}
 
 	key := "name:" + strings.ToLower(normalizeName(name))
-	a.banList.Add(key, d, message)
+	a.AddBan(key, d, message)
 
 	a.AddLog(fmt.Sprintf("Player banned: %s for %s. Message: %s", name, duration, message))
 
@@ -816,6 +906,17 @@ func (a *App) initDatabase() {
 	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS bet_amount INTEGER DEFAULT 0;")
 	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_bank INTEGER DEFAULT 0;")
 	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_status TEXT DEFAULT 'idle';")
+
+	// Create public.banned_players table
+	query = `CREATE TABLE IF NOT EXISTS public.banned_players (
+		ban_key TEXT PRIMARY KEY,
+		expires_at TIMESTAMP NOT NULL,
+		message TEXT NOT NULL,
+		created_at TIMESTAMP DEFAULT NOW()
+	);`
+	if _, err := a.db.Exec(context.Background(), query); err != nil {
+		a.AddLog("ERROR: public.banned_players table creation failed: " + err.Error())
+	}
 
 	// Create public.stocked_items table
 	query = `CREATE TABLE IF NOT EXISTS public.stocked_items (
