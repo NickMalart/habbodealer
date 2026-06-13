@@ -113,6 +113,12 @@ type BanEntry struct {
 	Label            string `json:"label"`
 	ExpiresAt        string `json:"expiresAt"`
 	RemainingSeconds int64  `json:"remainingSeconds"`
+	Message          string `json:"message"`
+}
+
+type BanInfo struct {
+	ExpiresAt time.Time `json:"expiresAt"`
+	Message   string    `json:"message"`
 }
 
 type App struct {
@@ -247,36 +253,46 @@ func (a *App) queueShout(playerName, message string) {
 // (we use "name:<lower>" and "tradeid:<id>"). Expirations are stored as time.Time.
 type BanList struct {
 	mu   sync.RWMutex
-	bans map[string]time.Time
+	bans map[string]BanInfo
 }
 
 func NewBanList() *BanList {
-	return &BanList{bans: make(map[string]time.Time)}
+	return &BanList{bans: make(map[string]BanInfo)}
 }
 
-func (b *BanList) Add(key string, d time.Duration) {
+func (b *BanList) Add(key string, d time.Duration, message string) {
 	b.mu.Lock()
-	b.bans[key] = time.Now().Add(d)
+	var expiry time.Time
+	if d == 0 {
+		// Lifetime: set to a very far future date
+		expiry = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+	} else {
+		expiry = time.Now().Add(d)
+	}
+	b.bans[key] = BanInfo{
+		ExpiresAt: expiry,
+		Message:   message,
+	}
 	b.mu.Unlock()
 }
 
 func (b *BanList) IsBanned(key string) bool {
-	b.mu.RLock()
-	exp, ok := b.bans[key]
-	b.mu.RUnlock()
+	info, ok := b.Get(key)
 	if !ok {
 		return false
 	}
-	if time.Now().After(exp) {
-		b.mu.Lock()
-		// only remove if unchanged
-		if cur, ok2 := b.bans[key]; ok2 && cur.Equal(exp) {
-			delete(b.bans, key)
-		}
-		b.mu.Unlock()
+	if time.Now().After(info.ExpiresAt) {
+		b.Remove(key)
 		return false
 	}
 	return true
+}
+
+func (b *BanList) Get(key string) (BanInfo, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	info, ok := b.bans[key]
+	return info, ok
 }
 
 // Remove deletes a ban key immediately.
@@ -287,34 +303,46 @@ func (b *BanList) Remove(key string) {
 }
 
 // List returns a snapshot copy of the ban map.
-func (b *BanList) List() map[string]time.Time {
+func (b *BanList) List() map[string]BanInfo {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	out := make(map[string]time.Time, len(b.bans))
+	out := make(map[string]BanInfo, len(b.bans))
 	for k, v := range b.bans {
 		out[k] = v
 	}
 	return out
 }
 
-// isPartnerBanned checks both name and trade-id variants for an active ban.
-func (a *App) isPartnerBanned(name string, tradeID int) bool {
+// getBanInfo checks both name and trade-id variants for an active ban and returns the info.
+func (a *App) getBanInfo(name string, tradeID int) (BanInfo, bool) {
 	if a.banList == nil {
-		return false
+		return BanInfo{}, false
 	}
 	if name != "" {
 		key := "name:" + strings.ToLower(normalizeName(name))
-		if a.banList.IsBanned(key) {
-			return true
+		if info, ok := a.banList.Get(key); ok {
+			if time.Now().Before(info.ExpiresAt) {
+				return info, true
+			}
+			a.banList.Remove(key)
 		}
 	}
 	if tradeID > 0 {
 		key := fmt.Sprintf("tradeid:%d", tradeID)
-		if a.banList.IsBanned(key) {
-			return true
+		if info, ok := a.banList.Get(key); ok {
+			if time.Now().Before(info.ExpiresAt) {
+				return info, true
+			}
+			a.banList.Remove(key)
 		}
 	}
-	return false
+	return BanInfo{}, false
+}
+
+// isPartnerBanned checks both name and trade-id variants for an active ban.
+func (a *App) isPartnerBanned(name string, tradeID int) bool {
+	_, banned := a.getBanInfo(name, tradeID)
+	return banned
 }
 
 // banMonitor watches the currently active trade and bans the partner if the
@@ -355,11 +383,12 @@ func (a *App) banMonitor() {
 
 			if time.Since(start) > maxOpenTradeDuration {
 				a.AddLog(fmt.Sprintf("[BAN] Trade with %s (id=%d) open > %s — banning for %s", name, id, maxOpenTradeDuration, banDuration))
+				msg := fmt.Sprintf("%s you are banned from placing a bet", name)
 				if name != "" {
-					a.banList.Add("name:"+strings.ToLower(normalizeName(name)), banDuration)
+					a.banList.Add("name:"+strings.ToLower(normalizeName(name)), banDuration, msg)
 				}
 				if id > 0 {
-					a.banList.Add(fmt.Sprintf("tradeid:%d", id), banDuration)
+					a.banList.Add(fmt.Sprintf("tradeid:%d", id), banDuration, msg)
 				}
 
 				// Notify frontend of updated banlist
@@ -615,8 +644,8 @@ func (a *App) GetBanList() []BanEntry {
 	now := time.Now()
 	snapshot := a.banList.List()
 	out := make([]BanEntry, 0, len(snapshot))
-	for k, exp := range snapshot {
-		rem := int64(exp.Sub(now).Seconds())
+	for k, info := range snapshot {
+		rem := int64(info.ExpiresAt.Sub(now).Seconds())
 		if rem < 0 {
 			rem = 0
 		}
@@ -626,7 +655,20 @@ func (a *App) GetBanList() []BanEntry {
 		} else if strings.HasPrefix(k, "tradeid:") {
 			label = "TradeID: " + strings.TrimPrefix(k, "tradeid:")
 		}
-		out = append(out, BanEntry{Key: k, Label: label, ExpiresAt: exp.Format(time.RFC3339), RemainingSeconds: rem})
+
+		expiresAtStr := info.ExpiresAt.Format(time.RFC3339)
+		if info.ExpiresAt.Year() > 3000 {
+			expiresAtStr = "Lifetime"
+			rem = 3153600000 // approx 100 years
+		}
+
+		out = append(out, BanEntry{
+			Key:              k,
+			Label:            label,
+			ExpiresAt:        expiresAtStr,
+			RemainingSeconds: rem,
+			Message:          info.Message,
+		})
 	}
 	return out
 }
@@ -638,6 +680,45 @@ func (a *App) ClearBan(key string) error {
 	}
 	a.banList.Remove(key)
 	a.AddLog(fmt.Sprintf("Ban cleared: %s", key))
+	if a.ctx != nil {
+		go runtime.EventsEmit(a.ctx, "banListUpdate", a.GetBanList())
+	}
+	return nil
+}
+
+// BanPlayer manually adds a name to the ban list with a specified duration and message.
+func (a *App) BanPlayer(name string, duration string, message string) error {
+	if a.banList == nil {
+		return fmt.Errorf("ban list not initialized")
+	}
+
+	var d time.Duration
+	switch duration {
+	case "1h":
+		d = 1 * time.Hour
+	case "5h":
+		d = 5 * time.Hour
+	case "24h":
+		d = 24 * time.Hour
+	case "1w":
+		d = 7 * 24 * time.Hour
+	case "1m":
+		d = 30 * 24 * time.Hour
+	case "lifetime":
+		d = 0 // Handled as lifetime in BanList.Add
+	default:
+		return fmt.Errorf("invalid duration: %s", duration)
+	}
+
+	if message == "" {
+		message = fmt.Sprintf("%s you are banned from placing a bet", name)
+	}
+
+	key := "name:" + strings.ToLower(normalizeName(name))
+	a.banList.Add(key, d, message)
+
+	a.AddLog(fmt.Sprintf("Player banned: %s for %s. Message: %s", name, duration, message))
+
 	if a.ctx != nil {
 		go runtime.EventsEmit(a.ctx, "banListUpdate", a.GetBanList())
 	}
@@ -2196,8 +2277,11 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 	a.tradeMu.Unlock()
 
 	// If we can identify the partner immediately and they are banned, block now
-	if a.isPartnerBanned(ownerName, ownerID) {
+	if info, banned := a.getBanInfo(ownerName, ownerID); banned {
 		a.AddLog(fmt.Sprintf("[BAN] Blocking incoming trade open from banned partner %s (id=%d)", ownerName, ownerID))
+		if ownerName != "" {
+			a.queueShout(ownerName, info.Message)
+		}
 		e.Block()
 		if a.ext != nil {
 			a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
@@ -2425,8 +2509,11 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 		a.tradeMu.Unlock()
 
 		// If this partner is currently banned, block the acceptance immediately
-		if a.isPartnerBanned(partnerName, partnerTradeID) {
+		if info, banned := a.getBanInfo(partnerName, partnerTradeID); banned {
 			a.AddLog(fmt.Sprintf("[BAN] Blocking acceptance from banned partner %s (id=%d)", partnerName, partnerTradeID))
+			if partnerName != "" {
+				a.queueShout(partnerName, info.Message)
+			}
 			e.Block()
 			if a.ext != nil {
 				a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
