@@ -236,14 +236,16 @@ func (a *App) queueShout(playerName, message string) {
 	a.lastShoutTime[strings.ToLower(playerName)] = time.Now()
 	a.shoutMu.Unlock()
 
+	owner := a.getOwnerKey()
+
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_, err := a.db.Exec(ctx, "INSERT INTO public.dealer_shouts (target_player, message, shout_type, status, created_at) VALUES ($1, $2, $3, 'pending', NOW())", playerName, message, "error")
+		_, err := a.db.Exec(ctx, "INSERT INTO public.dealer_shouts (owner_key, target_player, message, shout_type, status, created_at) VALUES ($1, $2, $3, $4, 'pending', NOW())", owner, playerName, message, "error")
 		if err != nil {
 			a.AddLog("ERROR: Failed to insert shout: " + err.Error())
 		} else {
-			a.AddLog(fmt.Sprintf("DB: Queued shout for %s: %s", playerName, message))
+			a.AddLog(fmt.Sprintf("DB: Queued shout for %s: %s (owner=%s)", playerName, message, owner))
 		}
 	}()
 }
@@ -296,9 +298,9 @@ func (a *App) syncBanToDB(key string, info BanInfo) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		query := `INSERT INTO public.banned_players (ban_key, expires_at, message) 
-		          VALUES ($1, $2, $3) 
-		          ON CONFLICT (ban_key) DO UPDATE SET expires_at = EXCLUDED.expires_at, message = EXCLUDED.message`
+		query := `INSERT INTO public.banned_players (ban_key, expires_at, message, is_active) 
+		          VALUES ($1, $2, $3, TRUE) 
+		          ON CONFLICT (ban_key) DO UPDATE SET expires_at = EXCLUDED.expires_at, message = EXCLUDED.message, is_active = TRUE`
 		_, err := a.db.Exec(ctx, query, key, info.ExpiresAt, info.Message)
 		if err != nil {
 			a.AddLog("ERROR: syncBanToDB failed: " + err.Error())
@@ -306,7 +308,7 @@ func (a *App) syncBanToDB(key string, info BanInfo) {
 	}()
 }
 
-// removeBanFromDB deletes a ban from the database.
+// removeBanFromDB marks a ban as inactive in the database.
 func (a *App) removeBanFromDB(key string) {
 	if a.db == nil {
 		return
@@ -314,7 +316,7 @@ func (a *App) removeBanFromDB(key string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_, err := a.db.Exec(ctx, "DELETE FROM public.banned_players WHERE ban_key = $1", key)
+		_, err := a.db.Exec(ctx, "UPDATE public.banned_players SET is_active = FALSE WHERE ban_key = $1", key)
 		if err != nil {
 			a.AddLog("ERROR: removeBanFromDB failed: " + err.Error())
 		}
@@ -387,11 +389,14 @@ func (a *App) getBanInfo(name string, tradeID int) (BanInfo, bool) {
 		return BanInfo{}, false
 	}
 	if name != "" {
-		key := "name:" + strings.ToLower(normalizeName(name))
+		norm := strings.ToLower(normalizeName(name))
+		key := "name:" + norm
 		if info, ok := a.banList.Get(key); ok {
 			if time.Now().Before(info.ExpiresAt) {
+				a.AddLog(fmt.Sprintf("[BAN_CHECK] Match by name: %s (key=%s)", name, key))
 				return info, true
 			}
+			a.AddLog(fmt.Sprintf("[BAN_CHECK] Expired ban for %s removed", name))
 			a.banList.Remove(key)
 		}
 	}
@@ -399,8 +404,10 @@ func (a *App) getBanInfo(name string, tradeID int) (BanInfo, bool) {
 		key := fmt.Sprintf("tradeid:%d", tradeID)
 		if info, ok := a.banList.Get(key); ok {
 			if time.Now().Before(info.ExpiresAt) {
+				a.AddLog(fmt.Sprintf("[BAN_CHECK] Match by TradeID: %d (key=%s)", tradeID, key))
 				return info, true
 			}
+			a.AddLog(fmt.Sprintf("[BAN_CHECK] Expired ban for TradeID %d removed", tradeID))
 			a.banList.Remove(key)
 		}
 	}
@@ -539,7 +546,7 @@ func (a *App) loadBansFromDB() {
 		return
 	}
 	a.AddLog("Loading active bans from database...")
-	rows, err := a.db.Query(context.Background(), "SELECT ban_key, expires_at, message FROM public.banned_players WHERE expires_at > NOW()")
+	rows, err := a.db.Query(context.Background(), "SELECT ban_key, expires_at, message FROM public.banned_players WHERE is_active = TRUE AND expires_at > NOW()")
 	if err != nil {
 		a.AddLog("ERROR: loadBansFromDB failed: " + err.Error())
 		return
@@ -559,14 +566,14 @@ func (a *App) loadBansFromDB() {
 }
 
 func (a *App) cleanupBans() {
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			removed := false
 			if a.db != nil {
-				_, err := a.db.Exec(context.Background(), "DELETE FROM public.banned_players WHERE expires_at <= NOW()")
+				_, err := a.db.Exec(context.Background(), "UPDATE public.banned_players SET is_active = FALSE WHERE expires_at <= NOW() AND is_active = TRUE")
 				if err != nil {
 					a.AddLog("ERROR: cleanupBans failed: " + err.Error())
 				}
@@ -1009,11 +1016,13 @@ func (a *App) initDatabase() {
 		ban_key TEXT PRIMARY KEY,
 		expires_at TIMESTAMP NOT NULL,
 		message TEXT NOT NULL,
+		is_active BOOLEAN DEFAULT TRUE,
 		created_at TIMESTAMP DEFAULT NOW()
 	);`
 	if _, err := a.db.Exec(context.Background(), query); err != nil {
 		a.AddLog("ERROR: public.banned_players table creation failed: " + err.Error())
 	}
+	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.banned_players ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
 
 	// Create public.stocked_items table
 	query = `CREATE TABLE IF NOT EXISTS public.stocked_items (
@@ -2439,35 +2448,58 @@ func (a *App) handleUserObject(e *g.Intercept) {
 }
 
 func (a *App) handleTradeOpen(e *g.Intercept) {
-	// Determine incoming trader id (if any) so we can allow opens that match
-	// an outgoing payout attempt while still blocking unsolicited incoming
-	// trades when the banker has active banker_trades in the DB.
+	id, ok := decodeLeadingVL64(e.Packet.Data)
+	if !ok {
+		a.AddLog("ERROR: Could not decode ID from TRADE_OPEN_IN")
+		return
+	}
 
+	a.tradeMu.Lock()
+	a.tradeActive = true
+	a.tradeAccepted = false
+	a.currentTradeItems = ""
+	a.lastTradeItems = nil
+	a.lastTradePartner = ""
+	a.lastTradePartnerID = id
+	a.lastTradePartnerChatID = 0
+	a.activeTradeTarget = id
+	a.tradeStartedAt = time.Now()
+
+	// Try to resolve name from room map
+	a.roomUsersMu.RLock()
+	found := false
+	for _, u := range a.roomUsers {
+		if u.TradeID == id || u.ChatID == id {
+			a.lastTradePartner = u.Username
+			a.lastTradePartnerChatID = u.ChatID
+			a.lastTradePartnerID = u.TradeID // ensure we use the canonical TradeID
+			a.activeTradeTarget = u.TradeID
+			found = true
+			break
+		}
+	}
+	a.roomUsersMu.RUnlock()
+
+	partnerName := a.lastTradePartner
+	partnerID := a.lastTradePartnerID
+	a.tradeMu.Unlock()
+
+	if found {
+		a.AddLog(fmt.Sprintf("Trade window opened with %s (ID:%d).", partnerName, partnerID))
+	} else {
+		a.AddLog(fmt.Sprintf("Trade window opened with ID %d (name not yet resolved).", id))
+		go a.requestRoomUsers()
+	}
+
+	// Check for active banker_trades blockade
 	if a.hasActiveBankerTrades() {
-		// If we're currently driving an outgoing payout flow, allow the
-		// incoming trade open so the payout can complete. Otherwise block
-		// unsolicited incoming opens while banker_trades are active.
 		a.tradeMu.Lock()
 		allow := a.payoutTradeSent
 		a.tradeMu.Unlock()
 		if !allow {
-			a.AddLog("Blocking incoming trade open: active banker_trades present")
-
-			// Try to resolve the player's name so we can shout to them
-			targetName := ""
-			if id, ok := decodeLeadingVL64(e.Packet.Data); ok {
-				a.roomUsersMu.RLock()
-				for _, u := range a.roomUsers {
-					if u.TradeID == id {
-						targetName = u.Username
-						break
-					}
-				}
-				a.roomUsersMu.RUnlock()
-			}
-
-			if targetName != "" {
-				a.queueShout(targetName, fmt.Sprintf("%s, hold on! A game is in progress. Trades are paused until it finishes.", targetName))
+			a.AddLog(fmt.Sprintf("[BLOCK] Blocking incoming trade from %s (id=%d): active banker_trades present", partnerName, id))
+			if partnerName != "" {
+				a.queueShout(partnerName, fmt.Sprintf("%s, hold on! A game is in progress. Trades are paused until it finishes.", partnerName))
 			}
 			e.Block()
 			if a.ext != nil {
@@ -2477,55 +2509,11 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 		}
 	}
 
-	a.tradeMu.Lock()
-	a.tradeActive = true
-	a.tradeAccepted = false
-	a.currentTradeItems = ""
-	a.lastTradeItems = nil
-	a.lastTradePartner = ""
-	a.lastTradePartnerID = 0
-	a.lastTradePartnerChatID = 0
-	a.allowedNamesCache = []string{}
-
-	if id, ok := decodeLeadingVL64(e.Packet.Data); ok {
-		a.activeTradeTarget = id
-		a.lastTradePartnerID = id
-
-		// Try to resolve name immediately
-		a.roomUsersMu.RLock()
-		found := false
-		for _, u := range a.roomUsers {
-			if u.TradeID == id {
-				a.lastTradePartner = u.Username
-				a.lastTradePartnerChatID = u.ChatID
-				a.AddLog(fmt.Sprintf("Trade window opened with %s (TradeID:%d, ChatID:%d).", u.Username, id, u.ChatID))
-				found = true
-				break
-			}
-		}
-		a.roomUsersMu.RUnlock()
-
-		if !found {
-			a.AddLog(fmt.Sprintf("Trade window opened with TradeID %d (resolving name...). Note: user might not be in room map yet.", id))
-			// Prompt the client to refresh room users immediately to avoid a
-			// race where TRADE_ACCEPT arrives before the USERS packet is
-			// parsed. This is rate-limited by requestRoomUsers.
-			go a.requestRoomUsers()
-		}
-	}
-
-	// Record start time for this active trade so the banMonitor can detect long-holds
-	a.tradeStartedAt = time.Now()
-	// Capture identity snapshot for immediate ban check
-	ownerName := a.lastTradePartner
-	ownerID := a.lastTradePartnerID
-	a.tradeMu.Unlock()
-
-	// If we can identify the partner immediately and they are banned, block now
-	if info, banned := a.getBanInfo(ownerName, ownerID); banned {
-		a.AddLog(fmt.Sprintf("[BAN] Blocking incoming trade open from banned partner %s (id=%d)", ownerName, ownerID))
-		if ownerName != "" {
-			a.queueShout(ownerName, fmt.Sprintf("%s - Remaining: %s", info.Message, formatRemainingTime(info.ExpiresAt)))
+	// Immediate ban check
+	if info, banned := a.getBanInfo(partnerName, partnerID); banned {
+		a.AddLog(fmt.Sprintf("[BAN] Blocking incoming trade from banned partner %s (id=%d)", partnerName, partnerID))
+		if partnerName != "" {
+			a.queueShout(partnerName, fmt.Sprintf("%s - Remaining: %s", info.Message, formatRemainingTime(info.ExpiresAt)))
 		}
 		e.Block()
 		if a.ext != nil {
