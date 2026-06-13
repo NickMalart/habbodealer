@@ -399,6 +399,34 @@ func (a *App) getBanInfo(name string, tradeID int) (BanInfo, bool) {
 	return BanInfo{}, false
 }
 
+func formatRemainingTime(expiresAt time.Time) string {
+	if expiresAt.Year() > 3000 {
+		return "lifetime"
+	}
+	rem := time.Until(expiresAt)
+	if rem <= 0 {
+		return "0 mins"
+	}
+
+	days := int(rem.Hours() / 24)
+	hours := int(rem.Hours())
+	mins := int(rem.Minutes())
+
+	if days > 1 {
+		return fmt.Sprintf("%d days", days)
+	} else if days == 1 {
+		return "1 day"
+	} else if hours > 1 {
+		return fmt.Sprintf("%d hours", hours)
+	} else if hours == 1 {
+		return "1 hour"
+	} else if mins > 1 {
+		return fmt.Sprintf("%d mins", mins)
+	} else {
+		return "1 min"
+	}
+}
+
 // isPartnerBanned checks both name and trade-id variants for an active ban.
 func (a *App) isPartnerBanned(name string, tradeID int) bool {
 	_, banned := a.getBanInfo(name, tradeID)
@@ -476,7 +504,7 @@ func (a *App) banMonitor() {
 			if info, banned := a.getBanInfo(name, id); banned {
 				a.AddLog(fmt.Sprintf("[BAN] Closing active trade with already banned partner %s (id=%d)", name, id))
 				if name != "" {
-					a.queueShout(name, info.Message)
+					a.queueShout(name, fmt.Sprintf("%s - Remaining: %s", info.Message, formatRemainingTime(info.ExpiresAt)))
 				}
 				if a.ext != nil {
 					a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
@@ -2054,7 +2082,7 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 				// SECURITY: If this resolved user is banned, close the trade immediately.
 				if info, banned := a.getBanInfo(matchedUser.Username, matchedUser.TradeID); banned {
 					a.AddLog(fmt.Sprintf("[BAN] Closing active trade with newly-identified banned partner %s (id=%d)", matchedUser.Username, matchedUser.TradeID))
-					a.queueShout(matchedUser.Username, info.Message)
+					a.queueShout(matchedUser.Username, fmt.Sprintf("%s - Remaining: %s", info.Message, formatRemainingTime(info.ExpiresAt)))
 					if a.ext != nil {
 						a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
 					}
@@ -2457,7 +2485,7 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 	if info, banned := a.getBanInfo(ownerName, ownerID); banned {
 		a.AddLog(fmt.Sprintf("[BAN] Blocking incoming trade open from banned partner %s (id=%d)", ownerName, ownerID))
 		if ownerName != "" {
-			a.queueShout(ownerName, info.Message)
+			a.queueShout(ownerName, fmt.Sprintf("%s - Remaining: %s", info.Message, formatRemainingTime(info.ExpiresAt)))
 		}
 		e.Block()
 		if a.ext != nil {
@@ -2694,7 +2722,7 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 		if info, banned := a.getBanInfo(partnerName, partnerTradeID); banned {
 			a.AddLog(fmt.Sprintf("[BAN] Blocking acceptance from banned partner %s (id=%d)", partnerName, partnerTradeID))
 			if partnerName != "" {
-				a.queueShout(partnerName, info.Message)
+				a.queueShout(partnerName, fmt.Sprintf("%s - Remaining: %s", info.Message, formatRemainingTime(info.ExpiresAt)))
 			}
 			e.Block()
 			if a.ext != nil {
