@@ -2708,7 +2708,7 @@ func (a *App) startBankerTradePolling() {
 				// We don't want to spam logs here, but let's log if there's a pending trade we're ignoring
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				var id int
-				err := db.QueryRow(ctx, "SELECT id FROM banker_trades WHERE status = 'pending' LIMIT 1").Scan(&id)
+				err := db.QueryRow(ctx, "SELECT id FROM banker_trades WHERE status = 'pending' AND (LOWER(banker_name) = $1 OR banker_name = 'Auto Payout Bot') LIMIT 1", targetBanker).Scan(&id)
 				cancel()
 				if err == nil {
 					a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] IGNORED: trade %d is pending but dealerGameActive() is true", id))
@@ -2726,10 +2726,10 @@ func (a *App) startBankerTradePolling() {
 			errP := db.QueryRow(ctxP, `
 				SELECT id, player_name, bet_items, player_trade_id, player_chat_id
 				FROM banker_trades
-				WHERE status = 'playing'
+				WHERE status = 'playing' AND (LOWER(banker_name) = $1 OR banker_name = 'Auto Payout Bot')
 				ORDER BY updated_at ASC
 				LIMIT 1
-			`).Scan(&pID, &pPlayerName, &pBetItems, &pTradeID, &pChatID)
+			`, targetBanker).Scan(&pID, &pPlayerName, &pBetItems, &pTradeID, &pChatID)
 			cancelP()
 			if errP == nil {
 				a.historyDBMu.Lock()
@@ -2767,10 +2767,10 @@ func (a *App) startBankerTradePolling() {
 			err := db.QueryRow(ctx, `
 				SELECT id, player_name, bet_items, player_trade_id, player_chat_id
 				FROM banker_trades
-				WHERE status = 'pending'
+				WHERE status = 'pending' AND (LOWER(banker_name) = $1 OR banker_name = 'Auto Payout Bot')
 				ORDER BY created_at ASC
 				LIMIT 1
-			`).Scan(&id, &playerName, &betItemsJSON, &tradeID, &chatID)
+			`, targetBanker).Scan(&id, &playerName, &betItemsJSON, &tradeID, &chatID)
 			cancel()
 
 			if err != nil {
@@ -2912,7 +2912,7 @@ func (a *App) finalizeBankerTradeByID(id int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		// Update status to completed and ensure risk is closed if it was active
-		res, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'completed', risk_status = 'completed' WHERE id = $1", targetID)
+		res, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE id = $1", targetID)
 		if err != nil {
 			a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] ERROR: failed to mark trade %d as completed: %v", targetID, err))
 		} else {

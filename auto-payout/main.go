@@ -814,6 +814,10 @@ func (a *App) initDatabase() {
 
 	// Ensure banker_trades has owner_key for raffle tracking
 	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';")
+	// Fail-safe: ensure bet_amount and risk columns exist
+	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS bet_amount INTEGER DEFAULT 0;")
+	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_bank INTEGER DEFAULT 0;")
+	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_status TEXT DEFAULT 'idle';")
 
 	// Create public.stocked_items table
 	query = `CREATE TABLE IF NOT EXISTS public.stocked_items (
@@ -2475,9 +2479,9 @@ func (a *App) recordBankerTrade(playerName string, items []TradeItem, tradeID in
 		defer cancel()
 
 		_, err := a.db.Exec(ctx, `
-			INSERT INTO public.banker_trades (player_name, bet_items, banker_name, status, created_at, player_trade_id, player_chat_id, owner_key)
-			VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7)
-		`, playerName, itemsJSON, banker, "pending", tradeID, chatID, owner)
+			INSERT INTO public.banker_trades (player_name, bet_items, banker_name, status, created_at, player_trade_id, player_chat_id, owner_key, risk_bank, bet_amount)
+			VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, 0, $8)
+		`, playerName, itemsJSON, banker, "pending", tradeID, chatID, owner, totalQty)
 		if err != nil {
 			a.AddLog(fmt.Sprintf("ERROR: [BANKER][DB] failed to record trade: %v", err))
 		} else {
