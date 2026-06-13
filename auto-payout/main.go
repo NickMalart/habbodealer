@@ -346,6 +346,22 @@ func (b *BanList) Remove(key string) {
 	b.mu.Unlock()
 }
 
+// PurgeExpired removes all expired bans from the in-memory map.
+// Returns true if any bans were removed.
+func (b *BanList) PurgeExpired() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := time.Now()
+	removed := false
+	for k, info := range b.bans {
+		if now.After(info.ExpiresAt) {
+			delete(b.bans, k)
+			removed = true
+		}
+	}
+	return removed
+}
+
 // List returns a snapshot copy of the ban map.
 func (b *BanList) List() map[string]BanInfo {
 	b.mu.RLock()
@@ -512,11 +528,20 @@ func (a *App) cleanupBans() {
 	for {
 		select {
 		case <-ticker.C:
+			removed := false
 			if a.db != nil {
 				_, err := a.db.Exec(context.Background(), "DELETE FROM public.banned_players WHERE expires_at <= NOW()")
 				if err != nil {
 					a.AddLog("ERROR: cleanupBans failed: " + err.Error())
 				}
+			}
+			if a.banList != nil {
+				if a.banList.PurgeExpired() {
+					removed = true
+				}
+			}
+			if removed && a.ctx != nil {
+				go runtime.EventsEmit(a.ctx, "banListUpdate", a.GetBanList())
 			}
 		case <-a.ctx.Done():
 			return
@@ -755,6 +780,9 @@ func (a *App) GetBanList() []BanEntry {
 	snapshot := a.banList.List()
 	out := make([]BanEntry, 0, len(snapshot))
 	for k, info := range snapshot {
+		if now.After(info.ExpiresAt) {
+			continue
+		}
 		rem := int64(info.ExpiresAt.Sub(now).Seconds())
 		if rem < 0 {
 			rem = 0
