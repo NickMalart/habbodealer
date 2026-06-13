@@ -216,9 +216,9 @@ func (a *App) evaluateBlackjackHand() {
 			isHitting = false
 			return
 		}
-		if blackjackPlayerTotal < 15 {
-			a.AddLogMsg(fmt.Sprintf("[BJ] player total %d < 15; auto-hit", blackjackPlayerTotal))
-			log.Printf("[BJ] player total %d < 15; auto-hit", blackjackPlayerTotal)
+		if blackjackPlayerTotal <= 15 {
+			a.AddLogMsg(fmt.Sprintf("[BJ] player total %d <= 15; auto-hit", blackjackPlayerTotal))
+			log.Printf("[BJ] player total %d <= 15; auto-hit", blackjackPlayerTotal)
 			if blackjackHitInFlight {
 				a.AddLogMsg("[BJ] player auto-hit deferred: hit already in flight")
 				log.Printf("[BJ] player auto-hit deferred: hit already in flight")
@@ -471,9 +471,9 @@ func (a *App) evaluate13Hand() {
 			return
 		}
 
-		if thirteenPlayerTotal < 7 {
-			a.AddLogMsg(fmt.Sprintf("[13] player total %d < 7; auto-hit", thirteenPlayerTotal))
-			log.Printf("[13] player total %d < 7; auto-hit", thirteenPlayerTotal)
+		if thirteenPlayerTotal <= 7 {
+			a.AddLogMsg(fmt.Sprintf("[13] player total %d <= 7; auto-hit", thirteenPlayerTotal))
+			log.Printf("[13] player total %d <= 7; auto-hit", thirteenPlayerTotal)
 			if thirteenHitInFlight {
 				a.AddLogMsg("[13] player auto-hit deferred: hit already in flight")
 				log.Printf("[13] player auto-hit deferred: hit already in flight")
