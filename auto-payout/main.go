@@ -453,6 +453,28 @@ func (a *App) banMonitor() {
 				a.lastTradePartnerID = 0
 				a.tradeStartedAt = time.Time{}
 				a.tradeMu.Unlock()
+				continue
+			}
+
+			// Also check if the current partner is ALREADY banned (e.g. manual ban via UI while trade active)
+			if info, banned := a.getBanInfo(name, id); banned {
+				a.AddLog(fmt.Sprintf("[BAN] Closing active trade with already banned partner %s (id=%d)", name, id))
+				if name != "" {
+					a.queueShout(name, info.Message)
+				}
+				if a.ext != nil {
+					a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+				}
+				// Reset local trade state
+				a.tradeMu.Lock()
+				a.tradeActive = false
+				a.payoutTradeSent = false
+				a.activeTradePartner = ""
+				a.activeTradeTarget = 0
+				a.lastTradePartner = ""
+				a.lastTradePartnerID = 0
+				a.tradeStartedAt = time.Time{}
+				a.tradeMu.Unlock()
 			}
 		case <-a.ctx.Done():
 			return
@@ -1972,30 +1994,54 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 
 		// Attempt to resolve any pending active trade target to avoid a race where
 		// a TRADE_OPEN arrives before the USERS/SPACENODEUSERS packet is parsed.
-		// If we can match the active trade target to a newly parsed user (by
-		// trade_id or chat_id), populate the trade tracking fields so
-		// accept-time validation in handlePartnerAccept will succeed.
 		a.tradeMu.Lock()
 		activeTarget := a.activeTradeTarget
 		needResolve := a.lastTradePartner == ""
 		a.tradeMu.Unlock()
-		if activeTarget != 0 && needResolve {
+
+		if activeTarget != 0 {
 			a.roomUsersMu.RLock()
+			var matchedUser *ParsedUsers28User
 			for _, u := range a.roomUsers {
 				if u.TradeID == activeTarget || u.ChatID == activeTarget {
-					a.tradeMu.Lock()
-					a.lastTradePartner = u.Username
-					a.lastTradePartnerID = u.TradeID
-					a.lastTradePartnerChatID = u.ChatID
-					if a.activeTradePartner == "" {
-						a.activeTradePartner = u.Username
-					}
-					a.tradeMu.Unlock()
-					a.AddLog(fmt.Sprintf("[ROOM] Resolved active trade target %d -> %s (chat=%d trade=%d)", activeTarget, u.Username, u.ChatID, u.TradeID))
+					matchedUser = &u
 					break
 				}
 			}
 			a.roomUsersMu.RUnlock()
+
+			if matchedUser != nil {
+				if needResolve {
+					a.tradeMu.Lock()
+					a.lastTradePartner = matchedUser.Username
+					a.lastTradePartnerID = matchedUser.TradeID
+					a.lastTradePartnerChatID = matchedUser.ChatID
+					if a.activeTradePartner == "" {
+						a.activeTradePartner = matchedUser.Username
+					}
+					a.tradeMu.Unlock()
+					a.AddLog(fmt.Sprintf("[ROOM] Resolved active trade target %d -> %s (chat=%d trade=%d)", activeTarget, matchedUser.Username, matchedUser.ChatID, matchedUser.TradeID))
+				}
+
+				// SECURITY: If this resolved user is banned, close the trade immediately.
+				if info, banned := a.getBanInfo(matchedUser.Username, matchedUser.TradeID); banned {
+					a.AddLog(fmt.Sprintf("[BAN] Closing active trade with newly-identified banned partner %s (id=%d)", matchedUser.Username, matchedUser.TradeID))
+					a.queueShout(matchedUser.Username, info.Message)
+					if a.ext != nil {
+						a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+					}
+					// Reset local trade state
+					a.tradeMu.Lock()
+					a.tradeActive = false
+					a.payoutTradeSent = false
+					a.activeTradePartner = ""
+					a.activeTradeTarget = 0
+					a.lastTradePartner = ""
+					a.lastTradePartnerID = 0
+					a.tradeStartedAt = time.Time{}
+					a.tradeMu.Unlock()
+				}
+			}
 		}
 
 		a.updatePayoutStatuses()
