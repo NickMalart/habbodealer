@@ -235,16 +235,14 @@ func (a *App) queueShout(playerName, message string) {
 	a.lastShoutTime[strings.ToLower(playerName)] = time.Now()
 	a.shoutMu.Unlock()
 
-	owner := a.getOwnerKey()
-
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_, err := a.db.Exec(ctx, "INSERT INTO public.dealer_shouts (target_player, message, shout_type, status, owner_key, created_at) VALUES ($1, $2, $3, 'pending', $4, NOW())", playerName, message, "error", owner)
+		_, err := a.db.Exec(ctx, "INSERT INTO public.dealer_shouts (target_player, message, shout_type, status, created_at) VALUES ($1, $2, $3, 'pending', NOW())", playerName, message, "error")
 		if err != nil {
 			a.AddLog("ERROR: Failed to insert shout: " + err.Error())
 		} else {
-			a.AddLog(fmt.Sprintf("DB: Queued shout for %s: %s (owner=%s)", playerName, message, owner))
+			a.AddLog(fmt.Sprintf("DB: Queued shout for %s: %s", playerName, message))
 		}
 	}()
 }
