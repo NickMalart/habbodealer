@@ -158,6 +158,7 @@ type App struct {
 	lastTradePartnerID     int
 	lastTradePartnerChatID int
 	allowedNamesCache      []string
+	allowedDisplayNamesCache []string
 	lastScreenshotPath     string
 	tradeMu                sync.Mutex
 	tradeStartedAt         time.Time
@@ -1598,6 +1599,27 @@ func (a *App) GetActiveStockedItemNames() []string {
 	return names
 }
 
+func (a *App) GetActiveStockedItems() []StockedItem {
+	if a.db == nil {
+		return []StockedItem{}
+	}
+	rows, err := a.db.Query(context.Background(), "SELECT id, raw_name, canonical_name, display_name, is_active FROM public.stocked_items WHERE is_active = TRUE ORDER BY display_name ASC")
+	if err != nil {
+		a.AddLog("ERROR: Failed to query active stocked_items: " + err.Error())
+		return []StockedItem{}
+	}
+	defer rows.Close()
+
+	items := []StockedItem{}
+	for rows.Next() {
+		var i StockedItem
+		if err := rows.Scan(&i.ID, &i.RawName, &i.CanonicalName, &i.DisplayName, &i.IsActive); err == nil {
+			items = append(items, i)
+		}
+	}
+	return items
+}
+
 // PayoutSettings holds persisted UI settings for auto-payout
 type PayoutSettings struct {
 	MaxUniqueItems  int `json:"maxUniqueItems"`
@@ -2495,11 +2517,19 @@ func (a *App) handleTradeOpen(e *g.Intercept) {
 	}
 
 	// Fetch active stocked items immediately on trade open (synchronously to avoid race with parseTradeItems)
-	names := a.GetActiveStockedItemNames()
+	activeItems := a.GetActiveStockedItems()
+	var names []string
+	var displayNames []string
+	for _, it := range activeItems {
+		names = append(names, it.RawName)
+		displayNames = append(displayNames, it.DisplayName)
+	}
+
 	a.tradeMu.Lock()
 	a.allowedNamesCache = names
+	a.allowedDisplayNamesCache = displayNames
 	a.tradeMu.Unlock()
-	a.AddLog(fmt.Sprintf("[DEBUG] Stocked items cached for trade: %v", names))
+	a.AddLog(fmt.Sprintf("[DEBUG] Stocked items cached for trade: %v (display: %v)", names, displayNames))
 
 	a.AddLog("Trade window opened.")
 }
@@ -2798,7 +2828,16 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 					unrecognized = append(unrecognized, n)
 				}
 				a.AddLog(fmt.Sprintf("[SECURITY] Blocking trade: unauthorized furniture detected: %v", unrecognized))
-				a.queueShout(partnerName, fmt.Sprintf("%s, trade rejected: unauthorized items detected.", partnerName))
+
+				a.tradeMu.Lock()
+				displayNames := a.allowedDisplayNamesCache
+				a.tradeMu.Unlock()
+
+				msg := fmt.Sprintf("%s, trade rejected: unauthorized items detected.", partnerName)
+				if len(displayNames) > 0 {
+					msg = fmt.Sprintf("%s, trade rejected: unauthorized items detected. We only accept: %s", partnerName, strings.Join(displayNames, ", "))
+				}
+				a.queueShout(partnerName, msg)
 				
 				if a.ctx != nil {
 					go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "unauthorized_items_detected", "player": partnerName, "unrecognized": unrecognized})
