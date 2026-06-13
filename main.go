@@ -2708,7 +2708,7 @@ func (a *App) startBankerTradePolling() {
 				// We don't want to spam logs here, but let's log if there's a pending trade we're ignoring
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				var id int
-				err := db.QueryRow(ctx, "SELECT id FROM banker_trades WHERE status = 'pending' AND LOWER(banker_name) = $1 LIMIT 1", targetBanker).Scan(&id)
+				err := db.QueryRow(ctx, "SELECT id FROM banker_trades WHERE status = 'pending' AND (LOWER(banker_name) = $1 OR banker_name = 'Auto Payout Bot') LIMIT 1", targetBanker).Scan(&id)
 				cancel()
 				if err == nil {
 					a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] IGNORED: trade %d is pending but dealerGameActive() is true", id))
@@ -2726,7 +2726,7 @@ func (a *App) startBankerTradePolling() {
 			errP := db.QueryRow(ctxP, `
 				SELECT id, player_name, bet_items, player_trade_id, player_chat_id
 				FROM banker_trades
-				WHERE status = 'playing' AND LOWER(banker_name) = $1
+				WHERE status = 'playing' AND (LOWER(banker_name) = $1 OR banker_name = 'Auto Payout Bot')
 				ORDER BY updated_at ASC
 				LIMIT 1
 			`, targetBanker).Scan(&pID, &pPlayerName, &pBetItems, &pTradeID, &pChatID)
@@ -2767,7 +2767,7 @@ func (a *App) startBankerTradePolling() {
 			err := db.QueryRow(ctx, `
 				SELECT id, player_name, bet_items, player_trade_id, player_chat_id
 				FROM banker_trades
-				WHERE status = 'pending'
+				WHERE status = 'pending' AND (LOWER(banker_name) = $1 OR banker_name = 'Auto Payout Bot')
 				ORDER BY created_at ASC
 				LIMIT 1
 			`, targetBanker).Scan(&id, &playerName, &betItemsJSON, &tradeID, &chatID)
