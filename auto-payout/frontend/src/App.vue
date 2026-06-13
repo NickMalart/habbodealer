@@ -84,8 +84,9 @@
                   </div>
                   <div v-if="b.message" style="font-size:0.85rem; color:#f88; font-style:italic; margin-top:4px">"{{ b.message }}"</div>
                 </div>
-                <div>
-                  <button @click="clearBan(b.key)" class="btn-small">Unban</button>
+                <div class="actions">
+                  <button @click="editBan(b)" class="btn-small" style="margin-right:6px">Edit</button>
+                  <button @click="clearBan(b.key)" class="btn-small danger">Unban</button>
                 </div>
               </div>
             </div>
@@ -261,6 +262,13 @@ const clearBan = async (key) => {
     await window.go.main.App.ClearBan(key)
     // rely on event emission to update banList
   } catch (e) { alert('Unban failed: ' + e) }
+}
+
+const editBan = (b) => {
+  banName.value = b.label.replace('Name: ', '').replace('TradeID: ', '')
+  banMessage.value = b.message
+  // duration is hard to reverse exactly from remaining seconds, so we default to 24h
+  banDuration.value = '24h'
 }
 
 const banPlayer = async () => {
