@@ -114,11 +114,13 @@ type BanEntry struct {
 	ExpiresAt        string `json:"expiresAt"`
 	RemainingSeconds int64  `json:"remainingSeconds"`
 	Message          string `json:"message"`
+	IsActive         bool   `json:"isActive"`
 }
 
 type BanInfo struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 	Message   string    `json:"message"`
+	IsActive  bool      `json:"isActive"`
 }
 
 type App struct {
@@ -273,6 +275,7 @@ func (b *BanList) Add(key string, d time.Duration, message string) BanInfo {
 	info := BanInfo{
 		ExpiresAt: expiry,
 		Message:   message,
+		IsActive:  true,
 	}
 	b.bans[key] = info
 	return info
@@ -558,6 +561,7 @@ func (a *App) loadBansFromDB() {
 		var key, msg string
 		var exp time.Time
 		if err := rows.Scan(&key, &exp, &msg); err == nil {
+			a.AddLog(fmt.Sprintf("[DB_LOAD] Loading active ban: %s (expires: %s)", key, exp.Format(time.RFC3339)))
 			a.banList.Add(key, exp.Sub(time.Now()), msg)
 			count++
 		}
@@ -849,6 +853,7 @@ func (a *App) GetBanList() []BanEntry {
 			ExpiresAt:        expiresAtStr,
 			RemainingSeconds: rem,
 			Message:          info.Message,
+			IsActive:         info.IsActive,
 		})
 	}
 	return out
@@ -1023,6 +1028,7 @@ func (a *App) initDatabase() {
 		a.AddLog("ERROR: public.banned_players table creation failed: " + err.Error())
 	}
 	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.banned_players ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
+	_, _ = a.db.Exec(context.Background(), "UPDATE public.banned_players SET is_active = TRUE WHERE is_active IS NULL;")
 
 	// Create public.stocked_items table
 	query = `CREATE TABLE IF NOT EXISTS public.stocked_items (

@@ -80,7 +80,11 @@
             <div v-if="banList.length">
               <div v-for="b in banList" :key="b.key" class="ban-entry" style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #222">
                 <div style="flex:1">
-                  <div style="font-weight:600">{{ b.label }}</div>
+                  <div style="font-weight:600">
+                    {{ b.label }}
+                    <span v-if="b.isActive" style="color:#4caf50; font-size:0.8rem; margin-left:8px">(Active)</span>
+                    <span v-else style="color:#f44336; font-size:0.8rem; margin-left:8px">(Inactive)</span>
+                  </div>
                   <div style="font-size:0.85rem;color:var(--muted)">
                     {{ b.expiresAt === 'Lifetime' ? 'Lifetime' : formatSeconds(b.remainingSeconds) + ' left' }}
                     <span v-if="b.expiresAt !== 'Lifetime'">(expires {{ new Date(b.expiresAt).toLocaleString() }})</span>
