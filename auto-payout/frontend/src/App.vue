@@ -75,10 +75,14 @@
           <div class="card banlist-card">
             <h3>Ban List</h3>
             <div v-if="banList.length">
-              <div v-for="b in banList" :key="b.key" class="ban-entry" style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #222">
-                <div>
+              <div v-for="b in banList" :key="b.key" class="ban-entry" style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #222">
+                <div style="flex:1">
                   <div style="font-weight:600">{{ b.label }}</div>
-                  <div style="font-size:0.85rem;color:var(--muted)">{{ formatSeconds(b.remainingSeconds) }} left (expires {{ new Date(b.expiresAt).toLocaleString() }})</div>
+                  <div style="font-size:0.85rem;color:var(--muted)">
+                    {{ b.expiresAt === 'Lifetime' ? 'Lifetime' : formatSeconds(b.remainingSeconds) + ' left' }}
+                    <span v-if="b.expiresAt !== 'Lifetime'">(expires {{ new Date(b.expiresAt).toLocaleString() }})</span>
+                  </div>
+                  <div v-if="b.message" style="font-size:0.85rem; color:#f88; font-style:italic; margin-top:4px">"{{ b.message }}"</div>
                 </div>
                 <div>
                   <button @click="clearBan(b.key)" class="btn-small">Unban</button>
@@ -86,6 +90,23 @@
               </div>
             </div>
             <div v-else class="empty">No active bans</div>
+          </div>
+
+          <div class="card add-ban">
+            <h3>Manual Ban</h3>
+            <div class="row" style="display:flex; flex-direction:column; gap:8px;">
+              <input v-model="banName" placeholder="Player name" />
+              <select v-model="banDuration" style="background:#0b0c0e; border:1px solid #222; padding:8px; border-radius:6px; color:#fff">
+                <option value="1h">1 Hour</option>
+                <option value="5h">5 Hours</option>
+                <option value="24h">24 Hours</option>
+                <option value="1w">1 Week</option>
+                <option value="1m">1 Month</option>
+                <option value="lifetime">Lifetime</option>
+              </select>
+              <textarea v-model="banMessage" placeholder="Custom message (optional)" style="background:#0b0c0e; border:1px solid #222; padding:8px; border-radius:6px; color:#fff; min-height:60px"></textarea>
+              <button class="btn-primary" @click="banPlayer" style="background:#441111">Ban Player</button>
+            </div>
           </div>
           <div class="card">
             <h3>Settings</h3>
@@ -158,6 +179,10 @@ const logFilter = ref('')
 
 const maxUniqueItems = ref(6)
 const maxQtyPerUnique = ref(10)
+
+const banName = ref('')
+const banDuration = ref('24h')
+const banMessage = ref('')
 
 const filteredLogs = computed(() => {
   if (!logFilter.value) return logs.value
@@ -236,6 +261,15 @@ const clearBan = async (key) => {
     await window.go.main.App.ClearBan(key)
     // rely on event emission to update banList
   } catch (e) { alert('Unban failed: ' + e) }
+}
+
+const banPlayer = async () => {
+  if (!banName.value || !window.go?.main?.App) return
+  try {
+    await window.go.main.App.BanPlayer(banName.value, banDuration.value, banMessage.value)
+    banName.value = ''
+    banMessage.value = ''
+  } catch (e) { alert('Ban failed: ' + e) }
 }
 
 const formatSeconds = (s) => {
