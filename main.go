@@ -6664,9 +6664,6 @@ func (a *App) handleRiskBet(n int, sender string, userID int) {
 		mutex.Unlock()
 		return
 	}
-	// Player engaged with risk decision; cancel the initial Keep-or-Risk reminder monitor.
-	stopRiskDecisionTimeoutMonitor()
-
 	// Defensive: avoid processing a second risk while one is pending.
 	if riskPendingBet > 0 || awaitingGameChoice {
 		mutex.Unlock()
@@ -6697,6 +6694,9 @@ func (a *App) handleRiskBet(n int, sender string, userID int) {
 		sendShoutTargeted(userID, fmt.Sprintf("Invalid risk amount. Max: %d", max))
 		return
 	}
+
+	// Player engaged with risk decision; cancel the initial Keep-or-Risk reminder monitor.
+	stopRiskDecisionTimeoutMonitor()
 
 	playerRisk -= n
 	dealerRisk += n
@@ -15585,12 +15585,10 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 					sendShoutTargeted(index, "Risk already placed; choose a game (or wait for the prompt).")
 					a.AddLogMsg(fmt.Sprintf("[RISK] ignored duplicate r%d from %s: already pending", amt, senderName))
 					e.Block()
-					stopRiskDecisionTimeoutMonitor()
 					return
 				}
 
 				e.Block()
-				stopRiskDecisionTimeoutMonitor()
 				go a.handleRiskBet(amt, senderName, index)
 				return
 			}
