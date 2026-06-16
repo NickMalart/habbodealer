@@ -16252,21 +16252,6 @@ func (a *App) handleIncomingChat(e *g.Intercept) {
 		if looseChoice, looseOK := normalizeLooseGameChoice(msg); looseOK {
 			choice = looseChoice
 			ok = true
-		} else if looksLikeUnreadableGameChoiceAttempt(msg) {
-			playerName := strings.TrimSpace(awaitingGameChoicePartnerName)
-			if playerName == "" {
-				playerName = strings.TrimSpace(lastTradePartnerName)
-			}
-			if playerName == "" {
-				playerName = "Player"
-			}
-
-			if !gameChoiceUnreadableWarned {
-				gameChoiceUnreadableWarned = true
-				warn := fmt.Sprintf("%q Please shout, I can not hear you.", playerName)
-				a.AddLogMsg(fmt.Sprintf("[GAME_SELECT] unreadable game choice from %s: %q", playerName, msg))
-				sendShoutTargeted(index, warn)
-			}
 		}
 		return
 	}
