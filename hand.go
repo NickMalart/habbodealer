@@ -61,6 +61,7 @@ func (a *App) evaluatePokerHand() {
 	if pokerSequenceStage == 1 {
 		pokerSequencePlayerResult = result
 		pokerSequencePlayerHand = hand
+		a.AddLogMsg(fmt.Sprintf("[POKER_DEBUG] stage 1 complete: player_cat=%d player_hand=%q", result.Category, hand))
 		a.setCurrentGameHistoryResults(hand, "", "", "In Progress", false)
 		a.noteCurrentGameHistory("Player poker hand recorded")
 		pokerSequenceStage = 2
@@ -72,6 +73,9 @@ func (a *App) evaluatePokerHand() {
 			a.startPokerRoll()
 		}()
 	} else if pokerSequenceStage == 2 {
+		a.AddLogMsg(fmt.Sprintf("[POKER_DEBUG] stage 2 start: player_cat=%d player_hand=%q dealer_cat=%d dealer_hand=%q", 
+			pokerSequencePlayerResult.Category, pokerSequencePlayerHand, result.Category, hand))
+		
 		winner := comparePokerHands(pokerSequencePlayerResult, result)
 		playerName := strings.TrimSpace(pokerSequencePlayerName)
 		if playerName == "" {
@@ -81,6 +85,9 @@ func (a *App) evaluatePokerHand() {
 		if winner == PokerWinnerPlayer {
 			winnerName = playerName
 		}
+		
+		a.AddLogMsg(fmt.Sprintf("[POKER_DEBUG] winner determined: %d (%s)", winner, winnerName))
+
 		winnerMsg := fmt.Sprintf("%s Wins - %s: %s | Dealer: %s", winnerName, playerName, pokerSequencePlayerHand, hand)
 
 		a.AddLogMsg(fmt.Sprintf("[POKER_RULES] player_cat=%d player_tie=%v dealer_cat=%d dealer_tie=%v winner=%s", 

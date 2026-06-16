@@ -87,6 +87,7 @@ func evaluatePokerRules(dices []*Dice) PokerHandResult {
 }
 
 func comparePokerHands(player PokerHandResult, dealer PokerHandResult) PokerWinner {
+	log.Printf("[POKER_COMPARE] player_cat=%d dealer_cat=%d", player.Category, dealer.Category)
 	if player.Category > dealer.Category {
 		return PokerWinnerPlayer
 	}
@@ -106,6 +107,7 @@ func comparePokerHands(player PokerHandResult, dealer PokerHandResult) PokerWinn
 	}
 
 	res := comparePokerTiebreaks(pTiebreaks, dTiebreaks)
+	log.Printf("[POKER_COMPARE] same_cat tiebreak_res=%d (count=%d)", res, count)
 	if res > 0 {
 		return PokerWinnerPlayer
 	}
