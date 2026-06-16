@@ -14554,6 +14554,9 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 	for _, pair := range pairs {
 		for i, dice := range diceList {
 			if dice.ID == pair.diceID {
+				diceList[i].Value = pair.adjValue
+				diceList[i].IsClosed = diceList[i].Value == 0
+
 				if dice.IsRolling && (isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isSixRolling || is13Hitting || isSixHitting || isHitting || isUORolling || isDTRolling || isPairUpRolling || isH18Rolling || isBanditRolling || isMidHouseRolling) {
 					dice.IsRolling = false
 					func() {
@@ -14565,8 +14568,6 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 						resultsWaitGroup.Done()
 					}()
 				}
-				diceList[i].Value = pair.adjValue
-				diceList[i].IsClosed = diceList[i].Value == 0
 
 				if isPokerRolling || isTriRolling || isBJRolling || is13Rolling || isSixRolling || is13Hitting || isSixHitting || isHitting || isUORolling || isDTRolling || isPairUpRolling || isH18Rolling || isBanditRolling || isMidHouseRolling {
 					log.Printf("Dice %d rolled: %d\n", pair.diceID, pair.adjValue)
