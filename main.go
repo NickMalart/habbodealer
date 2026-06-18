@@ -861,6 +861,12 @@ func (a *App) initUsers28ParserCommand() {
 	if strings.TrimSpace(a.users28PythonExec) != "" {
 		return
 	}
+	if stdruntime.GOOS == "windows" {
+		if p, err := exec.LookPath("py"); err == nil {
+			a.users28PythonExec = p
+			return
+		}
+	}
 	if p, err := exec.LookPath("python3"); err == nil {
 		a.users28PythonExec = p
 		return

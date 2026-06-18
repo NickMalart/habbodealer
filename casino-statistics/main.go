@@ -652,11 +652,11 @@ func (a *App) GetStats(startDate, endDate string) CasinoStats {
 	args := []interface{}{}
 	// Note: We'll filter status and issue in Go for now to see EVERYTHING in the logs
 	if startDate != "" {
-		query += fmt.Sprintf(" AND completed_at >= $%d", len(args)+1)
+		query += fmt.Sprintf(" AND NULLIF(completed_at, '')::timestamptz >= $%d::timestamptz", len(args)+1)
 		args = append(args, startDate)
 	}
 	if endDate != "" {
-		query += fmt.Sprintf(" AND completed_at <= $%d", len(args)+1)
+		query += fmt.Sprintf(" AND NULLIF(completed_at, '')::timestamptz <= $%d::timestamptz", len(args)+1)
 		args = append(args, endDate)
 	}
 
