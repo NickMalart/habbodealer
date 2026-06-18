@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	dbURL := "postgresql://neondb_owner:npg_S9jFTYzdQx3l@ep-aged-king-a77p1t8b-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+	dbURL := "postgresql://neondb_owner:npg_l8r4nExKaNGP@ep-rapid-night-a7u01fue-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 	ctx := context.Background()
 	pool, _ := pgxpool.New(ctx, dbURL)
 	defer pool.Close()

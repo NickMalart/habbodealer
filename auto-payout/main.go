@@ -209,7 +209,7 @@ func NewApp() *App {
 		roomUsers:            make(map[string]ParsedUsers28User),
 		inventory:            make(map[string][]int),
 		pythonExec:           "python",
-		dbConnString:         "postgresql://neondb_owner:npg_S9jFTYzdQx3l@ep-aged-king-a77p1t8b-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
+		dbConnString:         "postgresql://neondb_owner:npg_l8r4nExKaNGP@ep-rapid-night-a7u01fue-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
 		discordWebhook:       "https://discordapp.com/api/webhooks/1505787297696583800/aUE_M4-quy6wkFs0qVySjHgZq3zYOze5watr67D89e6O1V9VwmjNy24HzN-X7TI5G5k3",
 		stripScanSeenItemIDs: make(map[int]struct{}),
 		stripScanItemIDs:     make(map[string][]int),
