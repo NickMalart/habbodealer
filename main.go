@@ -402,6 +402,7 @@ var (
 	// Incoming trade limits (configured at startup)
 	maxTradeUniqueItems     int = 5
 	maxTradeQuantityPerItem int = 50
+	minTradeQuantityPerItem int = 1
 
 	// Risk system (snapshot + internal tracking)
 	isRiskEnabled     bool
@@ -500,6 +501,7 @@ type LiveDealerStatusPayload struct {
 	RoomName           string            `json:"roomName"`
 	MaxUniqueItems     int               `json:"maxUniqueItems"`
 	MaxQuantityPerItem int               `json:"maxQuantityPerItem"`
+	MinQuantityPerItem int               `json:"minQuantityPerItem"`
 	RiskEnabled        bool              `json:"riskEnabled"`
 	Snapshot           []TradeItem       `json:"snapshot,omitempty"`
 	RecentGames        []LiveGameSummary `json:"recentGames,omitempty"`
@@ -508,11 +510,14 @@ type LiveDealerStatusPayload struct {
 type tradeLimitViolation struct {
 	TooManyUniqueItems bool
 	TooMuchQuantity    bool
+	TooLittleQuantity   bool
 	HasUnknownItems    bool
 	UniqueCount        int
 	MaxUnique          int
 	MaxPerItem         int
+	MinPerItem         int
 	OverLimitItems     []TradeItem
+	UnderLimitItems    []TradeItem
 	UnknownItems       []TradeItem
 }
 
@@ -534,6 +539,7 @@ func (a *App) getTradeLimitViolation(items []TradeItem) *tradeLimitViolation {
 		UniqueCount: len(uniqueTypes),
 		MaxUnique:   maxTradeUniqueItems,
 		MaxPerItem:  maxTradeQuantityPerItem,
+		MinPerItem:  minTradeQuantityPerItem,
 	}
 	if v.UniqueCount > v.MaxUnique {
 		v.TooManyUniqueItems = true
@@ -551,16 +557,23 @@ func (a *App) getTradeLimitViolation(items []TradeItem) *tradeLimitViolation {
 		}
 
 		over := it.Quantity > v.MaxPerItem
-		log.Printf("[TRADE_LIMIT_DEBUG] check item=%q qty=%d max=%d over=%t", it.Name, it.Quantity, v.MaxPerItem, over)
+		under := it.Quantity < v.MinPerItem
+		log.Printf("[TRADE_LIMIT_DEBUG] check item=%q qty=%d max=%d min=%d over=%t under=%t", it.Name, it.Quantity, v.MaxPerItem, v.MinPerItem, over, under)
 		if over {
 			v.OverLimitItems = append(v.OverLimitItems, it)
+		}
+		if under {
+			v.UnderLimitItems = append(v.UnderLimitItems, it)
 		}
 	}
 	if len(v.OverLimitItems) > 0 {
 		v.TooMuchQuantity = true
 	}
-	log.Printf("[TRADE_LIMIT_DEBUG] unique=%d maxUnique=%d tooManyUnique=%t tooMuchQuantity=%t hasUnknown=%t", v.UniqueCount, v.MaxUnique, v.TooManyUniqueItems, v.TooMuchQuantity, v.HasUnknownItems)
-	if !v.TooManyUniqueItems && !v.TooMuchQuantity && !v.HasUnknownItems {
+	if len(v.UnderLimitItems) > 0 {
+		v.TooLittleQuantity = true
+	}
+	log.Printf("[TRADE_LIMIT_DEBUG] unique=%d maxUnique=%d tooManyUnique=%t tooMuchQuantity=%t tooLittleQuantity=%t hasUnknown=%t", v.UniqueCount, v.MaxUnique, v.TooManyUniqueItems, v.TooMuchQuantity, v.TooLittleQuantity, v.HasUnknownItems)
+	if !v.TooManyUniqueItems && !v.TooMuchQuantity && !v.TooLittleQuantity && !v.HasUnknownItems {
 		return nil
 	}
 	return v
@@ -577,6 +590,9 @@ func formatTradeLimitViolationMessage(v *tradeLimitViolation) string {
 	}
 	if v.TooMuchQuantity {
 		parts = append(parts, fmt.Sprintf("max %d each", v.MaxPerItem))
+	}
+	if v.TooLittleQuantity {
+		parts = append(parts, fmt.Sprintf("min %d each", v.MinPerItem))
 	}
 	if v.HasUnknownItems {
 		parts = append(parts, "items we don't have")
@@ -1943,11 +1959,12 @@ func (a *App) dealerOpenMessage() string {
 		return "One Arm Bandit - 1 Item Bet - Check What I Have --> rollorigins.club"
 	}
 	u := maxTradeUniqueItems
-	q := maxTradeQuantityPerItem
+	maxQ := maxTradeQuantityPerItem
+	minQ := minTradeQuantityPerItem
 	if u <= 1 {
-		return fmt.Sprintf("You can bet 1 item, max %d per item - see my live hand - rollorigins.club", q)
+		return fmt.Sprintf("You can bet 1 item, %d-%d per item - see my live hand - rollorigins.club", minQ, maxQ)
 	}
-	return fmt.Sprintf("You can bet up to %d unique items, max %d per item - see my live hand - rollorigins.club", u, q)
+	return fmt.Sprintf("You can bet up to %d unique items, %d-%d per item - see my live hand - rollorigins.club", u, minQ, maxQ)
 }
 
 func dealerGameActive() bool {
@@ -10586,6 +10603,7 @@ func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 			RoomName:           a.getCurrentRoomName(),
 			MaxUniqueItems:     maxTradeUniqueItems,
 			MaxQuantityPerItem: maxTradeQuantityPerItem,
+			MinQuantityPerItem: minTradeQuantityPerItem,
 			Snapshot:           snapshot,
 		}
 
@@ -10651,6 +10669,7 @@ func (a *App) sendLiveDealerStatus(open bool, dealerName string) {
 			RoomName:           a.getCurrentRoomName(),
 			MaxUniqueItems:     maxTradeUniqueItems,
 			MaxQuantityPerItem: maxTradeQuantityPerItem,
+			MinQuantityPerItem: minTradeQuantityPerItem,
 			RiskEnabled:        isRiskEnabled,
 			RecentGames:        a.getRecentGameSummaries(5),
 		}
@@ -14126,7 +14145,7 @@ func getExpectedDiceCount() int {
 // when the user clicks the "Start Casino" button. It resets any existing dice and
 // enables recording of incoming dice IDs. It also receives trade-limit configuration
 // values which are stored in global state and emitted in live-dealer payloads.
-func (a *App) StartCasinoSetup(dealerName string, roomName string, maxUniqueItems int, maxQuantityPerItem int, riskEnabled bool, enabledGames []string) {
+func (a *App) StartCasinoSetup(dealerName string, roomName string, maxUniqueItems int, maxQuantityPerItem int, minQuantityPerItem int, riskEnabled bool, enabledGames []string) {
 	// Reset state first (this will lock/unlock internally)
 	resetDiceState()
 
@@ -14188,10 +14207,15 @@ func (a *App) StartCasinoSetup(dealerName string, roomName string, maxUniqueItem
 	if maxQuantityPerItem < 1 {
 		maxQuantityPerItem = 50
 	}
+	if minQuantityPerItem < 1 {
+		minQuantityPerItem = 1
+	}
 	maxTradeUniqueItems = maxUniqueItems
 	maxTradeQuantityPerItem = maxQuantityPerItem
+	minTradeQuantityPerItem = minQuantityPerItem
 	a.AddLogMsg(fmt.Sprintf("[CONFIG] max trade unique items = %d", maxTradeUniqueItems))
 	a.AddLogMsg(fmt.Sprintf("[CONFIG] max trade quantity per item = %d", maxTradeQuantityPerItem))
+	a.AddLogMsg(fmt.Sprintf("[CONFIG] min trade quantity per item = %d", minTradeQuantityPerItem))
 
 	a.AddLogMsg(fmt.Sprintf("[DICE_SETUP] Dice setup mode enabled - roll all %d dice now", getExpectedDiceCount()))
 	a.emitDiceSetupUpdate()

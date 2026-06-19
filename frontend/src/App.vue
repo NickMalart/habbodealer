@@ -26,7 +26,7 @@
             <button v-if="casinoStatusKey !== 'stopped'" type="button" class="copy-btn history-danger-btn" @click="stopCasino">Stop</button>
           </div>
         </div>
-        <div v-if="casinoStatusKey !== 'stopped'" class="trade-limits-home">Trade limits: max {{ maxUniqueItemsInput }} unique items, max {{ maxQuantityPerItemInput }} per item</div>
+        <div v-if="casinoStatusKey !== 'stopped'" class="trade-limits-home">Trade limits: max {{ maxUniqueItemsInput }} unique items, {{ minQuantityPerItemInput }}-{{ maxQuantityPerItemInput }} per item</div>
       </div>
 
       <div class="dealer-post-panel">
@@ -192,12 +192,16 @@
                 <input v-model.number="maxUniqueItemsInput" type="number" min="1" class="modal-number" />
               </div>
               <div class="dealer-limit-field">
+                <div class="game-guide-label">Min Quantity Per Item</div>
+                <input v-model.number="minQuantityPerItemInput" type="number" min="1" class="modal-number" />
+              </div>
+              <div class="dealer-limit-field">
                 <div class="game-guide-label">Max Quantity Per Item</div>
                 <input v-model.number="maxQuantityPerItemInput" type="number" min="1" class="modal-number" />
               </div>
             </div>
             <div style="font-size:12px;color:#bdbdbd;margin-top:8px;">
-              Max Unique Items = how many different item types the player may offer. Max Quantity Per Item = max allowed amount for any one item type.
+              Max Unique Items = how many different item types the player may offer. Min/Max Quantity Per Item = allowed amount range for any one item type.
             </div>
             <div class="game-guide-block" style="margin-top:8px;">
               <div class="game-guide-label">Standalone Mode (no Risk)</div>
@@ -852,6 +856,7 @@ export default {
       raffleImagePreview: '',
       dealerPostBusy: false,
       maxUniqueItemsInput: 5,
+      minQuantityPerItemInput: 1,
       maxQuantityPerItemInput: 50,
       diceSetup: [],
       casinoStatus: 'Stopped',
@@ -1059,6 +1064,7 @@ export default {
               // otherwise ensure sane defaults are set before showing modal
               if (!this.dealerNameInput) this.dealerNameInput = '';
               if (!this.maxUniqueItemsInput || this.maxUniqueItemsInput < 1) this.maxUniqueItemsInput = 5;
+              if (!this.minQuantityPerItemInput || this.minQuantityPerItemInput < 1) this.minQuantityPerItemInput = 1;
               if (!this.maxQuantityPerItemInput || this.maxQuantityPerItemInput < 1) this.maxQuantityPerItemInput = 50;
               this.showDealerNameModal = true;
             return;
@@ -1075,6 +1081,7 @@ export default {
           const name = (this.dealerNameInput || '').trim();
           const roomName = (this.roomNameInput || '').trim();
           const maxUnique = Number(this.maxUniqueItemsInput || 0);
+          const minPer = Number(this.minQuantityPerItemInput || 0);
           const maxPer = Number(this.maxQuantityPerItemInput || 0);
 
           if (!name) {
@@ -1089,6 +1096,11 @@ export default {
 
           if (!Number.isInteger(maxUnique) || maxUnique < 1) {
             this.addLogMsg('[UI] Start cancelled: max unique items must be a positive integer');
+            return;
+          }
+
+          if (!Number.isInteger(minPer) || minPer < 1) {
+            this.addLogMsg('[UI] Start cancelled: min quantity per item must be a positive integer');
             return;
           }
 
@@ -1133,7 +1145,7 @@ export default {
           await window.go.main.App.SetSplitDealerMode(!!this.splitDealerModeEnabledInput);
           await window.go.main.App.SetBankerName(this.bankerNameInput || '');
 
-          await window.go.main.App.StartCasinoSetup(name, roomName, maxUnique, maxPer, this.riskModeEnabledInput, selectedGames);
+          await window.go.main.App.StartCasinoSetup(name, roomName, maxUnique, maxPer, minPer, this.riskModeEnabledInput, selectedGames);
 
           this.showDealerNameModal = false;
           const expected = this.enableGameBandit ? 3 : (this.underOver7Mode ? 2 : 5);

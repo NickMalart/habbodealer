@@ -35,6 +35,7 @@ type LiveDealerStatusPayload struct {
 	RoomName           string      `json:"roomName"`
 	MaxUniqueItems     int         `json:"maxUniqueItems"`
 	MaxQuantityPerItem int         `json:"maxQuantityPerItem"`
+	MinQuantityPerItem int         `json:"minQuantityPerItem"`
 	RiskEnabled        bool        `json:"riskEnabled,omitempty"`
 	Snapshot           []TradeItem `json:"snapshot,omitempty"`
 }
@@ -133,6 +134,7 @@ func main() {
 		RoomName:           "",
 		MaxUniqueItems:     5,
 		MaxQuantityPerItem: 50,
+		MinQuantityPerItem: 1,
 		Snapshot:           snapshot,
 	}
 
