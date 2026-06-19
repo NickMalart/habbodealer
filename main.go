@@ -5924,6 +5924,10 @@ func startPayout(a *App, targetID int, targetName string) {
 
 		mutex.Lock()
 		isRiskKeep := riskPayoutActive
+		if isRiskKeep {
+			riskPayoutActive = false
+			riskPayoutRequired = nil
+		}
 		mutex.Unlock()
 
 		// User said: "if the player says keep"
@@ -5945,6 +5949,20 @@ func startPayout(a *App, targetID int, targetName string) {
 			a.historyDBMu.Unlock()
 
 			if db != nil {
+				if btID <= 0 {
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+					var dbBtID int
+					err := db.QueryRow(ctx, "SELECT id FROM banker_trades WHERE lower(player_name) = lower($1) AND status != 'completed' ORDER BY created_at DESC LIMIT 1", targetName).Scan(&dbBtID)
+					cancel()
+					if err == nil && dbBtID > 0 {
+						a.historyDBMu.Lock()
+						a.activeBankerTradeID = dbBtID
+						btID = dbBtID
+						a.historyDBMu.Unlock()
+						a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] Restored activeBankerTradeID %d from DB for player %s", dbBtID, targetName))
+					}
+				}
+
 				// Ensure we have payout items to schedule - fallback to risk requirements or bet items if empty
 				if len(payoutItems) == 0 {
 					mutex.Lock()
@@ -7401,12 +7419,59 @@ func (a *App) finalizeRiskKeep() {
 	})
 	a.gameHistoryMu.Unlock()
 
+	// Try to restore the active banker trade ID if it is currently 0 or <= 0
+	a.historyDBMu.Lock()
+	db := a.historyDB
+	btID := a.activeBankerTradeID
+	a.historyDBMu.Unlock()
+
+	if db != nil && btID <= 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		var dbBtID int
+		err := db.QueryRow(ctx, "SELECT id FROM banker_trades WHERE lower(player_name) = lower($1) AND status != 'completed' ORDER BY created_at DESC LIMIT 1", targetName).Scan(&dbBtID)
+		cancel()
+		if err == nil && dbBtID > 0 {
+			a.historyDBMu.Lock()
+			a.activeBankerTradeID = dbBtID
+			btID = dbBtID
+			a.historyDBMu.Unlock()
+			a.AddLogMsg(fmt.Sprintf("[RISK] Restored activeBankerTradeID %d from DB for player %s", dbBtID, targetName))
+		}
+	}
+
 	// Build required map proportionally from recorded bet types if available
 	baseMult := sessionMult
 	base := payoutRequirementsFromBetItemsMult(gameBetItems, float64(baseMult))
 	baseTotal := 0
 	for _, v := range base {
 		baseTotal += v
+	}
+
+	// Fallback: If in-memory gameBetItems is empty (baseTotal == 0), restore it from database bet_items JSON
+	if baseTotal == 0 && db != nil && btID > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		var betItemsJSON []byte
+		err := db.QueryRow(ctx, "SELECT bet_items FROM banker_trades WHERE id = $1", btID).Scan(&betItemsJSON)
+		cancel()
+		if err == nil && len(betItemsJSON) > 0 {
+			var dbItems []struct {
+				Qty     int    `json:"qty"`
+				RawName string `json:"raw_name"`
+			}
+			if err := json.Unmarshal(betItemsJSON, &dbItems); err == nil && len(dbItems) > 0 {
+				var items []TradeItem
+				for _, it := range dbItems {
+					items = append(items, TradeItem{Name: it.RawName, Quantity: it.Qty})
+				}
+				gameBetItems = items
+				a.AddLogMsg(fmt.Sprintf("[RISK] Restored gameBetItems from DB banker_trades %d: %v", btID, gameBetItems))
+				base = payoutRequirementsFromBetItemsMult(gameBetItems, float64(baseMult))
+				baseTotal = 0
+				for _, v := range base {
+					baseTotal += v
+				}
+			}
+		}
 	}
 
 	required := map[string]int{}
@@ -7442,10 +7507,6 @@ func (a *App) finalizeRiskKeep() {
 
 	// Persist the finalized bank amount into banker_trades so any external
 	// auto-payer reads the correct risk_bank before we start payout.
-	a.historyDBMu.Lock()
-	db := a.historyDB
-	btID := a.activeBankerTradeID
-	a.historyDBMu.Unlock()
 	if db != nil && btID > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_, err := db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1 WHERE id = $2", total, btID)
