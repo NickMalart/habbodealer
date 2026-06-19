@@ -134,17 +134,20 @@ func (a *App) evaluatePokerHand() {
 			startPayout(a, payoutTargetID, payoutTargetName)
 			return
 		} else {
-			a.setCurrentGameHistoryResults(playerHand, hand, a.getCurrentDealerName(), "Completed", true)
-			a.noteCurrentGameHistory(winnerMsg)
-
 			mutex.Lock()
+			riskActive := riskSessionActive
 			splitEnabled := isSplitDealerMode
 			mutex.Unlock()
+
+			completeRound := !riskActive
+			a.setCurrentGameHistoryResults(playerHand, hand, a.getCurrentDealerName(), "Completed", completeRound)
+			a.noteCurrentGameHistory(winnerMsg)
+
 			if splitEnabled {
 				a.finalizeBankerTrade()
 			}
 
-			if isRiskEnabled && riskSessionActive {
+			if isRiskEnabled && riskActive {
 				go a.applyRiskOutcome(false)
 				return
 			}
@@ -410,17 +413,20 @@ func (a *App) finalizeBlackjackRound(playerWins bool, reason string) {
 		return
 	}
 
-	a.setCurrentGameHistoryResults(playerHand, dealerHand, a.getCurrentDealerName(), "Completed", true)
-	a.noteCurrentGameHistory(winnerMsg)
-
 	mutex.Lock()
+	riskActive := riskSessionActive
 	splitEnabled := isSplitDealerMode
 	mutex.Unlock()
+
+	completeRound := !riskActive
+	a.setCurrentGameHistoryResults(playerHand, dealerHand, a.getCurrentDealerName(), "Completed", completeRound)
+	a.noteCurrentGameHistory(winnerMsg)
+
 	if splitEnabled {
 		a.finalizeBankerTrade()
 	}
 
-	if isRiskEnabled && riskSessionActive {
+	if isRiskEnabled && riskActive {
 		go a.applyRiskOutcome(false)
 		return
 	}
@@ -866,9 +872,20 @@ func (a *App) evaluatePairUpRound() {
 		return
 	}
 
-	a.setCurrentGameHistoryResults(resultText, "", "Dealer", "Completed", true)
+	mutex.Lock()
+	riskActive := riskSessionActive
+	splitEnabled := isSplitDealerMode
+	mutex.Unlock()
+
+	completeRound := !riskActive
+	a.setCurrentGameHistoryResults(resultText, "", "Dealer", "Completed", completeRound)
 	a.noteCurrentGameHistory(winnerMsg)
-	if isRiskEnabled && riskSessionActive {
+
+	if splitEnabled {
+		a.finalizeBankerTrade()
+	}
+
+	if isRiskEnabled && riskActive {
 		go a.applyRiskOutcome(false)
 		return
 	}

@@ -5924,7 +5924,9 @@ func startPayout(a *App, targetID int, targetName string) {
 
 		mutex.Lock()
 		isRiskKeep := riskPayoutActive
+		var riskReq map[string]int
 		if isRiskKeep {
+			riskReq = riskPayoutRequired
 			riskPayoutActive = false
 			riskPayoutRequired = nil
 		}
@@ -5965,12 +5967,7 @@ func startPayout(a *App, targetID int, targetName string) {
 
 				// Ensure we have payout items to schedule - fallback to risk requirements or bet items if empty
 				if len(payoutItems) == 0 {
-					mutex.Lock()
-					isRisk := riskPayoutActive
-					riskReq := riskPayoutRequired
-					mutex.Unlock()
-
-					if isRisk && len(riskReq) > 0 {
+					if len(riskReq) > 0 {
 						for name, qty := range riskReq {
 							payoutItems = append(payoutItems, TradeItem{Name: name, Quantity: qty})
 						}
@@ -13721,6 +13718,10 @@ func (a *App) evaluateUnderOverRound() {
 	awaitingUOChoicePartnerID = 0
 	awaitingUOChoicePartnerName = ""
 
+	mutex.Lock()
+	riskActive := riskSessionActive
+	mutex.Unlock()
+
 	if playerWins && payoutTargetID > 0 {
 		a.setCurrentGameHistoryResults(strconv.Itoa(total), "", playerName, "Payout Pending", false)
 		a.noteCurrentGameHistory(winnerMsg)
@@ -13729,25 +13730,27 @@ func (a *App) evaluateUnderOverRound() {
 		// Post the round outcome immediately so Discord shows the win.
 		a.sendDiscordRoundResult(playerName, strconv.Itoa(total), "", winnerMsg)
 
-		// Never route Under/Over-7 rounds into Risk (UO7 is auto-payout only).
-		if isRiskEnabled && uoVariantForRound != "uo7" {
-			if riskSessionActive {
+		if isRiskEnabled {
+			if riskActive {
 				go a.applyRiskOutcome(true)
 				return
 			}
-			params := map[string]interface{}{"uoChoice": uoPlayerChoice}
-			riskGame := "UO"
-			if uoVariantForRound == "uo7" {
-				riskGame = "UO7"
+			if uoVariantForRound != "uo7" {
+				params := map[string]interface{}{"uoChoice": uoPlayerChoice}
+				riskGame := "UO"
+				if uoVariantForRound == "uo7" {
+					riskGame = "UO7"
+				}
+				go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, riskGame, params)
+				return
 			}
-			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, riskGame, params)
-			return
 		}
 		startPayout(a, payoutTargetID, payoutTargetName)
 		return
 	}
 
-	a.setCurrentGameHistoryResults(strconv.Itoa(total), "", a.getCurrentDealerName(), "Completed", true)
+	completeRound := !riskActive
+	a.setCurrentGameHistoryResults(strconv.Itoa(total), "", a.getCurrentDealerName(), "Completed", completeRound)
 	a.noteCurrentGameHistory(winnerMsg)
 
 	mutex.Lock()
@@ -13759,8 +13762,7 @@ func (a *App) evaluateUnderOverRound() {
 
 	// If a risk session is active, route this loss through the risk logic
 	// so only the pending bet is lost and the player can be re-prompted.
-	// Do NOT route UO7 rounds into Risk.
-	if isRiskEnabled && riskSessionActive && uoVariantForRound != "uo7" {
+	if isRiskEnabled && riskActive {
 		go a.applyRiskOutcome(false)
 		return
 	}
@@ -13836,13 +13838,18 @@ func (a *App) finalize13Round(playerWins bool, reason string) {
 		return
 	}
 
-	a.setCurrentGameHistoryResults(playerHand, dealerHand, a.getCurrentDealerName(), "Completed", true)
+	mutex.Lock()
+	riskActive := riskSessionActive
+	mutex.Unlock()
+
+	completeRound := !riskActive
+	a.setCurrentGameHistoryResults(playerHand, dealerHand, a.getCurrentDealerName(), "Completed", completeRound)
 	a.noteCurrentGameHistory(winnerMsg)
 
 	// Finalize banker trade on dealer win
 	a.finalizeBankerTrade()
 
-	if isRiskEnabled && riskSessionActive {
+	if isRiskEnabled && riskActive {
 		go a.applyRiskOutcome(false)
 		return
 	}
@@ -13913,13 +13920,18 @@ func (a *App) finalizeSixRound(playerWins bool, reason string) {
 		return
 	}
 
-	a.setCurrentGameHistoryResults(playerHand, dealerHand, a.getCurrentDealerName(), "Completed", true)
+	mutex.Lock()
+	riskActive := riskSessionActive
+	mutex.Unlock()
+
+	completeRound := !riskActive
+	a.setCurrentGameHistoryResults(playerHand, dealerHand, a.getCurrentDealerName(), "Completed", completeRound)
 	a.noteCurrentGameHistory(winnerMsg)
 
 	// Finalize banker trade on dealer win
 	a.finalizeBankerTrade()
 
-	if isRiskEnabled && riskSessionActive {
+	if isRiskEnabled && riskActive {
 		go a.applyRiskOutcome(false)
 		return
 	}
@@ -14014,17 +14026,20 @@ func (a *App) finalizeTriRound() {
 		return
 	}
 
-	a.setCurrentGameHistoryResults(playerHand, dealerHand, "Dealer", "Completed", true)
-	a.noteCurrentGameHistory(winnerMsg)
-
 	mutex.Lock()
+	riskActive := riskSessionActive
 	splitEnabled := isSplitDealerMode
 	mutex.Unlock()
+
+	completeRound := !riskActive
+	a.setCurrentGameHistoryResults(playerHand, dealerHand, "Dealer", "Completed", completeRound)
+	a.noteCurrentGameHistory(winnerMsg)
+
 	if splitEnabled {
 		a.finalizeBankerTrade()
 	}
 
-	if isRiskEnabled && riskSessionActive {
+	if isRiskEnabled && riskActive {
 		go a.applyRiskOutcome(false)
 		return
 	}
@@ -14156,17 +14171,20 @@ func (a *App) evaluateH18Round() {
 
 		go startPayout(a, payoutTargetID, payoutTargetName)
 	} else {
-		a.setCurrentGameHistoryResults(strconv.Itoa(total), "", "Dealer", "Completed", true)
-		a.noteCurrentGameHistory(msg)
-
 		mutex.Lock()
+		riskActive := riskSessionActive
 		splitEnabled := isSplitDealerMode
 		mutex.Unlock()
+
+		completeRound := !riskActive
+		a.setCurrentGameHistoryResults(strconv.Itoa(total), "", "Dealer", "Completed", completeRound)
+		a.noteCurrentGameHistory(msg)
+
 		if splitEnabled {
 			a.finalizeBankerTrade()
 		}
 
-		if isRiskEnabled && riskSessionActive {
+		if isRiskEnabled && riskActive {
 			go a.applyRiskOutcome(false)
 			return
 		}

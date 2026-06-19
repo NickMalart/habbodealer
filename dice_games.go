@@ -108,17 +108,20 @@ func (a *App) evaluateDoubleTroubleRound() {
 		startPayout(a, payoutTargetID, payoutTargetName)
 		return
 	}
-	a.setCurrentGameHistoryResults(resultText, "", a.getCurrentDealerName(), "Completed", true)
-	a.noteCurrentGameHistory(winnerMsg)
-
 	mutex.Lock()
+	riskActive := riskSessionActive
 	splitEnabled := isSplitDealerMode
 	mutex.Unlock()
+
+	completeRound := !riskActive
+	a.setCurrentGameHistoryResults(resultText, "", a.getCurrentDealerName(), "Completed", completeRound)
+	a.noteCurrentGameHistory(winnerMsg)
+
 	if splitEnabled {
 		a.finalizeBankerTrade()
 	}
 
-	if isRiskEnabled && riskSessionActive {
+	if isRiskEnabled && riskActive {
 		go a.applyRiskOutcome(false)
 		return
 	}
@@ -348,17 +351,20 @@ func (a *App) evaluateMidHouseRound() {
 
 		go startPayout(a, payoutTargetID, payoutTargetName)
 	} else {
-		a.setCurrentGameHistoryResults(fmt.Sprintf("%d", total), "", "Dealer", "Completed", true)
-		a.noteCurrentGameHistory(msg)
-
 		mutex.Lock()
+		riskActive := riskSessionActive
 		splitEnabled := isSplitDealerMode
 		mutex.Unlock()
+
+		completeRound := !riskActive
+		a.setCurrentGameHistoryResults(fmt.Sprintf("%d", total), "", "Dealer", "Completed", completeRound)
+		a.noteCurrentGameHistory(msg)
+
 		if splitEnabled {
 			a.finalizeBankerTrade()
 		}
 
-		if isRiskEnabled && riskSessionActive {
+		if isRiskEnabled && riskActive {
 			go a.applyRiskOutcome(false)
 			return
 		}
