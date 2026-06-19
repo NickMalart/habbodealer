@@ -6589,8 +6589,13 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 		displayMax = dealerRisk
 	}
 
-	// If there's nothing the player can risk, clear session state and finalize or reopen.
-	if displayMax <= 0 {
+	displayMin := minTradeQuantityPerItem
+	if displayMin < 1 {
+		displayMin = 1
+	}
+
+	// If there's nothing the player can risk (must be at least minTradeQuantityPerItem), clear session state and finalize or reopen.
+	if displayMax < displayMin {
 		finalPlayerRisk := playerRisk
 		// clear session flags (keep partner info if we need it for finalize)
 		stopRiskDecisionTimeoutMonitor()
@@ -6699,16 +6704,20 @@ func (a *App) handleRiskBet(n int, sender string, userID int) {
 		return
 	}
 
-	max := maxTradeQuantityPerItem
-	if playerRisk < max {
-		max = playerRisk
+	minLimit := minTradeQuantityPerItem
+	if minLimit < 1 {
+		minLimit = 1
 	}
-	if dealerRisk < max {
-		max = dealerRisk
+	maxLimit := maxTradeQuantityPerItem
+	if playerRisk < maxLimit {
+		maxLimit = playerRisk
 	}
-	if n <= 0 || n > max {
+	if dealerRisk < maxLimit {
+		maxLimit = dealerRisk
+	}
+	if n < minLimit || n > maxLimit {
 		mutex.Unlock()
-		sendShoutTargeted(userID, fmt.Sprintf("Invalid risk amount. Max: %d", max))
+		sendShoutTargeted(userID, fmt.Sprintf("Invalid risk amount. Range: %d-%d", minLimit, maxLimit))
 		return
 	}
 
@@ -7023,8 +7032,13 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			displayMax = dealerRisk
 		}
 
+		displayMin := minTradeQuantityPerItem
+		if displayMin < 1 {
+			displayMin = 1
+		}
+
 		// If nothing left to risk, end session and reopen/finalize as appropriate.
-		if playerRisk <= 0 || displayMax <= 0 {
+		if playerRisk <= 0 || displayMax < displayMin {
 			stopRiskDecisionTimeoutMonitor()
 			riskSessionActive = false
 			riskSessionGame = ""
@@ -7126,6 +7140,10 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 				go a.finalizeRiskKeep()
 				return
 			}
+			curMin := minTradeQuantityPerItem
+			if curMin < 1 {
+				curMin = 1
+			}
 			curMax := maxTradeQuantityPerItem
 			if playerRisk < curMax {
 				curMax = playerRisk
@@ -7133,7 +7151,12 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			if dealerRisk < curMax {
 				curMax = dealerRisk
 			}
-			msg := fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, curMax)
+			if curMax < curMin {
+				mutex.Unlock()
+				go a.finalizeRiskKeep()
+				return
+			}
+			msg := fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your risk range: %d-%d", playerRisk, curMin, curMax)
 			mutex.Unlock()
 			sendMessageWithDelay(msg)
 			a.startRiskDecisionTimeoutMonitor(p)
@@ -7196,7 +7219,11 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 	if dealerRisk < displayMax {
 		displayMax = dealerRisk
 	}
-	if displayMax <= 0 {
+	displayMin := minTradeQuantityPerItem
+	if displayMin < 1 {
+		displayMin = 1
+	}
+	if displayMax < displayMin {
 		finalPlayerRisk := playerRisk
 		// clear session flags (keep partner info for finalize)
 		stopRiskDecisionTimeoutMonitor()
@@ -7285,6 +7312,10 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			go a.finalizeRiskKeep()
 			return
 		}
+		curMin := minTradeQuantityPerItem
+		if curMin < 1 {
+			curMin = 1
+		}
 		curMax := maxTradeQuantityPerItem
 		if playerRisk < curMax {
 			curMax = playerRisk
@@ -7292,7 +7323,12 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		if dealerRisk < curMax {
 			curMax = dealerRisk
 		}
-		msg := fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, curMax)
+		if curMax < curMin {
+			mutex.Unlock()
+			go a.finalizeRiskKeep()
+			return
+		}
+		msg := fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your risk range: %d-%d", playerRisk, curMin, curMax)
 		mutex.Unlock()
 		sendMessageWithDelay(msg)
 		a.startRiskDecisionTimeoutMonitor(p)
@@ -7304,6 +7340,10 @@ func (a *App) buildRiskPromptLocked() (string, bool) {
 		return "", false
 	}
 
+	curMin := minTradeQuantityPerItem
+	if curMin < 1 {
+		curMin = 1
+	}
 	curMax := maxTradeQuantityPerItem
 	if playerRisk < curMax {
 		curMax = playerRisk
@@ -7311,11 +7351,11 @@ func (a *App) buildRiskPromptLocked() (string, bool) {
 	if dealerRisk < curMax {
 		curMax = dealerRisk
 	}
-	if curMax <= 0 {
+	if curMax < curMin {
 		return "", false
 	}
 
-	return fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your max risk: %d", playerRisk, curMax), true
+	return fmt.Sprintf("Keep or Risk (rN)? Current bank: %d. Your risk range: %d-%d", playerRisk, curMin, curMax), true
 }
 
 // finalizeRiskKeep converts the current `playerRisk` internal bank into a
