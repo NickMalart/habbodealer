@@ -122,6 +122,8 @@
             <input v-model.number="maxUniqueItems" type="number" />
             <label>Max Qty / Unique</label>
             <input v-model.number="maxQtyPerUnique" type="number" />
+            <label>Min Qty / Unique</label>
+            <input v-model.number="minQtyPerUnique" type="number" />
             <div style="margin-top:8px"><button @click="saveSettings" class="btn">Save</button></div>
           </div>
           <div class="card">
@@ -187,6 +189,7 @@ const logFilter = ref('')
 
 const maxUniqueItems = ref(6)
 const maxQtyPerUnique = ref(10)
+const minQtyPerUnique = ref(1)
 
 const banName = ref('')
 const banDuration = ref('24h')
@@ -205,7 +208,11 @@ const loadInitial = async () => {
       logs.value = await window.go.main.App.GetLogs()
       isConnected.value = true
       const s = await window.go.main.App.GetSettings()
-      if (s) { maxUniqueItems.value = s.maxUniqueItems || 6; maxQtyPerUnique.value = s.maxQtyPerUnique || 10 }
+      if (s) {
+        maxUniqueItems.value = s.maxUniqueItems || 6
+        maxQtyPerUnique.value = s.maxQtyPerUnique || 10
+        minQtyPerUnique.value = s.minQtyPerUnique !== undefined ? s.minQtyPerUnique : 1
+      }
       try {
         tradeInfo.value = await window.go.main.App.GetTradeInfo()
       } catch (e) {
@@ -248,7 +255,7 @@ const clearAllLogs = async () => { logs.value = []; if (window.go?.main?.App) { 
 const copyAllDebug = async () => { try { const text = debugEvents.value.map(d => `${d.ts} ${d.type}\n${JSON.stringify(d.data, null, 2)}`).join('\n\n'); await navigator.clipboard.writeText(text); alert('Copied') } catch (e) { alert('Copy failed') } }
 const clearDebug = () => { debugEvents.value = [] }
 
-const saveSettings = async () => { if (!window.go?.main?.App) return; await window.go.main.App.SaveSettings(maxUniqueItems.value, maxQtyPerUnique.value); alert('Saved') }
+const saveSettings = async () => { if (!window.go?.main?.App) return; await window.go.main.App.SaveSettings(maxUniqueItems.value, maxQtyPerUnique.value, minQtyPerUnique.value); alert('Saved') }
 
 watch(logs, () => { nextTick(() => { if (logContainer.value) logContainer.value.scrollTop = logContainer.value.scrollHeight }) })
 

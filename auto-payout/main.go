@@ -1236,6 +1236,12 @@ func (a *App) AddPayout(name, itemName string, qty int) {
 	// Load configured limits (defaults are applied when missing)
 	maxQty := a.getIntSetting("max_qty_per_unique", 10)
 	maxUnique := a.getIntSetting("max_unique_items", 6)
+	minQty := a.getIntSetting("min_qty_per_unique", 1)
+
+	if minQty > 0 && qty < minQty {
+		a.AddLog(fmt.Sprintf("Ignoring AddPayout: quantity %d is below minimum limit %d", qty, minQty))
+		return
+	}
 
 	// If DB present, enforce max unique items per player (only when adding a new unique)
 	if a.db != nil {
@@ -1326,6 +1332,7 @@ type AddPayoutCheckResult struct {
 	Exists      bool   `json:"exists"`
 	MaxUnique   int    `json:"maxUnique"`
 	MaxQty      int    `json:"maxQty"`
+	MinQty      int    `json:"minQty"`
 	Chunks      []int  `json:"chunks"`
 	Player      string `json:"player"`
 	Item        string `json:"item"`
@@ -1352,10 +1359,18 @@ func (a *App) CheckAddPayout(name, itemName string, qty int) (AddPayoutCheckResu
 
 	maxQty := a.getIntSetting("max_qty_per_unique", 10)
 	maxUnique := a.getIntSetting("max_unique_items", 6)
+	minQty := a.getIntSetting("min_qty_per_unique", 1)
 	res.MaxQty = maxQty
 	res.MaxUnique = maxUnique
+	res.MinQty = minQty
 	res.Player = player
 	res.Item = normItem
+
+	if minQty > 0 && qty < minQty {
+		res.Allowed = false
+		res.Reason = fmt.Sprintf("Quantity must be at least %d", minQty)
+		return res, nil
+	}
 
 	if a.db != nil {
 		ctx := context.Background()
@@ -1657,6 +1672,7 @@ func (a *App) GetActiveStockedItems() []StockedItem {
 type PayoutSettings struct {
 	MaxUniqueItems  int `json:"maxUniqueItems"`
 	MaxQtyPerUnique int `json:"maxQtyPerUnique"`
+	MinQtyPerUnique int `json:"minQtyPerUnique"`
 }
 
 // getIntSetting reads an integer setting from the DB and falls back to def when missing
@@ -1676,7 +1692,7 @@ func (a *App) getIntSetting(key string, def int) int {
 
 // GetSettings returns current auto-payout settings (with defaults when missing)
 func (a *App) GetSettings() PayoutSettings {
-	s := PayoutSettings{MaxUniqueItems: 6, MaxQtyPerUnique: 10}
+	s := PayoutSettings{MaxUniqueItems: 6, MaxQtyPerUnique: 10, MinQtyPerUnique: 1}
 	if a.db == nil {
 		return s
 	}
@@ -1692,11 +1708,16 @@ func (a *App) GetSettings() PayoutSettings {
 			s.MaxQtyPerUnique = iv
 		}
 	}
+	if err := a.db.QueryRow(ctx, "SELECT setting_value FROM public.auto_payout_settings WHERE setting_key = $1", "min_qty_per_unique").Scan(&v); err == nil {
+		if iv, err := strconv.Atoi(v); err == nil {
+			s.MinQtyPerUnique = iv
+		}
+	}
 	return s
 }
 
 // SaveSettings persists provided settings to the DB.
-func (a *App) SaveSettings(maxUnique int, maxQty int) error {
+func (a *App) SaveSettings(maxUnique int, maxQty int, minQty int) error {
 	if a.db == nil {
 		return nil
 	}
@@ -1709,7 +1730,11 @@ func (a *App) SaveSettings(maxUnique int, maxQty int) error {
 		a.AddLog("ERROR: Failed to save max_qty_per_unique: " + err.Error())
 		return err
 	}
-	a.AddLog(fmt.Sprintf("Settings saved: max_unique=%d, max_qty=%d", maxUnique, maxQty))
+	if _, err := a.db.Exec(ctx, `INSERT INTO public.auto_payout_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value`, "min_qty_per_unique", fmt.Sprintf("%d", minQty)); err != nil {
+		a.AddLog("ERROR: Failed to save min_qty_per_unique: " + err.Error())
+		return err
+	}
+	a.AddLog(fmt.Sprintf("Settings saved: max_unique=%d, max_qty=%d, min_qty=%d", maxUnique, maxQty, minQty))
 	return nil
 }
 
@@ -2934,12 +2959,20 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 			// Enforce configured limits per-settings
 			maxQty := a.getIntSetting("max_qty_per_unique", 10)
 			maxUnique := a.getIntSetting("max_unique_items", 6)
+			minQty := a.getIntSetting("min_qty_per_unique", 1)
 
 			// Check per-item qty
 			for itName, qty := range matchedItems {
 				if maxQty > 0 && qty > maxQty {
 					a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: %s offered %d which exceeds max per-unique %d", itName, qty, maxQty))
 					a.queueShout(partnerName, fmt.Sprintf("%s, trade cancelled: quantity exceeds the limit of %d.", partnerName, maxQty))
+					e.Block()
+					a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+					return
+				}
+				if minQty > 0 && qty < minQty {
+					a.AddLog(fmt.Sprintf("[FILTER] Blocking acceptance: %s offered %d which is below min per-unique %d", itName, qty, minQty))
+					a.queueShout(partnerName, fmt.Sprintf("%s, trade cancelled: quantity is below the minimum limit of %d.", partnerName, minQty))
 					e.Block()
 					a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
 					return
@@ -2958,7 +2991,7 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 			// Allowed: accept and emit debug
 			a.AddLog(fmt.Sprintf("[FILTER] Validated trade: matched items %v", matchedItems))
 			if a.ctx != nil {
-				go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "accepted", "player": partnerName, "items": matchedItems, "max_qty": maxQty, "max_unique": maxUnique})
+				go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "accepted", "player": partnerName, "items": matchedItems, "max_qty": maxQty, "max_unique": maxUnique, "min_qty": minQty})
 			}
 
 			// Validated: Automatically accept the trade (Stage 1)

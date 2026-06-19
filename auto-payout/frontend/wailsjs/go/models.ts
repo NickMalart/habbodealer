@@ -7,6 +7,7 @@ export namespace main {
 	    exists: boolean;
 	    maxUnique: number;
 	    maxQty: number;
+	    minQty: number;
 	    chunks: number[];
 	    player: string;
 	    item: string;
@@ -23,6 +24,7 @@ export namespace main {
 	        this.exists = source["exists"];
 	        this.maxUnique = source["maxUnique"];
 	        this.maxQty = source["maxQty"];
+	        this.minQty = source["minQty"];
 	        this.chunks = source["chunks"];
 	        this.player = source["player"];
 	        this.item = source["item"];
@@ -33,6 +35,8 @@ export namespace main {
 	    label: string;
 	    expiresAt: string;
 	    remainingSeconds: number;
+	    message: string;
+	    isActive: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new BanEntry(source);
@@ -44,6 +48,8 @@ export namespace main {
 	        this.label = source["label"];
 	        this.expiresAt = source["expiresAt"];
 	        this.remainingSeconds = source["remainingSeconds"];
+	        this.message = source["message"];
+	        this.isActive = source["isActive"];
 	    }
 	}
 	export class Payout {
@@ -77,6 +83,7 @@ export namespace main {
 	export class PayoutSettings {
 	    maxUniqueItems: number;
 	    maxQtyPerUnique: number;
+	    minQtyPerUnique: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new PayoutSettings(source);
@@ -86,6 +93,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.maxUniqueItems = source["maxUniqueItems"];
 	        this.maxQtyPerUnique = source["maxQtyPerUnique"];
+	        this.minQtyPerUnique = source["minQtyPerUnique"];
 	    }
 	}
 	export class StockedItem {
