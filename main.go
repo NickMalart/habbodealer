@@ -7043,8 +7043,16 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			riskSessionActive = false
 			riskSessionGame = ""
 			riskSessionParams = nil
-			mutex.Unlock()
 
+			if playerRisk > 0 {
+				a.AddLogMsg(fmt.Sprintf("[RISK] %s lost risk round but has leftover bank of %d; paying out", partner, playerRisk))
+				mutex.Unlock()
+				sendShout(fmt.Sprintf("%s lost the risk streak, paying out leftover %d.", partner, playerRisk))
+				go a.finalizeRiskKeep()
+				return
+			}
+
+			mutex.Unlock()
 			a.AddLogMsg(fmt.Sprintf("[RISK] %s lost risk session; dealerRisk=%d playerRisk=%d", partner, dealerRisk, playerRisk))
 			sendShout(fmt.Sprintf("%s lost the risk streak.", partner))
 
