@@ -92,18 +92,18 @@ func (a *App) evaluateDoubleTroubleRound() {
 		a.noteCurrentGameHistory(winnerMsg)
 		resetPayoutRetryState()
 
-		// Post the round outcome immediately so Discord shows the win.
-		a.sendDiscordRoundResult(playerName, resultText, "", winnerMsg)
-
 		if isRiskEnabled {
 			if riskSessionActive {
-				go a.applyRiskOutcome(true)
+				a.applyRiskOutcome(true)
+				a.sendDiscordRoundResult(playerName, resultText, "", winnerMsg)
 				return
 			}
 			params := map[string]interface{}{}
-			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "DT", params)
+			a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "DT", params)
+			a.sendDiscordRoundResult(playerName, resultText, "", winnerMsg)
 			return
 		}
+		a.sendDiscordRoundResult(playerName, resultText, "", winnerMsg)
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT] dt player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
 		startPayout(a, payoutTargetID, payoutTargetName)
 		return
@@ -336,19 +336,18 @@ func (a *App) evaluateMidHouseRound() {
 		a.noteCurrentGameHistory(msg)
 		resetPayoutRetryState()
 
-		// Post round result to Discord
-		a.sendDiscordRoundResult(playerName, fmt.Sprintf("%d", total), "", msg)
-
 		if isRiskEnabled {
 			if riskSessionActive {
-				go a.applyRiskOutcome(true)
+				a.applyRiskOutcome(true)
+				a.sendDiscordRoundResult(playerName, fmt.Sprintf("%d", total), "", msg)
 				return
 			}
 			params := map[string]interface{}{"mhChoice": choice}
-			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "MidHouse", params)
+			a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "MidHouse", params)
+			a.sendDiscordRoundResult(playerName, fmt.Sprintf("%d", total), "", msg)
 			return
 		}
-
+		a.sendDiscordRoundResult(playerName, fmt.Sprintf("%d", total), "", msg)
 		go startPayout(a, payoutTargetID, payoutTargetName)
 	} else {
 		mutex.Lock()

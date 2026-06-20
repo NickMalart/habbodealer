@@ -120,17 +120,17 @@ func (a *App) evaluatePokerHand() {
 			log.Printf("[PAYOUT] player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID)
 			resetPayoutRetryState()
 
-			// Post the round outcome immediately so Discord shows who won this roll.
-			a.sendDiscordRoundResult(playerName, playerHand, hand, winnerMsg)
-
 			if isRiskEnabled {
 				if riskSessionActive {
-					go a.applyRiskOutcome(true)
+					a.applyRiskOutcome(true)
+					a.sendDiscordRoundResult(playerName, playerHand, hand, winnerMsg)
 					return
 				}
-				go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "Pkr", nil)
+				a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "Pkr", nil)
+				a.sendDiscordRoundResult(playerName, playerHand, hand, winnerMsg)
 				return
 			}
+			a.sendDiscordRoundResult(playerName, playerHand, hand, winnerMsg)
 			startPayout(a, payoutTargetID, payoutTargetName)
 			return
 		} else {
@@ -398,17 +398,17 @@ func (a *App) finalizeBlackjackRound(playerWins bool, reason string) {
 		log.Printf("[PAYOUT] 21 player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID)
 		resetPayoutRetryState()
 
-		// Post the round outcome immediately so Discord shows who won this roll.
-		a.sendDiscordRoundResult(playerName, playerHand, dealerHand, winnerMsg)
-
 		if isRiskEnabled {
 			if riskSessionActive {
-				go a.applyRiskOutcome(true)
+				a.applyRiskOutcome(true)
+				a.sendDiscordRoundResult(playerName, playerHand, dealerHand, winnerMsg)
 				return
 			}
-			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "21", nil)
+			a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "21", nil)
+			a.sendDiscordRoundResult(playerName, playerHand, dealerHand, winnerMsg)
 			return
 		}
+		a.sendDiscordRoundResult(playerName, playerHand, dealerHand, winnerMsg)
 		startPayout(a, payoutTargetID, payoutTargetName)
 		return
 	}
@@ -856,18 +856,17 @@ func (a *App) evaluatePairUpRound() {
 		a.AddLogMsg(fmt.Sprintf("[PAYOUT] pu player won, initiating payout trade to %s (%d)", payoutTargetName, payoutTargetID))
 		resetPayoutRetryState()
 
-		// Post the round outcome immediately so Discord shows the win.
-		a.sendDiscordRoundResult(playerName, resultText, "", winnerMsg)
-
 		if isRiskEnabled {
 			if riskSessionActive {
-				go a.applyRiskOutcome(true)
+				a.applyRiskOutcome(true)
+				a.sendDiscordRoundResult(playerName, resultText, "", winnerMsg)
 				return
 			}
-			params := map[string]interface{}{}
-			go a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "PU", params)
+			a.handlePlayerWinRisk(cloneTradeItems(gameBetItems), payoutTargetName, payoutTargetID, "Tri", map[string]interface{}{"mode": triMode})
+			a.sendDiscordRoundResult(playerName, resultText, "", winnerMsg)
 			return
 		}
+		a.sendDiscordRoundResult(playerName, resultText, "", winnerMsg)
 		startPayout(a, payoutTargetID, payoutTargetName)
 		return
 	}
