@@ -3881,7 +3881,13 @@ func (a *App) beginGameHistory(playerName string, betItems []TradeItem) {
 	a.AddLogMsg("[GAME_HISTORY] beginGameHistory unlocked, syncing")
 	if replacedEntry != nil {
 		go a.sendDiscordWebhookForGame(*replacedEntry)
-		a.persistCurrentGameHistoryNow("game_issue_replaced")
+		SafeGo(func() {
+			if err := a.persistSingleGameEntryToDB(*replacedEntry); err != nil {
+				a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] persist replaced issue failed: %v", err))
+			} else {
+				a.AddLogMsg("[GAME_HISTORY][DB] persist replaced issue ok")
+			}
+		})
 		a.sendLiveDealerGames(5)
 		go LogEvent("game_issue", *replacedEntry, "Game marked issue: round replaced before full resolution", map[string]string{"player": replacedEntry.PlayerName})
 	}
@@ -6889,16 +6895,31 @@ func buildRiskBetItems(base []TradeItem, riskQty int) []TradeItem {
 func (a *App) beginRiskRoundHistory(choice string, rawShout string, gameLabel string) {
 	// Close any open entry in this chain before starting a new risk-game row.
 	a.gameHistoryMu.Lock()
+	var completedEntry GameHistoryEntry
+	var wasCompleted bool
 	if a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
 		if strings.TrimSpace(entry.CompletedAt) == "" {
 			entry.Status = "Risk Continued"
 			entry.CompletedAt = gameHistoryTimestamp()
 			entry.Notes = append(entry.Notes, "Risk chain continued into a new game")
+			completedEntry = *entry
+			wasCompleted = true
 		}
 	}) {
 		a.currentGameHistoryID = ""
 	}
 	a.gameHistoryMu.Unlock()
+
+	if wasCompleted {
+		go a.sendDiscordWebhookForGame(completedEntry)
+		SafeGo(func() {
+			if err := a.persistSingleGameEntryToDB(completedEntry); err != nil {
+				a.AddLogMsg(fmt.Sprintf("[GAME_HISTORY][DB] persist risk continued failed: %v", err))
+			} else {
+				a.AddLogMsg("[GAME_HISTORY][DB] persist risk continued ok")
+			}
+		})
+	}
 
 	partnerName := normalizeUsername(strings.TrimSpace(riskPartnerName))
 	if partnerName == "" {
