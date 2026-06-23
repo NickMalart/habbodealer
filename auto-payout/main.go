@@ -149,21 +149,21 @@ type App struct {
 	inventoryMu sync.RWMutex
 
 	// Trade state
-	activeTradePartner     string
-	activeTradeTarget      int
-	tradeActive            bool
-	tradeAccepted          bool
-	payoutTradeSent        bool
-	currentTradeItems      string
-	lastTradeItems         []TradeItem
-	lastTradePartner       string
-	lastTradePartnerID     int
-	lastTradePartnerChatID int
-	allowedNamesCache      []string
+	activeTradePartner       string
+	activeTradeTarget        int
+	tradeActive              bool
+	tradeAccepted            bool
+	payoutTradeSent          bool
+	currentTradeItems        string
+	lastTradeItems           []TradeItem
+	lastTradePartner         string
+	lastTradePartnerID       int
+	lastTradePartnerChatID   int
+	allowedNamesCache        []string
 	allowedDisplayNamesCache []string
-	lastScreenshotPath     string
-	tradeMu                sync.Mutex
-	tradeStartedAt         time.Time
+	lastScreenshotPath       string
+	tradeMu                  sync.Mutex
+	tradeStartedAt           time.Time
 
 	// Banker state
 	bankerName   string
@@ -210,7 +210,7 @@ func NewApp() *App {
 		inventory:            make(map[string][]int),
 		pythonExec:           "python",
 		dbConnString:         "postgresql://neondb_owner:npg_l8r4nExKaNGP@ep-rapid-night-a7u01fue-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
-		discordWebhook:       "https://discordapp.com/api/webhooks/1505787297696583800/aUE_M4-quy6wkFs0qVySjHgZq3zYOze5watr67D89e6O1V9VwmjNy24HzN-X7TI5G5k3",
+		discordWebhook:       "https://discord.com/api/webhooks/1519096496400760924/dsDuT5QTEahQ3l4BQ3L41h5lMu73iXpKAI2L6uCnNVfQJ4R6XJ-moQcqHwDFs53UaHR1",
 		stripScanSeenItemIDs: make(map[int]struct{}),
 		stripScanItemIDs:     make(map[string][]int),
 		inflight:             make(map[string]string),
@@ -2687,8 +2687,13 @@ func (a *App) parseTradeItems(data []byte, allowedNamesCache []string, partner s
 				}
 			}
 
-			a.AddLog(fmt.Sprintf("[DEBUG-TRADE] Found %s candidate at field[%d]: '%s' | %s", 
-				func() string { if isFloor { return "Floor" }; return "Wall" }(),
+			a.AddLog(fmt.Sprintf("[DEBUG-TRADE] Found %s candidate at field[%d]: '%s' | %s",
+				func() string {
+					if isFloor {
+						return "Floor"
+					}
+					return "Wall"
+				}(),
 				nameIdx, lowNameField, matchDetail))
 		}
 	}
@@ -2875,7 +2880,7 @@ func (a *App) handlePartnerAccept(e *g.Intercept) {
 					msg = fmt.Sprintf("%s, trade rejected: unauthorized items detected. We only accept: %s", partnerName, strings.Join(displayNames, ", "))
 				}
 				a.queueShout(partnerName, msg)
-				
+
 				if a.ctx != nil {
 					go runtime.EventsEmit(a.ctx, "debugEvent", map[string]interface{}{"ts": time.Now().Format(time.RFC3339), "type": "incoming-trade", "decision": "blocked", "reason": "unauthorized_items_detected", "player": partnerName, "unrecognized": unrecognized})
 				}
@@ -3803,7 +3808,7 @@ func (a *App) automateTrade(p *Payout) {
 		// and check if the items are gone. If they are, the trade likely succeeded.
 		a.AddLog(fmt.Sprintf("Confirm stage timed out for %s; performing inventory verification...", p.Name))
 		a.RefreshInventory()
-		
+
 		// Wait for scan to complete (max 5s)
 		scanTimedOut := true
 		for s := 0; s < 50; s++ {
