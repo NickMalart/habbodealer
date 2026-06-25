@@ -33,6 +33,11 @@ type TradeItem struct {
 	RawName  string `json:"raw_name,omitempty"`
 }
 
+type DiceRoll struct {
+	DiceID int `json:"diceId"`
+	Value  int `json:"value"`
+}
+
 type GameHistoryEntry struct {
 	ID               string      `json:"id"`
 	PlayerName       string      `json:"playerName"`
@@ -51,6 +56,7 @@ type GameHistoryEntry struct {
 	Choice           string      `json:"choice,omitempty"`
 	ChoiceShout      string      `json:"choiceShout,omitempty"`
 	PayoutMultiplier float64     `json:"payoutMultiplier,omitempty"`
+	Rolls            []DiceRoll  `json:"rolls,omitempty"`
 }
 
 type GameStats struct {

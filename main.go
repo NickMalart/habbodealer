@@ -723,6 +723,11 @@ type ParsedUsers28Trade struct {
 	FieldIndex int    `json:"field_index"`
 }
 
+type DiceRoll struct {
+	DiceID int `json:"diceId"`
+	Value  int `json:"value"`
+}
+
 type GameHistoryEntry struct {
 	ID          string `json:"id"`
 	PlayerName  string `json:"playerName"`
@@ -754,6 +759,7 @@ type GameHistoryEntry struct {
 	RiskBank    int  `json:"riskBank,omitempty"`    // player's internal bank at that moment
 	// Explicit decision marker for risk rounds (e.g. "Keep" or "Risk 3")
 	RiskDecision string `json:"riskDecision,omitempty"`
+	Rolls        []DiceRoll `json:"rolls,omitempty"`
 }
 
 type tradeShortage struct {
@@ -3019,6 +3025,7 @@ func (a *App) ensureGameHistoryTables() error {
 			PRIMARY KEY (id, owner_key)
 		)`,
 		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS raffle_session_id BIGINT NOT NULL DEFAULT 0`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS rolls JSONB NOT NULL DEFAULT '[]'::jsonb`,
 		`CREATE TABLE IF NOT EXISTS game_history_items (
 			entry_id TEXT NOT NULL,
 			owner_key TEXT NOT NULL DEFAULT '',
@@ -3137,6 +3144,7 @@ func (a *App) loadGameHistoryFromDB(limit int) ([]GameHistoryEntry, error) {
 			player_result,
 			dealer_result,
 			notes,
+			rolls,
 			choice,
 			choice_shout,
 			payout_multiplier,
@@ -3159,6 +3167,7 @@ func (a *App) loadGameHistoryFromDB(limit int) ([]GameHistoryEntry, error) {
 	for rows.Next() {
 		var e GameHistoryEntry
 		var notesRaw []byte
+		var rollsRaw []byte
 		if err := rows.Scan(
 			&e.ID,
 			&e.PlayerName,
@@ -3173,6 +3182,7 @@ func (a *App) loadGameHistoryFromDB(limit int) ([]GameHistoryEntry, error) {
 			&e.PlayerResult,
 			&e.DealerResult,
 			&notesRaw,
+			&rollsRaw,
 			&e.Choice,
 			&e.ChoiceShout,
 			&e.PayoutMultiplier,
@@ -3182,6 +3192,9 @@ func (a *App) loadGameHistoryFromDB(limit int) ([]GameHistoryEntry, error) {
 		}
 		if len(notesRaw) > 0 {
 			_ = json.Unmarshal(notesRaw, &e.Notes)
+		}
+		if len(rollsRaw) > 0 {
+			_ = json.Unmarshal(rollsRaw, &e.Rolls)
 		}
 		entries = append(entries, e)
 	}
@@ -3415,15 +3428,16 @@ func (a *App) persistSingleGameEntryToDB(entry GameHistoryEntry) error {
 
 			// Insert/update single entry only, no cleanup DELETE
 			notesJSON, _ := json.Marshal(entry.Notes)
+			rollsJSON, _ := json.Marshal(entry.Rolls)
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO game_history_entries (
 					id, owner_key, player_name, started_at, updated_at, completed_at,
 					game, winner, status, issue, issue_reason, player_result, dealer_result,
-					notes, choice, choice_shout, payout_multiplier, raffle_session_id, updated_db_at
+					notes, rolls, choice, choice_shout, payout_multiplier, raffle_session_id, updated_db_at
 				) VALUES (
 					$1,$2,$3,$4,$5,$6,
 					$7,$8,$9,$10,$11,$12,$13,
-					$14,$15,$16,$17,$18,NOW()
+					$14,$15,$16,$17,$18,$19,NOW()
 				)
 				ON CONFLICT (id, owner_key) DO UPDATE SET
 					player_name = EXCLUDED.player_name,
@@ -3438,6 +3452,7 @@ func (a *App) persistSingleGameEntryToDB(entry GameHistoryEntry) error {
 					player_result = EXCLUDED.player_result,
 					dealer_result = EXCLUDED.dealer_result,
 					notes = EXCLUDED.notes,
+					rolls = EXCLUDED.rolls,
 					choice = EXCLUDED.choice,
 					choice_shout = EXCLUDED.choice_shout,
 					payout_multiplier = EXCLUDED.payout_multiplier,
@@ -3458,6 +3473,7 @@ func (a *App) persistSingleGameEntryToDB(entry GameHistoryEntry) error {
 				entry.PlayerResult,
 				entry.DealerResult,
 				notesJSON,
+				rollsJSON,
 				entry.Choice,
 				entry.ChoiceShout,
 				entry.PayoutMultiplier,
@@ -3893,6 +3909,21 @@ func (a *App) beginGameHistory(playerName string, betItems []TradeItem) {
 	}
 	// Persist game-begin record
 	go LogEvent("game_begin", entry, "Game started", map[string]string{"player": entry.PlayerName})
+	a.syncCurrentGameEntry()
+}
+
+func (a *App) recordCurrentGameRoll(diceID, value int) {
+	a.gameHistoryMu.Lock()
+	if !a.updateCurrentGameHistoryLocked(func(entry *GameHistoryEntry) {
+		entry.Rolls = append(entry.Rolls, DiceRoll{
+			DiceID: diceID,
+			Value:  value,
+		})
+	}) {
+		a.gameHistoryMu.Unlock()
+		return
+	}
+	a.gameHistoryMu.Unlock()
 	a.syncCurrentGameEntry()
 }
 
@@ -14746,6 +14777,7 @@ func (a *App) handleDiceResult(e *g.Intercept) {
 					a.AddLogMsg(logRollResult)
 					// Persist dice result for later inspection
 					go LogEvent("dice_result", map[string]interface{}{"dice_id": pair.diceID, "value": pair.adjValue}, logRollResult, map[string]string{"source": "handleDiceResult"})
+					a.recordCurrentGameRoll(pair.diceID, pair.adjValue)
 				}
 				needEmit = true
 				break
