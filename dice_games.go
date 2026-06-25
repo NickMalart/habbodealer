@@ -178,7 +178,7 @@ func (a *App) rollBanditDice() {
 	}
 	mutex.Unlock()
 
-	resultsWaitGroup.Wait()
+	a.waitForDiceResults([]int{0, 1, 2}, 6*time.Second, "bandit-roll")
 	a.evaluateBanditRound()
 }
 

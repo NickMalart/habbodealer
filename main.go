@@ -13066,7 +13066,7 @@ func (a *App) onChatMessage(e *g.Intercept) {
 		switch {
 		case strings.HasSuffix(command, "reset"):
 			e.Block()
-			resetDiceState()
+			a.resetDiceState()
 		case strings.HasSuffix(command, "roll"):
 			e.Block()
 			a.startPokerRoll()
@@ -13626,7 +13626,7 @@ func (a *App) rollUnderOverDice() {
 	}
 
 	time.Sleep(1000 * time.Millisecond)
-	resultsWaitGroup.Wait()
+	a.waitForDiceResults(indices, 6*time.Second, "uo-roll")
 
 	a.evaluateUnderOverRound()
 	isUORolling = false
@@ -13681,7 +13681,7 @@ func (a *App) rollDoubleTroubleDice() {
 	}
 
 	time.Sleep(1000 * time.Millisecond)
-	resultsWaitGroup.Wait()
+	a.waitForDiceResults(indices, 6*time.Second, "dt-roll")
 
 	a.evaluateDoubleTroubleRound()
 	isDTRolling = false
@@ -14158,7 +14158,7 @@ func (a *App) rollH18Dice() {
 	}
 
 	time.Sleep(1000 * time.Millisecond)
-	resultsWaitGroup.Wait()
+	a.waitForDiceResults([]int{0, 1, 2, 3, 4}, 6*time.Second, "h18-roll")
 
 	a.evaluateH18Round()
 	isH18Rolling = false
@@ -14254,7 +14254,7 @@ func resetBanditSequence() {
 }
 
 // Reset all saved dice states
-func resetDiceState() {
+func (a *App) resetDiceState() {
 	stopDealerOpenHeartbeat()
 	stopTradeWindowTimeoutMonitor()
 	stopGameChoiceTimeoutMonitor()
@@ -14264,9 +14264,9 @@ func resetDiceState() {
 	stopPayout()
 	resetPayoutRetryState()
 
+	a.waitForDiceResults([]int{0, 1, 2, 3, 4}, 2*time.Second, "reset-state")
 	mutex.Lock()
 	defer mutex.Unlock()
-	resultsWaitGroup.Wait() // Ensure all dice roll results are processed
 	diceList = []*Dice{}
 	casinoReady = false
 	awaitingTradeOpen = false
@@ -14325,7 +14325,7 @@ func getExpectedDiceCount() int {
 // values which are stored in global state and emitted in live-dealer payloads.
 func (a *App) StartCasinoSetup(dealerName string, roomName string, maxUniqueItems int, maxQuantityPerItem int, minQuantityPerItem int, riskEnabled bool, enabledGames []string) {
 	// Reset state first (this will lock/unlock internally)
-	resetDiceState()
+	a.resetDiceState()
 
 	mutex.Lock()
 	setEnabledGamesFromSelection(enabledGames)
@@ -14426,7 +14426,7 @@ func (a *App) ResumeCasinoSetup() {
 // StopCasinoSetup turns off dice setup and clears any recorded dice.
 func (a *App) StopCasinoSetup() {
 	// Reset full dice/game state to initial-like values
-	resetDiceState()
+	a.resetDiceState()
 
 	mutex.Lock()
 	// Ensure setup flag is disabled, casino inactive and known dice cleared
@@ -14892,7 +14892,7 @@ func (a *App) rollPokerDice() {
 	}
 
 	time.Sleep(1000 * time.Millisecond)
-	resultsWaitGroup.Wait()
+	a.waitForDiceResults([]int{0, 1, 2, 3, 4}, 6*time.Second, "poker-roll")
 	a.evaluatePokerHand()
 	isPokerRolling = false
 }
@@ -14939,7 +14939,7 @@ func (a *App) rollTriDice() {
 	}
 
 	time.Sleep(1000 * time.Millisecond)
-	resultsWaitGroup.Wait()
+	a.waitForDiceResults([]int{0, 2, 4}, 6*time.Second, "tri-roll")
 
 	a.evaluateTriRound()
 	isTriRolling = false
@@ -14996,7 +14996,7 @@ func (a *App) rollBjDice() {
 	}
 
 	time.Sleep(1000 * time.Millisecond)
-	a.waitForBlackjackDiceResults([]int{0, 1, 2}, 6*time.Second, "initial-roll")
+	a.waitForDiceResults([]int{0, 1, 2}, 6*time.Second, "bj-initial-roll")
 
 	mutex.Lock()
 	values := make([]int, 0, 3)
@@ -15079,7 +15079,7 @@ func (a *App) hitBjDice() {
 	diceList[slot].Roll()
 
 	time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
-	a.waitForBlackjackDiceResults([]int{slot}, 5*time.Second, "hit-roll")
+	a.waitForDiceResults([]int{slot}, 5*time.Second, "bj-hit-roll")
 	newValue := diceList[slot].Value
 
 	mutex.Lock()
@@ -15097,7 +15097,7 @@ func (a *App) hitBjDice() {
 	isBJRolling = false
 }
 
-func (a *App) waitForBlackjackDiceResults(slots []int, timeout time.Duration, reason string) {
+func (a *App) waitForDiceResults(slots []int, timeout time.Duration, reason string) {
 	deadline := time.Now().Add(timeout)
 
 	for {
@@ -15115,12 +15115,12 @@ func (a *App) waitForBlackjackDiceResults(slots []int, timeout time.Duration, re
 		mutex.Unlock()
 
 		if len(pending) == 0 {
-			a.AddLogMsg(fmt.Sprintf("[BJ_DEBUG] wait complete reason=%s slots=%v", reason, slots))
+			a.AddLogMsg(fmt.Sprintf("[DICE_SYNC] wait complete reason=%s slots=%v", reason, slots))
 			return
 		}
 
 		if time.Now().After(deadline) {
-			a.AddLogMsg(fmt.Sprintf("[BJ_DEBUG] wait timeout reason=%s pendingSlots=%v; forcing unstick", reason, pending))
+			a.AddLogMsg(fmt.Sprintf("[DICE_SYNC] wait timeout reason=%s pendingSlots=%v; forcing unstick", reason, pending))
 
 			mutex.Lock()
 			for _, slot := range pending {
@@ -15136,12 +15136,12 @@ func (a *App) waitForBlackjackDiceResults(slots []int, timeout time.Duration, re
 				func() {
 					defer func() {
 						if r := recover(); r != nil {
-							a.AddLogMsg(fmt.Sprintf("[BJ_DEBUG] forced unstick Done panic diceID=%d slot=%d: %v", diceID, slot, r))
+							a.AddLogMsg(fmt.Sprintf("[DICE_SYNC] forced unstick Done panic diceID=%d slot=%d: %v", diceID, slot, r))
 						}
 					}()
 					resultsWaitGroup.Done()
 				}()
-				a.AddLogMsg(fmt.Sprintf("[BJ_DEBUG] forced unstick slot=%d diceID=%d retainedValue=%d", slot, diceID, diceValue))
+				a.AddLogMsg(fmt.Sprintf("[DICE_SYNC] forced unstick slot=%d diceID=%d retainedValue=%d", slot, diceID, diceValue))
 			}
 			mutex.Unlock()
 			return
@@ -15202,7 +15202,7 @@ func (a *App) rollSixDice() {
 	}
 
 	time.Sleep(1000 * time.Millisecond)
-	a.waitForSixDiceResults([]int{0}, 5*time.Second, "initial-roll")
+	a.waitForDiceResults([]int{0}, 5*time.Second, "six-initial-roll")
 
 	mutex.Lock()
 	for _, index := range []int{0} {
@@ -15267,7 +15267,7 @@ func (a *App) hitSixDice() {
 	diceList[slot].Roll()
 
 	time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
-	a.waitForSixDiceResults([]int{slot}, 5*time.Second, "hit-roll")
+	a.waitForDiceResults([]int{slot}, 5*time.Second, "six-hit-roll")
 	newValue := diceList[slot].Value
 
 	mutex.Lock()
@@ -15278,51 +15278,7 @@ func (a *App) hitSixDice() {
 	a.evaluateSixHand()
 }
 
-func (a *App) waitForSixDiceResults(slots []int, timeout time.Duration, reason string) {
-	deadline := time.Now().Add(timeout)
 
-	for {
-		pending := make([]int, 0, len(slots))
-
-		mutex.Lock()
-		for _, slot := range slots {
-			if slot < 0 || slot >= len(diceList) {
-				continue
-			}
-			if diceList[slot].IsRolling {
-				pending = append(pending, slot)
-			}
-		}
-		mutex.Unlock()
-
-		if len(pending) == 0 {
-			return
-		}
-
-		if time.Now().After(deadline) {
-			mutex.Lock()
-			for _, slot := range pending {
-				if slot < 0 || slot >= len(diceList) {
-					continue
-				}
-				if !diceList[slot].IsRolling {
-					continue
-				}
-				diceList[slot].IsRolling = false
-				func() {
-					defer func() {
-						if r := recover(); r != nil { logPanic(r, "RECOVERED") }
-					}()
-					resultsWaitGroup.Done()
-				}()
-			}
-			mutex.Unlock()
-			return
-		}
-
-		time.Sleep(75 * time.Millisecond)
-	}
-}
 
 func (a *App) beginPairUpRound() {
 	playerName := strings.TrimSpace(lastTradePartnerName)
@@ -15383,7 +15339,7 @@ func (a *App) rollPairUpDice() {
 	}
 
 	time.Sleep(1000 * time.Millisecond)
-	resultsWaitGroup.Wait()
+	a.waitForDiceResults([]int{0, 2, 4}, 6*time.Second, "pairup-roll")
 
 	a.evaluatePairUpRound()
 	isPairUpRolling = false
@@ -15439,7 +15395,7 @@ func (a *App) roll13Dice() {
 	}
 
 	time.Sleep(1000 * time.Millisecond)
-	resultsWaitGroup.Wait()
+	a.waitForDiceResults([]int{0, 1}, 6*time.Second, "13-initial-roll")
 
 	mutex.Lock()
 	for _, index := range []int{0, 1} {
@@ -15511,7 +15467,7 @@ func (a *App) hit13Dice() {
 	diceList[slot].Roll()
 
 	time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
-	a.waitForBlackjackDiceResults([]int{slot}, 5*time.Second, "hit-roll")
+	a.waitForDiceResults([]int{slot}, 5*time.Second, "13-hit-roll")
 	newValue := diceList[slot].Value
 
 	mutex.Lock()
@@ -17173,7 +17129,7 @@ func (a *App) rollMidHouseDice() {
 	}
 
 	time.Sleep(1000 * time.Millisecond)
-	resultsWaitGroup.Wait()
+	a.waitForDiceResults(indices, 6*time.Second, "midhouse-roll")
 
 	a.evaluateMidHouseRound()
 	isMidHouseRolling = false
