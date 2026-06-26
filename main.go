@@ -519,6 +519,8 @@ type tradeLimitViolation struct {
 	OverLimitItems     []TradeItem
 	UnderLimitItems    []TradeItem
 	UnknownItems       []TradeItem
+	GBLimitReached     bool
+	MaxAllowedGB       int
 }
 
 // getTradeLimitViolation inspects the parsed list of trade items and returns
@@ -572,8 +574,37 @@ func (a *App) getTradeLimitViolation(items []TradeItem) *tradeLimitViolation {
 	if len(v.UnderLimitItems) > 0 {
 		v.TooLittleQuantity = true
 	}
-	log.Printf("[TRADE_LIMIT_DEBUG] unique=%d maxUnique=%d tooManyUnique=%t tooMuchQuantity=%t tooLittleQuantity=%t hasUnknown=%t", v.UniqueCount, v.MaxUnique, v.TooManyUniqueItems, v.TooMuchQuantity, v.TooLittleQuantity, v.HasUnknownItems)
-	if !v.TooManyUniqueItems && !v.TooMuchQuantity && !v.TooLittleQuantity && !v.HasUnknownItems {
+
+	gbOffered := 0
+	for _, it := range items {
+		cname := a.getCanonicalName(it.Name)
+		if strings.EqualFold(cname, "goldbar") || strings.EqualFold(cname, "gold bar") {
+			gbOffered += it.Quantity
+		}
+	}
+	
+	db, _ := a.getHistoryDB()
+	if gbOffered > 0 && db != nil {
+		dateStr := time.Now().UTC().Format("2006-01-02")
+		var gbOut int
+		err := db.QueryRow(context.Background(), "SELECT gb_out FROM public.gb_daily_stats WHERE date_str = $1", dateStr).Scan(&gbOut)
+		if err != nil && !strings.Contains(err.Error(), "no rows") {
+			log.Printf("[TRADE_LIMIT_DEBUG] Failed to query gb_daily_stats: %v", err)
+		} else {
+			remaining := 200 - gbOut
+			maxAllowed := remaining / 3 // Assume worst case 3x multiplier
+			if maxAllowed < 0 {
+				maxAllowed = 0
+			}
+			if gbOffered > maxAllowed {
+				v.GBLimitReached = true
+				v.MaxAllowedGB = maxAllowed
+			}
+		}
+	}
+
+	log.Printf("[TRADE_LIMIT_DEBUG] unique=%d maxUnique=%d tooManyUnique=%t tooMuchQuantity=%t tooLittleQuantity=%t hasUnknown=%t gbLimitReached=%t", v.UniqueCount, v.MaxUnique, v.TooManyUniqueItems, v.TooMuchQuantity, v.TooLittleQuantity, v.HasUnknownItems, v.GBLimitReached)
+	if !v.TooManyUniqueItems && !v.TooMuchQuantity && !v.TooLittleQuantity && !v.HasUnknownItems && !v.GBLimitReached {
 		return nil
 	}
 	return v
@@ -583,6 +614,10 @@ func formatTradeLimitViolationMessage(v *tradeLimitViolation) string {
 	if v == nil {
 		return ""
 	}
+	if v.GBLimitReached {
+		return fmt.Sprintf("Daily payout limit is approaching. We can only accept a maximum bet of %d Gold Bars right now.", v.MaxAllowedGB)
+	}
+
 	parts := []string{}
 
 	if v.TooManyUniqueItems {
@@ -3042,6 +3077,11 @@ func (a *App) ensureGameHistoryTables() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_game_history_owner_started ON game_history_entries(owner_key, started_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_game_history_items_owner_entry ON game_history_items(owner_key, entry_id, item_type, item_index)`,
+		`CREATE TABLE IF NOT EXISTS public.gb_daily_stats (
+			date_str TEXT PRIMARY KEY,
+			gb_in INTEGER NOT NULL DEFAULT 0,
+			gb_out INTEGER NOT NULL DEFAULT 0
+		)`,
 		`CREATE TABLE IF NOT EXISTS trade_ledger (
 			id SERIAL PRIMARY KEY,
 			owner_key TEXT NOT NULL,
