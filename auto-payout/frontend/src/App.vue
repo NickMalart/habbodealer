@@ -3,7 +3,7 @@
     <header class="app-header">
       <div class="brand">
         <h1>Auto Payout Bot</h1>
-        <div class="subtitle">Lightweight automated payouts</div>
+        <div class="subtitle">Lightweight automated payouts <span style="margin-left: 12px; color: #f1c40f;">| Daily GB Paid Out: {{ dailyGbOut }} / 200</span></div>
       </div>
       <div class="status" :class="{ connected: isConnected }">{{ isConnected ? '● Connected' : '○ Disconnected' }}</div>
     </header>
@@ -173,6 +173,8 @@ import { ref, onMounted, watch, nextTick, computed } from 'vue'
 const topTab = ref('main')
 const subTab = ref('logs')
 
+const dailyGbOut = ref(0)
+
 const payouts = ref([])
 const logs = ref([])
 const debugEvents = ref([])
@@ -214,6 +216,11 @@ const loadInitial = async () => {
         minQtyPerUnique.value = s.minQtyPerUnique !== undefined ? s.minQtyPerUnique : 1
       }
       try {
+        dailyGbOut.value = await window.go.main.App.GetDailyGBOut()
+      } catch (e) {
+        // ignore
+      }
+      try {
         tradeInfo.value = await window.go.main.App.GetTradeInfo()
       } catch (e) {
         // ignore
@@ -244,7 +251,7 @@ const addPayout = async () => {
 
 const deletePayout = async (id) => { if (window.go?.main?.App) await window.go.main.App.DeletePayout(id) }
 const toggleStatus = async (id) => { if (window.go?.main?.App) await window.go.main.App.TogglePayoutStatus(id) }
-const refreshQueue = async () => { if (window.go?.main?.App) { await window.go.main.App.RefreshQueue(); payouts.value = await window.go.main.App.GetPayouts() } }
+const refreshQueue = async () => { if (window.go?.main?.App) { await window.go.main.App.RefreshQueue(); payouts.value = await window.go.main.App.GetPayouts(); dailyGbOut.value = await window.go.main.App.GetDailyGBOut() } }
 const clearCompleted = async () => { if (window.go?.main?.App) await window.go.main.App.ClearCompleted(); await refreshQueue() }
 const refreshInventory = async () => { if (window.go?.main?.App) await window.go.main.App.RefreshInventory() }
 const returnToOwner = async () => { const name = prompt('Owner name:'); if (name && window.go?.main?.App) await window.go.main.App.ReturnAllToOwner(name) }

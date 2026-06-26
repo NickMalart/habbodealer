@@ -3961,6 +3961,20 @@ func (a *App) automateTrade(p *Payout) {
 	a.sendSimpleFailureWebhook(*p)
 }
 
+// GetDailyGBOut returns the number of Gold Bars paid out today
+func (a *App) GetDailyGBOut() int {
+	if a.db == nil {
+		return 0
+	}
+	dateStr := time.Now().UTC().Format("2006-01-02")
+	var gbOut int
+	err := a.db.QueryRow(context.Background(), "SELECT gb_out FROM public.gb_daily_stats WHERE date_str = $1", dateStr).Scan(&gbOut)
+	if err != nil {
+		return 0
+	}
+	return gbOut
+}
+
 func main() {
 	app := NewApp()
 
