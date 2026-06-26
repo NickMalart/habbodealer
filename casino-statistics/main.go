@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -1094,6 +1095,13 @@ func (a *App) PostStatsToDiscord() string {
 	}
 	embed.Footer.Text = "Casino Performance Bot • Vertical Report"
 
+	truncateField := func(v string) string {
+		if len(v) > 1000 {
+			return v[:1000] + "…"
+		}
+		return v
+	}
+
 	// SECTION 1: TODAYS STATS
 	dealerLoss := statsToday.Overall.TotalRounds - statsToday.Overall.DealerWins
 	todayStats := fmt.Sprintf("Total Rounds: %d\nDealer Wins: %d\nDealer Loss: %d\nHouse Edge: %+.1f%%",
@@ -1101,7 +1109,7 @@ func (a *App) PostStatsToDiscord() string {
 		statsToday.Overall.DealerWins,
 		dealerLoss,
 		statsToday.Overall.DealerWinRate-statsToday.Overall.PlayerWinRate)
-	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "📅 Todays Stats", Value: todayStats, Inline: false})
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "📅 Todays Stats", Value: truncateField(todayStats), Inline: false})
 	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "\u200b", Value: "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", Inline: false})
 
 	// SECTION 2: TOP GAMES TODAY (Top 2)
@@ -1120,7 +1128,7 @@ func (a *App) PostStatsToDiscord() string {
 	if len(topGames) == 0 {
 		topGames = append(topGames, "No games today.")
 	}
-	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "🎮 Top Games Today", Value: strings.Join(topGames, "\n"), Inline: false})
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "🎮 Top Games Today", Value: truncateField(strings.Join(topGames, "\n")), Inline: false})
 	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "\u200b", Value: "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", Inline: false})
 
 	// SECTION 3: TODAYES NET
@@ -1136,7 +1144,7 @@ func (a *App) PostStatsToDiscord() string {
 	if len(todayNet) == 0 {
 		todayNet = append(todayNet, "No items today.")
 	}
-	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "💰 Todayes Net", Value: strings.Join(todayNet, "\n"), Inline: false})
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "💰 Todayes Net", Value: truncateField(strings.Join(todayNet, "\n")), Inline: false})
 	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "\u200b", Value: "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", Inline: false})
 
 	// SECTION 4: TOP PLAYERS TODAY
@@ -1150,7 +1158,7 @@ func (a *App) PostStatsToDiscord() string {
 			whaleInfo += fmt.Sprintf("💀 **Loser:** `%s` (%d items)", bigLoser.Name, bigLoser.Total)
 		}
 	}
-	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "🐋 Top Players Today", Value: whaleInfo, Inline: false})
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "🐋 Top Players Today", Value: truncateField(whaleInfo), Inline: false})
 	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "\u200b", Value: "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", Inline: false})
 
 	// SECTION 5: HEAT MAP
@@ -1165,7 +1173,7 @@ func (a *App) PostStatsToDiscord() string {
 	} else {
 		heatInfo += "🧊 **Player Streak:** None"
 	}
-	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "📈 Heat Map", Value: heatInfo, Inline: false})
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "📈 Heat Map", Value: truncateField(heatInfo), Inline: false})
 	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "\u200b", Value: "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", Inline: false})
 
 	// SECTION 5.5: WEEKLY STATS
@@ -1175,7 +1183,7 @@ func (a *App) PostStatsToDiscord() string {
 		statsWeek.Overall.DealerWins,
 		dealerLossWeek,
 		statsWeek.Overall.DealerWinRate-statsWeek.Overall.PlayerWinRate)
-	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "📅 Weekly Stats", Value: weekStats, Inline: false})
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "📅 Weekly Stats", Value: truncateField(weekStats), Inline: false})
 
 	var weekNet []string
 	sort.Slice(ledgerWeek, func(i, j int) bool { return ledgerWeek[i].Net > ledgerWeek[j].Net })
@@ -1195,7 +1203,7 @@ func (a *App) PostStatsToDiscord() string {
 	if len(ledgerWeek) > 10 {
 		weekNet = append(weekNet, fmt.Sprintf("... and %d more types", len(ledgerWeek)-10))
 	}
-	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "💰 Weekly Net", Value: strings.Join(weekNet, "\n"), Inline: false})
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "💰 Weekly Net", Value: truncateField(strings.Join(weekNet, "\n")), Inline: false})
 	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "\u200b", Value: "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", Inline: false})
 
 	// SECTION 6: LIFETIME SUMMARY
@@ -1206,7 +1214,7 @@ func (a *App) PostStatsToDiscord() string {
 	}
 	lifeSummary := fmt.Sprintf("Daily Avg: %.1f items in/day\nTotal Rounds: %d\nLife Net: **%d** items\n\n%s",
 		dailyAvgIn, statsLife.Overall.TotalRounds, lifeNetItems, strings.Join(lifeItems, "\n"))
-	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "👑 Lifetime Summary", Value: lifeSummary, Inline: false})
+	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "👑 Lifetime Summary", Value: truncateField(lifeSummary), Inline: false})
 
 	payload := DiscordWebhookPayload{
 		Username:  "Casino Performance Bot",
@@ -1216,8 +1224,14 @@ func (a *App) PostStatsToDiscord() string {
 
 	payloadBytes, _ := json.Marshal(payload)
 	resp, err := http.Post(webhookURL, "application/json", bytes.NewBuffer(payloadBytes))
-	if err == nil {
-		resp.Body.Close()
+	if err != nil {
+		return fmt.Sprintf("Error posting to Discord: %v", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Sprintf("Discord Error: %s - %s", resp.Status, string(body))
 	}
 
 	return "Vertical Performance Report posted to Discord!"
