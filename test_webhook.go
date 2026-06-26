@@ -30,7 +30,7 @@ type DiscordWebhookPayload struct {
 	Embeds    []DiscordEmbed `json:"embeds"`
 }
 
-func main() {
+func testWebhookMain() {
 	webhookURL := "https://discord.com/api/webhooks/1518982954716627094/2_SZHySpMk9b6mrEqRm1N5ndLDF6XVAWRNMLIPJry-cz5Y4ihN7OyaxXZypqsXTy0lp-"
 	embed := DiscordEmbed{
 		Title: "TEST TITLE",
