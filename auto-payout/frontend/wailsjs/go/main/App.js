@@ -54,6 +54,10 @@ export function GetBanList() {
   return window['go']['main']['App']['GetBanList']();
 }
 
+export function GetDailyGBOut() {
+  return window['go']['main']['App']['GetDailyGBOut']();
+}
+
 export function GetLogs() {
   return window['go']['main']['App']['GetLogs']();
 }

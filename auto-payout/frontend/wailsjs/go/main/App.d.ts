@@ -29,6 +29,8 @@ export function GetActiveStockedItems():Promise<Array<main.StockedItem>>;
 
 export function GetBanList():Promise<Array<main.BanEntry>>;
 
+export function GetDailyGBOut():Promise<number>;
+
 export function GetLogs():Promise<Array<string>>;
 
 export function GetPayouts():Promise<Array<main.Payout>>;
