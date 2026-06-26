@@ -1103,12 +1103,17 @@ func (a *App) PostStatsToDiscord() string {
 	}
 
 	// SECTION 1: TODAYS STATS
+	dateStr := time.Now().UTC().Format("2006-01-02")
+	var gbOutToday int
+	a.db.QueryRow(context.Background(), "SELECT gb_out FROM public.gb_daily_stats WHERE date_str = $1", dateStr).Scan(&gbOutToday)
+
 	dealerLoss := statsToday.Overall.TotalRounds - statsToday.Overall.DealerWins
-	todayStats := fmt.Sprintf("Total Rounds: %d\nDealer Wins: %d\nDealer Loss: %d\nHouse Edge: %+.1f%%",
+	todayStats := fmt.Sprintf("Total Rounds: %d\nDealer Wins: %d\nDealer Loss: %d\nHouse Edge: %+.1f%%\nGold Bars Paid Out: %d / 200",
 		statsToday.Overall.TotalRounds,
 		statsToday.Overall.DealerWins,
 		dealerLoss,
-		statsToday.Overall.DealerWinRate-statsToday.Overall.PlayerWinRate)
+		statsToday.Overall.DealerWinRate-statsToday.Overall.PlayerWinRate,
+		gbOutToday)
 	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "📅 Todays Stats", Value: truncateField(todayStats), Inline: false})
 	embed.Fields = append(embed.Fields, DiscordEmbedField{Name: "\u200b", Value: "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", Inline: false})
 
