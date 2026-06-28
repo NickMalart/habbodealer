@@ -1053,17 +1053,6 @@ func (a *App) initDatabase() {
 		a.AddLog("ERROR: auto_payout_settings table creation failed: " + err.Error())
 	}
 
-	// Create gb_daily_stats table
-	query = `CREATE TABLE IF NOT EXISTS public.gb_daily_stats (
-		date_str TEXT PRIMARY KEY,
-		gb_in INTEGER NOT NULL DEFAULT 0,
-		gb_out INTEGER NOT NULL DEFAULT 0
-	);`
-	_, err = a.db.Exec(context.Background(), query)
-	if err != nil {
-		a.AddLog("ERROR: gb_daily_stats table creation failed: " + err.Error())
-	}
-
 	a.AddLog("Database connected and ready.")
 }
 
@@ -1892,37 +1881,12 @@ func (a *App) persistPayoutStatus(id string, status string) {
 	if !isTerminal {
 		query += " AND LOWER(status) NOT IN ('completed', 'disabled')"
 	}
-	query += " RETURNING item_name, quantity"
 
-	var itemName string
-	var quantity int
-	err := a.db.QueryRow(ctx, query, status, id).Scan(&itemName, &quantity)
-	if err != nil {
-		if strings.Contains(err.Error(), "no rows") {
-			return // Race condition or already terminal status
-		}
+	if _, err := a.db.Exec(ctx, query, status, id); err != nil {
 		a.AddLog("ERROR: Failed to persist payout status: " + err.Error())
 	} else {
 		// Log the status change for debugging
 		a.AddLog(fmt.Sprintf("DB: set payout %s status=%s", id, status))
-		
-		// If transitioning to Completed, update our daily GB stats
-		itemNameLower := strings.ToLower(itemName)
-		isGB := strings.Contains(itemNameLower, "goldbar") || strings.Contains(itemNameLower, "gold bar")
-		if strings.EqualFold(status, "Completed") && isGB {
-			dateStr := time.Now().UTC().Format("2006-01-02")
-			upsertQuery := `
-				INSERT INTO public.gb_daily_stats (date_str, gb_in, gb_out)
-				VALUES ($1, 0, $2)
-				ON CONFLICT (date_str) DO UPDATE 
-				SET gb_out = public.gb_daily_stats.gb_out + EXCLUDED.gb_out
-			`
-			if _, err := a.db.Exec(ctx, upsertQuery, dateStr, quantity); err != nil {
-				a.AddLog("ERROR: Failed to update gb_daily_stats: " + err.Error())
-			} else {
-				a.AddLog(fmt.Sprintf("DB: incremented gb_daily_stats gb_out by %d for %s", quantity, dateStr))
-			}
-		}
 	}
 }
 
@@ -3961,20 +3925,6 @@ func (a *App) automateTrade(p *Payout) {
 
 	// Send concise webhook notifying of unaccepted payout (always attempts to send)
 	a.sendSimpleFailureWebhook(*p)
-}
-
-// GetDailyGBOut returns the number of Gold Bars paid out today
-func (a *App) GetDailyGBOut() int {
-	if a.db == nil {
-		return 0
-	}
-	dateStr := time.Now().UTC().Format("2006-01-02")
-	var gbOut int
-	err := a.db.QueryRow(context.Background(), "SELECT gb_out FROM public.gb_daily_stats WHERE date_str = $1", dateStr).Scan(&gbOut)
-	if err != nil {
-		return 0
-	}
-	return gbOut
 }
 
 func main() {
