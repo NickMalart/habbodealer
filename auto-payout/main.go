@@ -1907,7 +1907,9 @@ func (a *App) persistPayoutStatus(id string, status string) {
 		a.AddLog(fmt.Sprintf("DB: set payout %s status=%s", id, status))
 		
 		// If transitioning to Completed, update our daily GB stats
-		if strings.EqualFold(status, "Completed") && (strings.EqualFold(itemName, "Gold Bar") || strings.EqualFold(itemName, "GoldBar")) {
+		itemNameLower := strings.ToLower(itemName)
+		isGB := strings.Contains(itemNameLower, "goldbar") || strings.Contains(itemNameLower, "gold bar")
+		if strings.EqualFold(status, "Completed") && isGB {
 			dateStr := time.Now().UTC().Format("2006-01-02")
 			upsertQuery := `
 				INSERT INTO public.gb_daily_stats (date_str, gb_in, gb_out)
