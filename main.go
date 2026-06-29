@@ -2750,7 +2750,9 @@ func (a *App) startBankerTradePolling() {
 				SELECT id, player_name, bet_items, player_trade_id, player_chat_id
 				FROM banker_trades
 				WHERE status = 'playing' AND (LOWER(banker_name) = $1 OR banker_name = 'Auto Payout Bot')
-				ORDER BY updated_at ASC
+				AND created_at < NOW() - INTERVAL '3 minutes'
+				AND created_at > NOW() - INTERVAL '1 hour'
+				ORDER BY created_at ASC
 				LIMIT 1
 			`, targetBanker).Scan(&pID, &pPlayerName, &pBetItems, &pTradeID, &pChatID)
 			cancelP()
@@ -2791,6 +2793,7 @@ func (a *App) startBankerTradePolling() {
 				SELECT id, player_name, bet_items, player_trade_id, player_chat_id
 				FROM banker_trades
 				WHERE status = 'pending' AND (LOWER(banker_name) = $1 OR banker_name = 'Auto Payout Bot')
+				AND created_at > NOW() - INTERVAL '1 hour'
 				ORDER BY created_at ASC
 				LIMIT 1
 			`, targetBanker).Scan(&id, &playerName, &betItemsJSON, &tradeID, &chatID)

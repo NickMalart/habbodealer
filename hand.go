@@ -40,6 +40,16 @@ func (a *App) evaluatePokerHand() {
 		return
 	}
 
+	mutex.Lock()
+	diceCount := len(diceList)
+	mutex.Unlock()
+
+	if diceCount < 5 {
+		a.AddLogMsg("[POKER_GUARD] evaluatePokerHand called but len(diceList) < 5; cannot evaluate hand")
+		isPokerRolling = false
+		return
+	}
+
 	result := evaluatePokerRules(diceList)
 	hand := a.toPokerString(diceList)
 	logRollResult := fmt.Sprintf("Poker Result: %s\n", hand)
