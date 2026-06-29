@@ -2727,6 +2727,11 @@ func (a *App) startBankerTradePolling() {
 				targetBanker = strings.ToLower(strings.TrimSpace(a.getCurrentDealerName()))
 			}
 
+			// Do not poll if the Habbo extension is not connected (unless in fake dice mode)
+			if a.ext == nil && !fakeDiceTestingMode {
+				continue
+			}
+
 			if dealerGameActive() {
 				// We don't want to spam logs here, but let's log if there's a pending trade we're ignoring
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
