@@ -13620,6 +13620,7 @@ func (a *App) rollUnderOverDice() {
 	resultsWaitGroup.Add(len(indices))
 	mutex.Unlock()
 
+	a.closeDiceAndWait(indices)
 	for _, index := range indices {
 		diceList[index].Roll()
 		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
@@ -13675,6 +13676,7 @@ func (a *App) rollDoubleTroubleDice() {
 	resultsWaitGroup.Add(len(indices))
 	mutex.Unlock()
 
+	a.closeDiceAndWait(indices)
 	for _, index := range indices {
 		diceList[index].Roll()
 		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
@@ -14884,6 +14886,7 @@ func (a *App) rollPokerDice() {
 	resultsWaitGroup.Add(len(diceList))
 	mutex.Unlock()
 
+	a.closeDiceAndWait([]int{0, 1, 2, 3, 4})
 	for _, dice := range diceList {
 		dice.Roll()
 
@@ -14933,6 +14936,7 @@ func (a *App) rollTriDice() {
 	resultsWaitGroup.Add(3)
 	mutex.Unlock()
 
+	a.closeDiceAndWait([]int{0, 2, 4})
 	for _, index := range []int{0, 2, 4} {
 		diceList[index].Roll()
 		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
@@ -14990,6 +14994,7 @@ func (a *App) rollBjDice() {
 	mutex.Unlock()
 
 	// Roll the first three dice in order
+	a.closeDiceAndWait([]int{0, 1, 2})
 	for _, index := range []int{0, 1, 2} {
 		diceList[index].Roll()
 		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
@@ -15076,6 +15081,7 @@ func (a *App) hitBjDice() {
 	resultsWaitGroup.Add(1)
 	mutex.Unlock()
 
+	a.closeDiceAndWait([]int{slot})
 	diceList[slot].Roll()
 
 	time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
@@ -15196,6 +15202,7 @@ func (a *App) rollSixDice() {
 	mutex.Unlock()
 
 	// Roll the first dice
+	a.closeDiceAndWait([]int{0})
 	for _, index := range []int{0} {
 		diceList[index].Roll()
 		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
@@ -15264,6 +15271,7 @@ func (a *App) hitSixDice() {
 	mutex.Unlock()
 
 	resultsWaitGroup.Add(1)
+	a.closeDiceAndWait([]int{slot})
 	diceList[slot].Roll()
 
 	time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
@@ -15333,6 +15341,7 @@ func (a *App) rollPairUpDice() {
 	resultsWaitGroup.Add(3)
 	mutex.Unlock()
 
+	a.closeDiceAndWait([]int{0, 2, 4})
 	for _, index := range []int{0, 2, 4} {
 		diceList[index].Roll()
 		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
@@ -15389,6 +15398,7 @@ func (a *App) roll13Dice() {
 	mutex.Unlock()
 
 	// Roll the first three dice in order
+	a.closeDiceAndWait([]int{0, 1})
 	for _, index := range []int{0, 1} {
 		diceList[index].Roll()
 		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
@@ -15464,6 +15474,7 @@ func (a *App) hit13Dice() {
 	resultsWaitGroup.Add(1)
 	mutex.Unlock()
 
+	a.closeDiceAndWait([]int{slot})
 	diceList[slot].Roll()
 
 	time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
@@ -17123,6 +17134,7 @@ func (a *App) rollMidHouseDice() {
 	resultsWaitGroup.Add(len(indices))
 	mutex.Unlock()
 
+	a.closeDiceAndWait(indices)
 	for _, index := range indices {
 		diceList[index].Roll()
 		time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
@@ -17217,4 +17229,22 @@ func resetMidHouseSequence() {
 	awaitingMHChoice = false
 	awaitingMHChoicePartnerID = 0
 	awaitingMHChoicePartnerName = ""
+}
+
+// closeDiceAndWait closes the specified dice slots and waits if any were open.
+func (a *App) closeDiceAndWait(slots []int) {
+	needWait := false
+	mutex.Lock()
+	for _, index := range slots {
+		if index >= 0 && index < len(diceList) {
+			if !diceList[index].IsClosed {
+				diceList[index].Close()
+				needWait = true
+			}
+		}
+	}
+	mutex.Unlock()
+	if needWait {
+		time.Sleep(800 * time.Millisecond)
+	}
 }
