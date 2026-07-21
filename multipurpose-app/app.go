@@ -21,7 +21,7 @@ import (
 	"xabbo.b7c.io/goearth/shockwave/out"
 )
 
-const dbURL = "postgresql://neondb_owner:npg_l8r4nExKaNGP@ep-rapid-night-a7u01fue-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+const dbURL = "postgresql://neondb_owner:npg_bV04zdgaxDHm@ep-autumn-math-a7fklxxr-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 
 // ParsedUsers28User matches the JSON output of parse_users28.py
 type ParsedUsers28User struct {

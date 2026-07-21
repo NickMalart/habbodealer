@@ -209,7 +209,7 @@ func NewApp() *App {
 		roomUsers:            make(map[string]ParsedUsers28User),
 		inventory:            make(map[string][]int),
 		pythonExec:           "python",
-		dbConnString:         "postgresql://neondb_owner:npg_l8r4nExKaNGP@ep-rapid-night-a7u01fue-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
+		dbConnString:         "postgresql://neondb_owner:npg_bV04zdgaxDHm@ep-autumn-math-a7fklxxr-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
 		discordWebhook:       "https://discord.com/api/webhooks/1519096496400760924/dsDuT5QTEahQ3l4BQ3L41h5lMu73iXpKAI2L6uCnNVfQJ4R6XJ-moQcqHwDFs53UaHR1",
 		stripScanSeenItemIDs: make(map[int]struct{}),
 		stripScanItemIDs:     make(map[string][]int),
@@ -980,12 +980,17 @@ func (a *App) initDatabase() {
 		quantity INTEGER NOT NULL,
 		status TEXT NOT NULL,
 		created_at TEXT NOT NULL,
-		player_trade_id INTEGER NULL
+		player_trade_id INTEGER NULL,
+		banker_trade_id INTEGER NULL
 	);`
 	_, err = a.db.Exec(context.Background(), query)
 	if err != nil {
 		a.AddLog("ERROR: Table creation failed: " + err.Error())
 	}
+
+	// Ensure older installations also have the banker_trade_id column available.
+	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;")
+	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS banker_trade_id INTEGER NULL;")
 
 	// Create dealer_shouts table for cross-bot communication
 	query = `CREATE TABLE IF NOT EXISTS public.dealer_shouts (
