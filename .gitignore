@@ -24,6 +24,7 @@ wave-timer-app/build/bin/wave-timer-app.exe
 **/frontend/dist/
 **/frontend/wailsjs/
 **/*.md5
+multipurpose-app/frontend/
 
 # Local app-launcher build artifacts
 app-launcher/build/bin/
