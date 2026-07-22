@@ -6,6 +6,8 @@ export function BuildAll():Promise<string>;
 
 export function BuildSingle(arg1:string):Promise<string>;
 
+export function CreateMissingTables():Promise<string>;
+
 export function GetApps():Promise<Array<main.LaunchAppItem>>;
 
 export function GetBuildTargets():Promise<Array<Record<string, string>>>;

@@ -958,6 +958,36 @@ func (a *App) inventoryRefreshLoop() {
 	}
 }
 
+func bankerTradeSchemaStatements() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS public.banker_trades (
+			id BIGSERIAL PRIMARY KEY,
+			player_name TEXT NOT NULL,
+			bet_items JSONB NOT NULL DEFAULT '[]'::jsonb,
+			banker_name TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			player_trade_id INTEGER NULL,
+			player_chat_id INTEGER NULL,
+			owner_key TEXT NOT NULL DEFAULT '',
+			bet_amount INTEGER DEFAULT 0,
+			risk_bank INTEGER DEFAULT 0,
+			risk_status TEXT DEFAULT 'idle'
+		);`,
+		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS player_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS bet_items JSONB NOT NULL DEFAULT '[]'::jsonb;`,
+		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS banker_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';`,
+		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();`,
+		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;`,
+		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS player_chat_id INTEGER NULL;`,
+		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS bet_amount INTEGER DEFAULT 0;`,
+		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_bank INTEGER DEFAULT 0;`,
+		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_status TEXT DEFAULT 'idle';`,
+	}
+}
+
 func (a *App) initDatabase() {
 	a.AddLog("Connecting to database...")
 
@@ -1014,12 +1044,11 @@ func (a *App) initDatabase() {
 	// Ensure notified column exists for failure webhooks
 	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS notified BOOLEAN DEFAULT FALSE;")
 
-	// Ensure banker_trades has owner_key for raffle tracking
-	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';")
-	// Fail-safe: ensure bet_amount and risk columns exist
-	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS bet_amount INTEGER DEFAULT 0;")
-	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_bank INTEGER DEFAULT 0;")
-	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_status TEXT DEFAULT 'idle';")
+	for _, stmt := range bankerTradeSchemaStatements() {
+		if _, err := a.db.Exec(context.Background(), stmt); err != nil {
+			a.AddLog("ERROR: banker_trades schema migration failed: " + err.Error())
+		}
+	}
 
 	// Create public.banned_players table
 	query = `CREATE TABLE IF NOT EXISTS public.banned_players (

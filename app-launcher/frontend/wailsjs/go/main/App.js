@@ -10,6 +10,10 @@ export function BuildSingle(arg1) {
   return window['go']['main']['App']['BuildSingle'](arg1);
 }
 
+export function CreateMissingTables() {
+  return window['go']['main']['App']['CreateMissingTables']();
+}
+
 export function GetApps() {
   return window['go']['main']['App']['GetApps']();
 }

@@ -32,6 +32,7 @@ header h1{font-size:14px;font-weight:600;color:#e6edf3;flex:1}
   <h1>App Launcher</h1>
   <button class="btn btn-secondary" id="btnRefresh" onclick="refresh()">&#x21BA; Refresh</button>
   <button class="btn btn-secondary" id="btnKillAll" onclick="killAll()">Kill All Tasks</button>
+  <button class="btn btn-blue" id="btnCreateTables" onclick="createTables()">🗄 Create DB Tables</button>
   <button class="btn btn-blue" id="btnBuildAll" onclick="buildAll()">&#x2699; Build All</button>
 </header>
 <div class="apps" id="appList">Loading&#x2026;</div>
@@ -40,7 +41,7 @@ header h1{font-size:14px;font-weight:600;color:#e6edf3;flex:1}
   <button class="btn btn-secondary" style="padding:2px 8px;font-size:11px" onclick="clearLog()">Clear</button>
 </div><div id="log"></div></div>
 <script>
-const { BuildAll, BuildSingle, GetApps, LaunchApp, RefreshApps, IsBuilding, LaunchGEarth, GetGEarthStatus, KillAllTasks, KillApp } = window['go']['main']['App'];
+const { BuildAll, BuildSingle, GetApps, LaunchApp, RefreshApps, IsBuilding, LaunchGEarth, GetGEarthStatus, KillAllTasks, KillApp, CreateMissingTables } = window['go']['main']['App'];
 const { EventsOn } = window['runtime'];
 let building = false;
 let gEarthState = { exists: false, running: false };
@@ -53,8 +54,19 @@ async function refreshGEarth(){try{gEarthState=await GetGEarthStatus();}catch{gE
 async function launchGEarth(){const r=await LaunchGEarth();setStatus(r==='ok'?'':r);await refreshGEarth();}
 EventsOn('buildLog',data=>{log(data.line,data.kind);if(data.kind==='success'&&(data.line.includes('complete')||data.line.includes('done'))){setTimeout(()=>{setBuilding(false);setStatus('');refresh();},200);}});
 async function refresh(){const apps=await RefreshApps();renderApps(apps);await refreshGEarth();}
-async function buildAll(){if(building)return;setBuilding(true);setStatus('Building all apps\u2026');clearLog();await BuildAll();}
-async function killAll(){
+async function buildAll(){if(building)return;setBuilding(true);setStatus('Building all apps\u2026');clearLog();await BuildAll();}async function createTables(){
+  setStatus('Creating database tables…');
+  clearLog();
+  try {
+    const res = await CreateMissingTables();
+    log(res, (res||'').toLowerCase().includes('failure') || (res||'').toLowerCase().includes('fail') ? 'error' : 'success');
+    setStatus(res || '');
+  } catch (e) {
+    const msg = 'CreateMissingTables failed: ' + e;
+    log(msg, 'error');
+    setStatus(msg);
+  }
+}async function killAll(){
   setStatus('Killing all tracked tasks...');
   try{
     const res = await KillAllTasks();

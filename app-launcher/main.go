@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -194,6 +196,213 @@ type App struct {
 
 func NewApp() *App {
 	return &App{processes: map[string]*os.Process{}, stopChildrenOnExit: false}
+}
+
+type dbConfig struct {
+	DatabaseURL string `json:"databaseUrl"`
+}
+
+func readDatabaseURL(root string) (string, error) {
+	candidates := []string{
+		filepath.Join(root, "db.local.json"),
+		filepath.Join(root, "app-launcher", "db.local.json"),
+	}
+
+	for _, candidate := range candidates {
+		if !fileExists(candidate) {
+			continue
+		}
+
+		data, err := os.ReadFile(candidate)
+		if err != nil {
+			return "", err
+		}
+
+		var cfg dbConfig
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(cfg.DatabaseURL) != "" {
+			return cfg.DatabaseURL, nil
+		}
+	}
+
+	return "", fmt.Errorf("database config not found in %s", root)
+}
+
+func (a *App) CreateMissingTables() string {
+	root := a.resolveWorkspaceRoot()
+	connString, err := readDatabaseURL(root)
+	if err != nil {
+		msg := fmt.Sprintf("CreateMissingTables failed: %v", err)
+		a.emitLog(msg, "error")
+		return msg
+	}
+
+	a.emitLog(fmt.Sprintf("Creating database schema using %s", root), "info")
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	cfg, err := pgxpool.ParseConfig(connString)
+	if err != nil {
+		msg := fmt.Sprintf("CreateMissingTables failed: parse config: %v", err)
+		a.emitLog(msg, "error")
+		return msg
+	}
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		msg := fmt.Sprintf("CreateMissingTables failed: connect: %v", err)
+		a.emitLog(msg, "error")
+		return msg
+	}
+	defer pool.Close()
+
+	if err := pool.Ping(ctx); err != nil {
+		msg := fmt.Sprintf("CreateMissingTables failed: ping: %v", err)
+		a.emitLog(msg, "error")
+		return msg
+	}
+
+	queries := []string{
+		`CREATE TABLE IF NOT EXISTS public.game_history_entries (
+			id BIGSERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL DEFAULT '',
+			started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			ended_at TIMESTAMPTZ NULL,
+			game_type TEXT NOT NULL DEFAULT '',
+			result TEXT NOT NULL DEFAULT ''
+		);`,
+		`ALTER TABLE public.game_history_entries ADD COLUMN IF NOT EXISTS raffle_session_id BIGINT NOT NULL DEFAULT 0;`,
+		`ALTER TABLE public.game_history_entries ADD COLUMN IF NOT EXISTS rolls JSONB NOT NULL DEFAULT '[]'::jsonb;`,
+		`CREATE TABLE IF NOT EXISTS public.game_history_items (
+			id BIGSERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL DEFAULT '',
+			entry_id BIGINT NOT NULL DEFAULT 0,
+			item_type TEXT NOT NULL DEFAULT '',
+			item_index INTEGER NOT NULL DEFAULT 0,
+			payload JSONB NOT NULL DEFAULT '{}'::jsonb
+		);`,
+		`CREATE TABLE IF NOT EXISTS public.trade_ledger (
+			id BIGSERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			trade_type TEXT NOT NULL DEFAULT '',
+			item_name TEXT NOT NULL DEFAULT '',
+			quantity INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL DEFAULT ''
+		);`,
+		`CREATE TABLE IF NOT EXISTS public.stocked_items (
+			id BIGSERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL DEFAULT '',
+			item_name TEXT NOT NULL DEFAULT '',
+			quantity INTEGER NOT NULL DEFAULT 0,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);`,
+		`CREATE TABLE IF NOT EXISTS public.dealer_shouts (
+			id BIGSERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			message TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);`,
+		`ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
+		`CREATE TABLE IF NOT EXISTS public.auto_payouts (
+			id BIGSERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);`,
+		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;`,
+		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS banker_trade_id INTEGER NULL;`,
+		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS notified BOOLEAN DEFAULT FALSE;`,
+		`CREATE TABLE IF NOT EXISTS public.banker_trades (
+			id BIGSERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			status TEXT NOT NULL DEFAULT 'idle',
+			bet_amount INTEGER DEFAULT 0,
+			risk_bank INTEGER DEFAULT 0,
+			risk_status TEXT DEFAULT 'idle'
+		);`,
+		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS bet_amount INTEGER DEFAULT 0;`,
+		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_bank INTEGER DEFAULT 0;`,
+		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_status TEXT DEFAULT 'idle';`,
+		`CREATE TABLE IF NOT EXISTS public.banned_players (
+			id BIGSERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL DEFAULT '',
+			username TEXT NOT NULL DEFAULT '',
+			is_active BOOLEAN DEFAULT TRUE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);`,
+		`CREATE TABLE IF NOT EXISTS public.auto_payout_settings (
+			id BIGSERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL DEFAULT '',
+			setting_key TEXT NOT NULL DEFAULT '',
+			setting_value TEXT NOT NULL DEFAULT '',
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);`,
+		`CREATE TABLE IF NOT EXISTS public.raffle_sessions (
+			id BIGSERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL DEFAULT '',
+			started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			status TEXT NOT NULL DEFAULT 'pending',
+			raffle_name TEXT NOT NULL DEFAULT 'Flame Raffle',
+			prize_name TEXT NOT NULL DEFAULT 'Purple Dragon Lamp'
+		);`,
+		`CREATE TABLE IF NOT EXISTS public.raffle_participants (
+			id BIGSERIAL PRIMARY KEY,
+			session_id BIGINT NOT NULL DEFAULT 0,
+			owner_key TEXT NOT NULL DEFAULT '',
+			username_key TEXT NOT NULL DEFAULT '',
+			ticket_count INTEGER NOT NULL DEFAULT 1,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);`,
+		`CREATE TABLE IF NOT EXISTS public.trade_sessions (
+			id BIGSERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);`,
+		`CREATE TABLE IF NOT EXISTS public.trade_entries (
+			id BIGSERIAL PRIMARY KEY,
+			session_id BIGINT NOT NULL DEFAULT 0,
+			owner_key TEXT NOT NULL DEFAULT '',
+			occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			payload JSONB NOT NULL DEFAULT '{}'::jsonb
+		);`,
+		`CREATE TABLE IF NOT EXISTS public.trade_entry_items (
+			id BIGSERIAL PRIMARY KEY,
+			trade_entry_id BIGINT NOT NULL DEFAULT 0,
+			owner_key TEXT NOT NULL DEFAULT '',
+			item_name TEXT NOT NULL DEFAULT '',
+			quantity INTEGER NOT NULL DEFAULT 1,
+			raw_data TEXT NOT NULL DEFAULT ''
+		);`,
+		`CREATE TABLE IF NOT EXISTS public.blocked_players (
+			id BIGSERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL DEFAULT '',
+			username TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);`,
+		`CREATE TABLE IF NOT EXISTS public.ui_settings (
+			id BIGSERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL DEFAULT '',
+			setting_key TEXT NOT NULL DEFAULT '',
+			setting_value TEXT NOT NULL DEFAULT ''
+		);`,
+	}
+
+	for _, query := range queries {
+		if _, err := pool.Exec(ctx, query); err != nil {
+			msg := fmt.Sprintf("CreateMissingTables failed: %v\nquery: %s", err, query)
+			a.emitLog(msg, "error")
+			return msg
+		}
+	}
+
+	return "Database tables checked/created successfully"
 }
 
 // SetStopChildrenOnExit controls whether App Launcher will stop tracked/known
