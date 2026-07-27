@@ -4424,6 +4424,38 @@ func registerCustomTradeHeaders(a *App) {
 		a.ext.Headers().Add("TRADE_CONFIRM_ACCEPT", g.Header{Dir: g.Out, Value: 402})
 		a.AddLogMsg("[TRADE_HEADERS] registered outgoing TRADE_CONFIRM_ACCEPT -> 402")
 	}
+
+	if _, ok := a.ext.Headers().TryGet(g.Out.Id("G_USRS")); !ok {
+		a.ext.Headers().Add("G_USRS", g.Header{Dir: g.Out, Value: 61})
+		a.AddLogMsg("[ROOM_HEADERS] registered outgoing G_USRS -> 61")
+	}
+	if _, ok := a.ext.Headers().TryGet(g.Out.Id("GETSPACENODEUSERS")); !ok {
+		a.ext.Headers().Add("GETSPACENODEUSERS", g.Header{Dir: g.Out, Value: 154})
+		a.AddLogMsg("[ROOM_HEADERS] registered outgoing GETSPACENODEUSERS -> 154")
+	}
+	if _, ok := a.ext.Headers().TryGet(g.Out.Id("GETSTRIP")); !ok {
+		a.ext.Headers().Add("GETSTRIP", g.Header{Dir: g.Out, Value: 65})
+		a.AddLogMsg("[ROOM_HEADERS] registered outgoing GETSTRIP -> 65")
+	}
+}
+
+func (a *App) safeSend(header g.Header, payload ...interface{}) bool {
+	if a == nil || a.ext == nil {
+		if a != nil {
+			a.AddLogMsg("[SEND] extension not initialized; skipping outgoing packet")
+		}
+		return false
+	}
+	if _, ok := a.ext.Headers().TryGet(header); !ok {
+		a.AddLogMsg("[SEND] skipped outgoing packet because header is not registered")
+		return false
+	}
+	if len(payload) > 0 {
+		a.ext.Send(header, payload...)
+	} else {
+		a.ext.Send(header)
+	}
+	return true
 }
 
 func (a *App) runExt() {
@@ -10033,7 +10065,9 @@ func (a *App) requestPlayerStrip(force bool) int {
 
 	a.AddLogMsg(fmt.Sprintf("[STRIP_DEBUG] start scan session=%d force=%t", sid, force))
 
-	ext.Send(out.GETSTRIP, "new")
+	if !a.safeSend(out.GETSTRIP, "new") {
+		a.AddLogMsg("[STRIP_DEBUG] failed to send GETSTRIP; header missing")
+	}
 	a.AddLogMsg("[STRIP_DEBUG] raw GETSTRIP send payload=\"new\"")
 	a.AddLogMsg("[STRIP] requested player hand scan (GETSTRIP new)")
 
@@ -12496,9 +12530,13 @@ func requestRoomUsers(a *App) {
 	roomUsersReqMu.Unlock()
 
 	// G_USRS is the packet this client uses to request the in-room USERS list (header 61).
-	a.ext.Send(out.G_USRS)
+	if !a.safeSend(out.G_USRS) {
+		a.AddLogMsg("[ROOM_USERS] failed to send G_USRS; header missing")
+	}
 	// Keep legacy request as a secondary path in case the server expects both in some sessions.
-	a.ext.Send(out.GETSPACENODEUSERS)
+	if !a.safeSend(out.GETSPACENODEUSERS) {
+		a.AddLogMsg("[ROOM_USERS] failed to send GETSPACENODEUSERS; header missing")
+	}
 	startIncomingHeaderSniff(8 * time.Second)
 	a.AddLogMsg("[ROOM_USERS] requested current room users via G_USRS + GETSPACENODEUSERS")
 }
