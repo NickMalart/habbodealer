@@ -3717,11 +3717,6 @@ func (a *App) automateTrade(p *Payout) {
 			a.AddLog(fmt.Sprintf("Sent TRADE_ACCEPT_OUT attempt %d/3", acc))
 		}
 
-		// Wait up to 30s for the partner to accept (Stage 1)
-		a.tradeMu.Lock()
-		a.tradeAccepted = false
-		a.tradeMu.Unlock()
-
 		accepted := false
 		waitStart := time.Now()
 		for time.Since(waitStart) < 30*time.Second {
