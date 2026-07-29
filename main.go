@@ -4439,7 +4439,7 @@ func registerCustomTradeHeaders(a *App) {
 	}
 }
 
-func (a *App) safeSend(header g.Header, payload ...interface{}) bool {
+func (a *App) safeSend(header g.Identifier, payload ...interface{}) bool {
 	if a == nil || a.ext == nil {
 		if a != nil {
 			a.AddLogMsg("[SEND] extension not initialized; skipping outgoing packet")
@@ -4447,7 +4447,7 @@ func (a *App) safeSend(header g.Header, payload ...interface{}) bool {
 		return false
 	}
 	if _, ok := a.ext.Headers().TryGet(header); !ok {
-		a.AddLogMsg("[SEND] skipped outgoing packet because header is not registered")
+		a.AddLogMsg(fmt.Sprintf("[SEND] skipped outgoing packet because header %v is not registered", header))
 		return false
 	}
 	if len(payload) > 0 {
