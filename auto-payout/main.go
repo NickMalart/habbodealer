@@ -1097,7 +1097,10 @@ func (a *App) ShowWindow() {
 }
 
 func (a *App) initParser() {
-	if p, err := exec.LookPath("python3"); err == nil {
+	if p, err := exec.LookPath("py"); err == nil {
+		a.pythonExec = p
+		a.pythonArgs = []string{"-3"}
+	} else if p, err := exec.LookPath("python3"); err == nil {
 		a.pythonExec = p
 	} else if p, err := exec.LookPath("python"); err == nil {
 		a.pythonExec = p

@@ -796,6 +796,7 @@ type App struct {
 	currentDealerName     string
 	currentRoomName       string
 	users28PythonExec     string
+	users28PythonArgs     []string
 	users28ParserScript   string
 	activeRaffleSessionID int64
 	activeBankerTradeID   int
@@ -881,6 +882,11 @@ func (a *App) initUsers28ParserCommand() {
 		}
 	}
 	if strings.TrimSpace(a.users28PythonExec) != "" {
+		return
+	}
+	if p, err := exec.LookPath("py"); err == nil {
+		a.users28PythonExec = p
+		a.users28PythonArgs = []string{"-3"}
 		return
 	}
 	if p, err := exec.LookPath("python3"); err == nil {

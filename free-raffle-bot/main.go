@@ -4002,11 +4002,16 @@ func (a *App) runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, er
 	tmpFile.Close()
 
 	py := "python"
-	if _, err := exec.LookPath("python3"); err == nil {
+	args := []string{}
+	if p, err := exec.LookPath("py"); err == nil {
+		py = p
+		args = []string{"-3"}
+	} else if _, err := exec.LookPath("python3"); err == nil {
 		py = "python3"
 	}
 
-	cmd := exec.Command(py, scriptPath, "--input", tmpPath, "--json")
+	cmdArgs := append(args, scriptPath, "--input", tmpPath, "--json")
+	cmd := exec.Command(py, cmdArgs...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 
 	var stdout bytes.Buffer

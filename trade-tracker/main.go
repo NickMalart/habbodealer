@@ -1497,7 +1497,11 @@ func runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, error) {
 	log.Printf("[USERS28] using script: %s", scriptPath)
 
 	pythonExec := ""
-	if p, err := exec.LookPath("python3"); err == nil {
+	pythonArgs := []string{}
+	if p, err := exec.LookPath("py"); err == nil {
+		pythonExec = p
+		pythonArgs = []string{"-3"}
+	} else if p, err := exec.LookPath("python3"); err == nil {
 		pythonExec = p
 	} else if p, err := exec.LookPath("python"); err == nil {
 		pythonExec = p
@@ -1520,7 +1524,8 @@ func runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, error) {
 		return nil, err
 	}
 
-	cmd := exec.Command(pythonExec, scriptPath, "--input", tmpPath, "--json")
+	cmdArgs := append(pythonArgs, scriptPath, "--input", tmpPath, "--json")
+	cmd := exec.Command(pythonExec, cmdArgs...)
 	cmd.Dir = "."
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 
