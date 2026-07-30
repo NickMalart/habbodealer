@@ -173,6 +173,7 @@ type App struct {
 
 	// Config & DB
 	pythonExec     string
+	pythonArgs     []string
 	parserScript   string
 	db             *pgxpool.Pool
 	dbConnString   string
