@@ -176,6 +176,7 @@ const subTab = ref('logs')
 const payouts = ref([])
 const logs = ref([])
 const debugEvents = ref([])
+const maxDebugEvents = 100
 
 const tradeInfo = ref({ active: false, partner: '', partnerId: 0, elapsedSeconds: 0, remainingSeconds: 0, maxOpenSeconds: 0, banDurationSeconds: 0 })
 const banList = ref([])
@@ -264,7 +265,14 @@ onMounted(() => {
   if (window.runtime) {
     window.runtime.EventsOn('payoutsUpdate', data => { payouts.value = data })
     window.runtime.EventsOn('logsUpdate', data => { logs.value = data })
-    window.runtime.EventsOn('debugEvent', data => { debugEvents.value.unshift({ ts: data.ts || new Date().toLocaleString(), type: data.type || 'debug', data }); topTab.value = 'logs'; subTab.value = 'debug' })
+    window.runtime.EventsOn('debugEvent', data => {
+      debugEvents.value.unshift({ ts: data.ts || new Date().toLocaleString(), type: data.type || 'debug', data })
+      if (debugEvents.value.length > maxDebugEvents) {
+        debugEvents.value.splice(maxDebugEvents)
+      }
+      topTab.value = 'logs'
+      subTab.value = 'debug'
+    })
     window.runtime.EventsOn('tradeUpdate', data => { tradeInfo.value = data })
     window.runtime.EventsOn('banListUpdate', data => { banList.value = data })
   }
