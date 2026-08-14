@@ -318,7 +318,7 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 			SELECT
 				player_name, started_at, updated_at, completed_at, game, winner, status, issue, notes, choice
 			FROM game_history_entries
-			WHERE owner_key = $1
+			WHERE ($1 = '' OR owner_key = $1)
 		`, owner)
 		if err == nil {
 			defer rows.Close()
@@ -342,7 +342,7 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 		lrows, err := db.Query(context.Background(), `
 			SELECT trade_type, items, created_at
 			FROM trade_ledger
-			WHERE owner_key = $1
+			WHERE ($1 = '' OR owner_key = $1)
 		`, owner)
 		if err == nil {
 			defer lrows.Close()

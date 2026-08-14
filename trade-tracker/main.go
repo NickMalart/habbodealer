@@ -417,7 +417,7 @@ func (a *App) StopTracking() TrackerState {
 
 		if _, err := db.Exec(
 			ctx,
-			`UPDATE trade_sessions SET ended_at = $1 WHERE id = $2 AND owner_key = $3`,
+			`UPDATE trade_sessions SET ended_at = $1 WHERE id = $2 AND ($3 = '' OR owner_key = $3)`,
 			now,
 			dbSessionID,
 			a.ownerKey,
@@ -1347,7 +1347,7 @@ func (a *App) loadSessionsFromDB() error {
 			e.furni_items
 		FROM trade_sessions s
 		LEFT JOIN trade_entries e ON e.session_id = s.id
-		WHERE s.owner_key = $1
+		WHERE ($1 = '' OR s.owner_key = $1)
 		ORDER BY s.id ASC, e.occurred_at ASC, e.id ASC
 	`, a.ownerKey)
 	if err != nil {

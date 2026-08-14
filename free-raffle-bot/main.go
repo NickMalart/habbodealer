@@ -2416,7 +2416,7 @@ func (a *App) StopRaffle() RaffleState {
 		_, err := db.Exec(ctx,
 			`UPDATE raffle_sessions
 			 SET ended_at = $1, last_seen_created_at = $2, last_seen_entry_id = $3
-			 WHERE id = $4 AND owner_key = $5`,
+			 WHERE id = $4 AND ($5 = '' OR owner_key = $5)`,
 			now,
 			stopped.CursorAt,
 			stopped.CursorEntry,
@@ -2503,7 +2503,7 @@ func (a *App) ResumeSession(dbID int64) (RaffleState, error) {
 			`UPDATE raffle_sessions SET ended_at = NULL, scheduled_end_at = CASE 
 				WHEN scheduled_end_at < NOW() THEN NULL 
 				ELSE scheduled_end_at 
-			 END WHERE id = $1 AND owner_key = $2`,
+			 END WHERE id = $1 AND ($2 = '' OR owner_key = $2)`,
 			dbID, owner,
 		); err != nil {
 			a.logDebug("resume session db update failed: %v", err)
@@ -2603,7 +2603,7 @@ func (a *App) GetSessionTally(dbID int64) (SessionTally, error) {
 			COUNT(DISTINCT e.id) AS games
 		FROM game_history_entries e
 		JOIN game_history_items i ON i.entry_id = e.id AND i.owner_key = e.owner_key
-		WHERE e.owner_key = $1
+		WHERE ($1 = '' OR e.owner_key = $1)
 		  AND (
 			e.raffle_session_id = $2
 			OR (e.raffle_session_id = 0 AND trim(COALESCE(e.started_at, '')) <> '' AND to_timestamp(trim(e.started_at), 'YYYY-MM-DD"T"HH24:MI:SS') AT TIME ZONE 'UTC' >= $3 %s)
@@ -2643,7 +2643,7 @@ func (a *App) GetSessionTally(dbID int64) (SessionTally, error) {
 	var totalGamesRow int
 	_ = db.QueryRow(ctx, fmt.Sprintf(`
 		SELECT COUNT(*) FROM game_history_entries
-		WHERE owner_key = $1
+		WHERE ($1 = '' OR owner_key = $1)
 		  AND (
 			raffle_session_id = $2
 			OR (raffle_session_id = 0 AND trim(COALESCE(started_at, '')) <> '' AND to_timestamp(trim(started_at), 'YYYY-MM-DD"T"HH24:MI:SS') AT TIME ZONE 'UTC' >= $3 %s)
@@ -2845,7 +2845,7 @@ func (a *App) processNewBets() {
 			e.player_name,
 			e.started_at
 		FROM game_history_entries e
-		WHERE e.owner_key = $1
+		WHERE ($1 = '' OR e.owner_key = $1)
 		  AND trim(COALESCE(e.started_at, '')) <> ''
 		  AND (e.raffle_session_id = $2 OR e.raffle_session_id = 0)
 		  AND e.raffle_session_id <> -1
@@ -2888,7 +2888,7 @@ func (a *App) processNewBets() {
 			player_name,
 			created_at
 		FROM banker_trades
-		WHERE owner_key = $1
+		WHERE ($1 = '' OR owner_key = $1)
 		  AND (
 			created_at > $2
 			OR (created_at = $2 AND id > $3)
@@ -3121,7 +3121,7 @@ func (a *App) persistSessionCursor(sessionDBID int64, at time.Time, entryID stri
 		`UPDATE raffle_sessions
 		 SET last_seen_created_at = $1, last_seen_entry_id = $2,
 		     last_seen_banker_at = $3, last_seen_banker_id = $4
-		 WHERE id = $5 AND owner_key = $6`,
+		 WHERE id = $5 AND ($6 = '' OR owner_key = $6)`,
 		at,
 		entryID,
 		bankerAt,
@@ -3145,7 +3145,7 @@ func (a *App) persistSessionWebhookMessageID(sessionDBID int64, messageID string
 	_, err := db.Exec(ctx,
 		`UPDATE raffle_sessions
 		 SET webhook_message_id = $1
-		 WHERE id = $2 AND owner_key = $3`,
+		 WHERE id = $2 AND ($3 = '' OR owner_key = $3)`,
 		strings.TrimSpace(messageID),
 		sessionDBID,
 		owner,
@@ -3268,7 +3268,7 @@ func (a *App) saveSessionMeta(sessionDBID int64) error {
 		     winner_proof_id = $14, winner_proof_file = $15,
 		     sponsor_enabled = $16, sponsor_name = $17, sponsor_room_name = $18,
 		     sponsor_image_url = $19, sponsor_attachment_id = $20, sponsor_attachment_file = $21
-		 WHERE id = $22 AND owner_key = $23`,
+		 WHERE id = $22 AND ($23 = '' OR owner_key = $23)`,
 		raffleName, prizeName, prizeQty,
 		heroImageURL, heroAttachmentID, heroAttachmentFile,
 		winnerName, winnerTickets, winnerOdds, winnerDrawnAt,
@@ -3294,7 +3294,7 @@ func (a *App) deleteParticipant(sessionDBID int64, usernameKey string) error {
 	defer cancel()
 	_, err := db.Exec(ctx, `
 		DELETE FROM raffle_participants
-		WHERE session_id = $1 AND owner_key = $2 AND username_key = $3
+		WHERE session_id = $1 AND ($2 = '' OR owner_key = $2) AND username_key = $3
 	`, sessionDBID, owner, strings.TrimSpace(usernameKey))
 	return err
 }
@@ -3368,7 +3368,7 @@ func (a *App) DeleteSession(dbID int64) (RaffleState, error) {
 	if db != nil && dbID > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
-		_, err := db.Exec(ctx, `DELETE FROM raffle_sessions WHERE id = $1 AND owner_key = $2`, dbID, owner)
+		_, err := db.Exec(ctx, `DELETE FROM raffle_sessions WHERE id = $1 AND ($2 = '' OR owner_key = $2)`, dbID, owner)
 		if err != nil {
 			return a.GetState(), err
 		}
@@ -3450,7 +3450,7 @@ func (a *App) PostWinnerProofForSession(dbID int64, imageDataURL string, imageFi
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		_, _ = db.Exec(ctx,
-			`UPDATE raffle_sessions SET winner_proof_url = $1, winner_proof_id = $2, winner_proof_file = $3 WHERE id = $4 AND owner_key = $5`,
+			`UPDATE raffle_sessions SET winner_proof_url = $1, winner_proof_id = $2, winner_proof_file = $3 WHERE id = $4 AND ($5 = '' OR owner_key = $5)`,
 			proofURL, proofID, proofFile, dbID, owner,
 		)
 	}
@@ -3773,7 +3773,7 @@ func (a *App) loadSessionsFromDB() error {
 		       winner_proof_url, winner_proof_id, winner_proof_file, sponsor_enabled, sponsor_name, sponsor_room_name,
 		       sponsor_image_url, sponsor_attachment_id, sponsor_attachment_file
 		FROM raffle_sessions
-		WHERE owner_key = $1
+		WHERE ($1 = '' OR owner_key = $1)
 		ORDER BY id ASC
 	`, owner)
 	if err != nil {
@@ -3888,7 +3888,7 @@ func (a *App) loadSessionsFromDB() error {
 	pRows, err := db.Query(ctx, `
 		SELECT session_id, username, username_key, bet_count, ticket_count, manual_ticket_delta, first_bet_at, last_bet_at
 		FROM raffle_participants
-		WHERE owner_key = $1
+		WHERE ($1 = '' OR owner_key = $1)
 		ORDER BY session_id ASC, ticket_count DESC, username ASC
 	`, owner)
 	if err != nil {

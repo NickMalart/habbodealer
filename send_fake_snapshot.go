@@ -92,7 +92,7 @@ func main() {
 			SELECT bi.item_name, bi.quantity
 			FROM banker_inventory bi
 			JOIN public.stocked_items si
-			  ON LOWER(si.raw_name) = LOWER(bi.item_name) AND si.owner_key = $2
+							ON LOWER(si.raw_name) = LOWER(bi.item_name) AND ($2 = '' OR si.owner_key = $2)
 			WHERE bi.banker_name = $1 AND si.is_active = TRUE
 		`, banker, owner)
 	} else {

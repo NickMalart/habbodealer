@@ -2424,7 +2424,7 @@ func (a *App) loadStockedItems() {
 	rows, err := db.Query(ctx, `
 		SELECT id, raw_name, canonical_name, display_name, is_active
 		FROM public.stocked_items
-		WHERE owner_key = $1
+		WHERE ($1 = '' OR owner_key = $1)
 	`, owner)
 	if err != nil {
 		a.AddLogMsg(fmt.Sprintf("[STOCKED_ITEMS] query failed: %v", err))
@@ -2970,7 +2970,7 @@ func (a *App) GetActiveRaffles() []RaffleSession {
 	rows, err := db.Query(ctx, `
 		SELECT id, raffle_name, prize_name, started_at
 		FROM raffle_sessions
-		WHERE owner_key = $1 AND ended_at IS NULL
+		WHERE ($1 = '' OR owner_key = $1) AND ended_at IS NULL
 		ORDER BY id DESC
 	`, owner)
 	if err != nil {
@@ -3156,7 +3156,7 @@ func (a *App) loadGameHistoryFromDB(limit int) ([]GameHistoryEntry, error) {
 			payout_multiplier,
 			raffle_session_id
 		FROM game_history_entries
-		WHERE owner_key = $1
+		WHERE ($1 = '' OR owner_key = $1)
 		ORDER BY started_at DESC, id DESC
 	`
 	if limit > 0 {
@@ -3215,7 +3215,7 @@ func (a *App) loadGameHistoryFromDB(limit int) ([]GameHistoryEntry, error) {
 		SELECT entry_id, item_type, item_name, quantity, raw_data
 		FROM game_history_items
 		WHERE entry_id IN (
-			SELECT id FROM game_history_entries WHERE owner_key = $1
+			SELECT id FROM game_history_entries WHERE ($1 = '' OR owner_key = $1)
 			ORDER BY started_at DESC, id DESC
 			`+(func() string {
 		if limit > 0 {
@@ -3347,7 +3347,7 @@ func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
 					return err
 				}
 
-				if _, err := tx.Exec(ctx, `DELETE FROM game_history_items WHERE entry_id = $1 AND owner_key = $2`, e.ID, owner); err != nil {
+				if _, err := tx.Exec(ctx, `DELETE FROM game_history_items WHERE entry_id = $1 AND ($2 = '' OR owner_key = $2)`, e.ID, owner); err != nil {
 					return err
 				}
 
@@ -3489,7 +3489,7 @@ func (a *App) persistSingleGameEntryToDB(entry GameHistoryEntry) error {
 			}
 
 			// Update items for this entry (delete old, insert new)
-			if _, err := tx.Exec(ctx, `DELETE FROM game_history_items WHERE entry_id = $1 AND owner_key = $2`, entry.ID, owner); err != nil {
+			if _, err := tx.Exec(ctx, `DELETE FROM game_history_items WHERE entry_id = $1 AND ($2 = '' OR owner_key = $2)`, entry.ID, owner); err != nil {
 				return err
 			}
 
@@ -10749,23 +10749,13 @@ func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 
 				var rows pgx.Rows
 				var err error
-				if owner != "" {
-					rows, err = db.Query(ctx, `
-						SELECT bi.item_name, bi.quantity
-						FROM banker_inventory bi
-						JOIN public.stocked_items si
-						  ON LOWER(si.raw_name) = LOWER(bi.item_name)
-						WHERE si.owner_key = $1 AND si.is_active = TRUE
-					`, owner)
-				} else {
-					rows, err = db.Query(ctx, `
-						SELECT bi.item_name, bi.quantity
-						FROM banker_inventory bi
-						JOIN public.stocked_items si
-						  ON LOWER(si.raw_name) = LOWER(bi.item_name)
-						WHERE si.is_active = TRUE
-					`)
-				}
+								rows, err = db.Query(ctx, `
+										SELECT bi.item_name, bi.quantity
+										FROM banker_inventory bi
+										JOIN public.stocked_items si
+											ON LOWER(si.raw_name) = LOWER(bi.item_name)
+										WHERE ($1 = '' OR si.owner_key = $1) AND si.is_active = TRUE
+								`, owner)
 
 				if err != nil {
 					a.AddLogMsg(fmt.Sprintf("[TRADE_HAND_SNAPSHOT] DB query failed: %v", err))

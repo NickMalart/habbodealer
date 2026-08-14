@@ -287,7 +287,7 @@ func (a *App) GetBlockedPlayers() []string {
 		return []string{}
 	}
 	// Filter by owner key to match the actual schema
-	rows, err := a.db.Query(context.Background(), "SELECT player_name FROM blocked_players WHERE owner_key = $1 ORDER BY player_name", a.ownerKey)
+	rows, err := a.db.Query(context.Background(), "SELECT player_name FROM blocked_players WHERE ($1 = '' OR owner_key = $1) ORDER BY player_name", a.ownerKey)
 	if err != nil {
 		log.Printf("[BLOCK] Failed to query blocked players: %v", err)
 		return []string{}
@@ -321,7 +321,7 @@ func (a *App) ToggleBlockPlayer(name string) {
 
 	var exists bool
 	// Check existence for THIS owner
-	err := a.db.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM blocked_players WHERE owner_key = $1 AND LOWER(player_name) = $2)", a.ownerKey, name).Scan(&exists)
+	err := a.db.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM blocked_players WHERE ($1 = '' OR owner_key = $1) AND LOWER(player_name) = $2)", a.ownerKey, name).Scan(&exists)
 	if err != nil {
 		log.Printf("[BLOCK] Error checking existence for %s: %v", name, err)
 		return
@@ -331,7 +331,7 @@ func (a *App) ToggleBlockPlayer(name string) {
 
 	if exists {
 		log.Printf("[BLOCK] Unblocking player: %s", name)
-		tag, err := a.db.Exec(context.Background(), "DELETE FROM blocked_players WHERE owner_key = $1 AND LOWER(player_name) = $2", a.ownerKey, name)
+			tag, err := a.db.Exec(context.Background(), "DELETE FROM blocked_players WHERE ($1 = '' OR owner_key = $1) AND LOWER(player_name) = $2", a.ownerKey, name)
 		if err != nil {
 			log.Printf("[BLOCK] Failed to unblock player %s: %v", name, err)
 		} else {

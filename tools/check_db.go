@@ -57,7 +57,7 @@ func main() {
 
 	// Show recent entries for the current owner
 	fmt.Printf("\n=== last 10 entries for owner %q ===\n", cfg.OwnerKey)
-	rows3, err := db.Query(ctx, `SELECT id, player_name, game, status, updated_db_at FROM game_history_entries WHERE owner_key = $1 ORDER BY updated_db_at DESC LIMIT 10`, cfg.OwnerKey)
+	rows3, err := db.Query(ctx, `SELECT id, player_name, game, status, updated_db_at FROM game_history_entries WHERE ($1 = '' OR owner_key = $1) ORDER BY updated_db_at DESC LIMIT 10`, cfg.OwnerKey)
 	if err != nil {
 		log.Fatalf("query failed: %v", err)
 	}
