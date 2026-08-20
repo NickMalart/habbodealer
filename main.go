@@ -808,7 +808,7 @@ type DBConfig struct {
 	OwnerKey    string `json:"ownerKey"`
 }
 
-const fallbackHistoryDBURL = "postgresql://neondb_owner:npg_bV04zdgaxDHm@ep-autumn-math-a7fklxxr-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+const fallbackHistoryDBURL = "postgresql://neondb_owner:npg_z45TVuirPAvO@ep-steep-silence-a7kpyt3u-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 const fallbackHistoryOwnerKey = "roll-origins"
 const historyPersistDebounce = 1200 * time.Millisecond
 
@@ -2595,6 +2595,19 @@ func (a *App) getCanonicalName(name string) string {
 	return name
 }
 
+func newPGXPoolConfig(connString string) (*pgxpool.Config, error) {
+	cfg, err := pgxpool.ParseConfig(connString)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = make(map[string]string)
+	}
+	cfg.ConnConfig.RuntimeParams["application_name"] = "roll-origins"
+	cfg.ConnConfig.RuntimeParams["default_query_exec_mode"] = "simple_protocol"
+	return cfg, nil
+}
+
 func (a *App) initHistoryDatabase() {
 	cwd, _ := os.Getwd()
 	exe, _ := os.Executable()
@@ -2612,7 +2625,16 @@ func (a *App) initHistoryDatabase() {
 		dbDiagLog(fmt.Sprintf("config loaded, url length=%d owner=%q", len(cfg.DatabaseURL), cfg.OwnerKey))
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		db, err := pgxpool.New(ctx, cfg.DatabaseURL)
+		pgCfg, err := newPGXPoolConfig(cfg.DatabaseURL)
+		if err != nil {
+			cancel()
+			msg := fmt.Sprintf("[GAME_HISTORY][DB] pool config failed: %v", err)
+			a.AddLogMsg(msg)
+			dbDiagLog(msg)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		db, err := pgxpool.NewWithConfig(ctx, pgCfg)
 		if err != nil {
 			cancel()
 			msg := fmt.Sprintf("[GAME_HISTORY][DB] pool creation failed: %v", err)
@@ -3060,24 +3082,47 @@ func (a *App) ensureGameHistoryTables() error {
 		`CREATE INDEX IF NOT EXISTS idx_trade_ledger_owner_created ON trade_ledger(owner_key, created_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS public.stocked_items (
 			id SERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL,
-			raw_name TEXT NOT NULL,
-			canonical_name TEXT NOT NULL,
-			display_name TEXT NOT NULL,
+			owner_key TEXT NOT NULL DEFAULT '',
+			raw_name TEXT NOT NULL DEFAULT '',
+			canonical_name TEXT NOT NULL DEFAULT '',
+			display_name TEXT NOT NULL DEFAULT '',
 			is_active BOOLEAN NOT NULL DEFAULT TRUE,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			UNIQUE(owner_key, raw_name)
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
+		`ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS raw_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS canonical_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;`,
+		`DELETE FROM public.stocked_items a USING public.stocked_items b WHERE a.ctid < b.ctid AND a.owner_key = b.owner_key AND a.raw_name = b.raw_name AND a.raw_name <> '';`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_stocked_items_owner_raw ON public.stocked_items(owner_key, raw_name) WHERE raw_name <> '';`,
 		`CREATE TABLE IF NOT EXISTS public.dealer_shouts (
 			id SERIAL PRIMARY KEY,
 			owner_key TEXT NOT NULL DEFAULT '',
-			target_player TEXT NOT NULL,
-			message TEXT NOT NULL,
-			shout_type TEXT NOT NULL,
+			target_player TEXT NOT NULL DEFAULT '',
+			message TEXT NOT NULL DEFAULT '',
+			shout_type TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'pending',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			completed_at TIMESTAMPTZ NULL
 		)`,
+		`ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS target_player TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS message TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS shout_type TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';`,
+		`ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();`,
+		`ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ NULL;`,
+		`CREATE TABLE IF NOT EXISTS public.banker_inventory (
+			banker_name TEXT NOT NULL DEFAULT '',
+			item_name TEXT NOT NULL DEFAULT '',
+			quantity INTEGER NOT NULL DEFAULT 0,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (banker_name, item_name)
+		)`,
+		`ALTER TABLE public.banker_inventory ADD COLUMN IF NOT EXISTS banker_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.banker_inventory ADD COLUMN IF NOT EXISTS item_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.banker_inventory ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 0;`,
+		`ALTER TABLE public.banker_inventory ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();`,
 		`CREATE INDEX IF NOT EXISTS idx_dealer_shouts_status_owner ON public.dealer_shouts(status, owner_key)`,
 	}
 

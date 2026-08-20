@@ -210,7 +210,7 @@ func NewApp() *App {
 		roomUsers:            make(map[string]ParsedUsers28User),
 		inventory:            make(map[string][]int),
 		pythonExec:           "python",
-		dbConnString:         "postgresql://neondb_owner:npg_bV04zdgaxDHm@ep-autumn-math-a7fklxxr-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
+		dbConnString:         "postgresql://neondb_owner:npg_z45TVuirPAvO@ep-steep-silence-a7kpyt3u-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
 		discordWebhook:       "https://discord.com/api/webhooks/1519096496400760924/dsDuT5QTEahQ3l4BQ3L41h5lMu73iXpKAI2L6uCnNVfQJ4R6XJ-moQcqHwDFs53UaHR1",
 		stripScanSeenItemIDs: make(map[int]struct{}),
 		stripScanItemIDs:     make(map[string][]int),
@@ -959,6 +959,80 @@ func (a *App) inventoryRefreshLoop() {
 	}
 }
 
+func autoPayoutSchemaStatements() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS public.auto_payouts (
+			id TEXT PRIMARY KEY,
+			player_name TEXT NOT NULL,
+			item_name TEXT NOT NULL,
+			quantity INTEGER NOT NULL,
+			status TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			player_trade_id INTEGER NULL,
+			banker_trade_id INTEGER NULL,
+			notified BOOLEAN DEFAULT FALSE
+		);`,
+		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS player_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS item_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 0;`,
+		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';`,
+		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS created_at TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;`,
+		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS banker_trade_id INTEGER NULL;`,
+		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS notified BOOLEAN DEFAULT FALSE;`,
+	}
+}
+
+func bannedPlayersSchemaStatements() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS public.banned_players (
+			ban_key TEXT PRIMARY KEY,
+			expires_at TIMESTAMP NOT NULL,
+			message TEXT NOT NULL,
+			is_active BOOLEAN DEFAULT TRUE,
+			created_at TIMESTAMP DEFAULT NOW()
+		);`,
+		`ALTER TABLE public.banned_players ADD COLUMN IF NOT EXISTS ban_key TEXT;`,
+		`ALTER TABLE public.banned_players ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP;`,
+		`ALTER TABLE public.banned_players ADD COLUMN IF NOT EXISTS message TEXT;`,
+		`ALTER TABLE public.banned_players ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;`,
+		`ALTER TABLE public.banned_players ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();`,
+		`ALTER TABLE public.banned_players ADD COLUMN IF NOT EXISTS username TEXT;`,
+		`UPDATE public.banned_players SET ban_key = username WHERE ban_key IS NULL AND username IS NOT NULL AND TRIM(username) <> '';`,
+		`DELETE FROM public.banned_players a USING public.banned_players b WHERE a.ctid < b.ctid AND a.ban_key = b.ban_key AND a.ban_key IS NOT NULL;`,
+		`DROP INDEX IF EXISTS idx_banned_players_ban_key;`,
+		`CREATE UNIQUE INDEX idx_banned_players_ban_key ON public.banned_players (ban_key) WHERE ban_key IS NOT NULL;`,
+		`UPDATE public.banned_players SET is_active = TRUE WHERE is_active IS NULL;`,
+	}
+}
+
+func autoPayoutSettingsSchemaStatements() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS public.auto_payout_settings (
+			setting_key TEXT PRIMARY KEY,
+			setting_value TEXT NOT NULL
+		);`,
+		`ALTER TABLE public.auto_payout_settings ADD COLUMN IF NOT EXISTS setting_key TEXT;`,
+		`ALTER TABLE public.auto_payout_settings ADD COLUMN IF NOT EXISTS setting_value TEXT;`,
+		`DELETE FROM public.auto_payout_settings a USING public.auto_payout_settings b WHERE a.ctid < b.ctid AND a.setting_key = b.setting_key AND a.setting_key IS NOT NULL;`,
+		`DROP INDEX IF EXISTS idx_auto_payout_settings_key;`,
+		`CREATE UNIQUE INDEX idx_auto_payout_settings_key ON public.auto_payout_settings (setting_key) WHERE setting_key IS NOT NULL;`,
+	}
+}
+
+func (a *App) ensureAutoPayoutSettingsUniqueIndex() error {
+	if a.db == nil {
+		return nil
+	}
+	ctx := context.Background()
+	_, _ = a.db.Exec(ctx, "ALTER TABLE public.auto_payout_settings ADD COLUMN IF NOT EXISTS setting_key TEXT;")
+	_, _ = a.db.Exec(ctx, "ALTER TABLE public.auto_payout_settings ADD COLUMN IF NOT EXISTS setting_value TEXT;")
+	_, _ = a.db.Exec(ctx, `DELETE FROM public.auto_payout_settings a USING public.auto_payout_settings b WHERE a.ctid < b.ctid AND a.setting_key = b.setting_key AND a.setting_key IS NOT NULL;`)
+	_, _ = a.db.Exec(ctx, `DROP INDEX IF EXISTS idx_auto_payout_settings_key;`)
+	_, err := a.db.Exec(ctx, `CREATE UNIQUE INDEX idx_auto_payout_settings_key ON public.auto_payout_settings (setting_key) WHERE setting_key IS NOT NULL;`)
+	return err
+}
+
 func bankerTradeSchemaStatements() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS public.banker_trades (
@@ -989,10 +1063,67 @@ func bankerTradeSchemaStatements() []string {
 	}
 }
 
+func bankerInventorySchemaStatements() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS public.banker_inventory (
+			banker_name TEXT NOT NULL DEFAULT '',
+			item_name TEXT NOT NULL DEFAULT '',
+			quantity INTEGER NOT NULL DEFAULT 0,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (banker_name, item_name)
+		);`,
+		`ALTER TABLE public.banker_inventory ADD COLUMN IF NOT EXISTS banker_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.banker_inventory ADD COLUMN IF NOT EXISTS item_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.banker_inventory ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 0;`,
+		`ALTER TABLE public.banker_inventory ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();`,
+	}
+}
+
+func dealerShoutSchemaStatements() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS public.dealer_shouts (
+			id SERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL DEFAULT '',
+			target_player TEXT NOT NULL DEFAULT '',
+			message TEXT NOT NULL DEFAULT '',
+			shout_type TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			completed_at TIMESTAMPTZ NULL
+		);`,
+		`ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS target_player TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS message TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS shout_type TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';`,
+		`ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();`,
+		`ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_dealer_shouts_status_owner ON public.dealer_shouts(status, owner_key);`,
+	}
+}
+
+func newPGXPoolConfig(connString string) (*pgxpool.Config, error) {
+	cfg, err := pgxpool.ParseConfig(connString)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = make(map[string]string)
+	}
+	cfg.ConnConfig.RuntimeParams["application_name"] = "auto-payout"
+	cfg.ConnConfig.RuntimeParams["default_query_exec_mode"] = "simple_protocol"
+	return cfg, nil
+}
+
 func (a *App) initDatabase() {
 	a.AddLog("Connecting to database...")
 
-	pool, err := pgxpool.New(context.Background(), a.dbConnString)
+	cfg, err := newPGXPoolConfig(a.dbConnString)
+	if err != nil {
+		a.AddLog("ERROR: Database connection config failed: " + err.Error())
+		return
+	}
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
 	if err != nil {
 		a.AddLog("ERROR: Database connection failed: " + err.Error())
 		return
@@ -1003,47 +1134,26 @@ func (a *App) initDatabase() {
 	// Set search path and create tables with public qualification
 	_, _ = a.db.Exec(context.Background(), "SET search_path TO public;")
 
-	// Create table if not exists
-	query := `CREATE TABLE IF NOT EXISTS public.auto_payouts (
-		id TEXT PRIMARY KEY,
-		player_name TEXT NOT NULL,
-		item_name TEXT NOT NULL,
-		quantity INTEGER NOT NULL,
-		status TEXT NOT NULL,
-		created_at TEXT NOT NULL,
-		player_trade_id INTEGER NULL,
-		banker_trade_id INTEGER NULL
-	);`
-	_, err = a.db.Exec(context.Background(), query)
-	if err != nil {
-		a.AddLog("ERROR: Table creation failed: " + err.Error())
+	for _, stmt := range autoPayoutSchemaStatements() {
+		if _, err := a.db.Exec(context.Background(), stmt); err != nil {
+			a.AddLog("ERROR: auto_payouts schema migration failed: " + err.Error())
+		}
 	}
 
-	// Ensure older installations also have the banker_trade_id column available.
-	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;")
-	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS banker_trade_id INTEGER NULL;")
-
-	// Create dealer_shouts table for cross-bot communication
-	query = `CREATE TABLE IF NOT EXISTS public.dealer_shouts (
-		id SERIAL PRIMARY KEY,
-		owner_key TEXT NOT NULL DEFAULT '',
-		target_player TEXT NOT NULL,
-		message TEXT NOT NULL,
-		shout_type TEXT NOT NULL,
-		status TEXT NOT NULL DEFAULT 'pending',
-		created_at TIMESTAMP DEFAULT NOW(),
-		completed_at TIMESTAMP NULL
-	);`
-	_, err = a.db.Exec(context.Background(), query)
-	if err != nil {
-		a.AddLog("ERROR: dealer_shouts table creation failed: " + err.Error())
+	for _, stmt := range dealerShoutSchemaStatements() {
+		if _, err := a.db.Exec(context.Background(), stmt); err != nil {
+			a.AddLog("ERROR: dealer_shouts schema migration failed: " + err.Error())
+		}
 	}
-
-	// Add owner_key column if it doesn't exist (migration for existing tables)
-	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';")
 
 	// Ensure notified column exists for failure webhooks
 	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS notified BOOLEAN DEFAULT FALSE;")
+
+	for _, stmt := range bankerInventorySchemaStatements() {
+		if _, err := a.db.Exec(context.Background(), stmt); err != nil {
+			a.AddLog("ERROR: banker_inventory schema migration failed: " + err.Error())
+		}
+	}
 
 	for _, stmt := range bankerTradeSchemaStatements() {
 		if _, err := a.db.Exec(context.Background(), stmt); err != nil {
@@ -1051,41 +1161,42 @@ func (a *App) initDatabase() {
 		}
 	}
 
-	// Create public.banned_players table
-	query = `CREATE TABLE IF NOT EXISTS public.banned_players (
-		ban_key TEXT PRIMARY KEY,
-		expires_at TIMESTAMP NOT NULL,
-		message TEXT NOT NULL,
-		is_active BOOLEAN DEFAULT TRUE,
-		created_at TIMESTAMP DEFAULT NOW()
-	);`
-	if _, err := a.db.Exec(context.Background(), query); err != nil {
-		a.AddLog("ERROR: public.banned_players table creation failed: " + err.Error())
+	for _, stmt := range bannedPlayersSchemaStatements() {
+		if _, err := a.db.Exec(context.Background(), stmt); err != nil {
+			a.AddLog("ERROR: banned_players schema migration failed: " + err.Error())
+		}
 	}
-	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.banned_players ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
-	_, _ = a.db.Exec(context.Background(), "UPDATE public.banned_players SET is_active = TRUE WHERE is_active IS NULL;")
 
-	// Create public.stocked_items table
-	query = `CREATE TABLE IF NOT EXISTS public.stocked_items (
+	// Create the canonical public.stocked_items table layout used by the app.
+	query := `CREATE TABLE IF NOT EXISTS public.stocked_items (
 		id SERIAL PRIMARY KEY,
-		raw_name TEXT NOT NULL,
-		canonical_name TEXT NOT NULL,
-		display_name TEXT NOT NULL,
-		is_active BOOLEAN NOT NULL DEFAULT TRUE
+		owner_key TEXT NOT NULL DEFAULT '',
+		raw_name TEXT NOT NULL DEFAULT '',
+		canonical_name TEXT NOT NULL DEFAULT '',
+		display_name TEXT NOT NULL DEFAULT '',
+		is_active BOOLEAN NOT NULL DEFAULT TRUE,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);`
 	_, err = a.db.Exec(context.Background(), query)
 	if err != nil {
 		a.AddLog("ERROR: public.stocked_items table creation failed: " + err.Error())
 	}
+	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';")
+	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS raw_name TEXT NOT NULL DEFAULT '';")
+	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS canonical_name TEXT NOT NULL DEFAULT '';")
+	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '';")
+	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;")
+	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();")
+	_, _ = a.db.Exec(context.Background(), `DELETE FROM public.stocked_items a USING public.stocked_items b WHERE a.ctid < b.ctid AND a.owner_key = b.owner_key AND a.raw_name = b.raw_name AND a.raw_name <> '';`)
+	_, _ = a.db.Exec(context.Background(), `CREATE UNIQUE INDEX IF NOT EXISTS idx_stocked_items_owner_raw ON public.stocked_items(owner_key, raw_name) WHERE raw_name <> '';`)
 
-	// Create settings table for auto-payout configuration (key/value)
-	query = `CREATE TABLE IF NOT EXISTS public.auto_payout_settings (
-		setting_key TEXT PRIMARY KEY,
-		setting_value TEXT NOT NULL
-	);`
-	_, err = a.db.Exec(context.Background(), query)
-	if err != nil {
-		a.AddLog("ERROR: auto_payout_settings table creation failed: " + err.Error())
+	for _, stmt := range autoPayoutSettingsSchemaStatements() {
+		if _, err := a.db.Exec(context.Background(), stmt); err != nil {
+			a.AddLog("ERROR: auto_payout_settings schema migration failed: " + err.Error())
+		}
+	}
+	if err := a.ensureAutoPayoutSettingsUniqueIndex(); err != nil {
+		a.AddLog("ERROR: auto_payout_settings index repair failed: " + err.Error())
 	}
 
 	a.AddLog("Database connected and ready.")
@@ -1610,7 +1721,8 @@ func (a *App) GetStockedItems() []StockedItem {
 	if a.db == nil {
 		return []StockedItem{}
 	}
-	rows, err := a.db.Query(context.Background(), "SELECT id, raw_name, canonical_name, display_name, is_active FROM public.stocked_items ORDER BY display_name ASC")
+	owner := a.getOwnerKey()
+	rows, err := a.db.Query(context.Background(), "SELECT id, raw_name, canonical_name, display_name, is_active FROM public.stocked_items WHERE ($1 = '' OR owner_key = $1) ORDER BY display_name ASC", owner)
 	if err != nil {
 		a.AddLog("ERROR: Failed to query public.stocked_items: " + err.Error())
 		return []StockedItem{}
@@ -1635,9 +1747,15 @@ func (a *App) AddStockedItem(rawName, displayName string) {
 	if !ok {
 		canonical = strings.ToLower(strings.TrimSpace(rawName))
 	}
-	_, err := a.db.Exec(context.Background(),
-		"INSERT INTO public.stocked_items (raw_name, canonical_name, display_name, is_active) VALUES ($1, $2, $3, $4)",
-		rawName, canonical, displayName, true)
+	owner := a.getOwnerKey()
+	_, err := a.db.Exec(context.Background(), `
+		INSERT INTO public.stocked_items (owner_key, raw_name, canonical_name, display_name, is_active)
+		VALUES ($1, $2, $3, $4, TRUE)
+		ON CONFLICT (owner_key, raw_name) DO UPDATE SET
+			canonical_name = EXCLUDED.canonical_name,
+			display_name = EXCLUDED.display_name,
+			is_active = TRUE
+	`, owner, rawName, canonical, displayName)
 	if err != nil {
 		a.AddLog("ERROR: Failed to add stocked item: " + err.Error())
 	} else {
@@ -1758,6 +1876,10 @@ func (a *App) GetSettings() PayoutSettings {
 func (a *App) SaveSettings(maxUnique int, maxQty int, minQty int) error {
 	if a.db == nil {
 		return nil
+	}
+	if err := a.ensureAutoPayoutSettingsUniqueIndex(); err != nil {
+		a.AddLog("ERROR: Settings table repair failed before save: " + err.Error())
+		return err
 	}
 	ctx := context.Background()
 	if _, err := a.db.Exec(ctx, `INSERT INTO public.auto_payout_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value`, "max_unique_items", fmt.Sprintf("%d", maxUnique)); err != nil {

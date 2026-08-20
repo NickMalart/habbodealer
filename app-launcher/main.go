@@ -249,7 +249,10 @@ func (a *App) CreateMissingTables() string {
 		a.emitLog(msg, "error")
 		return msg
 	}
-
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = make(map[string]string)
+	}
+	cfg.ConnConfig.RuntimeParams["default_query_exec_mode"] = "simple_protocol"
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		msg := fmt.Sprintf("CreateMissingTables failed: connect: %v", err)
@@ -262,6 +265,33 @@ func (a *App) CreateMissingTables() string {
 		msg := fmt.Sprintf("CreateMissingTables failed: ping: %v", err)
 		a.emitLog(msg, "error")
 		return msg
+	}
+
+	resetQueries := []string{
+		`DROP TABLE IF EXISTS public.ui_settings CASCADE;`,
+		`DROP TABLE IF EXISTS public.blocked_players CASCADE;`,
+		`DROP TABLE IF EXISTS public.trade_entry_items CASCADE;`,
+		`DROP TABLE IF EXISTS public.trade_entries CASCADE;`,
+		`DROP TABLE IF EXISTS public.trade_sessions CASCADE;`,
+		`DROP TABLE IF EXISTS public.raffle_participants CASCADE;`,
+		`DROP TABLE IF EXISTS public.raffle_sessions CASCADE;`,
+		`DROP TABLE IF EXISTS public.auto_payout_settings CASCADE;`,
+		`DROP TABLE IF EXISTS public.banned_players CASCADE;`,
+		`DROP TABLE IF EXISTS public.banker_trades CASCADE;`,
+		`DROP TABLE IF EXISTS public.auto_payouts CASCADE;`,
+		`DROP TABLE IF EXISTS public.banker_inventory CASCADE;`,
+		`DROP TABLE IF EXISTS public.dealer_shouts CASCADE;`,
+		`DROP TABLE IF EXISTS public.stocked_items CASCADE;`,
+		`DROP TABLE IF EXISTS public.trade_ledger CASCADE;`,
+		`DROP TABLE IF EXISTS public.game_history_items CASCADE;`,
+		`DROP TABLE IF EXISTS public.game_history_entries CASCADE;`,
+	}
+	for _, query := range resetQueries {
+		if _, err := pool.Exec(ctx, query); err != nil {
+			msg := fmt.Sprintf("CreateMissingTables reset failed: %v\nquery: %s", err, query)
+			a.emitLog(msg, "error")
+			return msg
+		}
 	}
 
 	queries := []string{
@@ -295,27 +325,42 @@ func (a *App) CreateMissingTables() string {
 		`CREATE TABLE IF NOT EXISTS public.stocked_items (
 			id BIGSERIAL PRIMARY KEY,
 			owner_key TEXT NOT NULL DEFAULT '',
-			item_name TEXT NOT NULL DEFAULT '',
-			quantity INTEGER NOT NULL DEFAULT 0,
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			raw_name TEXT NOT NULL DEFAULT '',
+			canonical_name TEXT NOT NULL DEFAULT '',
+			display_name TEXT NOT NULL DEFAULT '',
+			is_active BOOLEAN NOT NULL DEFAULT TRUE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_stocked_items_owner_raw ON public.stocked_items(owner_key, raw_name) WHERE raw_name <> '';`,
 		`CREATE TABLE IF NOT EXISTS public.dealer_shouts (
 			id BIGSERIAL PRIMARY KEY,
 			owner_key TEXT NOT NULL DEFAULT '',
-			status TEXT NOT NULL DEFAULT 'pending',
+			target_player TEXT NOT NULL DEFAULT '',
 			message TEXT NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);`,
-		`ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
-		`CREATE TABLE IF NOT EXISTS public.auto_payouts (
-			id BIGSERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL DEFAULT '',
+			shout_type TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'pending',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			completed_at TIMESTAMPTZ NULL
 		);`,
-		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;`,
-		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS banker_trade_id INTEGER NULL;`,
-		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS notified BOOLEAN DEFAULT FALSE;`,
+		`CREATE INDEX IF NOT EXISTS idx_dealer_shouts_status_owner ON public.dealer_shouts(status, owner_key);`,
+		`CREATE TABLE IF NOT EXISTS public.banker_inventory (
+			banker_name TEXT NOT NULL DEFAULT '',
+			item_name TEXT NOT NULL DEFAULT '',
+			quantity INTEGER NOT NULL DEFAULT 0,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (banker_name, item_name)
+		);`,
+		`CREATE TABLE IF NOT EXISTS public.auto_payouts (
+			id TEXT PRIMARY KEY,
+			player_name TEXT NOT NULL,
+			item_name TEXT NOT NULL,
+			quantity INTEGER NOT NULL,
+			status TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			player_trade_id INTEGER NULL,
+			banker_trade_id INTEGER NULL,
+			notified BOOLEAN DEFAULT FALSE
+		);`,
 		`CREATE TABLE IF NOT EXISTS public.banker_trades (
 			id BIGSERIAL PRIMARY KEY,
 			owner_key TEXT NOT NULL DEFAULT '',
@@ -325,24 +370,19 @@ func (a *App) CreateMissingTables() string {
 			risk_bank INTEGER DEFAULT 0,
 			risk_status TEXT DEFAULT 'idle'
 		);`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS bet_amount INTEGER DEFAULT 0;`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_bank INTEGER DEFAULT 0;`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_status TEXT DEFAULT 'idle';`,
 		`CREATE TABLE IF NOT EXISTS public.banned_players (
-			id BIGSERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL DEFAULT '',
-			username TEXT NOT NULL DEFAULT '',
+			ban_key TEXT PRIMARY KEY,
+			expires_at TIMESTAMP NOT NULL,
+			message TEXT NOT NULL,
 			is_active BOOLEAN DEFAULT TRUE,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			created_at TIMESTAMP DEFAULT NOW()
 		);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_banned_players_ban_key ON public.banned_players (ban_key);`,
 		`CREATE TABLE IF NOT EXISTS public.auto_payout_settings (
-			id BIGSERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL DEFAULT '',
-			setting_key TEXT NOT NULL DEFAULT '',
-			setting_value TEXT NOT NULL DEFAULT '',
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			setting_key TEXT PRIMARY KEY,
+			setting_value TEXT NOT NULL
 		);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_auto_payout_settings_key ON public.auto_payout_settings (setting_key);`,
 		`CREATE TABLE IF NOT EXISTS public.raffle_sessions (
 			id BIGSERIAL PRIMARY KEY,
 			owner_key TEXT NOT NULL DEFAULT '',
@@ -402,7 +442,7 @@ func (a *App) CreateMissingTables() string {
 		}
 	}
 
-	return "Database tables checked/created successfully"
+	return "Database reset and recreated successfully"
 }
 
 // SetStopChildrenOnExit controls whether App Launcher will stop tracked/known
