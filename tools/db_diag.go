@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	conn := "postgresql://neondb_owner:npg_bV04zdgaxDHm@ep-autumn-math-a7fklxxr-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+	conn := "postgresql://neondb_owner:npg_z45TVuirPAvO@ep-steep-silence-a7kpyt3u-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, conn)
 	if err != nil {

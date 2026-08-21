@@ -808,7 +808,7 @@ type DBConfig struct {
 	OwnerKey    string `json:"ownerKey"`
 }
 
-const fallbackHistoryDBURL = "postgresql://neondb_owner:npg_bV04zdgaxDHm@ep-autumn-math-a7fklxxr-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+const fallbackHistoryDBURL = "postgresql://neondb_owner:npg_z45TVuirPAvO@ep-steep-silence-a7kpyt3u-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 const fallbackHistoryOwnerKey = "roll-origins"
 const historyPersistDebounce = 1200 * time.Millisecond
 
@@ -2997,6 +2997,27 @@ func (a *App) SetActiveRaffleSessionID(id int64) {
 	a.AddLogMsg(fmt.Sprintf("[CONFIG] Active raffle session set to #%d", id))
 }
 
+func stockedItemsSchemaStatements() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS public.stocked_items (
+			id SERIAL PRIMARY KEY,
+			owner_key TEXT NOT NULL DEFAULT '',
+			raw_name TEXT NOT NULL,
+			canonical_name TEXT NOT NULL DEFAULT '',
+			display_name TEXT NOT NULL DEFAULT '',
+			is_active BOOLEAN NOT NULL DEFAULT TRUE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS raw_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS canonical_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;`,
+		`ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS stocked_items_owner_raw_name_idx ON public.stocked_items (owner_key, raw_name);`,
+	}
+}
+
 func (a *App) ensureGameHistoryTables() error {
 	db, _ := a.getHistoryDB()
 	if db == nil {
@@ -3058,16 +3079,6 @@ func (a *App) ensureGameHistoryTables() error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_trade_ledger_owner_created ON trade_ledger(owner_key, created_at DESC)`,
-		`CREATE TABLE IF NOT EXISTS public.stocked_items (
-			id SERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL,
-			raw_name TEXT NOT NULL,
-			canonical_name TEXT NOT NULL,
-			display_name TEXT NOT NULL,
-			is_active BOOLEAN NOT NULL DEFAULT TRUE,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			UNIQUE(owner_key, raw_name)
-		)`,
 		`CREATE TABLE IF NOT EXISTS public.dealer_shouts (
 			id SERIAL PRIMARY KEY,
 			owner_key TEXT NOT NULL DEFAULT '',
@@ -3080,6 +3091,7 @@ func (a *App) ensureGameHistoryTables() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_dealer_shouts_status_owner ON public.dealer_shouts(status, owner_key)`,
 	}
+	queries = append(queries, stockedItemsSchemaStatements()...)
 
 	for _, q := range queries {
 		if _, err := db.Exec(ctx, q); err != nil {
