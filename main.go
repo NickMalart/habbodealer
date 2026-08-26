@@ -510,7 +510,7 @@ type LiveDealerStatusPayload struct {
 type tradeLimitViolation struct {
 	TooManyUniqueItems bool
 	TooMuchQuantity    bool
-	TooLittleQuantity   bool
+	TooLittleQuantity  bool
 	HasUnknownItems    bool
 	UniqueCount        int
 	MaxUnique          int
@@ -758,7 +758,7 @@ type GameHistoryEntry struct {
 	RiskPending int  `json:"riskPending,omitempty"` // amount currently risked for a re-roll
 	RiskBank    int  `json:"riskBank,omitempty"`    // player's internal bank at that moment
 	// Explicit decision marker for risk rounds (e.g. "Keep" or "Risk 3")
-	RiskDecision string `json:"riskDecision,omitempty"`
+	RiskDecision string     `json:"riskDecision,omitempty"`
 	Rolls        []DiceRoll `json:"rolls,omitempty"`
 }
 
@@ -2612,7 +2612,12 @@ func (a *App) initHistoryDatabase() {
 		dbDiagLog(fmt.Sprintf("config loaded, url length=%d owner=%q", len(cfg.DatabaseURL), cfg.OwnerKey))
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		db, err := pgxpool.New(ctx, cfg.DatabaseURL)
+		var db *pgxpool.Pool
+		poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+		if err == nil {
+			poolConfig.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
+			db, err = pgxpool.NewWithConfig(ctx, poolConfig)
+		}
 		if err != nil {
 			cancel()
 			msg := fmt.Sprintf("[GAME_HISTORY][DB] pool creation failed: %v", err)
@@ -2657,7 +2662,7 @@ func (a *App) initHistoryDatabase() {
 			msg := fmt.Sprintf("[GAME_HISTORY][DB] migration failed: %v", err)
 			a.AddLogMsg(msg)
 			dbDiagLog(msg)
-			// Don't retry indefinitely if migration fails? 
+			// Don't retry indefinitely if migration fails?
 			// Actually, let's retry anyway as it might be a transient DB issue.
 			time.Sleep(10 * time.Second)
 			continue
@@ -3051,6 +3056,24 @@ func (a *App) ensureGameHistoryTables() error {
 			updated_db_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			PRIMARY KEY (id, owner_key)
 		)`,
+		`ALTER TABLE game_history_entries ALTER COLUMN id TYPE TEXT USING id::text`,
+		`ALTER TABLE game_history_entries ALTER COLUMN started_at TYPE TEXT USING started_at::text`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS player_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS completed_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS game TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS winner TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS issue BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS issue_reason TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS player_result TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS dealer_result TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS notes JSONB NOT NULL DEFAULT '[]'::jsonb`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS choice TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS choice_shout TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS payout_multiplier INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS updated_db_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
 		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS raffle_session_id BIGINT NOT NULL DEFAULT 0`,
 		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS rolls JSONB NOT NULL DEFAULT '[]'::jsonb`,
 		`CREATE TABLE IF NOT EXISTS game_history_items (
@@ -4830,11 +4853,11 @@ func handleTradePacket(a *App, e *g.Intercept) {
 			// Perform validation in a goroutine with a short delay if the trade is currently empty.
 			// This gives the player time to add their first item before we force-close.
 			go func(initialItems []TradeItem, wasValidPrev bool) {
-		defer func() {
-			if r := recover(); r != nil {
-				logPanic(r, "GOROUTINE")
-			}
-		}()
+				defer func() {
+					if r := recover(); r != nil {
+						logPanic(r, "GOROUTINE")
+					}
+				}()
 				items := initialItems
 				if len(items) == 0 {
 					// If empty, wait a bit for the first item to arrive.
@@ -6078,11 +6101,11 @@ func startPayout(a *App, targetID int, targetName string) {
 				}
 
 				go func(items []TradeItem, id int, player string) {
-		defer func() {
-			if r := recover(); r != nil {
-				logPanic(r, "GOROUTINE")
-			}
-		}()
+					defer func() {
+						if r := recover(); r != nil {
+							logPanic(r, "GOROUTINE")
+						}
+					}()
 					ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 					defer cancel()
 
@@ -6600,11 +6623,11 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 			a.historyDBMu.Unlock()
 			if dbID > 0 && db != nil {
 				go func(id, qty int) {
-		defer func() {
-			if r := recover(); r != nil {
-				logPanic(r, "GOROUTINE")
-			}
-		}()
+					defer func() {
+						if r := recover(); r != nil {
+							logPanic(r, "GOROUTINE")
+						}
+					}()
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
 					// Use GREATEST so an async init write cannot reduce a later, larger bank value.
@@ -6838,11 +6861,11 @@ func (a *App) handleRiskBet(n int, sender string, userID int) {
 		a.historyDBMu.Unlock()
 		if dbID > 0 && db != nil {
 			go func(id, qty int) {
-		defer func() {
-			if r := recover(); r != nil {
-				logPanic(r, "GOROUTINE")
-			}
-		}()
+				defer func() {
+					if r := recover(); r != nil {
+						logPanic(r, "GOROUTINE")
+					}
+				}()
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				_, _ = db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1, risk_status = 'risk_active' WHERE id = $2", qty, id)
@@ -7128,11 +7151,11 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 			a.historyDBMu.Unlock()
 			if dbID > 0 && db != nil {
 				go func(id, qty int) {
-		defer func() {
-			if r := recover(); r != nil {
-				logPanic(r, "GOROUTINE")
-			}
-		}()
+					defer func() {
+						if r := recover(); r != nil {
+							logPanic(r, "GOROUTINE")
+						}
+					}()
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
 					_, _ = db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1 WHERE id = $2", qty, id)
@@ -7221,11 +7244,11 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		a.AddLogMsg(fmt.Sprintf("[RISK] %s lost risk round; bank remains playerRisk=%d dealerRisk=%d", partner, playerRisk, dealerRisk))
 
 		go func(max int, p string) {
-		defer func() {
-			if r := recover(); r != nil {
-				logPanic(r, "GOROUTINE")
-			}
-		}()
+			defer func() {
+				if r := recover(); r != nil {
+					logPanic(r, "GOROUTINE")
+				}
+			}()
 			waitForUnmute(90 * time.Second)
 			mutex.Lock()
 			canPrompt := riskSessionActive && playerRisk > 0 && dealerRisk > 0
@@ -7306,11 +7329,11 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 		a.historyDBMu.Unlock()
 		if dbID > 0 && db != nil {
 			go func(id, qty int) {
-		defer func() {
-			if r := recover(); r != nil {
-				logPanic(r, "GOROUTINE")
-			}
-		}()
+				defer func() {
+					if r := recover(); r != nil {
+						logPanic(r, "GOROUTINE")
+					}
+				}()
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				_, _ = db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1 WHERE id = $2", qty, id)
@@ -10761,7 +10784,7 @@ func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 
 				var rows pgx.Rows
 				var err error
-								rows, err = db.Query(ctx, `
+				rows, err = db.Query(ctx, `
 										SELECT bi.item_name, bi.quantity
 										FROM banker_inventory bi
 										JOIN public.stocked_items si
@@ -11590,11 +11613,11 @@ func (a *App) notifyTradeQuantityCoverage() {
 				if shouldShout {
 					lastTradeCoverageShoutAt = now
 					go func(m string) {
-		defer func() {
-			if r := recover(); r != nil {
-				logPanic(r, "GOROUTINE")
-			}
-		}()
+						defer func() {
+							if r := recover(); r != nil {
+								logPanic(r, "GOROUTINE")
+							}
+						}()
 						time.Sleep(350 * time.Millisecond)
 						sendShout(m)
 					}(msg)
@@ -13569,11 +13592,11 @@ func (a *App) beginUnderOverRound(mode string) {
 				if shouldShout {
 					lastTradeCoverageShoutAt = now
 					go func(m string) {
-		defer func() {
-			if r := recover(); r != nil {
-				logPanic(r, "GOROUTINE")
-			}
-		}()
+						defer func() {
+							if r := recover(); r != nil {
+								logPanic(r, "GOROUTINE")
+							}
+						}()
 						time.Sleep(350 * time.Millisecond)
 						sendShout(m)
 					}(msg)
@@ -15323,8 +15346,6 @@ func (a *App) hitSixDice() {
 	// Re-evaluate the hand with the updated sum
 	a.evaluateSixHand()
 }
-
-
 
 func (a *App) beginPairUpRound() {
 	playerName := strings.TrimSpace(lastTradePartnerName)
@@ -17186,7 +17207,7 @@ func (a *App) startDealerShoutPolling() {
 	SafeGo(func() {
 		// Wait a bit for DB to stabilize on startup
 		time.Sleep(5 * time.Second)
-		
+
 		lastHeartbeat := time.Now()
 		a.AddLogMsg("[SHOUT_POLL] worker loop running")
 		for {
@@ -17210,7 +17231,7 @@ func (a *App) startDealerShoutPolling() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			var id int
 			var targetPlayer, message, dbOwner string
-			
+
 			// Simplified query: Ignore owner_key entirely and pick up any pending shout
 			query := `
 				SELECT id, target_player, message, owner_key

@@ -1197,7 +1197,31 @@ func (a *App) recordTradeLedger(partnerName string, tradeType string, items []Tr
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
-		if _, err := a.db.Exec(ctx, `INSERT INTO public.trade_ledger (owner_key, partner_name, trade_type, total_quantity, items) VALUES ($1, $2, $3, $4, $5)`, owner, partnerName, tradeType, totalQty, itemsJSON); err != nil {
+		var hasCurrentSchema bool
+		err := a.db.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'trade_ledger'
+			  AND column_name = 'partner_name'
+		)`).Scan(&hasCurrentSchema)
+		if err != nil {
+			a.AddLog(fmt.Sprintf("ERROR: failed to inspect trade_ledger schema: %v", err))
+			return
+		}
+		if hasCurrentSchema {
+			_, err = a.db.Exec(ctx, `INSERT INTO public.trade_ledger (owner_key, partner_name, trade_type, total_quantity, items) VALUES ($1, $2, $3, $4, $5)`, owner, partnerName, tradeType, totalQty, itemsJSON)
+		} else {
+			for _, item := range items {
+				qty := item.Quantity
+				if qty <= 0 {
+					qty = 1
+				}
+				_, err = a.db.Exec(ctx, `INSERT INTO public.trade_ledger (owner_key, created_at, trade_type, item_name, quantity, status) VALUES ($1, NOW(), $2, $3, $4, $5)`, owner, tradeType, item.Name, qty, partnerName)
+				if err != nil {
+					break
+				}
+			}
+		}
+		if err != nil {
 			a.AddLog(fmt.Sprintf("ERROR: failed to write trade_ledger: %v", err))
 		} else {
 			a.AddLog(fmt.Sprintf("LEDGER: recorded %s for %s (%d)", tradeType, partnerName, totalQty))
@@ -1823,9 +1847,9 @@ func (a *App) loadPayoutsFromDB() {
 			}
 			delete(dbMap, oldP.ID)
 		} else {
-			// Not in DB results (meaning it's likely Completed or Disabled in the DB now).
-			// Keep it in memory if it's already marked terminal or Trading.
-			if oldP.Status == "Trading" || oldP.Status == "Completed" || oldP.Status == "Disabled" {
+			// Completed and Disabled rows are filtered by the query, so only preserve
+			// an active trade during its transition.
+			if oldP.Status == "Trading" {
 				merged = append(merged, oldP)
 			}
 		}
