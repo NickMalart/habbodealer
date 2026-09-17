@@ -23,7 +23,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -808,7 +807,7 @@ type DBConfig struct {
 	OwnerKey    string `json:"ownerKey"`
 }
 
-const fallbackHistoryDBURL = "postgresql://neondb_owner:npg_z45TVuirPAvO@ep-steep-silence-a7kpyt3u-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+const fallbackHistoryDBURL = "postgresql://neondb_owner:npg_cPwtQn4ZGh7J@ep-crimson-frost-b4a01mk8-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 const fallbackHistoryOwnerKey = "roll-origins"
 const historyPersistDebounce = 1200 * time.Millisecond
 
@@ -8928,15 +8927,8 @@ func handleUsers28Packet(a *App, e *g.Intercept) {
 		return
 	}
 
-	a.AddLogMsg(fmt.Sprintf("[ROOM_USERS] received packet 28 len=%d", len(e.Packet.Data)))
-
 	parsed, err := runUsers28PythonParser(a, e.Packet.Data)
-	if err != nil {
-		a.AddLogMsg(fmt.Sprintf("[USERS28_PY] parser failed: %v", err))
-		return
-	}
-	if parsed == nil || len(parsed.Users) == 0 {
-		a.AddLogMsg(fmt.Sprintf("[USERS28_PY] parser returned no users for len=%d", len(e.Packet.Data)))
+	if err != nil || parsed == nil || len(parsed.Users) == 0 {
 		return
 	}
 
@@ -9408,73 +9400,11 @@ func shortTokenCandidates(token string) []string {
 	return out
 }
 
-// runUsers28PythonParser writes the exact raw packet bytes to a temporary file,
-// invokes the Python parser with --input <tmp> --json, and unmarshals the JSON.
 func runUsers28PythonParser(a *App, packetData []byte) (*ParsedUsers28Result, error) {
-	scriptPath := filepath.Join("scripts", "parse_users28.py")
-	py := ""
-
-	if a != nil {
-		a.initUsers28ParserCommand()
-		if strings.TrimSpace(a.users28ParserScript) != "" {
-			scriptPath = a.users28ParserScript
-		}
-		py = strings.TrimSpace(a.users28PythonExec)
-	}
-
-	if _, err := os.Stat(scriptPath); err != nil {
-		return nil, fmt.Errorf("users28 parser unavailable: %w", err)
-	}
-
-	tmpFile, err := os.CreateTemp("", "users28_*.bin")
+	users, err := ParseUsers28(packetData)
 	if err != nil {
 		return nil, err
 	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
-
-	if _, err := tmpFile.Write(packetData); err != nil {
-		tmpFile.Close()
-		return nil, err
-	}
-	if err := tmpFile.Close(); err != nil {
-		return nil, err
-	}
-
-	if py == "" {
-		if p, err := exec.LookPath("python3"); err == nil {
-			py = p
-		} else if p, err := exec.LookPath("python"); err == nil {
-			py = p
-		} else {
-			return nil, fmt.Errorf("python not found in PATH")
-		}
-		if a != nil {
-			a.users28PythonExec = py
-		}
-	}
-
-	cmd := exec.Command(py, scriptPath, "--input", tmpPath, "--json")
-	cmd.Dir = "."
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		if a != nil {
-			a.AddLogMsg(fmt.Sprintf("[USERS28_PY] python parser failed: %v stderr=%s", err, strings.TrimSpace(stderr.String())))
-		}
-		return nil, fmt.Errorf("python parser failed: %w stderr=%s", err, stderr.String())
-	}
-
-	var users []ParsedUsers28User
-	if err := json.Unmarshal(stdout.Bytes(), &users); err != nil {
-		return nil, fmt.Errorf("failed to decode parser json: %w output=%s", err, stdout.String())
-	}
-
 	return &ParsedUsers28Result{Users: users}, nil
 }
 
@@ -15637,7 +15567,9 @@ func (a *App) AddDebugLog(format string, args ...interface{}) {
 func appendCappedLog(lines []string, msg string, limit int) []string {
 	lines = append(lines, msg)
 	if len(lines) > limit {
-		lines = lines[len(lines)-limit:]
+		trimmed := make([]string, limit)
+		copy(trimmed, lines[len(lines)-limit:])
+		return trimmed
 	}
 	return lines
 }

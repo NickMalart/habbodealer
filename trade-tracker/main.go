@@ -10,7 +10,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -18,7 +17,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -43,8 +41,17 @@ var ext = g.NewExt(g.ExtInfo{
 })
 
 type ParsedUsers28User struct {
-	Username string `json:"username"`
-	TradeID  int    `json:"trade_id"`
+	Username     string `json:"username"`
+	TradeID      int    `json:"trade_id"`
+	TradeIDRaw   string `json:"trade_id_raw,omitempty"`
+	ChatID       int    `json:"chat_id"`
+	ChatIDRaw    string `json:"chat_id_raw,omitempty"`
+	EntityID     string `json:"entity_id,omitempty"`
+	Figure       string `json:"figure,omitempty"`
+	Sex          string `json:"sex,omitempty"`
+	Motto        string `json:"motto,omitempty"`
+	TokenHex     string `json:"token_hex,omitempty"`
+	RawNameBlock string `json:"raw_name_block,omitempty"`
 }
 
 type TradeEntry struct {
@@ -1466,84 +1473,7 @@ func (a *App) handleUsersPacket(e *g.Intercept) {
 }
 
 func runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, error) {
-	// Resolve relative to the executable so the script is always found
-	// regardless of working directory (e.g. when launched by app-launcher).
-	exePath, _ := os.Executable()
-	exeDir := filepath.Dir(exePath)
-
-	scriptCandidates := []string{
-		// Primary: exe is at trade-tracker/build/bin/ → 3 levels up = workspace root
-		filepath.Join(exeDir, "..", "..", "..", "scripts", "parse_users28.py"),
-		// Fallbacks for go run / dev workflows
-		filepath.Join("..", "scripts", "parse_users28.py"),
-		filepath.Join("scripts", "parse_users28.py"),
-	}
-
-	scriptPath := ""
-	for _, c := range scriptCandidates {
-		abs, _ := filepath.Abs(c)
-		if _, err := os.Stat(abs); err == nil {
-			scriptPath = abs
-			break
-		}
-	}
-	if scriptPath == "" {
-		attempted := make([]string, len(scriptCandidates))
-		for i, c := range scriptCandidates {
-			attempted[i], _ = filepath.Abs(c)
-		}
-		return nil, fmt.Errorf("parse_users28.py not found; tried: %v", attempted)
-	}
-	log.Printf("[USERS28] using script: %s", scriptPath)
-
-	pythonExec := ""
-	pythonArgs := []string{}
-	if p, err := exec.LookPath("py"); err == nil {
-		pythonExec = p
-		pythonArgs = []string{"-3"}
-	} else if p, err := exec.LookPath("python3"); err == nil {
-		pythonExec = p
-	} else if p, err := exec.LookPath("python"); err == nil {
-		pythonExec = p
-	} else {
-		return nil, fmt.Errorf("python not found in PATH")
-	}
-
-	tmpFile, err := os.CreateTemp("", "users28_*.bin")
-	if err != nil {
-		return nil, err
-	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
-
-	if _, err := tmpFile.Write(packetData); err != nil {
-		tmpFile.Close()
-		return nil, err
-	}
-	if err := tmpFile.Close(); err != nil {
-		return nil, err
-	}
-
-	cmdArgs := append(pythonArgs, scriptPath, "--input", tmpPath, "--json")
-	cmd := exec.Command(pythonExec, cmdArgs...)
-	cmd.Dir = "."
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("python parser failed: %w stderr=%s", err, strings.TrimSpace(stderr.String()))
-	}
-
-	var users []ParsedUsers28User
-	if err := json.Unmarshal(stdout.Bytes(), &users); err != nil {
-		return nil, fmt.Errorf("failed to decode parser json: %w", err)
-	}
-
-	return users, nil
+	return ParseUsers28(packetData)
 }
 
 func setupExt(a *App) {

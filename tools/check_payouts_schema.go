@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	connStr := "postgresql://neondb_owner:npg_z45TVuirPAvO@ep-steep-silence-a7kpyt3u-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+	connStr := "postgresql://neondb_owner:npg_cPwtQn4ZGh7J@ep-crimson-frost-b4a01mk8-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 

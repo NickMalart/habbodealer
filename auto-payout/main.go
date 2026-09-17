@@ -82,10 +82,17 @@ type StockedItem struct {
 }
 
 type ParsedUsers28User struct {
-	Username string `json:"username"`
-	TradeID  int    `json:"trade_id"`
-	ChatID   int    `json:"chat_id"`
-	TokenHex string `json:"token_hex"`
+	Username     string `json:"username"`
+	TradeID      int    `json:"trade_id"`
+	TradeIDRaw   string `json:"trade_id_raw,omitempty"`
+	ChatID       int    `json:"chat_id"`
+	ChatIDRaw    string `json:"chat_id_raw,omitempty"`
+	EntityID     string `json:"entity_id,omitempty"`
+	Figure       string `json:"figure,omitempty"`
+	Sex          string `json:"sex,omitempty"`
+	Motto        string `json:"motto,omitempty"`
+	TokenHex     string `json:"token_hex,omitempty"`
+	RawNameBlock string `json:"raw_name_block,omitempty"`
 }
 
 type TradeItem struct {
@@ -210,7 +217,7 @@ func NewApp() *App {
 		roomUsers:            make(map[string]ParsedUsers28User),
 		inventory:            make(map[string][]int),
 		pythonExec:           "python",
-		dbConnString:         "postgresql://neondb_owner:npg_z45TVuirPAvO@ep-steep-silence-a7kpyt3u-pooler.ap-southeast-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
+		dbConnString:         "postgresql://neondb_owner:npg_cPwtQn4ZGh7J@ep-crimson-frost-b4a01mk8-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
 		discordWebhook:       "https://discord.com/api/webhooks/1519096496400760924/dsDuT5QTEahQ3l4BQ3L41h5lMu73iXpKAI2L6uCnNVfQJ4R6XJ-moQcqHwDFs53UaHR1",
 		stripScanSeenItemIDs: make(map[int]struct{}),
 		stripScanItemIDs:     make(map[string][]int),
@@ -683,7 +690,9 @@ func (a *App) AddLog(msg string) {
 	a.logsMu.Lock()
 	a.logs = append(a.logs, fullMsg)
 	if len(a.logs) > 50 {
-		a.logs = a.logs[len(a.logs)-50:]
+		trimmed := make([]string, 50)
+		copy(trimmed, a.logs[len(a.logs)-50:])
+		a.logs = trimmed
 	}
 	logsCopy := make([]string, len(a.logs))
 	copy(logsCopy, a.logs)
@@ -2135,102 +2144,59 @@ func (a *App) sendSimpleFailureWebhook(p Payout) {
 }
 
 func (a *App) handleRoomUsers(e *g.Intercept) {
-	headerName := "USERS"
-	if e.Packet.Header.Value != 28 {
-		headerName = "SPACENODEUSERS"
-	}
-	a.AddLog(fmt.Sprintf("Intercepted %s packet (len: %d).", headerName, len(e.Packet.Data)))
-
-	if a.parserScript == "" {
-		a.AddLog("ERROR: Parser script path is empty.")
+	users, err := ParseUsers28(e.Packet.Data)
+	if err != nil || len(users) == 0 {
 		return
 	}
 
-	tmpFile, err := os.CreateTemp("", "users28_*.bin")
-	if err != nil {
-		a.AddLog("ERROR: Failed to create temp file: " + err.Error())
-		return
+	a.roomUsersMu.Lock()
+	for _, u := range users {
+		key := strings.ToLower(normalizeName(u.Username))
+		a.roomUsers[key] = u
 	}
-	tmpPath := tmpFile.Name()
+	a.roomUsersMu.Unlock()
 
-	_, err = tmpFile.Write(e.Packet.Data)
-	tmpFile.Close()
-	if err != nil {
-		a.AddLog("ERROR: Failed to write to temp file: " + err.Error())
-		os.Remove(tmpPath)
-		return
-	}
+	// Attempt to resolve any pending active trade target to avoid a race where
+	// a TRADE_OPEN arrives before the USERS/SPACENODEUSERS packet is parsed.
+	a.tradeMu.Lock()
+	activeTarget := a.activeTradeTarget
+	needResolve := a.lastTradePartner == ""
+	a.tradeMu.Unlock()
 
-	go func(path string) {
-		defer os.Remove(path)
-
-		cmd := exec.Command(a.pythonExec, a.parserScript, "--input", path, "--json")
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-		var stdout bytes.Buffer
-		var stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			a.AddLog("ERROR: Parser execution failed: " + err.Error())
-			a.AddLog("Stderr: " + stderr.String())
-			return
-		}
-
-		var users []ParsedUsers28User
-		if err := json.Unmarshal(stdout.Bytes(), &users); err != nil {
-			a.AddLog("ERROR: Failed to parse JSON from parser.")
-			return
-		}
-
-		a.roomUsersMu.Lock()
-		for _, u := range users {
-			key := strings.ToLower(normalizeName(u.Username))
-			a.roomUsers[key] = u
-			a.AddLog(fmt.Sprintf("[ROOM] parsed user: username=%s tradeid=%d chatid=%d key=%s", u.Username, u.TradeID, u.ChatID, key))
-		}
-		a.roomUsersMu.Unlock()
-
-		// Attempt to resolve any pending active trade target to avoid a race where
-		// a TRADE_OPEN arrives before the USERS/SPACENODEUSERS packet is parsed.
-		a.tradeMu.Lock()
-		activeTarget := a.activeTradeTarget
-		needResolve := a.lastTradePartner == ""
-		a.tradeMu.Unlock()
-
-		if activeTarget != 0 {
-			a.roomUsersMu.RLock()
-			var matchedUser *ParsedUsers28User
-			for _, u := range a.roomUsers {
-				if u.TradeID == activeTarget || u.ChatID == activeTarget {
-					matchedUser = &u
-					break
-				}
+	if activeTarget != 0 {
+		a.roomUsersMu.RLock()
+		var matchedUser *ParsedUsers28User
+		for _, u := range a.roomUsers {
+			if u.TradeID == activeTarget || u.ChatID == activeTarget {
+				matchedUser = &u
+				break
 			}
-			a.roomUsersMu.RUnlock()
+		}
+		a.roomUsersMu.RUnlock()
 
-			if matchedUser != nil {
-				if needResolve {
-					a.tradeMu.Lock()
-					a.lastTradePartner = matchedUser.Username
-					a.lastTradePartnerID = matchedUser.TradeID
-					a.lastTradePartnerChatID = matchedUser.ChatID
-					if a.activeTradePartner == "" {
-						a.activeTradePartner = matchedUser.Username
-					}
-					a.tradeMu.Unlock()
-					a.AddLog(fmt.Sprintf("[ROOM] Resolved active trade target %d -> %s (chat=%d trade=%d)", activeTarget, matchedUser.Username, matchedUser.ChatID, matchedUser.TradeID))
+		if matchedUser != nil {
+			if needResolve {
+				a.tradeMu.Lock()
+				a.lastTradePartner = matchedUser.Username
+				a.lastTradePartnerID = matchedUser.TradeID
+				a.lastTradePartnerChatID = matchedUser.ChatID
+				if a.activeTradePartner == "" {
+					a.activeTradePartner = matchedUser.Username
 				}
+				a.tradeMu.Unlock()
+				a.AddLog(fmt.Sprintf("[ROOM] Resolved active trade target %d -> %s (chat=%d trade=%d)", activeTarget, matchedUser.Username, matchedUser.ChatID, matchedUser.TradeID))
+			}
 
-				// SECURITY: If this resolved user is banned, close the trade immediately.
-				if info, banned := a.getBanInfo(matchedUser.Username, matchedUser.TradeID); banned {
-					a.AddLog(fmt.Sprintf("[BAN] Closing active trade with newly-identified banned partner %s (id=%d)", matchedUser.Username, matchedUser.TradeID))
-					a.queueShout(matchedUser.Username, fmt.Sprintf("%s - Remaining: %s", info.Message, formatRemainingTime(info.ExpiresAt)))
-					if a.ext != nil {
-						a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
-					}
-					// Reset local trade state
-					a.tradeMu.Lock()
-					a.tradeActive = false
+			// SECURITY: If this resolved user is banned, close the trade immediately.
+			if info, banned := a.getBanInfo(matchedUser.Username, matchedUser.TradeID); banned {
+				a.AddLog(fmt.Sprintf("[BAN] Closing active trade with newly-identified banned partner %s (id=%d)", matchedUser.Username, matchedUser.TradeID))
+				a.queueShout(matchedUser.Username, fmt.Sprintf("%s - Remaining: %s", info.Message, formatRemainingTime(info.ExpiresAt)))
+				if a.ext != nil {
+					a.ext.Send(g.Out.Id("TRADE_CLOSE_OUT"))
+				}
+				// Reset local trade state
+				a.tradeMu.Lock()
+				a.tradeActive = false
 					a.payoutTradeSent = false
 					a.activeTradePartner = ""
 					a.activeTradeTarget = 0
@@ -2242,8 +2208,7 @@ func (a *App) handleRoomUsers(e *g.Intercept) {
 			}
 		}
 
-		a.updatePayoutStatuses()
-	}(tmpPath)
+	a.updatePayoutStatuses()
 }
 
 func (a *App) updatePayoutStatuses() {
@@ -2301,6 +2266,13 @@ func encodeVL64(value int) string {
 	buf := make([]byte, gencoding.VL64EncodeLen(value))
 	gencoding.VL64Encode(buf, value)
 	return string(buf)
+}
+
+func (a *App) sendTradeOpen(target int) {
+	if a.ext == nil || target < 0 {
+		return
+	}
+	a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), []byte(encodeVL64(target)))
 }
 
 func (a *App) handleStripInfo(e *g.Intercept) {
@@ -3410,9 +3382,8 @@ func (a *App) payoutMonitor() {
 					}
 
 					a.AddLog(fmt.Sprintf("Initiating auto-trade by TradeID for %s (TradeID: %d) for %s...", targetName, target.TradeID, targetItem))
-					a.AddLog(fmt.Sprintf("Sending TRADE_OPEN_OUT by TradeID %d (both forms)", target.TradeID))
-					a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), target.TradeID)
-					a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), []byte(encodeVL64(target.TradeID)))
+					a.AddLog(fmt.Sprintf("Sending TRADE_OPEN_OUT by TradeID %d", target.TradeID))
+					a.sendTradeOpen(target.TradeID)
 
 					pCopy := target
 					pCopy.Status = "Trading"
@@ -3479,15 +3450,11 @@ func (a *App) payoutMonitor() {
 			// Many servers reliably accept VL64-encoded TradeID opens. Try VL64-only first.
 			vl := []byte(encodeVL64(selectedTarget))
 			a.AddLog(fmt.Sprintf("Sending TRADE_OPEN_OUT by TradeID %d (vl=%x)", selectedTarget, vl))
-			a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), vl)
-			// small delay then try integer form as a fallback
-			time.Sleep(150 * time.Millisecond)
-			a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), selectedTarget)
+			a.sendTradeOpen(selectedTarget)
 		} else {
 			a.AddLog(fmt.Sprintf("Initiating auto-trade for %s (RoomIndex: %d) for %s...", targetName, selectedTarget, targetItem))
-			a.AddLog(fmt.Sprintf("Sending TRADE_OPEN_OUT to RoomIndex %d (both forms)", selectedTarget))
-			a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), selectedTarget)
-			a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), []byte(encodeVL64(selectedTarget)))
+			a.AddLog(fmt.Sprintf("Sending TRADE_OPEN_OUT to RoomIndex %d", selectedTarget))
+			a.sendTradeOpen(selectedTarget)
 		}
 
 		// Create a snapshot for the automation goroutine; ensure it has the most-recent trade id
@@ -3613,17 +3580,10 @@ func (a *App) automateTrade(p *Payout) {
 			isTradeID := p.TradeID > 0 && openTarget == p.TradeID
 			if isTradeID {
 				a.AddLog(fmt.Sprintf("Initiating TRADE_OPEN (attempt %d) for %s TradeID=%d vl=%x (VL64-first)", attemptNum, p.Name, openTarget, vl))
-				a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), vl)
-				time.Sleep(150 * time.Millisecond)
-				a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), openTarget)
+				a.sendTradeOpen(openTarget)
 			} else {
 				a.AddLog(fmt.Sprintf("Initiating TRADE_OPEN (attempt %d) for %s target=%d vl=%x", attemptNum, p.Name, openTarget, vl))
-				// Send both integer and VL64 forms; repeat a couple times to improve reliability
-				for s := 0; s < 2; s++ {
-					a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), openTarget)
-					a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), vl)
-					time.Sleep(120 * time.Millisecond)
-				}
+				a.sendTradeOpen(openTarget)
 			}
 		} else {
 			// Try to resolve from room users
@@ -3639,8 +3599,7 @@ func (a *App) automateTrade(p *Payout) {
 			a.activeTradeTarget = u.ChatID
 			a.tradeMu.Unlock()
 			a.AddLog(fmt.Sprintf("Initiating TRADE_OPEN to RoomIndex %d for %s", u.ChatID, p.Name))
-			a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), u.ChatID)
-			a.ext.Send(g.Out.Id("TRADE_OPEN_OUT"), []byte(encodeVL64(u.ChatID)))
+			a.sendTradeOpen(u.ChatID)
 		}
 
 		// Wait up to 5s for the trade window to open

@@ -1,20 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"embed"
-	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -211,57 +205,7 @@ func (a *App) ShoutWinner(name string) {
 }
 
 func (a *App) runUsers28PythonParser(packetData []byte) ([]ParsedUsers28User, error) {
-	// Try to find the script in common locations
-	scriptPath := filepath.Join("..", "scripts", "parse_users28.py")
-	if _, err := os.Stat(scriptPath); err != nil {
-		scriptPath = filepath.Join("scripts", "parse_users28.py")
-	}
-	
-	if _, err := os.Stat(scriptPath); err != nil {
-		exePath, _ := os.Executable()
-		exeDir := filepath.Dir(exePath)
-		scriptPath = filepath.Join(exeDir, "..", "..", "..", "scripts", "parse_users28.py")
-	}
-
-	tmpFile, err := os.CreateTemp("", "users28_*.bin")
-	if err != nil {
-		return nil, err
-	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
-
-	if _, err := tmpFile.Write(packetData); err != nil {
-		tmpFile.Close()
-		return nil, err
-	}
-	tmpFile.Close()
-
-	py := "python"
-	args := []string{}
-	if p, err := exec.LookPath("py"); err == nil {
-		py = p
-		args = []string{"-3"}
-	} else if _, err := exec.LookPath("python3"); err == nil {
-		py = "python3"
-	}
-
-	cmdArgs := append(args, scriptPath, "--input", tmpPath, "--json")
-	cmd := exec.Command(py, cmdArgs...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-
-	if err := cmd.Run(); err != nil {
-		return nil, err
-	}
-
-	var users []ParsedUsers28User
-	if err := json.Unmarshal(stdout.Bytes(), &users); err != nil {
-		return nil, err
-	}
-
-	return users, nil
+	return ParseUsers28(packetData)
 }
 
 func main() {

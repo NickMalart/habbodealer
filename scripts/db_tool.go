@@ -20,6 +20,7 @@ type BankerBetItem struct {
 func main() {
 	show := flag.Bool("show", false, "show recent banker_trades and auto_payouts")
 	makeLatest := flag.Bool("make-latest", false, "create auto_payout(s) from latest banker_trade")
+	resetOperational := flag.Bool("reset-operational", false, "delete payout queue and non-completed banker trades")
 	flag.Parse()
 
 	conn := os.Getenv("DBURL")
@@ -41,6 +42,35 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
+
+	if *resetOperational {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "begin reset transaction error: %v\n", err)
+			os.Exit(3)
+		}
+
+		var payoutCount, bankerCount int64
+		if result, err := tx.Exec(ctx, "DELETE FROM public.auto_payouts"); err != nil {
+			_ = tx.Rollback(ctx)
+			fmt.Fprintf(os.Stderr, "delete auto_payouts error: %v\n", err)
+			os.Exit(3)
+		} else {
+			payoutCount = result.RowsAffected()
+		}
+		if result, err := tx.Exec(ctx, "DELETE FROM public.banker_trades WHERE COALESCE(LOWER(status), '') <> 'completed'"); err != nil {
+			_ = tx.Rollback(ctx)
+			fmt.Fprintf(os.Stderr, "delete active banker_trades error: %v\n", err)
+			os.Exit(3)
+		} else {
+			bankerCount = result.RowsAffected()
+		}
+		if err := tx.Commit(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "commit reset transaction error: %v\n", err)
+			os.Exit(3)
+		}
+		fmt.Printf("Operational reset complete: deleted %d auto_payouts and %d non-completed banker_trades.\n", payoutCount, bankerCount)
+	}
 
 	if *show {
 		fmt.Println("== recent banker_trades ==")
