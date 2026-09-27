@@ -12183,7 +12183,7 @@ func enabledGameChoicePartsLocked() []string {
 		parts = append(parts, "6")
 	}
 	if enabledGameTri {
-		parts = append(parts, "tri")
+		parts = append(parts, "tril", "trih")
 	}
 	if enabledGameDT {
 		parts = append(parts, "dt")
