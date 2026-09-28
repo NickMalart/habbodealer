@@ -41,7 +41,7 @@ header h1{font-size:14px;font-weight:600;color:#e6edf3;flex:1}
   <button class="btn btn-secondary" style="padding:2px 8px;font-size:11px" onclick="clearLog()">Clear</button>
 </div><div id="log"></div></div>
 <script>
-const { BuildAll, BuildSingle, GetApps, LaunchApp, RefreshApps, IsBuilding, LaunchGEarth, GetGEarthStatus, KillAllTasks, KillApp, CreateMissingTables } = window['go']['main']['App'];
+const { BuildAll, BuildSingle, GetApps, LaunchApp, RefreshApps, IsBuilding, LaunchGEarth, GetGEarthStatus, KillAllTasks, KillApp, ResetDatabase } = window['go']['main']['App'];
 const { EventsOn } = window['runtime'];
 let building = false;
 let gEarthState = { exists: false, running: false };
