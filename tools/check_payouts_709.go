@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	
 )
 
 func main() {
@@ -21,7 +21,7 @@ func main() {
 	defer conn.Close(ctx)
 
 	fmt.Println("--- auto_payouts for banker_trade_id 709 ---")
-	rows, err := conn.Query(ctx, `SELECT id, player_name, item_name, quantity, status, created_at FROM auto_payouts WHERE banker_trade_id = 709`)
+	rows, err := conn.QueryContext(ctx, `SELECT id, player_name, item_name, quantity, status, created_at FROM auto_payouts WHERE banker_trade_id = 709`)
 	if err != nil {
 		log.Fatalf("Query failed: %v", err)
 	}

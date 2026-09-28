@@ -6,7 +6,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
@@ -14,21 +15,22 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	db, err := pgxpool.New(ctx, connStr)
+	connStr = strings.TrimPrefix(connStr, "file:")
+	db, err := sql.Open("sqlite", connStr)
 	if err != nil {
 		log.Fatalf("pool create failed: %v", err)
 	}
 	defer db.Close()
 
 	var count int
-	err = db.QueryRow(ctx, "SELECT count(*) FROM public.auto_payouts").Scan(&count)
+	err = db.QueryRowContext(ctx, "SELECT count(*) FROM auto_payouts").Scan(&count)
 	if err != nil {
-		fmt.Printf("Query public.auto_payouts failed: %v\n", err)
+		fmt.Printf("Query auto_payouts failed: %v\n", err)
 	} else {
-		fmt.Printf("Total rows in public.auto_payouts: %d\n", count)
+		fmt.Printf("Total rows in auto_payouts: %d\n", count)
 	}
 
-	rows, err := db.Query(ctx, "SELECT id, player_name, item_name, quantity, status FROM public.auto_payouts")
+	rows, err := db.QueryContext(ctx, "SELECT id, player_name, item_name, quantity, status FROM auto_payouts")
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {

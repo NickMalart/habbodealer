@@ -6,11 +6,15 @@ export function BuildAll():Promise<string>;
 
 export function BuildSingle(arg1:string):Promise<string>;
 
+export function ConfigureLocalDatabase():Promise<string>;
+
 export function CreateMissingTables():Promise<string>;
 
 export function GetApps():Promise<Array<main.LaunchAppItem>>;
 
 export function GetBuildTargets():Promise<Array<Record<string, string>>>;
+
+export function GetDatabaseConfig():Promise<string>;
 
 export function GetGEarthStatus():Promise<main.GEarthStatus>;
 
@@ -26,6 +30,10 @@ export function LaunchApp(arg1:string,arg2:string):Promise<string>;
 
 export function LaunchGEarth():Promise<string>;
 
+export function QueryTable(arg1:string):Promise<string>;
+
 export function RefreshApps():Promise<Array<main.LaunchAppItem>>;
+
+export function ResetDatabase():Promise<string>;
 
 export function SetStopChildrenOnExit(arg1:boolean):Promise<void>;

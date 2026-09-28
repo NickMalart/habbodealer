@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
@@ -25,15 +25,16 @@ func main() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	pool, err := pgxpool.New(ctx, conn)
+	conn = strings.TrimPrefix(conn, "file:")
+	pool, err := sql.Open("sqlite", conn)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "connect error: %v\n", err)
 		os.Exit(1)
 	}
 	defer pool.Close()
 
-	fmt.Println("Connected; inspecting columns for public.auto_payouts")
-	rows, err := pool.Query(ctx, "SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema='public' AND table_name='auto_payouts' ORDER BY ordinal_position")
+	fmt.Println("Connected; inspecting columns for auto_payouts")
+	rows, err := pool.QueryContext(ctx, "SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema='public' AND table_name='auto_payouts' ORDER BY ordinal_position")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "query error: %v\n", err)
 		os.Exit(2)
@@ -56,12 +57,12 @@ func main() {
 		fmt.Println("player_trade_id not found")
 		if *add {
 			fmt.Println("adding player_trade_id column...")
-			if _, err := pool.Exec(ctx, "ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;"); err != nil {
+			if _, err := pool.ExecContext(ctx, "ALTER TABLE auto_payouts ADD COLUMN player_trade_id INTEGER NULL;"); err != nil {
 				fmt.Fprintf(os.Stderr, "alter error: %v\n", err)
 				os.Exit(4)
 			}
 			fmt.Println("ALTER TABLE executed.")
-			rows2, err := pool.Query(ctx, "SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema='public' AND table_name='auto_payouts' ORDER BY ordinal_position")
+			rows2, err := pool.QueryContext(ctx, "SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema='public' AND table_name='auto_payouts' ORDER BY ordinal_position")
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "query2 err: %v\n", err)
 				os.Exit(5)
@@ -80,7 +81,7 @@ func main() {
 	}
 
 	fmt.Println("\nSample rows (most recent 10):")
-	sampleRows, err := pool.Query(ctx, "SELECT id, player_name, item_name, quantity, status, created_at, player_trade_id FROM public.auto_payouts ORDER BY created_at DESC LIMIT 10")
+	sampleRows, err := pool.QueryContext(ctx, "SELECT id, player_name, item_name, quantity, status, created_at, player_trade_id FROM auto_payouts ORDER BY created_at DESC LIMIT 10")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sample query err: %v\n", err)
 		os.Exit(6)

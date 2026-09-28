@@ -6,7 +6,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
@@ -14,15 +15,16 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	
-	pool, err := pgxpool.New(ctx, conn)
+	conn = strings.TrimPrefix(conn, "file:")
+	pool, err := sql.Open("sqlite", conn)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "connect error: %v\n", err)
 		os.Exit(1)
 	}
 	defer pool.Close()
 
-	fmt.Println("Querying pending shouts from public.dealer_shouts...")
-	rows, err := pool.Query(ctx, "SELECT id, target_player, message, owner_key, status, created_at FROM public.dealer_shouts WHERE status = 'pending' ORDER BY created_at DESC LIMIT 20")
+	fmt.Println("Querying pending shouts from dealer_shouts...")
+	rows, err := pool.QueryContext(ctx, "SELECT id, target_player, message, owner_key, status, created_at FROM dealer_shouts WHERE status = 'pending' ORDER BY created_at DESC LIMIT 20")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "query error: %v\n", err)
 		os.Exit(2)

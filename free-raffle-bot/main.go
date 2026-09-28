@@ -23,7 +23,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+	_ "modernc.org/sqlite"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -175,7 +176,7 @@ type App struct {
 	nextSessionID         int
 	currentSession        *RaffleSession
 	sessions              []RaffleSession
-	db                    *pgxpool.Pool
+	db                    *sql.DB
 	ownerKey              string
 	pollCancel            context.CancelFunc
 	listenCancel          context.CancelFunc
@@ -2247,7 +2248,7 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 		return a.GetState(), fmt.Errorf("end datetime must be later than start datetime")
 	}
 
-	var db *pgxpool.Pool
+	var db *sql.DB
 	var owner string
 	var sessionID int
 	var startedAt string
@@ -2337,7 +2338,7 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 		defer cancel()
 
 		var dbSessionID int64
-		err := db.QueryRow(ctx,
+		err := db.QueryRowContext(ctx,
 			`INSERT INTO raffle_sessions (started_at, scheduled_end_at, owner_key, bonus_every, 
 			                              last_seen_created_at, last_seen_entry_id, 
 			                              last_seen_banker_at, last_seen_banker_id,
@@ -2345,7 +2346,7 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 			                              raffle_name, prize_name, prize_qty, hero_image_url, hero_attachment_id, hero_attachment_file,
 			                              sponsor_enabled, sponsor_name, sponsor_room_name,
 			                              sponsor_image_url, sponsor_attachment_id, sponsor_attachment_file)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+			 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			 RETURNING id`,
 			startAt,
 			func() interface{} {
@@ -2394,7 +2395,7 @@ func (a *App) StartRaffleWithWindow(startAtRFC3339 string, endAtRFC3339 string) 
 func (a *App) StopRaffle() RaffleState {
 	now := time.Now().UTC()
 	var stopped *RaffleSession
-	var db *pgxpool.Pool
+	var db *sql.DB
 	var owner string
 
 	a.mu.Lock()
@@ -2411,10 +2412,10 @@ func (a *App) StopRaffle() RaffleState {
 	if stopped != nil && db != nil && stopped.DBID > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
-		_, err := db.Exec(ctx,
+		_, err := db.ExecContext(ctx,
 			`UPDATE raffle_sessions
-			 SET ended_at = $1, last_seen_created_at = $2, last_seen_entry_id = $3
-			 WHERE id = $4 AND ($5 = '' OR owner_key = $5)`,
+			 SET ended_at = ?, last_seen_created_at = ?, last_seen_entry_id = ?
+			 WHERE id = ? AND (? = '' OR owner_key = ?)`,
 			now,
 			stopped.CursorAt,
 			stopped.CursorEntry,
@@ -2497,11 +2498,11 @@ func (a *App) ResumeSession(dbID int64) (RaffleState, error) {
 	if db != nil && dbID > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
-		if _, err := db.Exec(ctx,
+		if _, err := db.ExecContext(ctx,
 			`UPDATE raffle_sessions SET ended_at = NULL, scheduled_end_at = CASE 
-				WHEN scheduled_end_at < NOW() THEN NULL 
+				WHEN scheduled_end_at < CURRENT_TIMESTAMP THEN NULL 
 				ELSE scheduled_end_at 
-			 END WHERE id = $1 AND ($2 = '' OR owner_key = $2)`,
+			 END WHERE id = ? AND (? = '' OR owner_key = ?)`,
 			dbID, owner,
 		); err != nil {
 			a.logDebug("resume session db update failed: %v", err)
@@ -2601,10 +2602,10 @@ func (a *App) GetSessionTally(dbID int64) (SessionTally, error) {
 			COUNT(DISTINCT e.id) AS games
 		FROM game_history_entries e
 		JOIN game_history_items i ON i.entry_id = e.id AND i.owner_key = e.owner_key
-		WHERE ($1 = '' OR e.owner_key = $1)
+		WHERE (? = '' OR e.owner_key = ?)
 		  AND (
-			e.raffle_session_id = $2
-			OR (e.raffle_session_id = 0 AND trim(COALESCE(e.started_at, '')) <> '' AND to_timestamp(trim(e.started_at), 'YYYY-MM-DD"T"HH24:MI:SS') AT TIME ZONE 'UTC' >= $3 %s)
+			e.raffle_session_id = ?
+			OR (e.raffle_session_id = 0 AND trim(COALESCE(e.started_at, '')) <> '' AND datetime(e.started_at) >= ? %s)
 		  )
 		  AND e.status = 'Completed'
 		GROUP BY i.item_name
@@ -2613,7 +2614,7 @@ func (a *App) GetSessionTally(dbID int64) (SessionTally, error) {
 		         i.item_name
 	`, endClause)
 
-	rows, err := db.Query(ctx, query, append([]interface{}{owner, dbID}, args[1:]...)...)
+	rows, err := db.QueryContext(ctx, query, append([]interface{}{owner, dbID}, args[1:]...)...)
 	if err != nil {
 		return tally, err
 	}
@@ -2639,12 +2640,12 @@ func (a *App) GetSessionTally(dbID int64) (SessionTally, error) {
 
 	// Fetch total distinct games in window separately (items query only counts games that had items)
 	var totalGamesRow int
-	_ = db.QueryRow(ctx, fmt.Sprintf(`
+	_ = db.QueryRowContext(ctx, fmt.Sprintf(`
 		SELECT COUNT(*) FROM game_history_entries
-		WHERE ($1 = '' OR owner_key = $1)
+		WHERE (? = '' OR owner_key = ?)
 		  AND (
-			raffle_session_id = $2
-			OR (raffle_session_id = 0 AND trim(COALESCE(started_at, '')) <> '' AND to_timestamp(trim(started_at), 'YYYY-MM-DD"T"HH24:MI:SS') AT TIME ZONE 'UTC' >= $3 %s)
+			raffle_session_id = ?
+			OR (raffle_session_id = 0 AND trim(COALESCE(started_at, '')) <> '' AND to_timestamp(trim(started_at), 'YYYY-MM-DD"T"HH24:MI:SS') AT TIME ZONE 'UTC' >= ? %s)
 		  )
 		  AND status = 'Completed'
 	`, endClause), append([]interface{}{owner, dbID}, args[1:]...)...).Scan(&totalGamesRow)
@@ -2698,7 +2699,6 @@ func (a *App) startRealtimeWatcher() {
 		a.logDebug("realtime watcher not started: db is nil")
 		return
 	}
-	db := a.db
 	ctx, cancel := context.WithCancel(context.Background())
 	a.listenCancel = cancel
 	a.mu.Unlock()
@@ -2710,66 +2710,20 @@ func (a *App) startRealtimeWatcher() {
 			}
 		}()
 
+		// SQLite does not support LISTEN/NOTIFY — poll instead.
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			default:
-			}
-
-			conn, err := db.Acquire(ctx)
-			if err != nil {
-				a.logDebug("realtime watcher acquire failed: %v", err)
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(2 * time.Second):
-				}
-				continue
-			}
-
-			if _, err := conn.Conn().Exec(ctx, `LISTEN raffle_game_finished`); err != nil {
-				a.logDebug("realtime watcher LISTEN failed: %v", err)
-				conn.Release()
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(2 * time.Second):
-				}
-				continue
-			}
-			a.logDebug("realtime watcher connected on channel raffle_game_finished")
-
-			for {
-				n, err := conn.Conn().WaitForNotification(ctx)
-				if err != nil {
-					if ctx.Err() == nil {
-						a.logDebug("realtime watcher notification error: %v", err)
-					}
-					break
-				}
-
-				payload := ""
-				if n != nil {
-					payload = strings.TrimSpace(n.Payload)
-				}
-				a.debugMu.Lock()
-				a.lastNotifyAt = time.Now().UTC().Format(time.RFC3339)
-				a.lastNotifyRaw = payload
-				a.debugMu.Unlock()
-				a.logDebug("realtime notify received: %s", payload)
+			case <-ticker.C:
 				a.processNewBets()
-			}
-
-			conn.Release()
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(500 * time.Millisecond):
 			}
 		}
 	}()
 }
+
 
 func (a *App) processNewBets() {
 	a.processMu.Lock()
@@ -2837,21 +2791,21 @@ func (a *App) processNewBets() {
 	batch := make([]betRow, 0)
 
 	// 1. Query standard game_history_entries
-	rows, err := db.Query(ctx, `
+	rows, err := db.QueryContext(ctx, `
 		SELECT
 			e.id::text,
 			e.player_name,
 			e.started_at
 		FROM game_history_entries e
-		WHERE ($1 = '' OR e.owner_key = $1)
+		WHERE (? = '' OR e.owner_key = ?)
 		  AND trim(COALESCE(e.started_at, '')) <> ''
-		  AND (e.raffle_session_id = $2 OR e.raffle_session_id = 0)
+		  AND (e.raffle_session_id = ? OR e.raffle_session_id = 0)
 		  AND e.raffle_session_id <> -1
 		  AND lower(e.game) <> 'bandit'
 		  AND (e.notes IS NULL OR e.notes::text NOT LIKE '%Adopting banker trade%')
 		  AND (
-			e.started_at::timestamptz > $3
-			OR (e.started_at::timestamptz = $3 AND e.id::bigint > $4)
+			e.started_at::timestamptz > ?
+			OR (e.started_at::timestamptz = ? AND e.id::bigint > ?)
 		  )
 		ORDER BY e.started_at::timestamptz ASC, e.id::bigint ASC
 		LIMIT 250
@@ -2880,16 +2834,16 @@ func (a *App) processNewBets() {
 	}
 
 	// 2. Query banker_trades
-	bRows, err := db.Query(ctx, `
+	bRows, err := db.QueryContext(ctx, `
 		SELECT
 			id,
 			player_name,
 			created_at
 		FROM banker_trades
-		WHERE ($1 = '' OR owner_key = $1)
+		WHERE (? = '' OR owner_key = ?)
 		  AND (
-			created_at > $2
-			OR (created_at = $2 AND id > $3)
+			created_at > ?
+			OR (created_at = ? AND id > ?)
 		  )
 		ORDER BY created_at ASC, id ASC
 		LIMIT 250
@@ -3115,11 +3069,11 @@ func (a *App) persistSessionCursor(sessionDBID int64, at time.Time, entryID stri
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := db.Exec(ctx,
+	_, err := db.ExecContext(ctx,
 		`UPDATE raffle_sessions
-		 SET last_seen_created_at = $1, last_seen_entry_id = $2,
-		     last_seen_banker_at = $3, last_seen_banker_id = $4
-		 WHERE id = $5 AND ($6 = '' OR owner_key = $6)`,
+		 SET last_seen_created_at = ?, last_seen_entry_id = ?,
+		     last_seen_banker_at = ?, last_seen_banker_id = ?
+		 WHERE id = ? AND (? = '' OR owner_key = ?)`,
 		at,
 		entryID,
 		bankerAt,
@@ -3140,10 +3094,10 @@ func (a *App) persistSessionWebhookMessageID(sessionDBID int64, messageID string
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := db.Exec(ctx,
+	_, err := db.ExecContext(ctx,
 		`UPDATE raffle_sessions
-		 SET webhook_message_id = $1
-		 WHERE id = $2 AND ($3 = '' OR owner_key = $3)`,
+		 SET webhook_message_id = ?
+		 WHERE id = ? AND (? = '' OR owner_key = ?)`,
 		strings.TrimSpace(messageID),
 		sessionDBID,
 		owner,
@@ -3257,16 +3211,16 @@ func (a *App) saveSessionMeta(sessionDBID int64) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := db.Exec(ctx,
+	_, err := db.ExecContext(ctx,
 		`UPDATE raffle_sessions
-		 SET raffle_name = $1, prize_name = $2, prize_qty = $3,
-		     hero_image_url = $4, hero_attachment_id = $5, hero_attachment_file = $6,
-		     winner_name = $7, winner_tickets = $8, winner_odds = $9, winner_drawn_at = $10,
-		     winner_method = $11, winner_summary = $12, winner_proof_url = $13,
-		     winner_proof_id = $14, winner_proof_file = $15,
-		     sponsor_enabled = $16, sponsor_name = $17, sponsor_room_name = $18,
-		     sponsor_image_url = $19, sponsor_attachment_id = $20, sponsor_attachment_file = $21
-		 WHERE id = $22 AND ($23 = '' OR owner_key = $23)`,
+		 SET raffle_name = ?, prize_name = ?, prize_qty = ?,
+		     hero_image_url = ?, hero_attachment_id = ?, hero_attachment_file = ?,
+		     winner_name = ?, winner_tickets = ?, winner_odds = ?, winner_drawn_at = ?,
+		     winner_method = ?, winner_summary = ?, winner_proof_url = ?,
+		     winner_proof_id = ?, winner_proof_file = ?,
+		     sponsor_enabled = ?, sponsor_name = ?, sponsor_room_name = ?,
+		     sponsor_image_url = ?, sponsor_attachment_id = ?, sponsor_attachment_file = ?
+		 WHERE id = ? AND (? = '' OR owner_key = ?)`,
 		raffleName, prizeName, prizeQty,
 		heroImageURL, heroAttachmentID, heroAttachmentFile,
 		winnerName, winnerTickets, winnerOdds, winnerDrawnAt,
@@ -3290,9 +3244,9 @@ func (a *App) deleteParticipant(sessionDBID int64, usernameKey string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := db.Exec(ctx, `
+	_, err := db.ExecContext(ctx, `
 		DELETE FROM raffle_participants
-		WHERE session_id = $1 AND ($2 = '' OR owner_key = $2) AND username_key = $3
+		WHERE session_id = ? AND (? = '' OR owner_key = ?) AND username_key = ?
 	`, sessionDBID, owner, strings.TrimSpace(usernameKey))
 	return err
 }
@@ -3308,24 +3262,24 @@ func (a *App) persistParticipants(sessionDBID int64, participants []RafflePartic
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	tx, err := db.Begin(ctx)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		_ = tx.Rollback(ctx)
+		_ = tx.Rollback()
 	}()
 
 	for _, p := range participants {
 		firstAt, _ := time.Parse(time.RFC3339, p.FirstBet)
 		lastAt, _ := time.Parse(time.RFC3339, p.LastBet)
-		if _, err := tx.Exec(ctx, `
+		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO raffle_participants (
 				session_id, owner_key, username, username_key,
 				bet_count, ticket_count, manual_ticket_delta, first_bet_at, last_bet_at, updated_at
 			) VALUES (
-				$1,$2,$3,$4,
-				$5,$6,$7,$8,$9,NOW()
+				?,?,?,?,
+				?,?,?,?,?,CURRENT_TIMESTAMP
 			)
 			ON CONFLICT (session_id, owner_key, username_key) DO UPDATE SET
 				username = EXCLUDED.username,
@@ -3334,13 +3288,13 @@ func (a *App) persistParticipants(sessionDBID int64, participants []RafflePartic
 				manual_ticket_delta = EXCLUDED.manual_ticket_delta,
 				first_bet_at = LEAST(raffle_participants.first_bet_at, EXCLUDED.first_bet_at),
 				last_bet_at = GREATEST(raffle_participants.last_bet_at, EXCLUDED.last_bet_at),
-				updated_at = NOW()
+				updated_at = CURRENT_TIMESTAMP
 		`, sessionDBID, owner, p.Username, p.UsernameKey, p.BetCount, p.Tickets, p.ManualDelta, firstAt, lastAt); err != nil {
 			return err
 		}
 	}
 
-	return tx.Commit(ctx)
+	return tx.Commit()
 }
 
 func (a *App) DeleteSession(dbID int64) (RaffleState, error) {
@@ -3366,7 +3320,7 @@ func (a *App) DeleteSession(dbID int64) (RaffleState, error) {
 	if db != nil && dbID > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
-		_, err := db.Exec(ctx, `DELETE FROM raffle_sessions WHERE id = $1 AND ($2 = '' OR owner_key = $2)`, dbID, owner)
+		_, err := db.ExecContext(ctx, `DELETE FROM raffle_sessions WHERE id = ? AND (? = '' OR owner_key = ?)`, dbID, owner)
 		if err != nil {
 			return a.GetState(), err
 		}
@@ -3447,8 +3401,8 @@ func (a *App) PostWinnerProofForSession(dbID int64, imageDataURL string, imageFi
 	if db != nil && dbID > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
-		_, _ = db.Exec(ctx,
-			`UPDATE raffle_sessions SET winner_proof_url = $1, winner_proof_id = $2, winner_proof_file = $3 WHERE id = $4 AND ($5 = '' OR owner_key = $5)`,
+		_, _ = db.ExecContext(ctx,
+			`UPDATE raffle_sessions SET winner_proof_url = ?, winner_proof_id = ?, winner_proof_file = ? WHERE id = ? AND (? = '' OR owner_key = ?)`,
 			proofURL, proofID, proofFile, dbID, owner,
 		)
 	}
@@ -3524,12 +3478,13 @@ func (a *App) initDatabase() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	cfg.DatabaseURL = strings.TrimPrefix(cfg.DatabaseURL, "file:")
+	db, err := sql.Open("sqlite", cfg.DatabaseURL)
 	if err != nil {
 		a.logDebug("db pool create failed: %v", err)
 		return
 	}
-	if err := db.Ping(ctx); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		a.logDebug("db ping failed: %v", err)
 		db.Close()
 		return
@@ -3578,15 +3533,15 @@ func (a *App) ensureTables() error {
 
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS raffle_sessions (
-			id BIGSERIAL PRIMARY KEY,
-			started_at TIMESTAMPTZ NOT NULL,
-			scheduled_end_at TIMESTAMPTZ NULL,
-			ended_at TIMESTAMPTZ NULL,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			started_at DATETIME NOT NULL,
+			scheduled_end_at DATETIME NULL,
+			ended_at DATETIME NULL,
 			owner_key TEXT NOT NULL DEFAULT '',
 			bonus_every INTEGER NOT NULL DEFAULT 5,
-			last_seen_created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			last_seen_created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			last_seen_entry_id TEXT NOT NULL DEFAULT '',
-			last_seen_banker_at TIMESTAMPTZ NOT NULL DEFAULT '2000-01-01',
+			last_seen_banker_at DATETIME NOT NULL DEFAULT '2000-01-01',
 			last_seen_banker_id BIGINT NOT NULL DEFAULT 0,
 			webhook_message_id TEXT NOT NULL DEFAULT '',
 			raffle_name TEXT NOT NULL DEFAULT 'Flame Raffle',
@@ -3598,10 +3553,10 @@ func (a *App) ensureTables() error {
 			sponsor_enabled BOOLEAN NOT NULL DEFAULT FALSE,
 			sponsor_name TEXT NOT NULL DEFAULT '',
 			sponsor_room_name TEXT NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS raffle_participants (
-			id BIGSERIAL PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id BIGINT NOT NULL REFERENCES raffle_sessions(id) ON DELETE CASCADE,
 			owner_key TEXT NOT NULL DEFAULT '',
 			username TEXT NOT NULL,
@@ -3609,10 +3564,10 @@ func (a *App) ensureTables() error {
 			bet_count INTEGER NOT NULL DEFAULT 1,
 			ticket_count INTEGER NOT NULL DEFAULT 1,
 			manual_ticket_delta INTEGER NOT NULL DEFAULT 0,
-			first_bet_at TIMESTAMPTZ NOT NULL,
-			last_bet_at TIMESTAMPTZ NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			first_bet_at DATETIME NOT NULL,
+			last_bet_at DATETIME NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE (session_id, owner_key, username_key)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_raffle_sessions_owner ON raffle_sessions(owner_key)`,
@@ -3635,7 +3590,7 @@ func (a *App) ensureTables() error {
 			END IF;
 			RETURN NEW;
 		END;
-		$$ LANGUAGE plpgsql`,
+		`,
 		`CREATE OR REPLACE FUNCTION notify_raffle_trade_entry_insert()
 		RETURNS TRIGGER AS $$
 		BEGIN
@@ -3649,7 +3604,7 @@ func (a *App) ensureTables() error {
 			);
 			RETURN NEW;
 		END;
-		$$ LANGUAGE plpgsql`,
+		`,
 		`CREATE OR REPLACE FUNCTION notify_raffle_banker_trade_insert()
 		RETURNS TRIGGER AS $$
 		BEGIN
@@ -3663,10 +3618,10 @@ func (a *App) ensureTables() error {
 			);
 			RETURN NEW;
 		END;
-		$$ LANGUAGE plpgsql`,
+		`,
 		`DO $$
 		BEGIN
-			IF to_regclass('public.game_history_entries') IS NOT NULL THEN
+			IF to_regclass('game_history_entries') IS NOT NULL THEN
 				DROP TRIGGER IF EXISTS trg_raffle_game_finished_entries ON game_history_entries;
 				CREATE TRIGGER trg_raffle_game_finished_entries
 				AFTER INSERT OR UPDATE ON game_history_entries
@@ -3676,7 +3631,7 @@ func (a *App) ensureTables() error {
 		END $$`,
 		`DO $$
 		BEGIN
-			IF to_regclass('public.trade_entries') IS NOT NULL THEN
+			IF to_regclass('trade_entries') IS NOT NULL THEN
 				DROP TRIGGER IF EXISTS trg_raffle_trade_entries_insert ON trade_entries;
 				CREATE TRIGGER trg_raffle_trade_entries_insert
 				AFTER INSERT ON trade_entries
@@ -3686,7 +3641,7 @@ func (a *App) ensureTables() error {
 		END $$`,
 		`DO $$
 		BEGIN
-			IF to_regclass('public.banker_trades') IS NOT NULL THEN
+			IF to_regclass('banker_trades') IS NOT NULL THEN
 				DROP TRIGGER IF EXISTS trg_raffle_banker_trades_insert ON banker_trades;
 				CREATE TRIGGER trg_raffle_banker_trades_insert
 				AFTER INSERT ON banker_trades
@@ -3697,52 +3652,52 @@ func (a *App) ensureTables() error {
 	}
 
 	for _, q := range queries {
-		if _, err := db.Exec(ctx, q); err != nil {
+		if _, err := db.ExecContext(ctx, q); err != nil {
 			return err
 		}
 	}
 
 	alterQueries := []string{
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS scheduled_end_at TIMESTAMPTZ NULL`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS bonus_every INTEGER NOT NULL DEFAULT 5`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS last_seen_created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS last_seen_entry_id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS last_seen_banker_at TIMESTAMPTZ NOT NULL DEFAULT '2000-01-01'`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS last_seen_banker_id BIGINT NOT NULL DEFAULT 0`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS webhook_message_id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS raffle_name TEXT NOT NULL DEFAULT 'Flame Raffle'`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS prize_name TEXT NOT NULL DEFAULT 'Purple Dragon Lamp'`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS prize_qty INTEGER NOT NULL DEFAULT 1`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS hero_image_url TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS hero_attachment_id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS hero_attachment_file TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_name TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_tickets INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_odds TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_drawn_at TIMESTAMPTZ NULL`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_method TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_summary TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_proof_url TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_proof_id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS winner_proof_file TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS sponsor_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS sponsor_name TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS sponsor_room_name TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS sponsor_image_url TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS sponsor_attachment_id TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE raffle_sessions ADD COLUMN IF NOT EXISTS sponsor_attachment_file TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN scheduled_end_at DATETIME NULL`,
+		`ALTER TABLE raffle_sessions ADD COLUMN bonus_every INTEGER NOT NULL DEFAULT 5`,
+		`ALTER TABLE raffle_sessions ADD COLUMN last_seen_created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`,
+		`ALTER TABLE raffle_sessions ADD COLUMN last_seen_entry_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN last_seen_banker_at DATETIME NOT NULL DEFAULT '2000-01-01'`,
+		`ALTER TABLE raffle_sessions ADD COLUMN last_seen_banker_id BIGINT NOT NULL DEFAULT 0`,
+		`ALTER TABLE raffle_sessions ADD COLUMN webhook_message_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN raffle_name TEXT NOT NULL DEFAULT 'Flame Raffle'`,
+		`ALTER TABLE raffle_sessions ADD COLUMN prize_name TEXT NOT NULL DEFAULT 'Purple Dragon Lamp'`,
+		`ALTER TABLE raffle_sessions ADD COLUMN prize_qty INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE raffle_sessions ADD COLUMN hero_image_url TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN hero_attachment_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN hero_attachment_file TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN winner_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN winner_tickets INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE raffle_sessions ADD COLUMN winner_odds TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN winner_drawn_at DATETIME NULL`,
+		`ALTER TABLE raffle_sessions ADD COLUMN winner_method TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN winner_summary TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN winner_proof_url TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN winner_proof_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN winner_proof_file TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN sponsor_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE raffle_sessions ADD COLUMN sponsor_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN sponsor_room_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN sponsor_image_url TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN sponsor_attachment_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_sessions ADD COLUMN sponsor_attachment_file TEXT NOT NULL DEFAULT ''`,
 		// Fix existing rows that still have the old hardcoded defaults
 		`UPDATE raffle_sessions SET raffle_name = 'Flame Raffle' WHERE raffle_name = 'Weekend Raffle'`,
 		`UPDATE raffle_sessions SET prize_name = 'Purple Dragon Lamp' WHERE prize_name = 'Mystery Prize'`,
 		`UPDATE raffle_sessions SET prize_qty = 1 WHERE prize_qty <= 0`,
-		`ALTER TABLE raffle_participants ADD COLUMN IF NOT EXISTS username_key TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE raffle_participants ADD COLUMN IF NOT EXISTS bet_count INTEGER NOT NULL DEFAULT 1`,
-		`ALTER TABLE raffle_participants ADD COLUMN IF NOT EXISTS ticket_count INTEGER NOT NULL DEFAULT 1`,
-		`ALTER TABLE raffle_participants ADD COLUMN IF NOT EXISTS manual_ticket_delta INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE raffle_participants ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
+		`ALTER TABLE raffle_participants ADD COLUMN username_key TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE raffle_participants ADD COLUMN bet_count INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE raffle_participants ADD COLUMN ticket_count INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE raffle_participants ADD COLUMN manual_ticket_delta INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE raffle_participants ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`,
 	}
 	for _, q := range alterQueries {
-		if _, err := db.Exec(ctx, q); err != nil {
+		if _, err := db.ExecContext(ctx, q); err != nil {
 			return err
 		}
 	}
@@ -3762,7 +3717,7 @@ func (a *App) loadSessionsFromDB() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 
-	sRows, err := db.Query(ctx, `
+	sRows, err := db.QueryContext(ctx, `
 		SELECT id, started_at, scheduled_end_at, ended_at, bonus_every, last_seen_created_at, last_seen_entry_id,
 		       last_seen_banker_at, last_seen_banker_id,
 		       webhook_message_id,
@@ -3771,7 +3726,7 @@ func (a *App) loadSessionsFromDB() error {
 		       winner_proof_url, winner_proof_id, winner_proof_file, sponsor_enabled, sponsor_name, sponsor_room_name,
 		       sponsor_image_url, sponsor_attachment_id, sponsor_attachment_file
 		FROM raffle_sessions
-		WHERE ($1 = '' OR owner_key = $1)
+		WHERE (? = '' OR owner_key = ?)
 		ORDER BY id ASC
 	`, owner)
 	if err != nil {
@@ -3883,10 +3838,10 @@ func (a *App) loadSessionsFromDB() error {
 
 	a.logDebug("loadSessionsFromDB: Loaded %d sessions", len(orderedIDs))
 
-	pRows, err := db.Query(ctx, `
+	pRows, err := db.QueryContext(ctx, `
 		SELECT session_id, username, username_key, bet_count, ticket_count, manual_ticket_delta, first_bet_at, last_bet_at
 		FROM raffle_participants
-		WHERE ($1 = '' OR owner_key = $1)
+		WHERE (? = '' OR owner_key = ?)
 		ORDER BY session_id ASC, ticket_count DESC, username ASC
 	`, owner)
 	if err != nil {

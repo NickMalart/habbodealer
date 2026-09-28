@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -18,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	_ "modernc.org/sqlite"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -233,176 +234,105 @@ func readDatabaseURL(root string) (string, error) {
 func (a *App) CreateMissingTables() string {
 	root := a.resolveWorkspaceRoot()
 	connString, err := readDatabaseURL(root)
-	if err != nil {
-		msg := fmt.Sprintf("CreateMissingTables failed: %v", err)
-		a.emitLog(msg, "error")
-		return msg
+
+	// If config is missing OR still has an old postgres URL, switch to local SQLite
+	isPostgres := strings.HasPrefix(connString, "postgresql://") || strings.HasPrefix(connString, "postgres://")
+	if err != nil || isPostgres {
+		dbPath := filepath.Join(root, "database.sqlite")
+		cfgPath := filepath.Join(root, "db.local.json")
+		cfgData := fmt.Sprintf(`{"databaseUrl":"file:%s"}`, filepath.ToSlash(dbPath))
+		if werr := os.WriteFile(cfgPath, []byte(cfgData), 0644); werr != nil {
+			msg := fmt.Sprintf("CreateMissingTables failed: could not create db.local.json: %v", werr)
+			a.emitLog(msg, "error")
+			return msg
+		}
+		connString = "file:" + filepath.ToSlash(dbPath)
+		a.emitLog(fmt.Sprintf("Configured local SQLite database at %s", dbPath), "info")
 	}
 
 	a.emitLog(fmt.Sprintf("Creating database schema using %s", root), "info")
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
-	cfg, err := pgxpool.ParseConfig(connString)
-	if err != nil {
-		msg := fmt.Sprintf("CreateMissingTables failed: parse config: %v", err)
-		a.emitLog(msg, "error")
-		return msg
-	}
-
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		msg := fmt.Sprintf("CreateMissingTables failed: connect: %v", err)
-		a.emitLog(msg, "error")
-		return msg
-	}
-	defer pool.Close()
-
-	if err := pool.Ping(ctx); err != nil {
-		msg := fmt.Sprintf("CreateMissingTables failed: ping: %v", err)
-		a.emitLog(msg, "error")
-		return msg
-	}
-
-	queries := []string{
-		`CREATE TABLE IF NOT EXISTS public.game_history_entries (
-			id BIGSERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL DEFAULT '',
-			started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			ended_at TIMESTAMPTZ NULL,
-			game_type TEXT NOT NULL DEFAULT '',
-			result TEXT NOT NULL DEFAULT ''
-		);`,
-		`ALTER TABLE public.game_history_entries ADD COLUMN IF NOT EXISTS raffle_session_id BIGINT NOT NULL DEFAULT 0;`,
-		`ALTER TABLE public.game_history_entries ADD COLUMN IF NOT EXISTS rolls JSONB NOT NULL DEFAULT '[]'::jsonb;`,
-		`CREATE TABLE IF NOT EXISTS public.game_history_items (
-			id BIGSERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL DEFAULT '',
-			entry_id BIGINT NOT NULL DEFAULT 0,
-			item_type TEXT NOT NULL DEFAULT '',
-			item_index INTEGER NOT NULL DEFAULT 0,
-			payload JSONB NOT NULL DEFAULT '{}'::jsonb
-		);`,
-		`CREATE TABLE IF NOT EXISTS public.trade_ledger (
-			id BIGSERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			trade_type TEXT NOT NULL DEFAULT '',
-			item_name TEXT NOT NULL DEFAULT '',
-			quantity INTEGER NOT NULL DEFAULT 0,
-			status TEXT NOT NULL DEFAULT ''
-		);`,
-		`CREATE TABLE IF NOT EXISTS public.stocked_items (
-			id BIGSERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL DEFAULT '',
-			item_name TEXT NOT NULL DEFAULT '',
-			quantity INTEGER NOT NULL DEFAULT 0,
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);`,
-		`CREATE TABLE IF NOT EXISTS public.dealer_shouts (
-			id BIGSERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL DEFAULT '',
-			status TEXT NOT NULL DEFAULT 'pending',
-			message TEXT NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);`,
-		`ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
-		`CREATE TABLE IF NOT EXISTS public.auto_payouts (
-			id BIGSERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL DEFAULT '',
-			status TEXT NOT NULL DEFAULT 'pending',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);`,
-		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;`,
-		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS banker_trade_id INTEGER NULL;`,
-		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS notified BOOLEAN DEFAULT FALSE;`,
-		`CREATE TABLE IF NOT EXISTS public.banker_trades (
-			id BIGSERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			status TEXT NOT NULL DEFAULT 'idle',
-			bet_amount INTEGER DEFAULT 0,
-			risk_bank INTEGER DEFAULT 0,
-			risk_status TEXT DEFAULT 'idle'
-		);`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS bet_amount INTEGER DEFAULT 0;`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_bank INTEGER DEFAULT 0;`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_status TEXT DEFAULT 'idle';`,
-		`CREATE TABLE IF NOT EXISTS public.banned_players (
-			id BIGSERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL DEFAULT '',
-			username TEXT NOT NULL DEFAULT '',
-			is_active BOOLEAN DEFAULT TRUE,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);`,
-		`CREATE TABLE IF NOT EXISTS public.auto_payout_settings (
-			id BIGSERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL DEFAULT '',
-			setting_key TEXT NOT NULL DEFAULT '',
-			setting_value TEXT NOT NULL DEFAULT '',
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);`,
-		`CREATE TABLE IF NOT EXISTS public.raffle_sessions (
-			id BIGSERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL DEFAULT '',
-			started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			status TEXT NOT NULL DEFAULT 'pending',
-			raffle_name TEXT NOT NULL DEFAULT 'Flame Raffle',
-			prize_name TEXT NOT NULL DEFAULT 'Purple Dragon Lamp'
-		);`,
-		`CREATE TABLE IF NOT EXISTS public.raffle_participants (
-			id BIGSERIAL PRIMARY KEY,
-			session_id BIGINT NOT NULL DEFAULT 0,
-			owner_key TEXT NOT NULL DEFAULT '',
-			username_key TEXT NOT NULL DEFAULT '',
-			ticket_count INTEGER NOT NULL DEFAULT 1,
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);`,
-		`CREATE TABLE IF NOT EXISTS public.trade_sessions (
-			id BIGSERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL DEFAULT '',
-			status TEXT NOT NULL DEFAULT 'pending',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);`,
-		`CREATE TABLE IF NOT EXISTS public.trade_entries (
-			id BIGSERIAL PRIMARY KEY,
-			session_id BIGINT NOT NULL DEFAULT 0,
-			owner_key TEXT NOT NULL DEFAULT '',
-			occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			payload JSONB NOT NULL DEFAULT '{}'::jsonb
-		);`,
-		`CREATE TABLE IF NOT EXISTS public.trade_entry_items (
-			id BIGSERIAL PRIMARY KEY,
-			trade_entry_id BIGINT NOT NULL DEFAULT 0,
-			owner_key TEXT NOT NULL DEFAULT '',
-			item_name TEXT NOT NULL DEFAULT '',
-			quantity INTEGER NOT NULL DEFAULT 1,
-			raw_data TEXT NOT NULL DEFAULT ''
-		);`,
-		`CREATE TABLE IF NOT EXISTS public.blocked_players (
-			id BIGSERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL DEFAULT '',
-			username TEXT NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);`,
-		`CREATE TABLE IF NOT EXISTS public.ui_settings (
-			id BIGSERIAL PRIMARY KEY,
-			owner_key TEXT NOT NULL DEFAULT '',
-			setting_key TEXT NOT NULL DEFAULT '',
-			setting_value TEXT NOT NULL DEFAULT ''
-		);`,
-	}
-
-	for _, query := range queries {
-		if _, err := pool.Exec(ctx, query); err != nil {
-			msg := fmt.Sprintf("CreateMissingTables failed: %v\nquery: %s", err, query)
+	dbPath := strings.TrimPrefix(connString, "file:")
+	// Ensure the sqlite file exists before opening
+	if !fileExists(dbPath) {
+		if err := os.WriteFile(dbPath, []byte{}, 0644); err != nil {
+			msg := fmt.Sprintf("CreateMissingTables failed: could not create db file: %v", err)
 			a.emitLog(msg, "error")
 			return msg
 		}
 	}
 
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		msg := fmt.Sprintf("CreateMissingTables failed: connect: %v", err)
+		a.emitLog(msg, "error")
+		return msg
+	}
+	defer db.Close()
+
+	if err := db.PingContext(ctx); err != nil {
+		msg := fmt.Sprintf("CreateMissingTables failed: ping: %v", err)
+		a.emitLog(msg, "error")
+		return msg
+	}
+
+	// Schemas will be created automatically by the individual apps when they start.
+
 	return "Database tables checked/created successfully"
+}
+
+// ResetDatabase wipes the existing database.sqlite and creates a fresh one
+// with all tables across every app. Overwrites db.local.json as well.
+func (a *App) ResetDatabase() string {
+	root := a.resolveWorkspaceRoot()
+	dbPath := filepath.Join(root, "database.sqlite")
+	cfgPath := filepath.Join(root, "db.local.json")
+
+	// Remove old database file if it exists
+	if fileExists(dbPath) {
+		if err := os.Remove(dbPath); err != nil {
+			msg := fmt.Sprintf("ResetDatabase: could not delete old database: %v", err)
+			a.emitLog(msg, "error")
+			return msg
+		}
+		a.emitLog("Old database.sqlite removed", "info")
+	}
+
+	// Write fresh db.local.json
+	cfgData := fmt.Sprintf(`{"databaseUrl":"file:%s"}`, filepath.ToSlash(dbPath))
+	if err := os.WriteFile(cfgPath, []byte(cfgData), 0644); err != nil {
+		msg := fmt.Sprintf("ResetDatabase: could not write db.local.json: %v", err)
+		a.emitLog(msg, "error")
+		return msg
+	}
+	a.emitLog(fmt.Sprintf("db.local.json written → %s", dbPath), "info")
+
+	// CreateMissingTables will create the file and all schemas
+	return a.CreateMissingTables()
+}
+
+func (a *App) ConfigureLocalDatabase() string {
+	root := a.resolveWorkspaceRoot()
+	dbPath := filepath.Join(root, "database.sqlite")
+	
+	// Create db.local.json pointing to it
+	cfgPath := filepath.Join(root, "db.local.json")
+	cfgData := fmt.Sprintf(`{"databaseUrl":"file:%s"}`, filepath.ToSlash(dbPath))
+	if err := os.WriteFile(cfgPath, []byte(cfgData), 0644); err != nil {
+		return fmt.Sprintf("Failed to write config: %v", err)
+	}
+	
+	// Ensure file exists
+	if !fileExists(dbPath) {
+		if err := os.WriteFile(dbPath, []byte(""), 0644); err != nil {
+			return fmt.Sprintf("Failed to create db file: %v", err)
+		}
+	}
+	
+	// Run schema migrations
+	return a.CreateMissingTables()
 }
 
 // SetStopChildrenOnExit controls whether App Launcher will stop tracked/known
@@ -1117,6 +1047,95 @@ func (a *App) shutdown(ctx context.Context) {
 
 // KillAllTasks forcibly stops all known/ tracked child processes immediately
 // and clears the tracked process list. Returns a status string for UI display.
+func (a *App) GetDatabaseConfig() string {
+	root := a.resolveWorkspaceRoot()
+	connString, err := readDatabaseURL(root)
+	if err != nil {
+		return `{"error": "` + err.Error() + `"}`
+	}
+	
+	dbPath := strings.TrimPrefix(connString, "file:")
+	
+	info := map[string]string{
+		"path": dbPath,
+		"dbeaver_driver": "SQLite",
+		"dbeaver_host": "localhost",
+		"instructions": "To connect in DBeaver:\n1. Click 'New Database Connection'\n2. Select 'SQLite' as the driver\n3. Set 'Path' to: " + dbPath + "\n4. No username or password is required.\n5. Click Finish.",
+	}
+	
+	b, _ := json.MarshalIndent(info, "", "  ")
+	return string(b)
+}
+
+func (a *App) QueryTable(tableName string) string {
+	allowed := map[string]bool{
+		"game_history_entries": true,
+		"auto_payouts":         true,
+	}
+	if !allowed[tableName] {
+		return "Error: table not allowed"
+	}
+	
+	root := a.resolveWorkspaceRoot()
+	connString, err := readDatabaseURL(root)
+	if err != nil {
+		return "Error reading DB config: " + err.Error()
+	}
+	dbPath := strings.TrimPrefix(connString, "file:")
+	
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return "Error opening DB: " + err.Error()
+	}
+	defer db.Close()
+	
+	rows, err := db.Query("SELECT * FROM " + tableName + " ORDER BY id DESC LIMIT 50")
+	if err != nil {
+		return "Error querying table: " + err.Error()
+	}
+	defer rows.Close()
+	
+	cols, err := rows.Columns()
+	if err != nil {
+		return "Error getting columns: " + err.Error()
+	}
+	
+	var result []map[string]interface{}
+	for rows.Next() {
+		columns := make([]interface{}, len(cols))
+		columnPointers := make([]interface{}, len(cols))
+		for i := range columns {
+			columnPointers[i] = &columns[i]
+		}
+		
+		if err := rows.Scan(columnPointers...); err != nil {
+			return "Error scanning row: " + err.Error()
+		}
+		
+		m := make(map[string]interface{})
+		for i, colName := range cols {
+			val := columnPointers[i].(*interface{})
+			if val != nil && *val != nil {
+				if b, ok := (*val).([]byte); ok {
+					m[colName] = string(b)
+				} else {
+					m[colName] = *val
+				}
+			} else {
+				m[colName] = nil
+			}
+		}
+		result = append(result, m)
+	}
+	
+	jsonBytes, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return "Error marshaling JSON: " + err.Error()
+	}
+	
+	return string(jsonBytes)
+}
+
 func (a *App) KillAllTasks() string {
 	a.emitLog("KillAllTasks invoked", "info")
 

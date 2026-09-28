@@ -19,7 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+	_ "modernc.org/sqlite"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -94,7 +95,7 @@ type App struct {
 	currentSession *TradeSession
 	sessions       []TradeSession
 	usersByTradeID map[int]string
-	db             *pgxpool.Pool
+	db             *sql.DB
 	ownerKey       string
 
 	// Trade lifecycle tracking (per-active-trade)
@@ -372,9 +373,9 @@ func (a *App) StartTracking() TrackerState {
 		defer cancel()
 
 		var dbSessionID int64
-		err := db.QueryRow(
-			ctx,
-			`INSERT INTO trade_sessions (started_at, owner_key) VALUES ($1, $2) RETURNING id`,
+		err := db.QueryRowContext(ctx,
+			
+			`INSERT INTO trade_sessions (started_at, owner_key) VALUES (?, ?) RETURNING id`,
 			now,
 			a.ownerKey,
 		).Scan(&dbSessionID)
@@ -422,9 +423,9 @@ func (a *App) StopTracking() TrackerState {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 
-		if _, err := db.Exec(
-			ctx,
-			`UPDATE trade_sessions SET ended_at = $1 WHERE id = $2 AND ($3 = '' OR owner_key = $3)`,
+		if _, err := db.ExecContext(ctx,
+			
+			`UPDATE trade_sessions SET ended_at = ? WHERE id = ? AND (? = '' OR owner_key = ?)`,
 			now,
 			dbSessionID,
 			a.ownerKey,
@@ -1119,14 +1120,15 @@ func (a *App) initDatabase() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	cfg.DatabaseURL = strings.TrimPrefix(cfg.DatabaseURL, "file:")
+	db, err := sql.Open("sqlite", cfg.DatabaseURL)
 	if err != nil {
 		log.Printf("[DB] connection setup failed: %v", err)
 		a.logDebug("db init failed at pool creation: %v", err)
 		return
 	}
 
-	if err := db.Ping(ctx); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		log.Printf("[DB] ping failed: %v", err)
 		a.logDebug("db init failed at ping: %v", err)
 		db.Close()
@@ -1179,17 +1181,17 @@ func (a *App) persistTradeEntry(dbSessionID int64, partnerName string, partnerTr
 	defer cancel()
 	a.logDebug("persist insert attempt: dbSessionID=%d partner=%q tradeID=%d items=%d ownerKey=%q", dbSessionID, partnerName, partnerTradeID, len(items), a.ownerKey)
 
-	tx, err := a.db.Begin(ctx)
+	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
 		a.logDebug("persist begin tx failed: dbSessionID=%d err=%v", dbSessionID, err)
 		return err
 	}
 	defer func() {
-		_ = tx.Rollback(ctx)
+		_ = tx.Rollback()
 	}()
 
 	var tradeEntryID int64
-	if err := tx.QueryRow(ctx, `INSERT INTO trade_entries (session_id, occurred_at, partner_name, partner_trade_id, payload_hex, furni_items, owner_key) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+	if err := tx.QueryRowContext(ctx, `INSERT INTO trade_entries (session_id, occurred_at, partner_name, partner_trade_id, payload_hex, furni_items, owner_key) VALUES (?,?,?,?,?,?,?) RETURNING id`,
 		dbSessionID,
 		occurredAt,
 		partnerName,
@@ -1211,9 +1213,9 @@ func (a *App) persistTradeEntry(dbSessionID int64, partnerName string, partnerTr
 		if qty <= 0 {
 			qty = 1
 		}
-		if _, err := tx.Exec(ctx, `
+		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO trade_entry_items (trade_entry_id, item_name, quantity, raw_data, owner_key)
-			VALUES ($1,$2,$3,$4,$5)
+			VALUES (?,?,?,?,?)
 			ON CONFLICT (trade_entry_id, item_name)
 			DO UPDATE SET quantity = EXCLUDED.quantity, raw_data = EXCLUDED.raw_data
 		`, tradeEntryID, name, qty, item.Raw, a.ownerKey); err != nil {
@@ -1222,7 +1224,7 @@ func (a *App) persistTradeEntry(dbSessionID int64, partnerName string, partnerTr
 		}
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		a.logDebug("persist commit failed: tradeEntryID=%d err=%v", tradeEntryID, err)
 		return err
 	}
@@ -1245,52 +1247,52 @@ func (a *App) ensureTables() error {
 
 	createQueries := []string{
 		`CREATE TABLE IF NOT EXISTS trade_sessions (
-			id BIGSERIAL PRIMARY KEY,
-			started_at TIMESTAMPTZ NOT NULL,
-			ended_at TIMESTAMPTZ NULL,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			started_at DATETIME NOT NULL,
+			ended_at DATETIME NULL,
 			owner_key TEXT NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS trade_entries (
-			id BIGSERIAL PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id BIGINT NOT NULL REFERENCES trade_sessions(id) ON DELETE CASCADE,
-			occurred_at TIMESTAMPTZ NOT NULL,
+			occurred_at DATETIME NOT NULL,
 			partner_name TEXT NOT NULL,
 			partner_trade_id INTEGER NOT NULL,
 			payload_hex TEXT NOT NULL,
-			furni_items JSONB DEFAULT '[]'::jsonb,
+			furni_items TEXT DEFAULT '[]',
 			owner_key TEXT NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS trade_entry_items (
-			id BIGSERIAL PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			trade_entry_id BIGINT NOT NULL REFERENCES trade_entries(id) ON DELETE CASCADE,
 			item_name TEXT NOT NULL,
 			quantity INTEGER NOT NULL DEFAULT 1,
 			raw_data TEXT NOT NULL DEFAULT '',
 			owner_key TEXT NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE (trade_entry_id, item_name)
 		)`,
 	}
 
 	for _, q := range createQueries {
-		if _, err := db.Exec(ctx, q); err != nil {
+		if _, err := db.ExecContext(ctx, q); err != nil {
 			return err
 		}
 	}
 
 	// Ensure older tables get new columns if they existed before this version
 	alterQueries := []string{
-		`ALTER TABLE trade_sessions ADD COLUMN IF NOT EXISTS owner_key TEXT DEFAULT ''`,
-		`ALTER TABLE trade_entries ADD COLUMN IF NOT EXISTS owner_key TEXT DEFAULT ''`,
-		`ALTER TABLE trade_entries ADD COLUMN IF NOT EXISTS furni_items JSONB DEFAULT '[]'::jsonb`,
-		`ALTER TABLE trade_entry_items ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 1`,
-		`ALTER TABLE trade_entry_items ADD COLUMN IF NOT EXISTS raw_data TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE trade_entry_items ADD COLUMN IF NOT EXISTS owner_key TEXT DEFAULT ''`,
+		`ALTER TABLE trade_sessions ADD COLUMN owner_key TEXT DEFAULT ''`,
+		`ALTER TABLE trade_entries ADD COLUMN owner_key TEXT DEFAULT ''`,
+		`ALTER TABLE trade_entries ADD COLUMN furni_items TEXT DEFAULT '[]'`,
+		`ALTER TABLE trade_entry_items ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE trade_entry_items ADD COLUMN raw_data TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE trade_entry_items ADD COLUMN owner_key TEXT DEFAULT ''`,
 	}
 	for _, q := range alterQueries {
-		if _, err := db.Exec(ctx, q); err != nil {
+		if _, err := db.ExecContext(ctx, q); err != nil {
 			return err
 		}
 	}
@@ -1305,13 +1307,13 @@ func (a *App) ensureTables() error {
 		`CREATE INDEX IF NOT EXISTS idx_trade_entry_items_name ON trade_entry_items(item_name)`,
 	}
 	for _, q := range indexQueries {
-		if _, err := db.Exec(ctx, q); err != nil {
+		if _, err := db.ExecContext(ctx, q); err != nil {
 			return err
 		}
 	}
 
 	// Backfill normalized rows from existing JSON payloads.
-	if _, err := db.Exec(ctx, `
+	if _, err := db.ExecContext(ctx, `
 		INSERT INTO trade_entry_items (trade_entry_id, item_name, quantity, raw_data, owner_key)
 		SELECT
 			e.id,
@@ -1320,7 +1322,7 @@ func (a *App) ensureTables() error {
 			COALESCE(elem->>'raw', ''),
 			e.owner_key
 		FROM trade_entries e
-		CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.furni_items, '[]'::jsonb)) elem
+		CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.furni_items, '[]')) elem
 		WHERE COALESCE(elem->>'name', '') <> ''
 		ON CONFLICT (trade_entry_id, item_name) DO NOTHING
 	`); err != nil {
@@ -1342,7 +1344,7 @@ func (a *App) loadSessionsFromDB() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	rows, err := db.Query(ctx, `
+	rows, err := db.QueryContext(ctx, `
 		SELECT
 			s.id,
 			s.started_at,
@@ -1354,7 +1356,7 @@ func (a *App) loadSessionsFromDB() error {
 			e.furni_items
 		FROM trade_sessions s
 		LEFT JOIN trade_entries e ON e.session_id = s.id
-		WHERE ($1 = '' OR s.owner_key = $1)
+		WHERE (? = '' OR s.owner_key = ?)
 		ORDER BY s.id ASC, e.occurred_at ASC, e.id ASC
 	`, a.ownerKey)
 	if err != nil {

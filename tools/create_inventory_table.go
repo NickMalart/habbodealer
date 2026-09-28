@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	
 )
 
 func main() {
@@ -21,12 +21,12 @@ func main() {
 	defer conn.Close(ctx)
 
 	fmt.Println("--- Creating banker_inventory table ---")
-	_, err = conn.Exec(ctx, `
+	_, err = conn.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS banker_inventory (
 			banker_name TEXT,
 			item_name TEXT,
 			quantity INTEGER,
-			updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
+			updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (banker_name, item_name)
 		)
 	`)

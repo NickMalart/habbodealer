@@ -8,13 +8,15 @@ import (
 	"os"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
 	conn := "postgresql://neondb_owner:npg_cPwtQn4ZGh7J@ep-crimson-frost-b4a01mk8-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, conn)
+	conn = strings.TrimPrefix(conn, "file:")
+	pool, err := sql.Open("sqlite", conn)
 	if err != nil {
 		log.Fatalf("failed to connect: %v", err)
 	}
@@ -29,7 +31,7 @@ func main() {
 
 	for _, q := range introspect {
 		fmt.Println("--- schema ---")
-		rows, err := pool.Query(ctx, q)
+		rows, err := pool.QueryContext(ctx, q)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "introspection failed: %v\n", err)
 			continue
@@ -50,14 +52,14 @@ func main() {
 		title string
 		q string
 	}{
-		{"Trades with payload mentioning bvanmker", `SELECT id, session_id, owner_key, occurred_at, payload FROM public.trade_entries WHERE payload::text ILIKE '%bvanmker%' ORDER BY occurred_at DESC LIMIT 200;`},
-		{"Game history for bvanmker", `SELECT id, owner_key, player_name, started_at, status FROM public.game_history_entries WHERE LOWER(player_name) = 'bvanmker' ORDER BY started_at DESC LIMIT 200;`},
-		{"Recent trade sessions", `SELECT id, owner_key, status, created_at FROM public.trade_sessions ORDER BY created_at DESC LIMIT 50;`},
+		{"Trades with payload mentioning bvanmker", `SELECT id, session_id, owner_key, occurred_at, payload FROM trade_entries WHERE payload::text LIKE '%bvanmker%' ORDER BY occurred_at DESC LIMIT 200;`},
+		{"Game history for bvanmker", `SELECT id, owner_key, player_name, started_at, status FROM game_history_entries WHERE LOWER(player_name) = 'bvanmker' ORDER BY started_at DESC LIMIT 200;`},
+		{"Recent trade sessions", `SELECT id, owner_key, status, created_at FROM trade_sessions ORDER BY created_at DESC LIMIT 50;`},
 	}
 
 	for _, s := range samples {
 		fmt.Println("---", s.title, "---")
-		rows, err := pool.Query(ctx, s.q)
+		rows, err := pool.QueryContext(ctx, s.q)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "sample query failed: %v\n", err)
 			continue
@@ -65,15 +67,15 @@ func main() {
 
 		// Quick substring searches in payload and player_name
 		checks := []struct{title, q string}{
-			{"Count trade_entries with payload ILIKE '%bvan%'", `SELECT COUNT(*) FROM public.trade_entries WHERE payload::text ILIKE '%bvan%';`},
-			{"Count trade_entries with payload ILIKE '%van%'", `SELECT COUNT(*) FROM public.trade_entries WHERE payload::text ILIKE '%van%';`},
-			{"Count game_history player_name ILIKE '%bvan%'", `SELECT COUNT(*) FROM public.game_history_entries WHERE player_name ILIKE '%bvan%';`},
+			{"Count trade_entries with payload LIKE '%bvan%'", `SELECT COUNT(*) FROM trade_entries WHERE payload::text LIKE '%bvan%';`},
+			{"Count trade_entries with payload LIKE '%van%'", `SELECT COUNT(*) FROM trade_entries WHERE payload::text LIKE '%van%';`},
+			{"Count game_history player_name LIKE '%bvan%'", `SELECT COUNT(*) FROM game_history_entries WHERE player_name LIKE '%bvan%';`},
 		}
 
 		for _, c := range checks {
 			fmt.Println("---", c.title, "---")
 			var cnt int64
-			if err := pool.QueryRow(ctx, c.q).Scan(&cnt); err != nil {
+			if err := pool.QueryRowContext(ctx, c.q).Scan(&cnt); err != nil {
 				fmt.Fprintf(os.Stderr, "check failed: %v\n", err)
 				continue
 			}
@@ -102,14 +104,14 @@ func main() {
 	// Targeted diagnostics for auto-payout flow for player 'bvanmker'
 	player := "bvanmker"
 	targeted := []struct{title, q string}{
-		{"Auto payouts for player", fmt.Sprintf(`SELECT id, player_name, item_name, quantity, status, COALESCE(player_trade_id,0) AS player_trade_id, COALESCE(banker_trade_id,0) AS banker_trade_id FROM public.auto_payouts WHERE lower(player_name)=lower('%s') ORDER BY created_at DESC LIMIT 100;`, player)},
-		{"Banker trades for player / trade id", fmt.Sprintf(`SELECT id, player_name, status, player_trade_id, owner_key, created_at FROM public.banker_trades WHERE (player_trade_id > 0 AND player_trade_id IN (SELECT COALESCE(player_trade_id,0) FROM public.auto_payouts WHERE lower(player_name)=lower('%s'))) OR lower(player_name)=lower('%s') ORDER BY created_at DESC LIMIT 100;`, player, player)},
-		{"Recent game history for player", fmt.Sprintf(`SELECT id, player_name, game, status, winner, started_at, owner_key FROM public.game_history_entries WHERE lower(player_name)=lower('%s') ORDER BY started_at DESC LIMIT 100;`, player)},
+		{"Auto payouts for player", fmt.Sprintf(`SELECT id, player_name, item_name, quantity, status, COALESCE(player_trade_id,0) AS player_trade_id, COALESCE(banker_trade_id,0) AS banker_trade_id FROM auto_payouts WHERE lower(player_name)=lower('%s') ORDER BY created_at DESC LIMIT 100;`, player)},
+		{"Banker trades for player / trade id", fmt.Sprintf(`SELECT id, player_name, status, player_trade_id, owner_key, created_at FROM banker_trades WHERE (player_trade_id > 0 AND player_trade_id IN (SELECT COALESCE(player_trade_id,0) FROM auto_payouts WHERE lower(player_name)=lower('%s'))) OR lower(player_name)=lower('%s') ORDER BY created_at DESC LIMIT 100;`, player, player)},
+		{"Recent game history for player", fmt.Sprintf(`SELECT id, player_name, game, status, winner, started_at, owner_key FROM game_history_entries WHERE lower(player_name)=lower('%s') ORDER BY started_at DESC LIMIT 100;`, player)},
 	}
 
 	for _, t := range targeted {
 		fmt.Println("---", t.title, "---")
-		rows, err := pool.Query(ctx, t.q)
+		rows, err := pool.QueryContext(ctx, t.q)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "targeted query failed: %v\n", err)
 			continue
@@ -135,13 +137,13 @@ func main() {
 
 	// Distinct owner_key checks per table (if column exists)
 	fmt.Println("--- Distinct owner_key in auto_payouts (if column exists) ---")
-	rows, err := pool.Query(ctx, "SELECT column_name FROM information_schema.columns WHERE table_name='auto_payouts' AND column_name='owner_key'")
+	rows, err := pool.QueryContext(ctx, "SELECT column_name FROM information_schema.columns WHERE table_name='auto_payouts' AND column_name='owner_key'")
 	if err == nil {
 		has := false
 		for rows.Next() { has = true }
 		rows.Close()
 		if has {
-			r, _ := pool.Query(ctx, "SELECT DISTINCT owner_key FROM public.auto_payouts ORDER BY owner_key")
+			r, _ := pool.QueryContext(ctx, "SELECT DISTINCT owner_key FROM auto_payouts ORDER BY owner_key")
 			for r.Next() {
 				var ok string
 				_ = r.Scan(&ok)
@@ -154,7 +156,7 @@ func main() {
 	}
 
 	fmt.Println("--- Distinct owner_key in banker_trades ---")
-	r2, err := pool.Query(ctx, "SELECT DISTINCT owner_key FROM public.banker_trades ORDER BY owner_key")
+	r2, err := pool.QueryContext(ctx, "SELECT DISTINCT owner_key FROM banker_trades ORDER BY owner_key")
 	if err == nil {
 		for r2.Next() {
 			var ok string
@@ -167,7 +169,7 @@ func main() {
 	}
 
 	fmt.Println("--- Distinct owner_key in game_history_entries ---")
-	r3, err := pool.Query(ctx, "SELECT DISTINCT owner_key FROM public.game_history_entries ORDER BY owner_key")
+	r3, err := pool.QueryContext(ctx, "SELECT DISTINCT owner_key FROM game_history_entries ORDER BY owner_key")
 	if err == nil {
 		for r3.Next() {
 			var ok string
@@ -182,7 +184,7 @@ func main() {
 	// Additional safe SELECTs requested: specific checks for banker_trades and auto_payouts
 	fmt.Println() 
 	fmt.Println("--- Safe SELECT: banker_trades for player 'bvanmker' ---")
-	btRows, err := pool.Query(ctx, "SELECT id, player_name, status, player_trade_id, owner_key, created_at FROM public.banker_trades WHERE lower(player_name)=lower('bvanmker') ORDER BY created_at DESC LIMIT 500")
+	btRows, err := pool.QueryContext(ctx, "SELECT id, player_name, status, player_trade_id, owner_key, created_at FROM banker_trades WHERE lower(player_name)=lower('bvanmker') ORDER BY created_at DESC LIMIT 500")
 	if err == nil {
 		for btRows.Next() {
 			var id int64
@@ -200,7 +202,7 @@ func main() {
 
 	fmt.Println()
 	fmt.Println("--- Safe SELECT: banker_trades with status 'paying' ---")
-	payingRows, err := pool.Query(ctx, "SELECT id, player_name, status, player_trade_id, owner_key, created_at FROM public.banker_trades WHERE lower(status)=lower('paying') ORDER BY created_at DESC LIMIT 500")
+	payingRows, err := pool.QueryContext(ctx, "SELECT id, player_name, status, player_trade_id, owner_key, created_at FROM banker_trades WHERE lower(status)=lower('paying') ORDER BY created_at DESC LIMIT 500")
 	if err == nil {
 		for payingRows.Next() {
 			var id int64
@@ -218,7 +220,7 @@ func main() {
 
 	fmt.Println()
 	fmt.Println("--- Safe SELECT: auto_payouts related to player or banker trades ---")
-	apRows, err := pool.Query(ctx, "SELECT id, player_name, item_name, quantity, status, created_at, COALESCE(player_trade_id,0), COALESCE(banker_trade_id,0) FROM public.auto_payouts WHERE lower(player_name)=lower('bvanmker') OR player_trade_id IN (SELECT id FROM public.banker_trades WHERE lower(player_name)=lower('bvanmker')) ORDER BY created_at DESC LIMIT 500")
+	apRows, err := pool.QueryContext(ctx, "SELECT id, player_name, item_name, quantity, status, created_at, COALESCE(player_trade_id,0), COALESCE(banker_trade_id,0) FROM auto_payouts WHERE lower(player_name)=lower('bvanmker') OR player_trade_id IN (SELECT id FROM banker_trades WHERE lower(player_name)=lower('bvanmker')) ORDER BY created_at DESC LIMIT 500")
 	if err == nil {
 		for apRows.Next() {
 			var id int64

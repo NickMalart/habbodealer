@@ -10,6 +10,10 @@ export function BuildSingle(arg1) {
   return window['go']['main']['App']['BuildSingle'](arg1);
 }
 
+export function ConfigureLocalDatabase() {
+  return window['go']['main']['App']['ConfigureLocalDatabase']();
+}
+
 export function CreateMissingTables() {
   return window['go']['main']['App']['CreateMissingTables']();
 }
@@ -20,6 +24,10 @@ export function GetApps() {
 
 export function GetBuildTargets() {
   return window['go']['main']['App']['GetBuildTargets']();
+}
+
+export function GetDatabaseConfig() {
+  return window['go']['main']['App']['GetDatabaseConfig']();
 }
 
 export function GetGEarthStatus() {
@@ -50,8 +58,16 @@ export function LaunchGEarth() {
   return window['go']['main']['App']['LaunchGEarth']();
 }
 
+export function QueryTable(arg1) {
+  return window['go']['main']['App']['QueryTable'](arg1);
+}
+
 export function RefreshApps() {
   return window['go']['main']['App']['RefreshApps']();
+}
+
+export function ResetDatabase() {
+  return window['go']['main']['App']['ResetDatabase']();
 }
 
 export function SetStopChildrenOnExit(arg1) {

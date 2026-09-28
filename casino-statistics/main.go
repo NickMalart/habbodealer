@@ -16,7 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+	_ "modernc.org/sqlite"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -106,7 +107,7 @@ type DiscordWebhookPayload struct {
 
 type App struct {
 	ctx      context.Context
-	db       *pgxpool.Pool
+	db       *sql.DB
 	ownerKey string
 	dbStatus string
 	mu       sync.Mutex
@@ -192,7 +193,8 @@ func (a *App) initDB() {
 	a.ownerKey = cfg.OwnerKey
 	log.Printf("[DB_INIT] Connecting to database... (ownerKey: %s)", a.ownerKey)
 
-	pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
+	cfg.DatabaseURL = strings.TrimPrefix(cfg.DatabaseURL, "file:")
+	pool, err := sql.Open("sqlite", cfg.DatabaseURL)
 	if err != nil {
 		log.Printf("[DB_INIT] Failed to create connection pool: %v", err)
 		a.mu.Lock()
@@ -202,7 +204,7 @@ func (a *App) initDB() {
 	}
 
 	// Test connection
-	if err := pool.Ping(context.Background()); err != nil {
+	if err := pool.PingContext(context.Background()); err != nil {
 		log.Printf("[DB_INIT] Failed to ping database: %v", err)
 		a.mu.Lock()
 		a.dbStatus = "Connection failed (Ping)"
@@ -213,12 +215,12 @@ func (a *App) initDB() {
 	a.db = pool
 
 	// Create blocked_players table if not exists
-	_, err = a.db.Exec(context.Background(), `
+	_, err = a.db.ExecContext(context.Background(), `
 		CREATE TABLE IF NOT EXISTS blocked_players (
-			id SERIAL PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL,
 			player_name TEXT NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE (owner_key, player_name)
 		)
 	`)
@@ -226,21 +228,21 @@ func (a *App) initDB() {
 		log.Printf("[DB_INIT] Failed to create blocked_players table: %v", err)
 	} else {
 		// Create lowercase index if it doesn't exist
-		_, _ = a.db.Exec(context.Background(), "CREATE UNIQUE INDEX IF NOT EXISTS idx_blocked_players_lower_name ON blocked_players (LOWER(player_name))")
+		_, _ = a.db.ExecContext(context.Background(), "CREATE UNIQUE INDEX IF NOT EXISTS idx_blocked_players_lower_name ON blocked_players (LOWER(player_name))")
 
 		// Normalize existing names to lowercase
-		_, err = a.db.Exec(context.Background(), "UPDATE blocked_players SET player_name = LOWER(player_name) WHERE player_name != LOWER(player_name)")
+		_, err = a.db.ExecContext(context.Background(), "UPDATE blocked_players SET player_name = LOWER(player_name) WHERE player_name != LOWER(player_name)")
 		if err != nil {
 			log.Printf("[DB_INIT] Failed to normalize blocked_players: %v", err)
 		}
 	}
 
 	// Create ui_settings table if not exists
-	_, err = a.db.Exec(context.Background(), `
+	_, err = a.db.ExecContext(context.Background(), `
 		CREATE TABLE IF NOT EXISTS ui_settings (
 			key TEXT PRIMARY KEY,
-			value JSONB NOT NULL,
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			value TEXT NOT NULL,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
 	if err != nil {
@@ -258,7 +260,7 @@ func (a *App) GetSettings(key string) string {
 		return "{}"
 	}
 	var val string
-	err := a.db.QueryRow(context.Background(), "SELECT value FROM ui_settings WHERE key = $1", key).Scan(&val)
+	err := a.db.QueryRowContext(context.Background(), "SELECT value FROM ui_settings WHERE key = ?", key).Scan(&val)
 	if err != nil {
 		return "{}"
 	}
@@ -270,10 +272,10 @@ func (a *App) SaveSettings(key string, valueJSON string) {
 	if a.db == nil {
 		return
 	}
-	_, err := a.db.Exec(context.Background(), `
+	_, err := a.db.ExecContext(context.Background(), `
 		INSERT INTO ui_settings (key, value, updated_at)
-		VALUES ($1, $2, NOW())
-		ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT (key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP
 	`, key, valueJSON)
 	if err != nil {
 		log.Printf("[SETTINGS] Failed to save %s: %v", key, err)
@@ -287,7 +289,7 @@ func (a *App) GetBlockedPlayers() []string {
 		return []string{}
 	}
 	// Filter by owner key to match the actual schema
-	rows, err := a.db.Query(context.Background(), "SELECT player_name FROM blocked_players WHERE ($1 = '' OR owner_key = $1) ORDER BY player_name", a.ownerKey)
+	rows, err := a.db.QueryContext(context.Background(), "SELECT player_name FROM blocked_players WHERE (? = '' OR owner_key = ?) ORDER BY player_name", a.ownerKey)
 	if err != nil {
 		log.Printf("[BLOCK] Failed to query blocked players: %v", err)
 		return []string{}
@@ -321,7 +323,7 @@ func (a *App) ToggleBlockPlayer(name string) {
 
 	var exists bool
 	// Check existence for THIS owner
-	err := a.db.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM blocked_players WHERE ($1 = '' OR owner_key = $1) AND LOWER(player_name) = $2)", a.ownerKey, name).Scan(&exists)
+	err := a.db.QueryRowContext(context.Background(), "SELECT EXISTS(SELECT 1 FROM blocked_players WHERE (? = '' OR owner_key = ?) AND LOWER(player_name) = ?)", a.ownerKey, name).Scan(&exists)
 	if err != nil {
 		log.Printf("[BLOCK] Error checking existence for %s: %v", name, err)
 		return
@@ -331,20 +333,22 @@ func (a *App) ToggleBlockPlayer(name string) {
 
 	if exists {
 		log.Printf("[BLOCK] Unblocking player: %s", name)
-			tag, err := a.db.Exec(context.Background(), "DELETE FROM blocked_players WHERE ($1 = '' OR owner_key = $1) AND LOWER(player_name) = $2", a.ownerKey, name)
+			tag, err := a.db.ExecContext(context.Background(), "DELETE FROM blocked_players WHERE (? = '' OR owner_key = ?) AND LOWER(player_name) = ?", a.ownerKey, name)
 		if err != nil {
 			log.Printf("[BLOCK] Failed to unblock player %s: %v", name, err)
 		} else {
-			log.Printf("[BLOCK] Unblock successful for %s. Rows affected: %d", name, tag.RowsAffected())
+			n, _ := tag.RowsAffected()
+			log.Printf("[BLOCK] Unblock successful for %s. Rows affected: %d", name, n)
 		}
 	} else {
 		log.Printf("[BLOCK] Blocking player: %s", name)
 		// The actual table has a unique index on (owner_key, player_name)
-		tag, err := a.db.Exec(context.Background(), "INSERT INTO blocked_players (owner_key, player_name) VALUES ($1, $2) ON CONFLICT (owner_key, player_name) DO NOTHING", a.ownerKey, name)
+		tag, err := a.db.ExecContext(context.Background(), "INSERT INTO blocked_players (owner_key, player_name) VALUES (?, ?) ON CONFLICT (owner_key, player_name) DO NOTHING", a.ownerKey, name)
 		if err != nil {
 			log.Printf("[BLOCK] Failed to block player %s: %v", name, err)
 		} else {
-			log.Printf("[BLOCK] Block successful for %s. Rows affected: %d", name, tag.RowsAffected())
+			n, _ := tag.RowsAffected()
+			log.Printf("[BLOCK] Block successful for %s. Rows affected: %d", name, n)
 		}
 	}
 }
@@ -386,7 +390,7 @@ func (a *App) GetPlayerStats(startDate, endDate string) []PlayerStats {
 		args = append(args, endDate)
 	}
 
-	rows, err := a.db.Query(context.Background(), query, args...)
+	rows, err := a.db.QueryContext(context.Background(), query, args...)
 	if err != nil {
 		log.Printf("[PLAYER_STATS] Query failed: %v", err)
 		return []PlayerStats{}
@@ -465,7 +469,7 @@ func (a *App) GetPlayerGameStats(playerName, startDate, endDate string) []GameSt
 	query := `
 		SELECT game, winner, status, issue, completed_at
 		FROM game_history_entries
-		WHERE 1=1 AND TRIM(player_name) = $1
+		WHERE 1=1 AND TRIM(player_name) = ?
 	`
 	args := []interface{}{strings.TrimSpace(playerName)}
 	if startDate != "" {
@@ -477,7 +481,7 @@ func (a *App) GetPlayerGameStats(playerName, startDate, endDate string) []GameSt
 		args = append(args, endDate)
 	}
 
-	rows, err := a.db.Query(context.Background(), query, args...)
+	rows, err := a.db.QueryContext(context.Background(), query, args...)
 	if err != nil {
 		log.Printf("[PLAYER_GAME_STATS] Query failed: %v", err)
 		return []GameStats{}
@@ -544,7 +548,7 @@ func (a *App) GetPlayers() []string {
 	if a.db == nil {
 		return []string{}
 	}
-	rows, err := a.db.Query(context.Background(), "SELECT DISTINCT player_name FROM game_history_entries ORDER BY player_name")
+	rows, err := a.db.QueryContext(context.Background(), "SELECT DISTINCT player_name FROM game_history_entries ORDER BY player_name")
 	if err != nil {
 		return []string{}
 	}
@@ -667,7 +671,7 @@ func (a *App) GetStats(startDate, endDate string) CasinoStats {
 		args = append(args, endDate)
 	}
 
-	rows, err := a.db.Query(context.Background(), query, args...)
+	rows, err := a.db.QueryContext(context.Background(), query, args...)
 	if err != nil {
 		log.Printf("[STATS] Query failed: %v", err)
 		return CasinoStats{}
@@ -780,7 +784,7 @@ func (a *App) GetLedgerStats(startDate, endDate string) []LedgerItemStats {
 		args = append(args, endDate)
 	}
 
-	rows, err := a.db.Query(context.Background(), query, args...)
+	rows, err := a.db.QueryContext(context.Background(), query, args...)
 	if err != nil {
 		log.Printf("[LEDGER_STATS] Query failed: %v", err)
 		return []LedgerItemStats{}
@@ -853,7 +857,7 @@ func (a *App) GetPlayerLedgerStats(playerName, startDate, endDate string) []Ledg
 	query := `
 		SELECT trade_type, items
 		FROM trade_ledger
-		WHERE 1=1 AND TRIM(LOWER(partner_name)) = $1
+		WHERE 1=1 AND TRIM(LOWER(partner_name)) = ?
 	`
 	args := []interface{}{strings.TrimSpace(strings.ToLower(playerName))}
 	if startDate != "" {
@@ -865,7 +869,7 @@ func (a *App) GetPlayerLedgerStats(playerName, startDate, endDate string) []Ledg
 		args = append(args, endDate)
 	}
 
-	rows, err := a.db.Query(context.Background(), query, args...)
+	rows, err := a.db.QueryContext(context.Background(), query, args...)
 	if err != nil {
 		log.Printf("[PLAYER_LEDGER_STATS] Query failed: %v", err)
 		return []LedgerItemStats{}
@@ -962,9 +966,9 @@ func (a *App) PostStatsToDiscord() string {
 	ledgerLife := a.GetLedgerStats("", "")
 
 	// 3. Calculate Biggest Winner/Loser (Today - Net Items)
-	rows, _ := a.db.Query(context.Background(), `
+	rows, _ := a.db.QueryContext(context.Background(), `
 		SELECT partner_name, trade_type, items FROM trade_ledger 
-		WHERE created_at >= $1 AND created_at <= $2
+		WHERE created_at >= ? AND created_at <= ?
 	`, todayStart, todayEnd)
 
 	type PlayerNet struct {
@@ -1015,7 +1019,7 @@ func (a *App) PostStatsToDiscord() string {
 	}
 
 	// 4. Calculate Heat Map (Longest Current Streaks)
-	srows, _ := a.db.Query(context.Background(), `
+	srows, _ := a.db.QueryContext(context.Background(), `
 		SELECT game, winner, player_name FROM game_history_entries 
 		WHERE status = 'Completed' AND issue = false
 		ORDER BY created_at DESC LIMIT 100
@@ -1075,7 +1079,7 @@ func (a *App) PostStatsToDiscord() string {
 
 	// 5. Lifetime Economy
 	var firstDate time.Time
-	a.db.QueryRow(context.Background(), "SELECT MIN(created_at) FROM trade_ledger").Scan(&firstDate)
+	a.db.QueryRowContext(context.Background(), "SELECT MIN(created_at) FROM trade_ledger").Scan(&firstDate)
 	daysActive := int(now.Sub(firstDate).Hours()/24) + 1
 
 	totalItemsIn := 0

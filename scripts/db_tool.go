@@ -9,7 +9,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+	_ "modernc.org/sqlite"
 )
 
 type BankerBetItem struct {
@@ -36,7 +37,8 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	pool, err := pgxpool.New(ctx, conn)
+	conn = strings.TrimPrefix(conn, "file:")
+	pool, err := sql.Open("sqlite", conn)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "connect error: %v\n", err)
 		os.Exit(1)
@@ -44,28 +46,28 @@ func main() {
 	defer pool.Close()
 
 	if *resetOperational {
-		tx, err := pool.Begin(ctx)
+		tx, err := pool.BeginTx(ctx, nil)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "begin reset transaction error: %v\n", err)
 			os.Exit(3)
 		}
 
 		var payoutCount, bankerCount int64
-		if result, err := tx.Exec(ctx, "DELETE FROM public.auto_payouts"); err != nil {
-			_ = tx.Rollback(ctx)
+		if result, err := tx.ExecContext(ctx, "DELETE FROM auto_payouts"); err != nil {
+			_ = tx.Rollback()
 			fmt.Fprintf(os.Stderr, "delete auto_payouts error: %v\n", err)
 			os.Exit(3)
 		} else {
 			payoutCount = result.RowsAffected()
 		}
-		if result, err := tx.Exec(ctx, "DELETE FROM public.banker_trades WHERE COALESCE(LOWER(status), '') <> 'completed'"); err != nil {
-			_ = tx.Rollback(ctx)
+		if result, err := tx.ExecContext(ctx, "DELETE FROM banker_trades WHERE COALESCE(LOWER(status), '') <> 'completed'"); err != nil {
+			_ = tx.Rollback()
 			fmt.Fprintf(os.Stderr, "delete active banker_trades error: %v\n", err)
 			os.Exit(3)
 		} else {
 			bankerCount = result.RowsAffected()
 		}
-		if err := tx.Commit(ctx); err != nil {
+		if err := tx.Commit(); err != nil {
 			fmt.Fprintf(os.Stderr, "commit reset transaction error: %v\n", err)
 			os.Exit(3)
 		}
@@ -74,7 +76,7 @@ func main() {
 
 	if *show {
 		fmt.Println("== recent banker_trades ==")
-		r, err := pool.Query(ctx, "SELECT id, player_name, COALESCE(player_trade_id,0), status, created_at, bet_items FROM public.banker_trades ORDER BY created_at DESC LIMIT 20")
+		r, err := pool.QueryContext(ctx, "SELECT id, player_name, COALESCE(player_trade_id,0), status, created_at, bet_items FROM banker_trades ORDER BY created_at DESC LIMIT 20")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "query banker_trades error: %v\n", err)
 		} else {
@@ -98,12 +100,12 @@ func main() {
 
 		fmt.Println("\n== recent auto_payouts ==")
 		var cnt int
-		if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM public.auto_payouts").Scan(&cnt); err == nil {
+		if err := pool.QueryRowContext(ctx, "SELECT COUNT(*) FROM auto_payouts").Scan(&cnt); err == nil {
 			fmt.Printf("auto_payouts count=%d\n", cnt)
 		} else {
 			fmt.Printf("auto_payouts count query error: %v\n", err)
 		}
-		r2, err := pool.Query(ctx, "SELECT id, player_name, COALESCE(player_trade_id,0), COALESCE(banker_trade_id,0), item_name, quantity, status, created_at FROM public.auto_payouts ORDER BY created_at DESC LIMIT 50")
+		r2, err := pool.QueryContext(ctx, "SELECT id, player_name, COALESCE(player_trade_id,0), COALESCE(banker_trade_id,0), item_name, quantity, status, created_at FROM auto_payouts ORDER BY created_at DESC LIMIT 50")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "query auto_payouts error: %v\n", err)
 		} else {
@@ -123,7 +125,7 @@ func main() {
 
 	if *makeLatest {
 		// Find latest banker_trade not completed
-		row := pool.QueryRow(ctx, "SELECT id, player_name, COALESCE(player_trade_id,0), COALESCE(player_chat_id,0), bet_items FROM public.banker_trades WHERE status != 'completed' ORDER BY created_at DESC LIMIT 1")
+		row := pool.QueryRowContext(ctx, "SELECT id, player_name, COALESCE(player_trade_id,0), COALESCE(player_chat_id,0), bet_items FROM banker_trades WHERE status != 'completed' ORDER BY created_at DESC LIMIT 1")
 		var btID int
 		var player string
 		var playerTrade int64
@@ -155,7 +157,7 @@ func main() {
 			} else {
 				tradeParam = nil
 			}
-			_, err := pool.Exec(ctx, "INSERT INTO public.auto_payouts (id, player_name, item_name, quantity, status, created_at, player_trade_id, banker_trade_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", pid, player, it.RawName, it.Qty, "Pending", created, tradeParam, btID)
+			_, err := pool.ExecContext(ctx, "INSERT INTO auto_payouts (id, player_name, item_name, quantity, status, created_at, player_trade_id, banker_trade_id) VALUES (?,?,?,?,?,?,?,?)", pid, player, it.RawName, it.Qty, "Pending", created, tradeParam, btID)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "INSERT error: %v\n", err)
 			} else {
