@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"/><title>App Launcher</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -58,11 +58,11 @@ async function buildAll(){if(building)return;setBuilding(true);setStatus('Buildi
   setStatus('Creating database tables…');
   clearLog();
   try {
-    const res = await CreateMissingTables();
+    const res = await ResetDatabase();
     log(res, (res||'').toLowerCase().includes('failure') || (res||'').toLowerCase().includes('fail') ? 'error' : 'success');
     setStatus(res || '');
   } catch (e) {
-    const msg = 'CreateMissingTables failed: ' + e;
+    const msg = 'ResetDatabase failed: ' + e;
     log(msg, 'error');
     setStatus(msg);
   }
