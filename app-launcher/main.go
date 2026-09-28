@@ -235,17 +235,34 @@ func (a *App) CreateMissingTables() string {
 	root := a.resolveWorkspaceRoot()
 	connString, err := readDatabaseURL(root)
 	if err != nil {
-		msg := fmt.Sprintf("CreateMissingTables failed: %v", err)
-		a.emitLog(msg, "error")
-		return msg
+		// db.local.json doesn't exist yet — auto-create it
+		dbPath := filepath.Join(root, "database.sqlite")
+		cfgPath := filepath.Join(root, "db.local.json")
+		cfgData := fmt.Sprintf(`{"databaseUrl":"file:%s"}`, filepath.ToSlash(dbPath))
+		if werr := os.WriteFile(cfgPath, []byte(cfgData), 0644); werr != nil {
+			msg := fmt.Sprintf("CreateMissingTables failed: could not create db.local.json: %v", werr)
+			a.emitLog(msg, "error")
+			return msg
+		}
+		connString = "file:" + filepath.ToSlash(dbPath)
+		a.emitLog(fmt.Sprintf("Created db.local.json at %s", cfgPath), "info")
 	}
 
 	a.emitLog(fmt.Sprintf("Creating database schema using %s", root), "info")
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
-	connString = strings.TrimPrefix(connString, "file:")
-	db, err := sql.Open("sqlite", connString)
+	dbPath := strings.TrimPrefix(connString, "file:")
+	// Ensure the sqlite file exists (SQLite needs the file to exist or a valid path)
+	if !fileExists(dbPath) {
+		if err := os.WriteFile(dbPath, []byte{}, 0644); err != nil {
+			msg := fmt.Sprintf("CreateMissingTables failed: could not create db file: %v", err)
+			a.emitLog(msg, "error")
+			return msg
+		}
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		msg := fmt.Sprintf("CreateMissingTables failed: connect: %v", err)
 		a.emitLog(msg, "error")
