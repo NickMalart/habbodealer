@@ -3287,7 +3287,7 @@ func (a *App) persistParticipants(sessionDBID int64, participants []RafflePartic
 				ticket_count = EXCLUDED.ticket_count,
 				manual_ticket_delta = EXCLUDED.manual_ticket_delta,
 				first_bet_at = LEAST(raffle_participants.first_bet_at, EXCLUDED.first_bet_at),
-				last_bet_at = GREATEST(raffle_participants.last_bet_at, EXCLUDED.last_bet_at),
+				last_bet_at = MAX(raffle_participants.last_bet_at, EXCLUDED.last_bet_at),
 				updated_at = CURRENT_TIMESTAMP
 		`, sessionDBID, owner, p.Username, p.UsernameKey, p.BetCount, p.Tickets, p.ManualDelta, firstAt, lastAt); err != nil {
 			return err
@@ -3550,9 +3550,21 @@ func (a *App) ensureTables() error {
 			hero_image_url TEXT NOT NULL DEFAULT '',
 			hero_attachment_id TEXT NOT NULL DEFAULT '',
 			hero_attachment_file TEXT NOT NULL DEFAULT '',
+			winner_name TEXT NOT NULL DEFAULT '',
+			winner_tickets INTEGER NOT NULL DEFAULT 0,
+			winner_odds TEXT NOT NULL DEFAULT '',
+			winner_drawn_at DATETIME NULL,
+			winner_method TEXT NOT NULL DEFAULT '',
+			winner_summary TEXT NOT NULL DEFAULT '',
+			winner_proof_url TEXT NOT NULL DEFAULT '',
+			winner_proof_id TEXT NOT NULL DEFAULT '',
+			winner_proof_file TEXT NOT NULL DEFAULT '',
 			sponsor_enabled BOOLEAN NOT NULL DEFAULT FALSE,
 			sponsor_name TEXT NOT NULL DEFAULT '',
 			sponsor_room_name TEXT NOT NULL DEFAULT '',
+			sponsor_image_url TEXT NOT NULL DEFAULT '',
+			sponsor_attachment_id TEXT NOT NULL DEFAULT '',
+			sponsor_attachment_file TEXT NOT NULL DEFAULT '',
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS raffle_participants (
@@ -3574,81 +3586,6 @@ func (a *App) ensureTables() error {
 		`CREATE INDEX IF NOT EXISTS idx_raffle_sessions_started ON raffle_sessions(started_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_raffle_participants_session ON raffle_participants(session_id, owner_key)`,
 		`CREATE INDEX IF NOT EXISTS idx_raffle_participants_tickets ON raffle_participants(session_id, ticket_count DESC)`,
-		`CREATE OR REPLACE FUNCTION notify_raffle_game_finished_from_entries()
-		RETURNS TRIGGER AS $$
-		BEGIN
-			IF lower(trim(COALESCE(NEW.status, ''))) IN ('completed','issue')
-			   AND trim(COALESCE(NEW.completed_at, '')) <> '' THEN
-				PERFORM pg_notify(
-					'raffle_game_finished',
-					json_build_object(
-						'owner_key', NEW.owner_key,
-						'entry_id', NEW.id,
-						'source', 'entries'
-					)::text
-				);
-			END IF;
-			RETURN NEW;
-		END;
-		`,
-		`CREATE OR REPLACE FUNCTION notify_raffle_trade_entry_insert()
-		RETURNS TRIGGER AS $$
-		BEGIN
-			PERFORM pg_notify(
-				'raffle_game_finished',
-				json_build_object(
-					'owner_key', NEW.owner_key,
-					'entry_id', NEW.id,
-					'source', 'trade_entries'
-				)::text
-			);
-			RETURN NEW;
-		END;
-		`,
-		`CREATE OR REPLACE FUNCTION notify_raffle_banker_trade_insert()
-		RETURNS TRIGGER AS $$
-		BEGIN
-			PERFORM pg_notify(
-				'raffle_game_finished',
-				json_build_object(
-					'owner_key', COALESCE(NEW.owner_key, ''),
-					'entry_id', NEW.id,
-					'source', 'banker_trades'
-				)::text
-			);
-			RETURN NEW;
-		END;
-		`,
-		`DO $$
-		BEGIN
-			IF to_regclass('game_history_entries') IS NOT NULL THEN
-				DROP TRIGGER IF EXISTS trg_raffle_game_finished_entries ON game_history_entries;
-				CREATE TRIGGER trg_raffle_game_finished_entries
-				AFTER INSERT OR UPDATE ON game_history_entries
-				FOR EACH ROW
-				EXECUTE FUNCTION notify_raffle_game_finished_from_entries();
-			END IF;
-		END $$`,
-		`DO $$
-		BEGIN
-			IF to_regclass('trade_entries') IS NOT NULL THEN
-				DROP TRIGGER IF EXISTS trg_raffle_trade_entries_insert ON trade_entries;
-				CREATE TRIGGER trg_raffle_trade_entries_insert
-				AFTER INSERT ON trade_entries
-				FOR EACH ROW
-				EXECUTE FUNCTION notify_raffle_trade_entry_insert();
-			END IF;
-		END $$`,
-		`DO $$
-		BEGIN
-			IF to_regclass('banker_trades') IS NOT NULL THEN
-				DROP TRIGGER IF EXISTS trg_raffle_banker_trades_insert ON banker_trades;
-				CREATE TRIGGER trg_raffle_banker_trades_insert
-				AFTER INSERT ON banker_trades
-				FOR EACH ROW
-				EXECUTE FUNCTION notify_raffle_banker_trade_insert();
-			END IF;
-		END $$`,
 	}
 
 	for _, q := range queries {
@@ -3698,6 +3635,9 @@ func (a *App) ensureTables() error {
 	}
 	for _, q := range alterQueries {
 		if _, err := db.ExecContext(ctx, q); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+				continue
+			}
 			return err
 		}
 	}

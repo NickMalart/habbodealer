@@ -840,8 +840,6 @@ type DBConfig struct {
 	OwnerKey    string `json:"ownerKey"`
 }
 
-const fallbackHistoryDBURL = "postgresql://neondb_owner:npg_cPwtQn4ZGh7J@ep-crimson-frost-b4a01mk8-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
-const fallbackHistoryOwnerKey = "roll-origins"
 const historyPersistDebounce = 1200 * time.Millisecond
 
 type PokerDisplayConfig struct {
@@ -2419,10 +2417,6 @@ func loadDBConfig() (*DBConfig, error) {
 			return nil, fmt.Errorf("databaseUrl is empty in %s", candidate)
 		}
 		return &cfg, nil
-	}
-
-	if strings.TrimSpace(fallbackHistoryDBURL) != "" {
-		return &DBConfig{DatabaseURL: fallbackHistoryDBURL, OwnerKey: fallbackHistoryOwnerKey}, nil
 	}
 
 	return nil, fmt.Errorf("db.local.json not found in cwd/exe parent paths")
@@ -6604,17 +6598,25 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 				// Query the sum of quantities for all items in this bet
 				itemNames := make([]string, 0, len(betItems))
 				for _, it := range betItems {
-					itemNames = append(itemNames, it.Name)
+					name := strings.ToLower(strings.TrimSpace(it.Name))
+					if name != "" {
+						itemNames = append(itemNames, name)
+					}
 				}
 
 				var stock int
-				err := db.QueryRowContext(ctx, `
-					SELECT COALESCE(SUM(quantity), 0)
-					FROM banker_inventory
-					WHERE LOWER(item_name) = ANY(
-						SELECT LOWER(unnest(?::text[]))
-					)
-				`, itemNames).Scan(&stock)
+				var err error
+				if len(itemNames) == 0 {
+					err = fmt.Errorf("no item names available for banker stock lookup")
+				} else {
+					placeholders := strings.TrimRight(strings.Repeat("?,", len(itemNames)), ",")
+					query := "SELECT COALESCE(SUM(quantity), 0) FROM banker_inventory WHERE LOWER(item_name) IN (" + placeholders + ")"
+					args := make([]any, len(itemNames))
+					for i, name := range itemNames {
+						args[i] = name
+					}
+					err = db.QueryRowContext(ctx, query, args...).Scan(&stock)
+				}
 				cancel()
 
 				if err != nil {
@@ -6661,7 +6663,7 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
 					// Use GREATEST so an async init write cannot reduce a later, larger bank value.
-					_, err := db.ExecContext(ctx, "UPDATE banker_trades SET risk_bank = GREATEST(COALESCE(risk_bank,0), ?), risk_status = 'playing' WHERE id = ?", qty, id)
+					_, err := db.ExecContext(ctx, "UPDATE banker_trades SET risk_bank = MAX(COALESCE(risk_bank,0), ?), risk_status = 'playing' WHERE id = ?", qty, id)
 					if err != nil {
 						a.AddLogMsg(fmt.Sprintf("[RISK] ERROR: failed to init banker_trades %d: %v", id, err))
 					} else {

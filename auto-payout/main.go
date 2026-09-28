@@ -210,21 +210,48 @@ type App struct {
 }
 
 func readLocalDBURL() string {
-	candidates := []string{"db.local.json", "../db.local.json"}
-	for _, c := range candidates {
-		data, err := os.ReadFile(c)
+	if envURL := strings.TrimSpace(os.Getenv("ROLL_ORIGINS_DB_URL")); envURL != "" {
+		return strings.TrimPrefix(envURL, "file:")
+	}
+	starts := []string{}
+	if cwd, err := os.Getwd(); err == nil {
+		starts = append(starts, cwd)
+	}
+	if exe, err := os.Executable(); err == nil {
+		starts = append(starts, filepath.Dir(exe))
+	}
+	seen := make(map[string]struct{})
+	for _, start := range starts {
+		dir, err := filepath.Abs(start)
 		if err != nil {
 			continue
 		}
-		var cfg struct{ DatabaseURL string `json:"databaseUrl"` }
-		if json.Unmarshal(data, &cfg) == nil && cfg.DatabaseURL != "" {
-			return strings.TrimPrefix(cfg.DatabaseURL, "file:")
+		for depth := 0; depth < 10; depth++ {
+			if _, ok := seen[dir]; !ok {
+				seen[dir] = struct{}{}
+				configPath := filepath.Join(dir, "db.local.json")
+				if data, err := os.ReadFile(configPath); err == nil {
+					var cfg struct{ DatabaseURL string `json:"databaseUrl"` }
+					if json.Unmarshal(data, &cfg) == nil && strings.TrimSpace(cfg.DatabaseURL) != "" {
+						dbPath := strings.TrimPrefix(strings.TrimSpace(cfg.DatabaseURL), "file:")
+						if !filepath.IsAbs(dbPath) {
+							dbPath = filepath.Join(dir, dbPath)
+						}
+						return dbPath
+					}
+				}
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
 		}
 	}
-	exeDir := func() string {
-		e, _ := os.Executable()
-		return filepath.Dir(e)
-	}()
+	exeDir := "."
+	if exe, err := os.Executable(); err == nil {
+		exeDir = filepath.Dir(exe)
+	}
 	return filepath.Join(exeDir, "database.sqlite")
 }
 
@@ -995,6 +1022,7 @@ func bankerTradeSchemaStatements() []string {
 			banker_name TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'pending',
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			player_trade_id INTEGER NULL,
 			player_chat_id INTEGER NULL,
 			owner_key TEXT NOT NULL DEFAULT '',
@@ -1007,6 +1035,7 @@ func bankerTradeSchemaStatements() []string {
 		`ALTER TABLE banker_trades ADD COLUMN banker_name TEXT NOT NULL DEFAULT '';`,
 		`ALTER TABLE banker_trades ADD COLUMN status TEXT NOT NULL DEFAULT 'pending';`,
 		`ALTER TABLE banker_trades ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP;`,
+		`ALTER TABLE banker_trades ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP;`,
 		`ALTER TABLE banker_trades ADD COLUMN player_trade_id INTEGER NULL;`,
 		`ALTER TABLE banker_trades ADD COLUMN player_chat_id INTEGER NULL;`,
 		`ALTER TABLE banker_trades ADD COLUMN owner_key TEXT NOT NULL DEFAULT '';`,

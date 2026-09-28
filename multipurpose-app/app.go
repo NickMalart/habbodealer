@@ -22,8 +22,6 @@ import (
 	"xabbo.b7c.io/goearth/shockwave/out"
 )
 
-const dbURL = "postgresql://neondb_owner:npg_cPwtQn4ZGh7J@ep-crimson-frost-b4a01mk8-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
-
 // ParsedUsers28User matches the JSON output of parse_users28.py
 type ParsedUsers28User struct {
 	Username string `json:"username"`
@@ -193,7 +191,11 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) initDatabase() {
-	dbPath := strings.TrimPrefix(dbURL, "file:")
+	dbPath, err := workspaceDatabasePath()
+	if err != nil {
+		log.Printf("Database configuration error: %v", err)
+		return
+	}
 	pool, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		a.AddLog(fmt.Sprintf("ERROR: Failed to connect to database: %v", err))
@@ -215,6 +217,58 @@ func (a *App) initDatabase() {
 	} else {
 		a.AddLog("Database initialized and room_rights table verified.")
 	}
+}
+
+func workspaceDatabasePath() (string, error) {
+	if envURL := strings.TrimSpace(os.Getenv("ROLL_ORIGINS_DB_URL")); envURL != "" {
+		dbPath := strings.TrimPrefix(envURL, "file:")
+		if !filepath.IsAbs(dbPath) {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return "", err
+			}
+			dbPath = filepath.Join(cwd, dbPath)
+		}
+		return dbPath, nil
+	}
+	starts := []string{}
+	if cwd, err := os.Getwd(); err == nil {
+		starts = append(starts, cwd)
+	}
+	if exe, err := os.Executable(); err == nil {
+		starts = append(starts, filepath.Dir(exe))
+	}
+	seen := make(map[string]struct{})
+	for _, start := range starts {
+		dir, err := filepath.Abs(start)
+		if err != nil {
+			continue
+		}
+		for depth := 0; depth < 10; depth++ {
+			if _, ok := seen[dir]; !ok {
+				seen[dir] = struct{}{}
+				configPath := filepath.Join(dir, "db.local.json")
+				if data, err := os.ReadFile(configPath); err == nil {
+					var cfg struct {
+						DatabaseURL string `json:"databaseUrl"`
+					}
+					if json.Unmarshal(data, &cfg) == nil && strings.TrimSpace(cfg.DatabaseURL) != "" {
+						dbPath := strings.TrimPrefix(strings.TrimSpace(cfg.DatabaseURL), "file:")
+						if !filepath.IsAbs(dbPath) {
+							dbPath = filepath.Join(dir, dbPath)
+						}
+						return dbPath, nil
+					}
+				}
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
+	}
+	return "", fmt.Errorf("db.local.json not found while searching from the working and executable directories")
 }
 
 // AddRoomRight adds a user to the room rights list in the database

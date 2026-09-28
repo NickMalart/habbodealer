@@ -1054,6 +1054,10 @@ func (a *App) handleIncomingTradeOpen(e *g.Intercept) {
 }
 
 func loadDBConfig() (*DBConfig, error) {
+	if envURL := strings.TrimSpace(os.Getenv("ROLL_ORIGINS_DB_URL")); envURL != "" {
+		owner := strings.TrimSpace(os.Getenv("ROLL_ORIGINS_OWNER_KEY"))
+		return &DBConfig{DatabaseURL: envURL, OwnerKey: owner}, nil
+	}
 	searchDirs := []string{}
 	if cwd, err := os.Getwd(); err == nil {
 		searchDirs = append(searchDirs, cwd)
@@ -1293,6 +1297,9 @@ func (a *App) ensureTables() error {
 	}
 	for _, q := range alterQueries {
 		if _, err := db.ExecContext(ctx, q); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+				continue
+			}
 			return err
 		}
 	}
@@ -1314,17 +1321,16 @@ func (a *App) ensureTables() error {
 
 	// Backfill normalized rows from existing JSON payloads.
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO trade_entry_items (trade_entry_id, item_name, quantity, raw_data, owner_key)
+		INSERT OR IGNORE INTO trade_entry_items (trade_entry_id, item_name, quantity, raw_data, owner_key)
 		SELECT
 			e.id,
-			COALESCE(elem->>'name', ''),
-			GREATEST(COALESCE((elem->>'quantity')::int, 1), 1),
-			COALESCE(elem->>'raw', ''),
+			COALESCE(json_extract(j.value, '$.name'), ''),
+			MAX(COALESCE(CAST(json_extract(j.value, '$.quantity') AS INTEGER), 1), 1),
+			COALESCE(json_extract(j.value, '$.raw'), ''),
 			e.owner_key
-		FROM trade_entries e
-		CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.furni_items, '[]')) elem
-		WHERE COALESCE(elem->>'name', '') <> ''
-		ON CONFLICT (trade_entry_id, item_name) DO NOTHING
+		FROM trade_entries e,
+			json_each(CASE WHEN json_valid(e.furni_items) THEN e.furni_items ELSE '[]' END) AS j
+		WHERE COALESCE(json_extract(j.value, '$.name'), '') <> ''
 	`); err != nil {
 		return err
 	}

@@ -255,6 +255,14 @@ func (a *App) CreateMissingTables() string {
 	defer cancel()
 
 	dbPath := strings.TrimPrefix(connString, "file:")
+	if !filepath.IsAbs(dbPath) {
+		dbPath = filepath.Join(root, dbPath)
+	}
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		msg := fmt.Sprintf("CreateMissingTables failed: could not create database directory: %v", err)
+		a.emitLog(msg, "error")
+		return msg
+	}
 	// Ensure the sqlite file exists before opening
 	if !fileExists(dbPath) {
 		if err := os.WriteFile(dbPath, []byte{}, 0644); err != nil {
@@ -278,9 +286,14 @@ func (a *App) CreateMissingTables() string {
 		return msg
 	}
 
-	// Schemas will be created automatically by the individual apps when they start.
+	if err := ensureWorkspaceSchema(ctx, db); err != nil {
+		msg := fmt.Sprintf("CreateMissingTables failed: schema bootstrap: %v", err)
+		a.emitLog(msg, "error")
+		return msg
+	}
+	a.emitLog("Verified shared schemas for all database-backed workspace apps", "success")
 
-	return "Database tables checked/created successfully"
+	return "Database tables checked/created successfully for all workspace apps"
 }
 
 // ResetDatabase wipes the existing database.sqlite and creates a fresh one
@@ -289,6 +302,10 @@ func (a *App) ResetDatabase() string {
 	root := a.resolveWorkspaceRoot()
 	dbPath := filepath.Join(root, "database.sqlite")
 	cfgPath := filepath.Join(root, "db.local.json")
+
+	// Close database-owning child processes first so they cannot keep the old
+	// file open or race the fresh shared-schema bootstrap.
+	a.KillAllTasks()
 
 	// Remove old database file if it exists
 	if fileExists(dbPath) {
@@ -574,6 +591,14 @@ func (a *App) LaunchApp(appID string, port string) string {
 
 	cmd := exec.Command(item.Path, args...)
 	cmd.Dir = filepath.Dir(item.Path)
+	if databaseURL, err := readDatabaseURL(a.resolveWorkspaceRoot()); err == nil && strings.TrimSpace(databaseURL) != "" {
+		dbPath := strings.TrimPrefix(strings.TrimSpace(databaseURL), "file:")
+		if !filepath.IsAbs(dbPath) {
+			dbPath = filepath.Join(a.resolveWorkspaceRoot(), dbPath)
+		}
+		sharedURL := "file:" + filepath.ToSlash(dbPath)
+		cmd.Env = append(os.Environ(), "ROLL_ORIGINS_DB_URL="+sharedURL)
+	}
 	hideWindow(cmd)
 
 	stdout, _ := cmd.StdoutPipe()

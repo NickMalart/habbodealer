@@ -141,53 +141,52 @@ func (a *App) initDB() {
 	a.dbStatus = "Initializing..."
 	a.mu.Unlock()
 
-	// Try to find db.local.json by looking in CWD and then walking up
-	found := false
-	absConfigPath := ""
-
-	// Check current dir and up to 4 levels up
-	checkPath := "db.local.json"
-	for i := 0; i < 5; i++ {
-		abs, _ := filepath.Abs(checkPath)
-		log.Printf("[DB_INIT] Checking for config at: %s", abs)
-		if _, err := os.Stat(abs); err == nil {
-			absConfigPath = abs
-			found = true
-			break
-		}
-		checkPath = filepath.Join("..", checkPath)
-	}
-
-	if !found {
-		msg := "Failed to find db.local.json in current or parent directories"
-		log.Printf("[DB_INIT] %s", msg)
-		a.mu.Lock()
-		a.dbStatus = "Config not found"
-		a.mu.Unlock()
-		return
-	}
-
-	log.Printf("[DB_INIT] Using config at: %s", absConfigPath)
-
-	data, err := os.ReadFile(absConfigPath)
-	if err != nil {
-		log.Printf("[DB_INIT] Failed to read db.local.json: %v", err)
-		a.mu.Lock()
-		a.dbStatus = "Read error"
-		a.mu.Unlock()
-		return
-	}
-
 	var cfg struct {
 		DatabaseURL string `json:"databaseUrl"`
 		OwnerKey    string `json:"ownerKey"`
 	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		log.Printf("[DB_INIT] Failed to unmarshal db.local.json: %v", err)
-		a.mu.Lock()
-		a.dbStatus = "Parse error"
-		a.mu.Unlock()
-		return
+	if envURL := strings.TrimSpace(os.Getenv("ROLL_ORIGINS_DB_URL")); envURL != "" {
+		cfg.DatabaseURL = envURL
+		cfg.OwnerKey = strings.TrimSpace(os.Getenv("ROLL_ORIGINS_OWNER_KEY"))
+	} else {
+		// Try to find db.local.json by looking in CWD and then walking up.
+		found := false
+		absConfigPath := ""
+		checkPath := "db.local.json"
+		for i := 0; i < 10; i++ {
+			abs, _ := filepath.Abs(checkPath)
+			log.Printf("[DB_INIT] Checking for config at: %s", abs)
+			if _, err := os.Stat(abs); err == nil {
+				absConfigPath = abs
+				found = true
+				break
+			}
+			checkPath = filepath.Join("..", checkPath)
+		}
+		if !found {
+			msg := "Failed to find db.local.json in current or parent directories"
+			log.Printf("[DB_INIT] %s", msg)
+			a.mu.Lock()
+			a.dbStatus = "Config not found"
+			a.mu.Unlock()
+			return
+		}
+		log.Printf("[DB_INIT] Using config at: %s", absConfigPath)
+		data, err := os.ReadFile(absConfigPath)
+		if err != nil {
+			log.Printf("[DB_INIT] Failed to read db.local.json: %v", err)
+			a.mu.Lock()
+			a.dbStatus = "Read error"
+			a.mu.Unlock()
+			return
+		}
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			log.Printf("[DB_INIT] Failed to unmarshal db.local.json: %v", err)
+			a.mu.Lock()
+			a.dbStatus = "Parse error"
+			a.mu.Unlock()
+			return
+		}
 	}
 
 	a.ownerKey = cfg.OwnerKey
