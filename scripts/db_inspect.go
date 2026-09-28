@@ -57,7 +57,7 @@ func main() {
 		fmt.Println("player_trade_id not found")
 		if *add {
 			fmt.Println("adding player_trade_id column...")
-			if _, err := pool.ExecContext(ctx, "ALTER TABLE auto_payouts ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;"); err != nil {
+			if _, err := pool.ExecContext(ctx, "ALTER TABLE auto_payouts ADD COLUMN player_trade_id INTEGER NULL;"); err != nil {
 				fmt.Fprintf(os.Stderr, "alter error: %v\n", err)
 				os.Exit(4)
 			}

@@ -1284,12 +1284,12 @@ func (a *App) ensureTables() error {
 
 	// Ensure older tables get new columns if they existed before this version
 	alterQueries := []string{
-		`ALTER TABLE trade_sessions ADD COLUMN IF NOT EXISTS owner_key TEXT DEFAULT ''`,
-		`ALTER TABLE trade_entries ADD COLUMN IF NOT EXISTS owner_key TEXT DEFAULT ''`,
-		`ALTER TABLE trade_entries ADD COLUMN IF NOT EXISTS furni_items TEXT DEFAULT '[]'`,
-		`ALTER TABLE trade_entry_items ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 1`,
-		`ALTER TABLE trade_entry_items ADD COLUMN IF NOT EXISTS raw_data TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE trade_entry_items ADD COLUMN IF NOT EXISTS owner_key TEXT DEFAULT ''`,
+		`ALTER TABLE trade_sessions ADD COLUMN owner_key TEXT DEFAULT ''`,
+		`ALTER TABLE trade_entries ADD COLUMN owner_key TEXT DEFAULT ''`,
+		`ALTER TABLE trade_entries ADD COLUMN furni_items TEXT DEFAULT '[]'`,
+		`ALTER TABLE trade_entry_items ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE trade_entry_items ADD COLUMN raw_data TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE trade_entry_items ADD COLUMN owner_key TEXT DEFAULT ''`,
 	}
 	for _, q := range alterQueries {
 		if _, err := db.ExecContext(ctx, q); err != nil {

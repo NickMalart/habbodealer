@@ -1002,17 +1002,17 @@ func bankerTradeSchemaStatements() []string {
 			risk_bank INTEGER DEFAULT 0,
 			risk_status TEXT DEFAULT 'idle'
 		);`,
-		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS player_name TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS bet_items TEXT NOT NULL DEFAULT '[]';`,
-		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS banker_name TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';`,
-		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP;`,
-		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;`,
-		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS player_chat_id INTEGER NULL;`,
-		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS bet_amount INTEGER DEFAULT 0;`,
-		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS risk_bank INTEGER DEFAULT 0;`,
-		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS risk_status TEXT DEFAULT 'idle';`,
+		`ALTER TABLE banker_trades ADD COLUMN player_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE banker_trades ADD COLUMN bet_items TEXT NOT NULL DEFAULT '[]';`,
+		`ALTER TABLE banker_trades ADD COLUMN banker_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE banker_trades ADD COLUMN status TEXT NOT NULL DEFAULT 'pending';`,
+		`ALTER TABLE banker_trades ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP;`,
+		`ALTER TABLE banker_trades ADD COLUMN player_trade_id INTEGER NULL;`,
+		`ALTER TABLE banker_trades ADD COLUMN player_chat_id INTEGER NULL;`,
+		`ALTER TABLE banker_trades ADD COLUMN owner_key TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE banker_trades ADD COLUMN bet_amount INTEGER DEFAULT 0;`,
+		`ALTER TABLE banker_trades ADD COLUMN risk_bank INTEGER DEFAULT 0;`,
+		`ALTER TABLE banker_trades ADD COLUMN risk_status TEXT DEFAULT 'idle';`,
 	}
 }
 
@@ -1047,8 +1047,8 @@ func (a *App) initDatabase() {
 	}
 
 	// Ensure older installations also have the banker_trade_id column available.
-	_, _ = a.db.ExecContext(context.Background(), "ALTER TABLE auto_payouts ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;")
-	_, _ = a.db.ExecContext(context.Background(), "ALTER TABLE auto_payouts ADD COLUMN IF NOT EXISTS banker_trade_id INTEGER NULL;")
+	_, _ = a.db.ExecContext(context.Background(), "ALTER TABLE auto_payouts ADD COLUMN player_trade_id INTEGER NULL;")
+	_, _ = a.db.ExecContext(context.Background(), "ALTER TABLE auto_payouts ADD COLUMN banker_trade_id INTEGER NULL;")
 
 	// Create dealer_shouts table for cross-bot communication
 	query = `CREATE TABLE IF NOT EXISTS dealer_shouts (
@@ -1067,10 +1067,10 @@ func (a *App) initDatabase() {
 	}
 
 	// Add owner_key column if it doesn't exist (migration for existing tables)
-	_, _ = a.db.ExecContext(context.Background(), "ALTER TABLE dealer_shouts ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';")
+	_, _ = a.db.ExecContext(context.Background(), "ALTER TABLE dealer_shouts ADD COLUMN owner_key TEXT NOT NULL DEFAULT '';")
 
 	// Ensure notified column exists for failure webhooks
-	_, _ = a.db.ExecContext(context.Background(), "ALTER TABLE auto_payouts ADD COLUMN IF NOT EXISTS notified BOOLEAN DEFAULT FALSE;")
+	_, _ = a.db.ExecContext(context.Background(), "ALTER TABLE auto_payouts ADD COLUMN notified BOOLEAN DEFAULT FALSE;")
 
 	for _, stmt := range bankerTradeSchemaStatements() {
 		if _, err := a.db.ExecContext(context.Background(), stmt); err != nil {
@@ -1089,7 +1089,7 @@ func (a *App) initDatabase() {
 	if _, err := a.db.ExecContext(context.Background(), query); err != nil {
 		a.AddLog("ERROR: banned_players table creation failed: " + err.Error())
 	}
-	_, _ = a.db.ExecContext(context.Background(), "ALTER TABLE banned_players ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
+	_, _ = a.db.ExecContext(context.Background(), "ALTER TABLE banned_players ADD COLUMN is_active BOOLEAN DEFAULT TRUE;")
 	_, _ = a.db.ExecContext(context.Background(), "UPDATE banned_players SET is_active = TRUE WHERE is_active IS NULL;")
 
 	// Create stocked_items table

@@ -25,8 +25,8 @@ func main() {
 	// Add risk_bank column
 	_, err = conn.ExecContext(ctx, `
 		ALTER TABLE banker_trades 
-		ADD COLUMN IF NOT EXISTS risk_bank INTEGER DEFAULT 0,
-		ADD COLUMN IF NOT EXISTS risk_status TEXT DEFAULT 'idle'
+		ADD COLUMN risk_bank INTEGER DEFAULT 0,
+		ADD COLUMN risk_status TEXT DEFAULT 'idle'
 	`)
 	if err != nil {
 		log.Fatalf("Migration failed: %v", err)

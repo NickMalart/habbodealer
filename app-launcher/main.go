@@ -287,8 +287,8 @@ func (a *App) CreateMissingTables() string {
 			game_type TEXT NOT NULL DEFAULT '',
 			result TEXT NOT NULL DEFAULT ''
 		);`,
-		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS raffle_session_id BIGINT NOT NULL DEFAULT 0;`,
-		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS rolls TEXT NOT NULL DEFAULT '[]';`,
+		`ALTER TABLE game_history_entries ADD COLUMN raffle_session_id BIGINT NOT NULL DEFAULT 0;`,
+		`ALTER TABLE game_history_entries ADD COLUMN rolls TEXT NOT NULL DEFAULT '[]';`,
 		`CREATE TABLE IF NOT EXISTS game_history_items (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
@@ -320,16 +320,16 @@ func (a *App) CreateMissingTables() string {
 			message TEXT NOT NULL DEFAULT '',
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
-		`ALTER TABLE dealer_shouts ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE dealer_shouts ADD COLUMN owner_key TEXT NOT NULL DEFAULT '';`,
 		`CREATE TABLE IF NOT EXISTS auto_payouts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'pending',
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
-		`ALTER TABLE auto_payouts ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;`,
-		`ALTER TABLE auto_payouts ADD COLUMN IF NOT EXISTS banker_trade_id INTEGER NULL;`,
-		`ALTER TABLE auto_payouts ADD COLUMN IF NOT EXISTS notified BOOLEAN DEFAULT FALSE;`,
+		`ALTER TABLE auto_payouts ADD COLUMN player_trade_id INTEGER NULL;`,
+		`ALTER TABLE auto_payouts ADD COLUMN banker_trade_id INTEGER NULL;`,
+		`ALTER TABLE auto_payouts ADD COLUMN notified BOOLEAN DEFAULT FALSE;`,
 		`CREATE TABLE IF NOT EXISTS banker_trades (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
@@ -339,10 +339,10 @@ func (a *App) CreateMissingTables() string {
 			risk_bank INTEGER DEFAULT 0,
 			risk_status TEXT DEFAULT 'idle'
 		);`,
-		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS bet_amount INTEGER DEFAULT 0;`,
-		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS risk_bank INTEGER DEFAULT 0;`,
-		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS risk_status TEXT DEFAULT 'idle';`,
+		`ALTER TABLE banker_trades ADD COLUMN owner_key TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE banker_trades ADD COLUMN bet_amount INTEGER DEFAULT 0;`,
+		`ALTER TABLE banker_trades ADD COLUMN risk_bank INTEGER DEFAULT 0;`,
+		`ALTER TABLE banker_trades ADD COLUMN risk_status TEXT DEFAULT 'idle';`,
 		`CREATE TABLE IF NOT EXISTS banned_players (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
@@ -1187,6 +1187,95 @@ func (a *App) shutdown(ctx context.Context) {
 
 // KillAllTasks forcibly stops all known/ tracked child processes immediately
 // and clears the tracked process list. Returns a status string for UI display.
+func (a *App) GetDatabaseConfig() string {
+	root := a.resolveWorkspaceRoot()
+	connString, err := readDatabaseURL(root)
+	if err != nil {
+		return `{"error": "` + err.Error() + `"}`
+	}
+	
+	dbPath := strings.TrimPrefix(connString, "file:")
+	
+	info := map[string]string{
+		"path": dbPath,
+		"dbeaver_driver": "SQLite",
+		"dbeaver_host": "localhost",
+		"instructions": "To connect in DBeaver:\n1. Click 'New Database Connection'\n2. Select 'SQLite' as the driver\n3. Set 'Path' to: " + dbPath + "\n4. No username or password is required.\n5. Click Finish.",
+	}
+	
+	b, _ := json.MarshalIndent(info, "", "  ")
+	return string(b)
+}
+
+func (a *App) QueryTable(tableName string) string {
+	allowed := map[string]bool{
+		"game_history_entries": true,
+		"auto_payouts":         true,
+	}
+	if !allowed[tableName] {
+		return "Error: table not allowed"
+	}
+	
+	root := a.resolveWorkspaceRoot()
+	connString, err := readDatabaseURL(root)
+	if err != nil {
+		return "Error reading DB config: " + err.Error()
+	}
+	dbPath := strings.TrimPrefix(connString, "file:")
+	
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return "Error opening DB: " + err.Error()
+	}
+	defer db.Close()
+	
+	rows, err := db.Query("SELECT * FROM " + tableName + " ORDER BY id DESC LIMIT 50")
+	if err != nil {
+		return "Error querying table: " + err.Error()
+	}
+	defer rows.Close()
+	
+	cols, err := rows.Columns()
+	if err != nil {
+		return "Error getting columns: " + err.Error()
+	}
+	
+	var result []map[string]interface{}
+	for rows.Next() {
+		columns := make([]interface{}, len(cols))
+		columnPointers := make([]interface{}, len(cols))
+		for i := range columns {
+			columnPointers[i] = &columns[i]
+		}
+		
+		if err := rows.Scan(columnPointers...); err != nil {
+			return "Error scanning row: " + err.Error()
+		}
+		
+		m := make(map[string]interface{})
+		for i, colName := range cols {
+			val := columnPointers[i].(*interface{})
+			if val != nil && *val != nil {
+				if b, ok := (*val).([]byte); ok {
+					m[colName] = string(b)
+				} else {
+					m[colName] = *val
+				}
+			} else {
+				m[colName] = nil
+			}
+		}
+		result = append(result, m)
+	}
+	
+	jsonBytes, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return "Error marshaling JSON: " + err.Error()
+	}
+	
+	return string(jsonBytes)
+}
+
 func (a *App) KillAllTasks() string {
 	a.emitLog("KillAllTasks invoked", "info")
 
