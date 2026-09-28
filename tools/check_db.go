@@ -10,7 +10,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+	_ "modernc.org/sqlite"
 )
 
 type DBConfig struct {
@@ -31,14 +32,15 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	cfg.DatabaseURL = strings.TrimPrefix(cfg.DatabaseURL, "file:")
+	db, err := sql.Open("sqlite", cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("pool create failed: %v", err)
 	}
 	defer db.Close()
 
 	fmt.Println("=== blocked_players table ===")
-	rows, err := db.Query(ctx, `SELECT player_name, created_at FROM blocked_players ORDER BY created_at DESC`)
+	rows, err := db.QueryContext(ctx, `SELECT player_name, created_at FROM blocked_players ORDER BY created_at DESC`)
 	if err != nil {
 		fmt.Printf("Query failed (maybe table doesn't exist?): %v\n", err)
 	} else {
@@ -57,7 +59,7 @@ func main() {
 
 	// Show recent entries for the current owner
 	fmt.Printf("\n=== last 10 entries for owner %q ===\n", cfg.OwnerKey)
-	rows3, err := db.Query(ctx, `SELECT id, player_name, game, status, updated_db_at FROM game_history_entries WHERE ($1 = '' OR owner_key = $1) ORDER BY updated_db_at DESC LIMIT 10`, cfg.OwnerKey)
+	rows3, err := db.QueryContext(ctx, `SELECT id, player_name, game, status, updated_db_at FROM game_history_entries WHERE (? = '' OR owner_key = ?) ORDER BY updated_db_at DESC LIMIT 10`, cfg.OwnerKey)
 	if err != nil {
 		log.Fatalf("query failed: %v", err)
 	}

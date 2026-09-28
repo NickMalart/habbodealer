@@ -6,7 +6,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
@@ -14,7 +15,8 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	db, err := pgxpool.New(ctx, connStr)
+	connStr = strings.TrimPrefix(connStr, "file:")
+	db, err := sql.Open("sqlite", connStr)
 	if err != nil {
 		log.Fatalf("pool create failed: %v", err)
 	}
@@ -27,7 +29,7 @@ func main() {
 		JOIN game_history_items i ON e.id = i.entry_id AND e.owner_key = i.owner_key
 		WHERE e.status = 'Payout Pending' AND i.item_type = 'payout'
 	`
-	rows, err := db.Query(ctx, query)
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		log.Fatalf("Query failed: %v", err)
 	}

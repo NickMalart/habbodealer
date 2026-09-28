@@ -25,8 +25,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	
+	"database/sql"
+	_ "modernc.org/sqlite"
 	"github.com/sirupsen/logrus"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	g "xabbo.b7c.io/goearth"
@@ -781,7 +782,7 @@ type App struct {
 	gameHistory           []GameHistoryEntry
 	gameHistoryMu         sync.Mutex
 	currentGameHistoryID  string
-	historyDB             *pgxpool.Pool
+	historyDB             *sql.DB
 	historyOwnerKey       string
 	historyDBMu           sync.Mutex
 	historyInitMu         sync.Mutex
@@ -2080,7 +2081,7 @@ func getGameHistoryFilePath() string {
 }
 
 // hasActiveBankerTrades checks whether there are any non-completed rows in
-// public.banker_trades for this dealer. Returns false if DB unavailable.
+// banker_trades for this dealer. Returns false if DB unavailable.
 func (a *App) hasActiveBankerTrades() bool {
 	db, _ := a.getHistoryDB()
 	if db == nil {
@@ -2094,9 +2095,9 @@ func (a *App) hasActiveBankerTrades() bool {
 	var exists bool
 	var err error
 	if dealerName != "" {
-		err = db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM public.banker_trades WHERE lower(banker_name) = lower($1) AND COALESCE(status,'') != 'completed')`, dealerName).Scan(&exists)
+		err = db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM banker_trades WHERE lower(banker_name) = lower(?) AND COALESCE(status,'') != 'completed')`, dealerName).Scan(&exists)
 	} else {
-		err = db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM public.banker_trades WHERE COALESCE(status,'') != 'completed')`).Scan(&exists)
+		err = db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM banker_trades WHERE COALESCE(status,'') != 'completed')`).Scan(&exists)
 	}
 	if err != nil {
 		a.AddLogMsg(fmt.Sprintf("[TRADE_GUARD] hasActiveBankerTrades query failed: %v", err))
@@ -2420,10 +2421,10 @@ func (a *App) loadStockedItems() {
 	a.AddLogMsg(fmt.Sprintf("[STOCKED_ITEMS] querying database for owner=%q", owner))
 	dbDiagLog(fmt.Sprintf("[STOCKED_ITEMS] loading for owner=%q", owner))
 
-	rows, err := db.Query(ctx, `
+	rows, err := db.QueryContext(ctx, `
 		SELECT id, raw_name, canonical_name, display_name, is_active
-		FROM public.stocked_items
-		WHERE ($1 = '' OR owner_key = $1)
+		FROM stocked_items
+		WHERE (? = '' OR owner_key = ?)
 	`, owner)
 	if err != nil {
 		a.AddLogMsg(fmt.Sprintf("[STOCKED_ITEMS] query failed: %v", err))
@@ -2509,9 +2510,9 @@ func (a *App) AddStockedItem(rawName, canonicalName, displayName string) string 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := db.Exec(ctx, `
-		INSERT INTO public.stocked_items (owner_key, raw_name, canonical_name, display_name, is_active)
-		VALUES ($1, $2, $3, $4, TRUE)
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO stocked_items (owner_key, raw_name, canonical_name, display_name, is_active)
+		VALUES (?, ?, ?, ?, TRUE)
 		ON CONFLICT (owner_key, raw_name) DO UPDATE SET
 			canonical_name = EXCLUDED.canonical_name,
 			display_name = EXCLUDED.display_name,
@@ -2534,7 +2535,7 @@ func (a *App) DeleteStockedItem(id int) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := db.Exec(ctx, `DELETE FROM public.stocked_items WHERE id = $1`, id)
+	_, err := db.ExecContext(ctx, `DELETE FROM stocked_items WHERE id = ?`, id)
 	if err != nil {
 		return err.Error()
 	}
@@ -2552,7 +2553,7 @@ func (a *App) ToggleStockedItem(id int, active bool) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := db.Exec(ctx, `UPDATE public.stocked_items SET is_active = $1 WHERE id = $2`, active, id)
+	_, err := db.ExecContext(ctx, `UPDATE stocked_items SET is_active = ? WHERE id = ?`, active, id)
 	if err != nil {
 		return err.Error()
 	}
@@ -2611,12 +2612,9 @@ func (a *App) initHistoryDatabase() {
 		dbDiagLog(fmt.Sprintf("config loaded, url length=%d owner=%q", len(cfg.DatabaseURL), cfg.OwnerKey))
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		var db *pgxpool.Pool
-		poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
-		if err == nil {
-			poolConfig.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
-			db, err = pgxpool.NewWithConfig(ctx, poolConfig)
-		}
+		var db *sql.DB
+		dbURL := strings.TrimPrefix(cfg.DatabaseURL, "file:")
+		db, err = sql.Open("sqlite", dbURL)
 		if err != nil {
 			cancel()
 			msg := fmt.Sprintf("[GAME_HISTORY][DB] pool creation failed: %v", err)
@@ -2625,7 +2623,7 @@ func (a *App) initHistoryDatabase() {
 			time.Sleep(10 * time.Second)
 			continue
 		}
-		if err := db.Ping(ctx); err != nil {
+		if err := db.PingContext(ctx); err != nil {
 			cancel()
 			msg := fmt.Sprintf("[GAME_HISTORY][DB] ping failed: %v", err)
 			a.AddLogMsg(msg)
@@ -2675,7 +2673,7 @@ func (a *App) initHistoryDatabase() {
 	}
 }
 
-func (a *App) getHistoryDB() (*pgxpool.Pool, string) {
+func (a *App) getHistoryDB() (*sql.DB, string) {
 	a.historyDBMu.Lock()
 	defer a.historyDBMu.Unlock()
 	return a.historyDB, a.historyOwnerKey
@@ -2741,7 +2739,7 @@ func (a *App) startBankerTradePolling() {
 				// We don't want to spam logs here, but let's log if there's a pending trade we're ignoring
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				var id int
-				err := db.QueryRow(ctx, "SELECT id FROM banker_trades WHERE status = 'pending' AND (LOWER(banker_name) = $1 OR banker_name = 'Auto Payout Bot') LIMIT 1", targetBanker).Scan(&id)
+				err := db.QueryRowContext(ctx, "SELECT id FROM banker_trades WHERE status = 'pending' AND (LOWER(banker_name) = ? OR banker_name = 'Auto Payout Bot') LIMIT 1", targetBanker).Scan(&id)
 				cancel()
 				if err == nil {
 					a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] IGNORED: trade %d is pending but dealerGameActive() is true", id))
@@ -2756,10 +2754,10 @@ func (a *App) startBankerTradePolling() {
 			var pPlayerName string
 			var pBetItems []byte
 			var pTradeID, pChatID int
-			errP := db.QueryRow(ctxP, `
+			errP := db.QueryRowContext(ctxP, `
 				SELECT id, player_name, bet_items, player_trade_id, player_chat_id
 				FROM banker_trades
-				WHERE status = 'playing' AND (LOWER(banker_name) = $1 OR banker_name = 'Auto Payout Bot')
+				WHERE status = 'playing' AND (LOWER(banker_name) = ? OR banker_name = 'Auto Payout Bot')
 				ORDER BY updated_at ASC
 				LIMIT 1
 			`, targetBanker).Scan(&pID, &pPlayerName, &pBetItems, &pTradeID, &pChatID)
@@ -2797,10 +2795,10 @@ func (a *App) startBankerTradePolling() {
 			var betItemsJSON []byte
 			var tradeID, chatID int
 
-			err := db.QueryRow(ctx, `
+			err := db.QueryRowContext(ctx, `
 				SELECT id, player_name, bet_items, player_trade_id, player_chat_id
 				FROM banker_trades
-				WHERE status = 'pending' AND (LOWER(banker_name) = $1 OR banker_name = 'Auto Payout Bot')
+				WHERE status = 'pending' AND (LOWER(banker_name) = ? OR banker_name = 'Auto Payout Bot')
 				ORDER BY created_at ASC
 				LIMIT 1
 			`, targetBanker).Scan(&id, &playerName, &betItemsJSON, &tradeID, &chatID)
@@ -2815,7 +2813,7 @@ func (a *App) startBankerTradePolling() {
 
 			// Mark as 'processing' immediately to avoid duplicate triggers
 			ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
-			_, err = db.Exec(ctx2, "UPDATE banker_trades SET status = 'processing' WHERE id = $1", id)
+			_, err = db.ExecContext(ctx2, "UPDATE banker_trades SET status = 'processing' WHERE id = ?", id)
 			cancel2()
 			if err != nil {
 				a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] ERROR: failed to mark trade %d as processing: %v", id, err))
@@ -2846,7 +2844,7 @@ func (a *App) startBankerTradePolling() {
 			a.initGameFromBankerTrade(id, playerName, items, tradeID, chatID)
 
 			ctx3, cancel3 := context.WithTimeout(context.Background(), 5*time.Second)
-			_, err = db.Exec(ctx3, "UPDATE banker_trades SET status = 'playing' WHERE id = $1", id)
+			_, err = db.ExecContext(ctx3, "UPDATE banker_trades SET status = 'playing' WHERE id = ?", id)
 			cancel3()
 			if err != nil {
 				a.AddLogMsg(fmt.Sprintf("[BANKER_POLL] ERROR: failed to mark trade %d as playing: %v", id, err))
@@ -2945,11 +2943,11 @@ func (a *App) finalizeBankerTradeByID(id int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		// Update status to completed and ensure risk is closed if it was active
-		res, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE id = $1", targetID)
+		res, err := db.ExecContext(ctx, "UPDATE banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE id = ?", targetID)
 		if err != nil {
 			a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] ERROR: failed to mark trade %d as completed: %v", targetID, err))
 		} else {
-			affected := res.RowsAffected()
+			affected, _ := res.RowsAffected()
 			a.AddLogMsg(fmt.Sprintf("[BANKER_GAME] Successfully marked trade %d as completed (rows affected: %d)", targetID, affected))
 		}
 	}(id)
@@ -2971,10 +2969,10 @@ func (a *App) GetActiveRaffles() []RaffleSession {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	rows, err := db.Query(ctx, `
+	rows, err := db.QueryContext(ctx, `
 		SELECT id, raffle_name, prize_name, started_at
 		FROM raffle_sessions
-		WHERE ($1 = '' OR owner_key = $1) AND ended_at IS NULL
+		WHERE (? = '' OR owner_key = ?) AND ended_at IS NULL
 		ORDER BY id DESC
 	`, owner)
 	if err != nil {
@@ -3003,22 +3001,22 @@ func (a *App) SetActiveRaffleSessionID(id int64) {
 
 func stockedItemsSchemaStatements() []string {
 	return []string{
-		`CREATE TABLE IF NOT EXISTS public.stocked_items (
+		`CREATE TABLE IF NOT EXISTS stocked_items (
 			id SERIAL PRIMARY KEY,
 			owner_key TEXT NOT NULL DEFAULT '',
 			raw_name TEXT NOT NULL,
 			canonical_name TEXT NOT NULL DEFAULT '',
 			display_name TEXT NOT NULL DEFAULT '',
 			is_active BOOLEAN NOT NULL DEFAULT TRUE,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
-		`ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS raw_name TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS canonical_name TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;`,
-		`ALTER TABLE public.stocked_items ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS stocked_items_owner_raw_name_idx ON public.stocked_items (owner_key, raw_name);`,
+		`ALTER TABLE stocked_items ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE stocked_items ADD COLUMN IF NOT EXISTS raw_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE stocked_items ADD COLUMN IF NOT EXISTS canonical_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE stocked_items ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE stocked_items ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;`,
+		`ALTER TABLE stocked_items ADD COLUMN IF NOT EXISTS created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS stocked_items_owner_raw_name_idx ON stocked_items (owner_key, raw_name);`,
 	}
 }
 
@@ -3046,13 +3044,13 @@ func (a *App) ensureGameHistoryTables() error {
 			issue_reason TEXT NOT NULL DEFAULT '',
 			player_result TEXT NOT NULL DEFAULT '',
 			dealer_result TEXT NOT NULL DEFAULT '',
-			notes JSONB NOT NULL DEFAULT '[]'::jsonb,
+			notes TEXT NOT NULL DEFAULT '[]',
 			choice TEXT NOT NULL DEFAULT '',
 			choice_shout TEXT NOT NULL DEFAULT '',
 			payout_multiplier INTEGER NOT NULL DEFAULT 0,
 			raffle_session_id BIGINT NOT NULL DEFAULT 0,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_db_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_db_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (id, owner_key)
 		)`,
 		`ALTER TABLE game_history_entries ALTER COLUMN id TYPE TEXT USING id::text`,
@@ -3067,14 +3065,14 @@ func (a *App) ensureGameHistoryTables() error {
 		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS issue_reason TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS player_result TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS dealer_result TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS notes JSONB NOT NULL DEFAULT '[]'::jsonb`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS choice TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS choice_shout TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS payout_multiplier INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
-		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS updated_db_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS updated_db_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`,
 		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS raffle_session_id BIGINT NOT NULL DEFAULT 0`,
-		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS rolls JSONB NOT NULL DEFAULT '[]'::jsonb`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS rolls TEXT NOT NULL DEFAULT '[]'`,
 		`CREATE TABLE IF NOT EXISTS game_history_items (
 			entry_id TEXT NOT NULL,
 			owner_key TEXT NOT NULL DEFAULT '',
@@ -3083,7 +3081,7 @@ func (a *App) ensureGameHistoryTables() error {
 			item_name TEXT NOT NULL DEFAULT '',
 			quantity INTEGER NOT NULL DEFAULT 1,
 			raw_data TEXT NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (entry_id, owner_key, item_type, item_index),
 			FOREIGN KEY (entry_id, owner_key)
 				REFERENCES game_history_entries(id, owner_key)
@@ -3097,26 +3095,26 @@ func (a *App) ensureGameHistoryTables() error {
 			partner_name TEXT NOT NULL,
 			trade_type TEXT NOT NULL,
 			total_quantity INTEGER NOT NULL,
-			items JSONB NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			items TEXT NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_trade_ledger_owner_created ON trade_ledger(owner_key, created_at DESC)`,
-		`CREATE TABLE IF NOT EXISTS public.dealer_shouts (
+		`CREATE TABLE IF NOT EXISTS dealer_shouts (
 			id SERIAL PRIMARY KEY,
 			owner_key TEXT NOT NULL DEFAULT '',
 			target_player TEXT NOT NULL,
 			message TEXT NOT NULL,
 			shout_type TEXT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'pending',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			completed_at TIMESTAMPTZ NULL
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			completed_at DATETIME NULL
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_dealer_shouts_status_owner ON public.dealer_shouts(status, owner_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_dealer_shouts_status_owner ON dealer_shouts(status, owner_key)`,
 	}
 	queries = append(queries, stockedItemsSchemaStatements()...)
 
 	for _, q := range queries {
-		if _, err := db.Exec(ctx, q); err != nil {
+		if _, err := db.ExecContext(ctx, q); err != nil {
 			return err
 		}
 	}
@@ -3148,9 +3146,9 @@ func (a *App) recordTradeToLedger(partnerName string, tradeType string, items []
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		_, err := db.Exec(ctx, `
+		_, err := db.ExecContext(ctx, `
 			INSERT INTO trade_ledger (owner_key, partner_name, trade_type, total_quantity, items)
-			VALUES ($1, $2, $3, $4, $5)
+			VALUES (?, ?, ?, ?, ?)
 		`, owner, partnerName, tradeType, totalQty, itemsJSON)
 		if err != nil {
 			a.AddLogMsg(fmt.Sprintf("[LEDGER][DB] failed to record trade: %v", err))
@@ -3190,14 +3188,14 @@ func (a *App) loadGameHistoryFromDB(limit int) ([]GameHistoryEntry, error) {
 			payout_multiplier,
 			raffle_session_id
 		FROM game_history_entries
-		WHERE ($1 = '' OR owner_key = $1)
+		WHERE (? = '' OR owner_key = ?)
 		ORDER BY started_at DESC, id DESC
 	`
 	if limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}
 
-	rows, err := db.Query(ctx, query, owner)
+	rows, err := db.QueryContext(ctx, query, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -3245,11 +3243,11 @@ func (a *App) loadGameHistoryFromDB(limit int) ([]GameHistoryEntry, error) {
 	// For small limited sets, we can fetch items efficiently.
 	// If limit is 0 (all history), this might still be slow but it's what was there before.
 	// In practice we will call this with a limit for the UI.
-	itemRows, err := db.Query(ctx, `
+	itemRows, err := db.QueryContext(ctx, `
 		SELECT entry_id, item_type, item_name, quantity, raw_data
 		FROM game_history_items
 		WHERE entry_id IN (
-			SELECT id FROM game_history_entries WHERE ($1 = '' OR owner_key = $1)
+			SELECT id FROM game_history_entries WHERE (? = '' OR owner_key = ?)
 			ORDER BY started_at DESC, id DESC
 			`+(func() string {
 		if limit > 0 {
@@ -3320,25 +3318,25 @@ func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
 		err := func() error {
 			defer cancel()
 
-			tx, err := db.Begin(ctx)
+			tx, err := db.BeginTx(ctx, nil)
 			if err != nil {
 				return err
 			}
 			defer func() {
-				_ = tx.Rollback(ctx)
+				_ = tx.Rollback()
 			}()
 
 			for _, e := range entries {
 				notesJSON, _ := json.Marshal(e.Notes)
-				if _, err := tx.Exec(ctx, `
+				if _, err := tx.ExecContext(ctx, `
 					INSERT INTO game_history_entries (
 						id, owner_key, player_name, started_at, updated_at, completed_at,
 						game, winner, status, issue, issue_reason, player_result, dealer_result,
 						notes, choice, choice_shout, payout_multiplier, raffle_session_id, updated_db_at
 					) VALUES (
-						$1,$2,$3,$4,$5,$6,
-						$7,$8,$9,$10,$11,$12,$13,
-						$14,$15,$16,$17,$18,NOW()
+						?,?,?,?,?,?,
+						?,?,?,?,?,?,?,
+						?,?,?,?,?,CURRENT_TIMESTAMP
 					)
 					ON CONFLICT (id, owner_key) DO UPDATE SET
 						player_name = EXCLUDED.player_name,
@@ -3357,7 +3355,7 @@ func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
 						choice_shout = EXCLUDED.choice_shout,
 						payout_multiplier = EXCLUDED.payout_multiplier,
 						raffle_session_id = EXCLUDED.raffle_session_id,
-						updated_db_at = NOW()
+						updated_db_at = CURRENT_TIMESTAMP
 				`,
 					e.ID,
 					owner,
@@ -3381,7 +3379,7 @@ func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
 					return err
 				}
 
-				if _, err := tx.Exec(ctx, `DELETE FROM game_history_items WHERE entry_id = $1 AND ($2 = '' OR owner_key = $2)`, e.ID, owner); err != nil {
+				if _, err := tx.ExecContext(ctx, `DELETE FROM game_history_items WHERE entry_id = ? AND (? = '' OR owner_key = ?)`, e.ID, owner); err != nil {
 					return err
 				}
 
@@ -3390,9 +3388,9 @@ func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
 					if qty <= 0 {
 						qty = 1
 					}
-					if _, err := tx.Exec(ctx, `
+					if _, err := tx.ExecContext(ctx, `
 						INSERT INTO game_history_items (entry_id, owner_key, item_type, item_index, item_name, quantity, raw_data)
-						VALUES ($1,$2,'bet',$3,$4,$5,$6)
+						VALUES (?,?,'bet',?,?,?,?)
 					`, e.ID, owner, i, item.Name, qty, item.RawData); err != nil {
 						return err
 					}
@@ -3403,16 +3401,16 @@ func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
 					if qty <= 0 {
 						qty = 1
 					}
-					if _, err := tx.Exec(ctx, `
+					if _, err := tx.ExecContext(ctx, `
 						INSERT INTO game_history_items (entry_id, owner_key, item_type, item_index, item_name, quantity, raw_data)
-						VALUES ($1,$2,'payout',$3,$4,$5,$6)
+						VALUES (?,?,'payout',?,?,?,?)
 					`, e.ID, owner, i, item.Name, qty, item.RawData); err != nil {
 						return err
 					}
 				}
 			}
 
-			if err := tx.Commit(ctx); err != nil {
+			if err := tx.Commit(); err != nil {
 				return err
 			}
 			return nil
@@ -3458,26 +3456,26 @@ func (a *App) persistSingleGameEntryToDB(entry GameHistoryEntry) error {
 		err := func() error {
 			defer cancel()
 
-			tx, err := db.Begin(ctx)
+			tx, err := db.BeginTx(ctx, nil)
 			if err != nil {
 				return err
 			}
 			defer func() {
-				_ = tx.Rollback(ctx)
+				_ = tx.Rollback()
 			}()
 
 			// Insert/update single entry only, no cleanup DELETE
 			notesJSON, _ := json.Marshal(entry.Notes)
 			rollsJSON, _ := json.Marshal(entry.Rolls)
-			if _, err := tx.Exec(ctx, `
+			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO game_history_entries (
 					id, owner_key, player_name, started_at, updated_at, completed_at,
 					game, winner, status, issue, issue_reason, player_result, dealer_result,
 					notes, rolls, choice, choice_shout, payout_multiplier, raffle_session_id, updated_db_at
 				) VALUES (
-					$1,$2,$3,$4,$5,$6,
-					$7,$8,$9,$10,$11,$12,$13,
-					$14,$15,$16,$17,$18,$19,NOW()
+					?,?,?,?,?,?,
+					?,?,?,?,?,?,?,
+					?,?,?,?,?,?,CURRENT_TIMESTAMP
 				)
 				ON CONFLICT (id, owner_key) DO UPDATE SET
 					player_name = EXCLUDED.player_name,
@@ -3497,7 +3495,7 @@ func (a *App) persistSingleGameEntryToDB(entry GameHistoryEntry) error {
 					choice_shout = EXCLUDED.choice_shout,
 					payout_multiplier = EXCLUDED.payout_multiplier,
 					raffle_session_id = EXCLUDED.raffle_session_id,
-					updated_db_at = NOW()
+					updated_db_at = CURRENT_TIMESTAMP
 			`,
 				entry.ID,
 				owner,
@@ -3523,7 +3521,7 @@ func (a *App) persistSingleGameEntryToDB(entry GameHistoryEntry) error {
 			}
 
 			// Update items for this entry (delete old, insert new)
-			if _, err := tx.Exec(ctx, `DELETE FROM game_history_items WHERE entry_id = $1 AND ($2 = '' OR owner_key = $2)`, entry.ID, owner); err != nil {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM game_history_items WHERE entry_id = ? AND (? = '' OR owner_key = ?)`, entry.ID, owner); err != nil {
 				return err
 			}
 
@@ -3532,9 +3530,9 @@ func (a *App) persistSingleGameEntryToDB(entry GameHistoryEntry) error {
 				if qty <= 0 {
 					qty = 1
 				}
-				if _, err := tx.Exec(ctx, `
+				if _, err := tx.ExecContext(ctx, `
 					INSERT INTO game_history_items (entry_id, owner_key, item_type, item_index, item_name, quantity, raw_data)
-					VALUES ($1,$2,'bet',$3,$4,$5,$6)
+					VALUES (?,?,'bet',?,?,?,?)
 				`, entry.ID, owner, i, item.Name, qty, item.RawData); err != nil {
 					return err
 				}
@@ -3545,15 +3543,15 @@ func (a *App) persistSingleGameEntryToDB(entry GameHistoryEntry) error {
 				if qty <= 0 {
 					qty = 1
 				}
-				if _, err := tx.Exec(ctx, `
+				if _, err := tx.ExecContext(ctx, `
 					INSERT INTO game_history_items (entry_id, owner_key, item_type, item_index, item_name, quantity, raw_data)
-					VALUES ($1,$2,'payout',$3,$4,$5,$6)
+					VALUES (?,?,'payout',?,?,?,?)
 				`, entry.ID, owner, i, item.Name, qty, item.RawData); err != nil {
 					return err
 				}
 			}
 
-			if err := tx.Commit(ctx); err != nil {
+			if err := tx.Commit(); err != nil {
 				return err
 			}
 			return nil
@@ -6063,7 +6061,7 @@ func startPayout(a *App, targetID int, targetName string) {
 				if btID <= 0 {
 					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 					var dbBtID int
-					err := db.QueryRow(ctx, "SELECT id FROM banker_trades WHERE lower(player_name) = lower($1) AND status != 'completed' ORDER BY created_at DESC LIMIT 1", targetName).Scan(&dbBtID)
+					err := db.QueryRowContext(ctx, "SELECT id FROM banker_trades WHERE lower(player_name) = lower(?) AND status != 'completed' ORDER BY created_at DESC LIMIT 1", targetName).Scan(&dbBtID)
 					cancel()
 					if err == nil && dbBtID > 0 {
 						a.historyDBMu.Lock()
@@ -6118,7 +6116,7 @@ func startPayout(a *App, targetID int, targetName string) {
 
 					if id > 0 {
 						// Mark the banker_trade as paying so external auto-payer can pick it up
-						_, err := db.Exec(ctx, "UPDATE banker_trades SET status = 'paying', risk_status = 'paying' WHERE id = $1", id)
+						_, err := db.ExecContext(ctx, "UPDATE banker_trades SET status = 'paying', risk_status = 'paying' WHERE id = ?", id)
 						if err != nil {
 							a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] ERROR: failed to mark banker_trades %d as paying: %v", id, err))
 						} else {
@@ -6126,7 +6124,7 @@ func startPayout(a *App, targetID int, targetName string) {
 						}
 
 						// Fetch player_trade_id from banker_trades so auto-payer knows who to trade with
-						if err := db.QueryRow(ctx, "SELECT COALESCE(player_trade_id,0), COALESCE(risk_bank,0) FROM banker_trades WHERE id = $1", id).Scan(&playerTradeID, &dbBank); err != nil {
+						if err := db.QueryRowContext(ctx, "SELECT COALESCE(player_trade_id,0), COALESCE(risk_bank,0) FROM banker_trades WHERE id = ?", id).Scan(&playerTradeID, &dbBank); err != nil {
 							a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] could not fetch player_trade_id/risk_bank for banker_trades %d: %v", id, err))
 							playerTradeID = 0
 							dbBank = 0
@@ -6153,7 +6151,7 @@ func startPayout(a *App, targetID int, targetName string) {
 						created := time.Now().Format("2006-01-02 15:04:05")
 						qty := it.Quantity
 
-						_, err := db.Exec(ctx, "INSERT INTO public.auto_payouts (id, player_name, item_name, quantity, status, created_at, player_trade_id, banker_trade_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", pid, player, itemName, qty, "Pending", created, playerTradeID, bankerParam)
+						_, err := db.ExecContext(ctx, "INSERT INTO auto_payouts (id, player_name, item_name, quantity, status, created_at, player_trade_id, banker_trade_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", pid, player, itemName, qty, "Pending", created, playerTradeID, bankerParam)
 						if err != nil {
 							a.AddLogMsg(fmt.Sprintf("[BANKER_PAY] ERROR: failed to insert auto_payout for %s: %v", player, err))
 						} else {
@@ -6577,11 +6575,11 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 				}
 
 				var stock int
-				err := db.QueryRow(ctx, `
+				err := db.QueryRowContext(ctx, `
 					SELECT COALESCE(SUM(quantity), 0)
 					FROM banker_inventory
 					WHERE LOWER(item_name) = ANY(
-						SELECT LOWER(unnest($1::text[]))
+						SELECT LOWER(unnest(?::text[]))
 					)
 				`, itemNames).Scan(&stock)
 				cancel()
@@ -6630,7 +6628,7 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
 					// Use GREATEST so an async init write cannot reduce a later, larger bank value.
-					_, err := db.Exec(ctx, "UPDATE banker_trades SET risk_bank = GREATEST(COALESCE(risk_bank,0), $1), risk_status = 'playing' WHERE id = $2", qty, id)
+					_, err := db.ExecContext(ctx, "UPDATE banker_trades SET risk_bank = GREATEST(COALESCE(risk_bank,0), ?), risk_status = 'playing' WHERE id = ?", qty, id)
 					if err != nil {
 						a.AddLogMsg(fmt.Sprintf("[RISK] ERROR: failed to init banker_trades %d: %v", id, err))
 					} else {
@@ -6674,12 +6672,12 @@ func (a *App) handlePlayerWinRisk(betItems []TradeItem, playerName string, playe
 		if dbID > 0 && db != nil {
 			// Update DB bank immediately
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_, _ = db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1 WHERE id = $2", playerRisk, dbID)
+			_, _ = db.ExecContext(ctx, "UPDATE banker_trades SET risk_bank = ? WHERE id = ?", playerRisk, dbID)
 			cancel()
 
 			// Optional: verify/read back to ensure 100% accuracy before shouting
 			var dbBank int
-			_ = db.QueryRow(context.Background(), "SELECT risk_bank FROM banker_trades WHERE id = $1", dbID).Scan(&dbBank)
+			_ = db.QueryRowContext(context.Background(), "SELECT risk_bank FROM banker_trades WHERE id = ?", dbID).Scan(&dbBank)
 			if dbBank > 0 {
 				playerRisk = dbBank
 			}
@@ -6867,7 +6865,7 @@ func (a *App) handleRiskBet(n int, sender string, userID int) {
 				}()
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				_, _ = db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1, risk_status = 'risk_active' WHERE id = $2", qty, id)
+				_, _ = db.ExecContext(ctx, "UPDATE banker_trades SET risk_bank = ?, risk_status = 'risk_active' WHERE id = ?", qty, id)
 			}(dbID, playerRisk)
 		}
 	}
@@ -7157,7 +7155,7 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 					}()
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
-					_, _ = db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1 WHERE id = $2", qty, id)
+					_, _ = db.ExecContext(ctx, "UPDATE banker_trades SET risk_bank = ? WHERE id = ?", qty, id)
 				}(dbID, playerRisk)
 			}
 		}
@@ -7335,7 +7333,7 @@ func (a *App) applyRiskOutcome(playerWins bool) {
 				}()
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				_, _ = db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1 WHERE id = $2", qty, id)
+				_, _ = db.ExecContext(ctx, "UPDATE banker_trades SET risk_bank = ? WHERE id = ?", qty, id)
 			}(dbID, playerRisk)
 		}
 	}
@@ -7549,7 +7547,7 @@ func (a *App) finalizeRiskKeep() {
 	if db != nil && btID <= 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		var dbBtID int
-		err := db.QueryRow(ctx, "SELECT id FROM banker_trades WHERE lower(player_name) = lower($1) AND status != 'completed' ORDER BY created_at DESC LIMIT 1", targetName).Scan(&dbBtID)
+		err := db.QueryRowContext(ctx, "SELECT id FROM banker_trades WHERE lower(player_name) = lower(?) AND status != 'completed' ORDER BY created_at DESC LIMIT 1", targetName).Scan(&dbBtID)
 		cancel()
 		if err == nil && dbBtID > 0 {
 			a.historyDBMu.Lock()
@@ -7572,7 +7570,7 @@ func (a *App) finalizeRiskKeep() {
 	if baseTotal == 0 && db != nil && btID > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		var betItemsJSON []byte
-		err := db.QueryRow(ctx, "SELECT bet_items FROM banker_trades WHERE id = $1", btID).Scan(&betItemsJSON)
+		err := db.QueryRowContext(ctx, "SELECT bet_items FROM banker_trades WHERE id = ?", btID).Scan(&betItemsJSON)
 		cancel()
 		if err == nil && len(betItemsJSON) > 0 {
 			var dbItems []struct {
@@ -7630,7 +7628,7 @@ func (a *App) finalizeRiskKeep() {
 	// auto-payer reads the correct risk_bank before we start payout.
 	if db != nil && btID > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_, err := db.Exec(ctx, "UPDATE banker_trades SET risk_bank = $1 WHERE id = $2", total, btID)
+		_, err := db.ExecContext(ctx, "UPDATE banker_trades SET risk_bank = ? WHERE id = ?", total, btID)
 		cancel()
 		if err != nil {
 			a.AddLogMsg(fmt.Sprintf("[RISK] ERROR: failed to update banker_trades risk_bank for %d: %v", btID, err))
@@ -10704,7 +10702,7 @@ func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 		}()
 		// If Split Dealer Mode is enabled, and the history DB is available,
 		// prefer a DB-backed snapshot built from banker_inventory joined to
-		// public.stocked_items where is_active = TRUE. Pull items for all
+		// stocked_items where is_active = TRUE. Pull items for all
 		// bankers (ignore configured banker name) per request.
 		if a.GetSplitDealerMode() {
 			db, owner := a.getHistoryDB()
@@ -10712,14 +10710,14 @@ func (a *App) sendLiveDealerSnapshot(items []TradeItem) {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 
-				var rows pgx.Rows
+				var rows *sql.Rows
 				var err error
-				rows, err = db.Query(ctx, `
+				rows, err = db.QueryContext(ctx, `
 										SELECT bi.item_name, bi.quantity
 										FROM banker_inventory bi
-										JOIN public.stocked_items si
+										JOIN stocked_items si
 											ON LOWER(si.raw_name) = LOWER(bi.item_name)
-										WHERE ($1 = '' OR si.owner_key = $1) AND si.is_active = TRUE
+										WHERE (? = '' OR si.owner_key = ?) AND si.is_active = TRUE
 								`, owner)
 
 				if err != nil {
@@ -17167,17 +17165,17 @@ func (a *App) startDealerShoutPolling() {
 			// Simplified query: Ignore owner_key entirely and pick up any pending shout
 			query := `
 				SELECT id, target_player, message, owner_key
-				FROM public.dealer_shouts 
+				FROM dealer_shouts 
 				WHERE status = 'pending'
 				ORDER BY created_at ASC 
 				LIMIT 1
 			`
-			err := db.QueryRow(ctx, query).Scan(&id, &targetPlayer, &message, &dbOwner)
+			err := db.QueryRowContext(ctx, query).Scan(&id, &targetPlayer, &message, &dbOwner)
 			cancel()
 
 			if err != nil {
 				// No pending shouts found for our filters
-				if err != pgx.ErrNoRows && !strings.Contains(err.Error(), "no rows") {
+				if err != sql.ErrNoRows && !strings.Contains(err.Error(), "no rows") {
 					a.AddLogMsg(fmt.Sprintf("[SHOUT_POLL] query error: %v", err))
 				}
 				continue
@@ -17187,7 +17185,7 @@ func (a *App) startDealerShoutPolling() {
 
 			// Mark as 'processing' to avoid duplicate shouts from same poller
 			ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
-			_, err = db.Exec(ctx2, "UPDATE public.dealer_shouts SET status = 'processing' WHERE id = $1", id)
+			_, err = db.ExecContext(ctx2, "UPDATE dealer_shouts SET status = 'processing' WHERE id = ?", id)
 			cancel2()
 			if err != nil {
 				a.AddLogMsg(fmt.Sprintf("[SHOUT_POLL] ERROR: failed to mark shout %d as processing: %v", id, err))
@@ -17199,7 +17197,7 @@ func (a *App) startDealerShoutPolling() {
 
 			// Mark as completed
 			ctx3, cancel3 := context.WithTimeout(context.Background(), 2*time.Second)
-			_, err = db.Exec(ctx3, "UPDATE public.dealer_shouts SET status = 'completed', completed_at = NOW() WHERE id = $1", id)
+			_, err = db.ExecContext(ctx3, "UPDATE dealer_shouts SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = ?", id)
 			cancel3()
 			if err != nil {
 				a.AddLogMsg(fmt.Sprintf("[SHOUT_POLL] ERROR: failed to mark shout %d as completed: %v", id, err))

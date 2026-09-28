@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	
 )
 
 func main() {
@@ -23,7 +23,7 @@ func main() {
 	fmt.Println("--- Migrating banker_trades table ---")
 	
 	// Add risk_bank column
-	_, err = conn.Exec(ctx, `
+	_, err = conn.ExecContext(ctx, `
 		ALTER TABLE banker_trades 
 		ADD COLUMN IF NOT EXISTS risk_bank INTEGER DEFAULT 0,
 		ADD COLUMN IF NOT EXISTS risk_status TEXT DEFAULT 'idle'

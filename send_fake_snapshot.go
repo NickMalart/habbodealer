@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	
 )
 
 type TradeItem struct {
@@ -91,17 +91,17 @@ func main() {
 		rows, err = conn.Query(context.Background(), `
 			SELECT bi.item_name, bi.quantity
 			FROM banker_inventory bi
-			JOIN public.stocked_items si
-							ON LOWER(si.raw_name) = LOWER(bi.item_name) AND ($2 = '' OR si.owner_key = $2)
-			WHERE bi.banker_name = $1 AND si.is_active = TRUE
+			JOIN stocked_items si
+							ON LOWER(si.raw_name) = LOWER(bi.item_name) AND (? = '' OR si.owner_key = ?)
+			WHERE bi.banker_name = ? AND si.is_active = TRUE
 		`, banker, owner)
 	} else {
 		rows, err = conn.Query(context.Background(), `
 			SELECT bi.item_name, bi.quantity
 			FROM banker_inventory bi
-			JOIN public.stocked_items si
+			JOIN stocked_items si
 			  ON LOWER(si.raw_name) = LOWER(bi.item_name)
-			WHERE bi.banker_name = $1 AND si.is_active = TRUE
+			WHERE bi.banker_name = ? AND si.is_active = TRUE
 		`, banker)
 	}
 	if err != nil {

@@ -314,11 +314,11 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 	db, owner := a.getHistoryDB()
 	if db != nil {
 		// 1. Fetch Game History
-		rows, err := db.Query(context.Background(), `
+		rows, err := db.QueryContext(context.Background(), `
 			SELECT
 				player_name, started_at, updated_at, completed_at, game, winner, status, issue, notes, choice
 			FROM game_history_entries
-			WHERE ($1 = '' OR owner_key = $1)
+			WHERE (? = '' OR owner_key = ?)
 		`, owner)
 		if err == nil {
 			defer rows.Close()
@@ -339,10 +339,10 @@ func (a *App) BuildCasinoStats(rangeKey string) CasinoStats {
 		}
 
 		// 2. Fetch Item Ledger for "Ahead or Not" tracking
-		lrows, err := db.Query(context.Background(), `
+		lrows, err := db.QueryContext(context.Background(), `
 			SELECT trade_type, items, created_at
 			FROM trade_ledger
-			WHERE ($1 = '' OR owner_key = $1)
+			WHERE (? = '' OR owner_key = ?)
 		`, owner)
 		if err == nil {
 			defer lrows.Close()

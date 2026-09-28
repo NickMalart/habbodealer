@@ -15,7 +15,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+	_ "modernc.org/sqlite"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	g "xabbo.b7c.io/goearth"
 	"xabbo.b7c.io/goearth/shockwave/out"
@@ -51,7 +52,7 @@ type App struct {
 	pythonExec   string
 	parserScript string
 
-	db *pgxpool.Pool
+	db *sql.DB
 
 	autoGrantRights   bool
 	lastGrantedRights map[string]time.Time
@@ -192,13 +193,8 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) initDatabase() {
-	config, err := pgxpool.ParseConfig(dbURL)
-	if err != nil {
-		a.AddLog(fmt.Sprintf("ERROR: Failed to parse database URL: %v", err))
-		return
-	}
-
-	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	dbPath := strings.TrimPrefix(dbURL, "file:")
+	pool, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		a.AddLog(fmt.Sprintf("ERROR: Failed to connect to database: %v", err))
 		return
@@ -207,11 +203,11 @@ func (a *App) initDatabase() {
 	a.db = pool
 
 	// Create table if not exists
-	_, err = a.db.Exec(context.Background(), `
+	_, err = a.db.ExecContext(context.Background(), `
 		CREATE TABLE IF NOT EXISTS room_rights (
-			id SERIAL PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			username TEXT UNIQUE NOT NULL,
-			added_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+			added_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
 	if err != nil {
@@ -232,8 +228,8 @@ func (a *App) AddRoomRight(username string) error {
 	}
 
 	a.AddLog(fmt.Sprintf("DB: Adding right for %s", username))
-	_, err := a.db.Exec(context.Background(),
-		"INSERT INTO room_rights (username) VALUES ($1) ON CONFLICT (username) DO NOTHING",
+	_, err := a.db.ExecContext(context.Background(),
+		"INSERT INTO room_rights (username) VALUES (?) ON CONFLICT (username) DO NOTHING",
 		username)
 	if err != nil {
 		a.AddLog(fmt.Sprintf("ERROR: DB add failed: %v", err))
@@ -247,7 +243,7 @@ func (a *App) RemoveRoomRight(username string) error {
 		return fmt.Errorf("database not connected")
 	}
 	a.AddLog(fmt.Sprintf("DB: Removing right for %s", username))
-	_, err := a.db.Exec(context.Background(), "DELETE FROM room_rights WHERE username = $1", username)
+	_, err := a.db.ExecContext(context.Background(), "DELETE FROM room_rights WHERE username = ?", username)
 	if err != nil {
 		a.AddLog(fmt.Sprintf("ERROR: DB remove failed: %v", err))
 	}
@@ -260,7 +256,7 @@ func (a *App) GetRoomRights() ([]string, error) {
 		return nil, fmt.Errorf("database not connected")
 	}
 
-	rows, err := a.db.Query(context.Background(), "SELECT username FROM room_rights ORDER BY username ASC")
+	rows, err := a.db.QueryContext(context.Background(), "SELECT username FROM room_rights ORDER BY username ASC")
 	if err != nil {
 		return nil, err
 	}

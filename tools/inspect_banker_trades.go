@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	
 )
 
 func main() {
@@ -21,7 +21,7 @@ func main() {
 	defer conn.Close(ctx)
 
 	fmt.Println("--- Schema for banker_trades ---")
-	rows, err := conn.Query(ctx, `
+	rows, err := conn.QueryContext(ctx, `
 		SELECT column_name, data_type 
 		FROM information_schema.columns 
 		WHERE table_name = 'banker_trades'
@@ -40,7 +40,7 @@ func main() {
 	}
 
 	fmt.Println("\n--- Recent banker_trades entries ---")
-	rows2, err := conn.Query(ctx, `SELECT * FROM banker_trades ORDER BY id DESC LIMIT 5`)
+	rows2, err := conn.QueryContext(ctx, `SELECT * FROM banker_trades ORDER BY id DESC LIMIT 5`)
 	if err != nil {
 		log.Fatalf("Query failed: %v", err)
 	}

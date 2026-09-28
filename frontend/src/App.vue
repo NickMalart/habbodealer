@@ -26,6 +26,15 @@
             <button v-if="casinoStatusKey !== 'stopped'" type="button" class="copy-btn history-danger-btn" @click="stopCasino">Stop</button>
           </div>
         </div>
+        <div class="casino-panel-inner" style="margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px;">
+          <div class="casino-info">
+            <div class="casino-status-label">Local Database</div>
+            <div class="casino-status">SQLite</div>
+          </div>
+          <div class="casino-actions">
+            <button type="button" class="copy-btn start-casino-btn" @click="configureDatabase">Configure Local DB</button>
+          </div>
+        </div>
         <div v-if="casinoStatusKey !== 'stopped'" class="trade-limits-home">Trade limits: max {{ maxUniqueItemsInput }} unique items, {{ minQuantityPerItemInput }}-{{ maxQuantityPerItemInput }} per item</div>
       </div>
 
@@ -967,6 +976,14 @@ export default {
     },
   },
   methods: {
+    async configureDatabase() {
+      try {
+        const result = await window.go.main.App.ConfigureLocalDatabase();
+        alert("Database Configuration Result:\n" + result);
+      } catch (err) {
+        alert("Error configuring database: " + err);
+      }
+    },
     openGameGuide(game) {
       this.activeGameGuide = game;
     },

@@ -19,8 +19,7 @@ import (
 	"time"
 
 	"database/sql"
-
-	"github.com/jackc/pgx/v5/pgxpool"
+	_ "modernc.org/sqlite"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -182,7 +181,7 @@ type App struct {
 	pythonExec     string
 	pythonArgs     []string
 	parserScript   string
-	db             *pgxpool.Pool
+	db             *sql.DB
 	dbConnString   string
 	discordWebhook string
 
@@ -210,6 +209,25 @@ type App struct {
 	shoutMu       sync.Mutex
 }
 
+func readLocalDBURL() string {
+	candidates := []string{"db.local.json", "../db.local.json"}
+	for _, c := range candidates {
+		data, err := os.ReadFile(c)
+		if err != nil {
+			continue
+		}
+		var cfg struct{ DatabaseURL string `json:"databaseUrl"` }
+		if json.Unmarshal(data, &cfg) == nil && cfg.DatabaseURL != "" {
+			return strings.TrimPrefix(cfg.DatabaseURL, "file:")
+		}
+	}
+	exeDir := func() string {
+		e, _ := os.Executable()
+		return filepath.Dir(e)
+	}()
+	return filepath.Join(exeDir, "database.sqlite")
+}
+
 func NewApp() *App {
 	return &App{
 		payouts:              []Payout{},
@@ -217,7 +235,7 @@ func NewApp() *App {
 		roomUsers:            make(map[string]ParsedUsers28User),
 		inventory:            make(map[string][]int),
 		pythonExec:           "python",
-		dbConnString:         "postgresql://neondb_owner:npg_cPwtQn4ZGh7J@ep-crimson-frost-b4a01mk8-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
+		dbConnString:         readLocalDBURL(),
 		discordWebhook:       "https://discord.com/api/webhooks/1519096496400760924/dsDuT5QTEahQ3l4BQ3L41h5lMu73iXpKAI2L6uCnNVfQJ4R6XJ-moQcqHwDFs53UaHR1",
 		stripScanSeenItemIDs: make(map[int]struct{}),
 		stripScanItemIDs:     make(map[string][]int),
@@ -251,7 +269,7 @@ func (a *App) queueShout(playerName, message string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_, err := a.db.Exec(ctx, "INSERT INTO public.dealer_shouts (owner_key, target_player, message, shout_type, status, created_at) VALUES ($1, $2, $3, $4, 'pending', NOW())", owner, playerName, message, "error")
+		_, err := a.db.ExecContext(ctx, "INSERT INTO dealer_shouts (owner_key, target_player, message, shout_type, status, created_at) VALUES (?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)", owner, playerName, message, "error")
 		if err != nil {
 			a.AddLog("ERROR: Failed to insert shout: " + err.Error())
 		} else {
@@ -309,10 +327,10 @@ func (a *App) syncBanToDB(key string, info BanInfo) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		query := `INSERT INTO public.banned_players (ban_key, expires_at, message, is_active) 
-		          VALUES ($1, $2, $3, TRUE) 
+		query := `INSERT INTO banned_players (ban_key, expires_at, message, is_active) 
+		          VALUES (?, ?, ?, TRUE) 
 		          ON CONFLICT (ban_key) DO UPDATE SET expires_at = EXCLUDED.expires_at, message = EXCLUDED.message, is_active = TRUE`
-		_, err := a.db.Exec(ctx, query, key, info.ExpiresAt, info.Message)
+		_, err := a.db.ExecContext(ctx, query, key, info.ExpiresAt, info.Message)
 		if err != nil {
 			a.AddLog("ERROR: syncBanToDB failed: " + err.Error())
 		}
@@ -327,7 +345,7 @@ func (a *App) removeBanFromDB(key string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_, err := a.db.Exec(ctx, "UPDATE public.banned_players SET is_active = FALSE WHERE ban_key = $1", key)
+		_, err := a.db.ExecContext(ctx, "UPDATE banned_players SET is_active = FALSE WHERE ban_key = ?", key)
 		if err != nil {
 			a.AddLog("ERROR: removeBanFromDB failed: " + err.Error())
 		}
@@ -557,7 +575,7 @@ func (a *App) loadBansFromDB() {
 		return
 	}
 	a.AddLog("Loading active bans from database...")
-	rows, err := a.db.Query(context.Background(), "SELECT ban_key, expires_at, message FROM public.banned_players WHERE is_active = TRUE AND expires_at > NOW()")
+	rows, err := a.db.QueryContext(context.Background(), "SELECT ban_key, expires_at, message FROM banned_players WHERE is_active = TRUE AND expires_at > CURRENT_TIMESTAMP")
 	if err != nil {
 		a.AddLog("ERROR: loadBansFromDB failed: " + err.Error())
 		return
@@ -585,7 +603,7 @@ func (a *App) cleanupBans() {
 		case <-ticker.C:
 			removed := false
 			if a.db != nil {
-				_, err := a.db.Exec(context.Background(), "UPDATE public.banned_players SET is_active = FALSE WHERE expires_at <= NOW() AND is_active = TRUE")
+				_, err := a.db.ExecContext(context.Background(), "UPDATE banned_players SET is_active = FALSE WHERE expires_at <= CURRENT_TIMESTAMP AND is_active = TRUE")
 				if err != nil {
 					a.AddLog("ERROR: cleanupBans failed: " + err.Error())
 				}
@@ -970,13 +988,13 @@ func (a *App) inventoryRefreshLoop() {
 
 func bankerTradeSchemaStatements() []string {
 	return []string{
-		`CREATE TABLE IF NOT EXISTS public.banker_trades (
-			id BIGSERIAL PRIMARY KEY,
+		`CREATE TABLE IF NOT EXISTS banker_trades (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			player_name TEXT NOT NULL,
-			bet_items JSONB NOT NULL DEFAULT '[]'::jsonb,
+			bet_items TEXT NOT NULL DEFAULT '[]',
 			banker_name TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'pending',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			player_trade_id INTEGER NULL,
 			player_chat_id INTEGER NULL,
 			owner_key TEXT NOT NULL DEFAULT '',
@@ -984,24 +1002,25 @@ func bankerTradeSchemaStatements() []string {
 			risk_bank INTEGER DEFAULT 0,
 			risk_status TEXT DEFAULT 'idle'
 		);`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS player_name TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS bet_items JSONB NOT NULL DEFAULT '[]'::jsonb;`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS banker_name TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS player_chat_id INTEGER NULL;`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS bet_amount INTEGER DEFAULT 0;`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_bank INTEGER DEFAULT 0;`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_status TEXT DEFAULT 'idle';`,
+		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS player_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS bet_items TEXT NOT NULL DEFAULT '[]';`,
+		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS banker_name TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';`,
+		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP;`,
+		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;`,
+		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS player_chat_id INTEGER NULL;`,
+		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS bet_amount INTEGER DEFAULT 0;`,
+		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS risk_bank INTEGER DEFAULT 0;`,
+		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS risk_status TEXT DEFAULT 'idle';`,
 	}
 }
 
 func (a *App) initDatabase() {
 	a.AddLog("Connecting to database...")
 
-	pool, err := pgxpool.New(context.Background(), a.dbConnString)
+	a.dbConnString = strings.TrimPrefix(a.dbConnString, "file:")
+	pool, err := sql.Open("sqlite", a.dbConnString)
 	if err != nil {
 		a.AddLog("ERROR: Database connection failed: " + err.Error())
 		return
@@ -1009,11 +1028,10 @@ func (a *App) initDatabase() {
 
 	a.db = pool
 
-	// Set search path and create tables with public qualification
-	_, _ = a.db.Exec(context.Background(), "SET search_path TO public;")
+	// SQLite doesn't need search_path
 
 	// Create table if not exists
-	query := `CREATE TABLE IF NOT EXISTS public.auto_payouts (
+	query := `CREATE TABLE IF NOT EXISTS auto_payouts (
 		id TEXT PRIMARY KEY,
 		player_name TEXT NOT NULL,
 		item_name TEXT NOT NULL,
@@ -1023,76 +1041,76 @@ func (a *App) initDatabase() {
 		player_trade_id INTEGER NULL,
 		banker_trade_id INTEGER NULL
 	);`
-	_, err = a.db.Exec(context.Background(), query)
+	_, err = a.db.ExecContext(context.Background(), query)
 	if err != nil {
 		a.AddLog("ERROR: Table creation failed: " + err.Error())
 	}
 
 	// Ensure older installations also have the banker_trade_id column available.
-	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;")
-	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS banker_trade_id INTEGER NULL;")
+	_, _ = a.db.ExecContext(context.Background(), "ALTER TABLE auto_payouts ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;")
+	_, _ = a.db.ExecContext(context.Background(), "ALTER TABLE auto_payouts ADD COLUMN IF NOT EXISTS banker_trade_id INTEGER NULL;")
 
 	// Create dealer_shouts table for cross-bot communication
-	query = `CREATE TABLE IF NOT EXISTS public.dealer_shouts (
+	query = `CREATE TABLE IF NOT EXISTS dealer_shouts (
 		id SERIAL PRIMARY KEY,
 		owner_key TEXT NOT NULL DEFAULT '',
 		target_player TEXT NOT NULL,
 		message TEXT NOT NULL,
 		shout_type TEXT NOT NULL,
 		status TEXT NOT NULL DEFAULT 'pending',
-		created_at TIMESTAMP DEFAULT NOW(),
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		completed_at TIMESTAMP NULL
 	);`
-	_, err = a.db.Exec(context.Background(), query)
+	_, err = a.db.ExecContext(context.Background(), query)
 	if err != nil {
 		a.AddLog("ERROR: dealer_shouts table creation failed: " + err.Error())
 	}
 
 	// Add owner_key column if it doesn't exist (migration for existing tables)
-	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';")
+	_, _ = a.db.ExecContext(context.Background(), "ALTER TABLE dealer_shouts ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';")
 
 	// Ensure notified column exists for failure webhooks
-	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS notified BOOLEAN DEFAULT FALSE;")
+	_, _ = a.db.ExecContext(context.Background(), "ALTER TABLE auto_payouts ADD COLUMN IF NOT EXISTS notified BOOLEAN DEFAULT FALSE;")
 
 	for _, stmt := range bankerTradeSchemaStatements() {
-		if _, err := a.db.Exec(context.Background(), stmt); err != nil {
+		if _, err := a.db.ExecContext(context.Background(), stmt); err != nil {
 			a.AddLog("ERROR: banker_trades schema migration failed: " + err.Error())
 		}
 	}
 
-	// Create public.banned_players table
-	query = `CREATE TABLE IF NOT EXISTS public.banned_players (
+	// Create banned_players table
+	query = `CREATE TABLE IF NOT EXISTS banned_players (
 		ban_key TEXT PRIMARY KEY,
 		expires_at TIMESTAMP NOT NULL,
 		message TEXT NOT NULL,
 		is_active BOOLEAN DEFAULT TRUE,
-		created_at TIMESTAMP DEFAULT NOW()
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);`
-	if _, err := a.db.Exec(context.Background(), query); err != nil {
-		a.AddLog("ERROR: public.banned_players table creation failed: " + err.Error())
+	if _, err := a.db.ExecContext(context.Background(), query); err != nil {
+		a.AddLog("ERROR: banned_players table creation failed: " + err.Error())
 	}
-	_, _ = a.db.Exec(context.Background(), "ALTER TABLE public.banned_players ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
-	_, _ = a.db.Exec(context.Background(), "UPDATE public.banned_players SET is_active = TRUE WHERE is_active IS NULL;")
+	_, _ = a.db.ExecContext(context.Background(), "ALTER TABLE banned_players ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;")
+	_, _ = a.db.ExecContext(context.Background(), "UPDATE banned_players SET is_active = TRUE WHERE is_active IS NULL;")
 
-	// Create public.stocked_items table
-	query = `CREATE TABLE IF NOT EXISTS public.stocked_items (
+	// Create stocked_items table
+	query = `CREATE TABLE IF NOT EXISTS stocked_items (
 		id SERIAL PRIMARY KEY,
 		raw_name TEXT NOT NULL,
 		canonical_name TEXT NOT NULL,
 		display_name TEXT NOT NULL,
 		is_active BOOLEAN NOT NULL DEFAULT TRUE
 	);`
-	_, err = a.db.Exec(context.Background(), query)
+	_, err = a.db.ExecContext(context.Background(), query)
 	if err != nil {
-		a.AddLog("ERROR: public.stocked_items table creation failed: " + err.Error())
+		a.AddLog("ERROR: stocked_items table creation failed: " + err.Error())
 	}
 
 	// Create settings table for auto-payout configuration (key/value)
-	query = `CREATE TABLE IF NOT EXISTS public.auto_payout_settings (
+	query = `CREATE TABLE IF NOT EXISTS auto_payout_settings (
 		setting_key TEXT PRIMARY KEY,
 		setting_value TEXT NOT NULL
 	);`
-	_, err = a.db.Exec(context.Background(), query)
+	_, err = a.db.ExecContext(context.Background(), query)
 	if err != nil {
 		a.AddLog("ERROR: auto_payout_settings table creation failed: " + err.Error())
 	}
@@ -1207,7 +1225,7 @@ func (a *App) recordTradeLedger(partnerName string, tradeType string, items []Tr
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		var hasCurrentSchema bool
-		err := a.db.QueryRow(ctx, `SELECT EXISTS (
+		err := a.db.QueryRowContext(ctx, `SELECT EXISTS (
 			SELECT 1 FROM information_schema.columns
 			WHERE table_schema = 'public' AND table_name = 'trade_ledger'
 			  AND column_name = 'partner_name'
@@ -1217,14 +1235,14 @@ func (a *App) recordTradeLedger(partnerName string, tradeType string, items []Tr
 			return
 		}
 		if hasCurrentSchema {
-			_, err = a.db.Exec(ctx, `INSERT INTO public.trade_ledger (owner_key, partner_name, trade_type, total_quantity, items) VALUES ($1, $2, $3, $4, $5)`, owner, partnerName, tradeType, totalQty, itemsJSON)
+			_, err = a.db.ExecContext(ctx, `INSERT INTO trade_ledger (owner_key, partner_name, trade_type, total_quantity, items) VALUES (?, ?, ?, ?, ?)`, owner, partnerName, tradeType, totalQty, itemsJSON)
 		} else {
 			for _, item := range items {
 				qty := item.Quantity
 				if qty <= 0 {
 					qty = 1
 				}
-				_, err = a.db.Exec(ctx, `INSERT INTO public.trade_ledger (owner_key, created_at, trade_type, item_name, quantity, status) VALUES ($1, NOW(), $2, $3, $4, $5)`, owner, tradeType, item.Name, qty, partnerName)
+				_, err = a.db.ExecContext(ctx, `INSERT INTO trade_ledger (owner_key, created_at, trade_type, item_name, quantity, status) VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?)`, owner, tradeType, item.Name, qty, partnerName)
 				if err != nil {
 					break
 				}
@@ -1318,10 +1336,10 @@ func (a *App) AddPayout(name, itemName string, qty int) {
 	if a.db != nil {
 		ctx := context.Background()
 		var exists bool
-		if err := a.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM public.auto_payouts WHERE lower(player_name)=lower($1) AND lower(item_name)=lower($2) AND status != 'Completed')", player, normItem).Scan(&exists); err == nil {
+		if err := a.db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM auto_payouts WHERE lower(player_name)=lower(?) AND lower(item_name)=lower(?) AND status != 'Completed')", player, normItem).Scan(&exists); err == nil {
 			if !exists {
 				var uniqueCount int
-				if err := a.db.QueryRow(ctx, "SELECT COUNT(DISTINCT item_name) FROM public.auto_payouts WHERE lower(player_name)=lower($1) AND status != 'Completed'", player).Scan(&uniqueCount); err == nil {
+				if err := a.db.QueryRowContext(ctx, "SELECT COUNT(DISTINCT item_name) FROM auto_payouts WHERE lower(player_name)=lower(?) AND status != 'Completed'", player).Scan(&uniqueCount); err == nil {
 					if uniqueCount >= maxUnique {
 						a.AddLog(fmt.Sprintf("Player %s already has %d unique items queued (limit %d). Not adding %s", player, uniqueCount, maxUnique, normItem))
 						return
@@ -1336,9 +1354,9 @@ func (a *App) AddPayout(name, itemName string, qty int) {
 	if a.db != nil {
 		ctx := context.Background()
 		var playerTrade sql.NullInt64
-		err := a.db.QueryRow(ctx, "SELECT player_trade_id FROM public.banker_trades WHERE player_name = $1 AND status = 'paying' ORDER BY created_at DESC LIMIT 1", player).Scan(&playerTrade)
+		err := a.db.QueryRowContext(ctx, "SELECT player_trade_id FROM banker_trades WHERE player_name = ? AND status = 'paying' ORDER BY created_at DESC LIMIT 1", player).Scan(&playerTrade)
 		if err != nil || !playerTrade.Valid {
-			_ = a.db.QueryRow(ctx, "SELECT player_trade_id FROM public.banker_trades WHERE player_name = $1 ORDER BY created_at DESC LIMIT 1", player).Scan(&playerTrade)
+			_ = a.db.QueryRowContext(ctx, "SELECT player_trade_id FROM banker_trades WHERE player_name = ? ORDER BY created_at DESC LIMIT 1", player).Scan(&playerTrade)
 		}
 		if playerTrade.Valid {
 			tradeParam = playerTrade.Int64
@@ -1375,8 +1393,8 @@ func (a *App) AddPayout(name, itemName string, qty int) {
 
 		if a.db != nil {
 			ctx := context.Background()
-			if _, err := a.db.Exec(ctx,
-				"INSERT INTO public.auto_payouts (id, player_name, item_name, quantity, status, created_at, player_trade_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+			if _, err := a.db.ExecContext(ctx,
+				"INSERT INTO auto_payouts (id, player_name, item_name, quantity, status, created_at, player_trade_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
 				p.ID, p.Name, p.ItemName, p.Quantity, p.Status, p.CreatedAt, tradeParam); err != nil {
 				a.AddLog("ERROR: DB Save failed: " + err.Error())
 			}
@@ -1447,13 +1465,13 @@ func (a *App) CheckAddPayout(name, itemName string, qty int) (AddPayoutCheckResu
 		ctx := context.Background()
 		// Check if an existing non-completed row for this player+item exists
 		var exists bool
-		if err := a.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM public.auto_payouts WHERE lower(player_name)=lower($1) AND lower(item_name)=lower($2) AND status != 'Completed')", player, normItem).Scan(&exists); err == nil {
+		if err := a.db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM auto_payouts WHERE lower(player_name)=lower(?) AND lower(item_name)=lower(?) AND status != 'Completed')", player, normItem).Scan(&exists); err == nil {
 			res.Exists = exists
 		}
 
 		if !res.Exists {
 			var uniqueCount int
-			if err := a.db.QueryRow(ctx, "SELECT COUNT(DISTINCT item_name) FROM public.auto_payouts WHERE lower(player_name)=lower($1) AND status != 'Completed'", player).Scan(&uniqueCount); err == nil {
+			if err := a.db.QueryRowContext(ctx, "SELECT COUNT(DISTINCT item_name) FROM auto_payouts WHERE lower(player_name)=lower(?) AND status != 'Completed'", player).Scan(&uniqueCount); err == nil {
 				res.UniqueCount = uniqueCount
 				if uniqueCount >= maxUnique {
 					res.Allowed = false
@@ -1494,7 +1512,7 @@ func normalizeName(raw string) string {
 
 func (a *App) DeletePayout(id string) {
 	if a.db != nil {
-		_, err := a.db.Exec(context.Background(), "DELETE FROM public.auto_payouts WHERE id = $1", id)
+		_, err := a.db.ExecContext(context.Background(), "DELETE FROM auto_payouts WHERE id = ?", id)
 		if err != nil {
 			a.AddLog("ERROR: DB Delete failed: " + err.Error())
 		}
@@ -1533,7 +1551,7 @@ func (a *App) TogglePayoutStatus(id string) {
 			a.payouts[i].Status = newStatus
 
 			if a.db != nil {
-				a.db.Exec(context.Background(), "UPDATE public.auto_payouts SET status = $1 WHERE id = $2", newStatus, id)
+				a.db.ExecContext(context.Background(), "UPDATE auto_payouts SET status = ? WHERE id = ?", newStatus, id)
 			}
 			break
 		}
@@ -1543,7 +1561,7 @@ func (a *App) TogglePayoutStatus(id string) {
 
 func (a *App) ClearCompleted() {
 	if a.db != nil {
-		a.db.Exec(context.Background(), "DELETE FROM public.auto_payouts WHERE status = 'Completed'")
+		a.db.ExecContext(context.Background(), "DELETE FROM auto_payouts WHERE status = 'Completed'")
 	}
 
 	a.pMu.Lock()
@@ -1643,9 +1661,9 @@ func (a *App) GetStockedItems() []StockedItem {
 	if a.db == nil {
 		return []StockedItem{}
 	}
-	rows, err := a.db.Query(context.Background(), "SELECT id, raw_name, canonical_name, display_name, is_active FROM public.stocked_items ORDER BY display_name ASC")
+	rows, err := a.db.QueryContext(context.Background(), "SELECT id, raw_name, canonical_name, display_name, is_active FROM stocked_items ORDER BY display_name ASC")
 	if err != nil {
-		a.AddLog("ERROR: Failed to query public.stocked_items: " + err.Error())
+		a.AddLog("ERROR: Failed to query stocked_items: " + err.Error())
 		return []StockedItem{}
 	}
 	defer rows.Close()
@@ -1668,8 +1686,8 @@ func (a *App) AddStockedItem(rawName, displayName string) {
 	if !ok {
 		canonical = strings.ToLower(strings.TrimSpace(rawName))
 	}
-	_, err := a.db.Exec(context.Background(),
-		"INSERT INTO public.stocked_items (raw_name, canonical_name, display_name, is_active) VALUES ($1, $2, $3, $4)",
+	_, err := a.db.ExecContext(context.Background(),
+		"INSERT INTO stocked_items (raw_name, canonical_name, display_name, is_active) VALUES (?, ?, ?, ?)",
 		rawName, canonical, displayName, true)
 	if err != nil {
 		a.AddLog("ERROR: Failed to add stocked item: " + err.Error())
@@ -1682,7 +1700,7 @@ func (a *App) DeleteStockedItem(id int) {
 	if a.db == nil {
 		return
 	}
-	_, err := a.db.Exec(context.Background(), "DELETE FROM public.stocked_items WHERE id = $1", id)
+	_, err := a.db.ExecContext(context.Background(), "DELETE FROM stocked_items WHERE id = ?", id)
 	if err != nil {
 		a.AddLog("ERROR: Failed to delete stocked item: " + err.Error())
 	}
@@ -1692,7 +1710,7 @@ func (a *App) ToggleStockedItem(id int) {
 	if a.db == nil {
 		return
 	}
-	_, err := a.db.Exec(context.Background(), "UPDATE public.stocked_items SET is_active = NOT is_active WHERE id = $1", id)
+	_, err := a.db.ExecContext(context.Background(), "UPDATE stocked_items SET is_active = NOT is_active WHERE id = ?", id)
 	if err != nil {
 		a.AddLog("ERROR: Failed to toggle stocked item: " + err.Error())
 	}
@@ -1702,7 +1720,7 @@ func (a *App) GetActiveStockedItemNames() []string {
 	if a.db == nil {
 		return []string{}
 	}
-	rows, err := a.db.Query(context.Background(), "SELECT raw_name FROM public.stocked_items WHERE is_active = TRUE")
+	rows, err := a.db.QueryContext(context.Background(), "SELECT raw_name FROM stocked_items WHERE is_active = TRUE")
 	if err != nil {
 		return []string{}
 	}
@@ -1722,7 +1740,7 @@ func (a *App) GetActiveStockedItems() []StockedItem {
 	if a.db == nil {
 		return []StockedItem{}
 	}
-	rows, err := a.db.Query(context.Background(), "SELECT id, raw_name, canonical_name, display_name, is_active FROM public.stocked_items WHERE is_active = TRUE ORDER BY display_name ASC")
+	rows, err := a.db.QueryContext(context.Background(), "SELECT id, raw_name, canonical_name, display_name, is_active FROM stocked_items WHERE is_active = TRUE ORDER BY display_name ASC")
 	if err != nil {
 		a.AddLog("ERROR: Failed to query active stocked_items: " + err.Error())
 		return []StockedItem{}
@@ -1753,7 +1771,7 @@ func (a *App) getIntSetting(key string, def int) int {
 	}
 	var v string
 	ctx := context.Background()
-	if err := a.db.QueryRow(ctx, "SELECT setting_value FROM public.auto_payout_settings WHERE setting_key = $1", key).Scan(&v); err == nil {
+	if err := a.db.QueryRowContext(ctx, "SELECT setting_value FROM auto_payout_settings WHERE setting_key = ?", key).Scan(&v); err == nil {
 		if iv, err := strconv.Atoi(v); err == nil {
 			return iv
 		}
@@ -1769,17 +1787,17 @@ func (a *App) GetSettings() PayoutSettings {
 	}
 	ctx := context.Background()
 	var v string
-	if err := a.db.QueryRow(ctx, "SELECT setting_value FROM public.auto_payout_settings WHERE setting_key = $1", "max_unique_items").Scan(&v); err == nil {
+	if err := a.db.QueryRowContext(ctx, "SELECT setting_value FROM auto_payout_settings WHERE setting_key = ?", "max_unique_items").Scan(&v); err == nil {
 		if iv, err := strconv.Atoi(v); err == nil {
 			s.MaxUniqueItems = iv
 		}
 	}
-	if err := a.db.QueryRow(ctx, "SELECT setting_value FROM public.auto_payout_settings WHERE setting_key = $1", "max_qty_per_unique").Scan(&v); err == nil {
+	if err := a.db.QueryRowContext(ctx, "SELECT setting_value FROM auto_payout_settings WHERE setting_key = ?", "max_qty_per_unique").Scan(&v); err == nil {
 		if iv, err := strconv.Atoi(v); err == nil {
 			s.MaxQtyPerUnique = iv
 		}
 	}
-	if err := a.db.QueryRow(ctx, "SELECT setting_value FROM public.auto_payout_settings WHERE setting_key = $1", "min_qty_per_unique").Scan(&v); err == nil {
+	if err := a.db.QueryRowContext(ctx, "SELECT setting_value FROM auto_payout_settings WHERE setting_key = ?", "min_qty_per_unique").Scan(&v); err == nil {
 		if iv, err := strconv.Atoi(v); err == nil {
 			s.MinQtyPerUnique = iv
 		}
@@ -1793,15 +1811,15 @@ func (a *App) SaveSettings(maxUnique int, maxQty int, minQty int) error {
 		return nil
 	}
 	ctx := context.Background()
-	if _, err := a.db.Exec(ctx, `INSERT INTO public.auto_payout_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value`, "max_unique_items", fmt.Sprintf("%d", maxUnique)); err != nil {
+	if _, err := a.db.ExecContext(ctx, `INSERT INTO auto_payout_settings (setting_key, setting_value) VALUES (?, ?) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value`, "max_unique_items", fmt.Sprintf("%d", maxUnique)); err != nil {
 		a.AddLog("ERROR: Failed to save max_unique_items: " + err.Error())
 		return err
 	}
-	if _, err := a.db.Exec(ctx, `INSERT INTO public.auto_payout_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value`, "max_qty_per_unique", fmt.Sprintf("%d", maxQty)); err != nil {
+	if _, err := a.db.ExecContext(ctx, `INSERT INTO auto_payout_settings (setting_key, setting_value) VALUES (?, ?) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value`, "max_qty_per_unique", fmt.Sprintf("%d", maxQty)); err != nil {
 		a.AddLog("ERROR: Failed to save max_qty_per_unique: " + err.Error())
 		return err
 	}
-	if _, err := a.db.Exec(ctx, `INSERT INTO public.auto_payout_settings (setting_key, setting_value) VALUES ($1, $2) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value`, "min_qty_per_unique", fmt.Sprintf("%d", minQty)); err != nil {
+	if _, err := a.db.ExecContext(ctx, `INSERT INTO auto_payout_settings (setting_key, setting_value) VALUES (?, ?) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value`, "min_qty_per_unique", fmt.Sprintf("%d", minQty)); err != nil {
 		a.AddLog("ERROR: Failed to save min_qty_per_unique: " + err.Error())
 		return err
 	}
@@ -1817,12 +1835,12 @@ func (a *App) loadPayoutsFromDB() {
 		return
 	}
 
-	a.AddLog("Querying public.auto_payouts records...")
+	a.AddLog("Querying auto_payouts records...")
 	dbPayouts := []Payout{}
 	count := 0
 
-	// Manual entries from public.auto_payouts table. Filter out Completed/Disabled status (case-insensitive).
-	rows, err := a.db.Query(context.Background(), "SELECT id, player_name, item_name, quantity, status, created_at, COALESCE(player_trade_id,0), COALESCE(banker_trade_id,0), COALESCE(notified,false) FROM public.auto_payouts WHERE LOWER(status) NOT IN ('completed', 'disabled') ORDER BY created_at DESC")
+	// Manual entries from auto_payouts table. Filter out Completed/Disabled status (case-insensitive).
+	rows, err := a.db.QueryContext(context.Background(), "SELECT id, player_name, item_name, quantity, status, created_at, COALESCE(player_trade_id,0), COALESCE(banker_trade_id,0), COALESCE(notified,false) FROM auto_payouts WHERE LOWER(status) NOT IN ('completed', 'disabled') ORDER BY created_at DESC")
 	if err == nil {
 		for rows.Next() {
 			var p Payout
@@ -1947,13 +1965,13 @@ func (a *App) persistPayoutStatus(id string, status string) {
 
 	// Use a conditional update to ensure we don't overwrite a terminal status (Completed/Disabled)
 	// with a non-terminal one (e.g., Trading, Pending) due to a race condition.
-	query := "UPDATE public.auto_payouts SET status = $1 WHERE id = $2"
+	query := "UPDATE auto_payouts SET status = ? WHERE id = ?"
 	isTerminal := strings.EqualFold(status, "Completed") || strings.EqualFold(status, "Disabled")
 	if !isTerminal {
 		query += " AND LOWER(status) NOT IN ('completed', 'disabled')"
 	}
 
-	if _, err := a.db.Exec(ctx, query, status, id); err != nil {
+	if _, err := a.db.ExecContext(ctx, query, status, id); err != nil {
 		a.AddLog("ERROR: Failed to persist payout status: " + err.Error())
 	} else {
 		// Log the status change for debugging
@@ -1981,7 +1999,7 @@ func (a *App) getInflight(name string) (string, bool) {
 }
 
 // hasActiveBankerTrades checks whether there are any non-completed rows in
-// public.banker_trades for this banker. When true, the banker should not
+// banker_trades for this banker. When true, the banker should not
 // accept incoming trades (outgoing opens for payouts are still allowed).
 func (a *App) hasActiveBankerTrades() bool {
 	if a.db == nil {
@@ -1998,9 +2016,9 @@ func (a *App) hasActiveBankerTrades() bool {
 	var exists bool
 	var err error
 	if bname != "" {
-		err = a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM public.banker_trades WHERE lower(banker_name) = lower($1) AND COALESCE(status,'') != 'completed')`, bname).Scan(&exists)
+		err = a.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM banker_trades WHERE lower(banker_name) = lower(?) AND COALESCE(status,'') != 'completed')`, bname).Scan(&exists)
 	} else {
-		err = a.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM public.banker_trades WHERE COALESCE(status,'') != 'completed')`).Scan(&exists)
+		err = a.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM banker_trades WHERE COALESCE(status,'') != 'completed')`).Scan(&exists)
 	}
 	if err != nil {
 		a.AddLog("ERROR: hasActiveBankerTrades query failed: " + err.Error())
@@ -2018,7 +2036,7 @@ func (a *App) isPayoutCompletedInDB(id string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	var status string
-	if err := a.db.QueryRow(ctx, "SELECT status FROM public.auto_payouts WHERE id = $1", id).Scan(&status); err != nil {
+	if err := a.db.QueryRowContext(ctx, "SELECT status FROM auto_payouts WHERE id = ?", id).Scan(&status); err != nil {
 		return false, err
 	}
 	s := strings.TrimSpace(strings.ToLower(status))
@@ -2044,7 +2062,7 @@ func (a *App) sendPayoutNotAcceptedWebhook(p Payout, attempts int) {
 			var already bool
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := a.db.QueryRow(ctx, "SELECT COALESCE(notified,false) FROM public.auto_payouts WHERE id = $1", p.ID).Scan(&already); err == nil {
+			if err := a.db.QueryRowContext(ctx, "SELECT COALESCE(notified,false) FROM auto_payouts WHERE id = ?", p.ID).Scan(&already); err == nil {
 				if already {
 					a.notifiedMu.Lock()
 					a.notified[p.ID] = struct{}{}
@@ -2086,7 +2104,7 @@ func (a *App) sendPayoutNotAcceptedWebhook(p Payout, attempts int) {
 		if a.db != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if _, err := a.db.Exec(ctx, "UPDATE public.auto_payouts SET notified = TRUE WHERE id = $1", p.ID); err != nil {
+			if _, err := a.db.ExecContext(ctx, "UPDATE auto_payouts SET notified = TRUE WHERE id = ?", p.ID); err != nil {
 				a.AddLog("ERROR: Failed to mark notified in DB: " + err.Error())
 			}
 		}
@@ -2134,7 +2152,7 @@ func (a *App) sendSimpleFailureWebhook(p Payout) {
 		if a.db != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if _, err := a.db.Exec(ctx, "UPDATE public.auto_payouts SET notified = TRUE WHERE id = $1", p.ID); err != nil {
+			if _, err := a.db.ExecContext(ctx, "UPDATE auto_payouts SET notified = TRUE WHERE id = ?", p.ID); err != nil {
 				a.AddLog("ERROR: Failed to mark notified in DB: " + err.Error())
 			}
 		}
@@ -2465,11 +2483,11 @@ func (a *App) finalizeStripScan(sessionID int) {
 
 			for itemName, ids := range inv {
 				qty := len(ids)
-				_, err := a.db.Exec(ctx, `
+				_, err := a.db.ExecContext(ctx, `
 					INSERT INTO banker_inventory (banker_name, item_name, quantity, updated_at)
-					VALUES ($1, $2, $3, NOW())
+					VALUES (?, ?, ?, CURRENT_TIMESTAMP)
 					ON CONFLICT (banker_name, item_name) 
-					DO UPDATE SET quantity = EXCLUDED.quantity, updated_at = NOW()
+					DO UPDATE SET quantity = EXCLUDED.quantity, updated_at = CURRENT_TIMESTAMP
 				`, name, itemName, qty)
 				if err != nil {
 					log.Printf("[INVENTORY_DB] ERROR: failed to update %s for %s: %v", itemName, name, err)
@@ -2790,9 +2808,9 @@ func (a *App) recordBankerTrade(playerName string, items []TradeItem, tradeID in
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		_, err := a.db.Exec(ctx, `
-			INSERT INTO public.banker_trades (player_name, bet_items, banker_name, status, created_at, player_trade_id, player_chat_id, owner_key, risk_bank, bet_amount)
-			VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, 0, $8)
+		_, err := a.db.ExecContext(ctx, `
+			INSERT INTO banker_trades (player_name, bet_items, banker_name, status, created_at, player_trade_id, player_chat_id, owner_key, risk_bank, bet_amount)
+			VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, 0, ?)
 		`, playerName, itemsJSON, banker, "pending", tradeID, chatID, owner, totalQty)
 		if err != nil {
 			a.AddLog(fmt.Sprintf("ERROR: [BANKER][DB] failed to record trade: %v", err))
@@ -3190,7 +3208,7 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 
 			if a.db != nil {
 				// Persist payout completion
-				if _, err := a.db.Exec(context.Background(), "UPDATE public.auto_payouts SET status = 'Completed' WHERE id = $1", p.ID); err != nil {
+				if _, err := a.db.ExecContext(context.Background(), "UPDATE auto_payouts SET status = 'Completed' WHERE id = ?", p.ID); err != nil {
 					a.AddLog("ERROR: Failed to update DB status: " + err.Error())
 				}
 			}
@@ -3212,11 +3230,11 @@ func (a *App) handleTradeCompleted(e *g.Intercept) {
 			if a.db != nil {
 				var err error
 				if p.BankerTradeID > 0 {
-					_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE id = $1 AND status = 'paying'", p.BankerTradeID)
+					_, err = a.db.ExecContext(context.Background(), "UPDATE banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE id = ? AND status = 'paying'", p.BankerTradeID)
 				} else if p.TradeID > 0 {
-					_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_trade_id = $1 AND status = 'paying'", p.TradeID)
+					_, err = a.db.ExecContext(context.Background(), "UPDATE banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_trade_id = ? AND status = 'paying'", p.TradeID)
 				} else {
-					_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_name = $1 AND status = 'paying'", p.Name)
+					_, err = a.db.ExecContext(context.Background(), "UPDATE banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_name = ? AND status = 'paying'", p.Name)
 				}
 				if err != nil {
 					a.AddLog(fmt.Sprintf("ERROR: Failed to update banker_trades for %s/%d (banker_id=%d): %v", p.Name, p.TradeID, p.BankerTradeID, err))
@@ -3878,11 +3896,11 @@ func (a *App) automateTrade(p *Payout) {
 				// Record reliable ledger OUT and mark banker trades
 				if a.db != nil {
 					if p.BankerTradeID > 0 {
-						a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE id = $1 AND status = 'paying'", p.BankerTradeID)
+						a.db.ExecContext(context.Background(), "UPDATE banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE id = ? AND status = 'paying'", p.BankerTradeID)
 					} else if p.TradeID > 0 {
-						a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_trade_id = $1 AND status = 'paying'", p.TradeID)
+						a.db.ExecContext(context.Background(), "UPDATE banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_trade_id = ? AND status = 'paying'", p.TradeID)
 					} else {
-						a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_name = $1 AND status = 'paying'", p.Name)
+						a.db.ExecContext(context.Background(), "UPDATE banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_name = ? AND status = 'paying'", p.Name)
 					}
 				}
 				a.recordTradeLedger(p.Name, "OUT", []TradeItem{{Name: p.ItemName, Quantity: p.Quantity}})
@@ -3923,11 +3941,11 @@ func (a *App) automateTrade(p *Payout) {
 	if a.db != nil {
 		var err error
 		if p.BankerTradeID > 0 {
-			_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE id = $1 AND status = 'paying'", p.BankerTradeID)
+			_, err = a.db.ExecContext(context.Background(), "UPDATE banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE id = ? AND status = 'paying'", p.BankerTradeID)
 		} else if p.TradeID > 0 {
-			_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_trade_id = $1 AND status = 'paying'", p.TradeID)
+			_, err = a.db.ExecContext(context.Background(), "UPDATE banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_trade_id = ? AND status = 'paying'", p.TradeID)
 		} else {
-			_, err = a.db.Exec(context.Background(), "UPDATE public.banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_name = $1 AND status = 'paying'", p.Name)
+			_, err = a.db.ExecContext(context.Background(), "UPDATE banker_trades SET status = 'completed', risk_status = 'completed', risk_bank = 0 WHERE player_name = ? AND status = 'paying'", p.Name)
 		}
 		if err != nil {
 			a.AddLog(fmt.Sprintf("ERROR: Failed to update banker_trades for %s/%d (banker_id=%d): %v", p.Name, p.TradeID, p.BankerTradeID, err))

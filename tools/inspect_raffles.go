@@ -8,7 +8,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+	_ "modernc.org/sqlite"
 )
 
 type DBConfig struct {
@@ -29,14 +30,15 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	cfg.DatabaseURL = strings.TrimPrefix(cfg.DatabaseURL, "file:")
+	db, err := sql.Open("sqlite", cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("pool create failed: %v", err)
 	}
 	defer db.Close()
 
 	fmt.Println("=== Recent Raffle Sessions ===")
-	rows, err := db.Query(ctx, `SELECT id, raffle_name, prize_name, prize_qty, winner_name FROM raffle_sessions ORDER BY id DESC`)
+	rows, err := db.QueryContext(ctx, `SELECT id, raffle_name, prize_name, prize_qty, winner_name FROM raffle_sessions ORDER BY id DESC`)
 	if err != nil {
 		log.Fatalf("query failed: %v", err)
 	}

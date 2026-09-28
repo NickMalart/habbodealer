@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -18,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	_ "modernc.org/sqlite"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -243,151 +244,145 @@ func (a *App) CreateMissingTables() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
-	cfg, err := pgxpool.ParseConfig(connString)
-	if err != nil {
-		msg := fmt.Sprintf("CreateMissingTables failed: parse config: %v", err)
-		a.emitLog(msg, "error")
-		return msg
-	}
-
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	connString = strings.TrimPrefix(connString, "file:")
+	db, err := sql.Open("sqlite", connString)
 	if err != nil {
 		msg := fmt.Sprintf("CreateMissingTables failed: connect: %v", err)
 		a.emitLog(msg, "error")
 		return msg
 	}
-	defer pool.Close()
+	defer db.Close()
 
-	if err := pool.Ping(ctx); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		msg := fmt.Sprintf("CreateMissingTables failed: ping: %v", err)
 		a.emitLog(msg, "error")
 		return msg
 	}
 
 	queries := []string{
-		`CREATE TABLE IF NOT EXISTS public.game_history_entries (
-			id BIGSERIAL PRIMARY KEY,
+		`CREATE TABLE IF NOT EXISTS game_history_entries (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
-			started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			ended_at TIMESTAMPTZ NULL,
+			started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			ended_at DATETIME NULL,
 			game_type TEXT NOT NULL DEFAULT '',
 			result TEXT NOT NULL DEFAULT ''
 		);`,
-		`ALTER TABLE public.game_history_entries ADD COLUMN IF NOT EXISTS raffle_session_id BIGINT NOT NULL DEFAULT 0;`,
-		`ALTER TABLE public.game_history_entries ADD COLUMN IF NOT EXISTS rolls JSONB NOT NULL DEFAULT '[]'::jsonb;`,
-		`CREATE TABLE IF NOT EXISTS public.game_history_items (
-			id BIGSERIAL PRIMARY KEY,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS raffle_session_id BIGINT NOT NULL DEFAULT 0;`,
+		`ALTER TABLE game_history_entries ADD COLUMN IF NOT EXISTS rolls TEXT NOT NULL DEFAULT '[]';`,
+		`CREATE TABLE IF NOT EXISTS game_history_items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
 			entry_id BIGINT NOT NULL DEFAULT 0,
 			item_type TEXT NOT NULL DEFAULT '',
 			item_index INTEGER NOT NULL DEFAULT 0,
-			payload JSONB NOT NULL DEFAULT '{}'::jsonb
+			payload TEXT NOT NULL DEFAULT '{}'
 		);`,
-		`CREATE TABLE IF NOT EXISTS public.trade_ledger (
-			id BIGSERIAL PRIMARY KEY,
+		`CREATE TABLE IF NOT EXISTS trade_ledger (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			trade_type TEXT NOT NULL DEFAULT '',
 			item_name TEXT NOT NULL DEFAULT '',
 			quantity INTEGER NOT NULL DEFAULT 0,
 			status TEXT NOT NULL DEFAULT ''
 		);`,
-		`CREATE TABLE IF NOT EXISTS public.stocked_items (
-			id BIGSERIAL PRIMARY KEY,
+		`CREATE TABLE IF NOT EXISTS stocked_items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
 			item_name TEXT NOT NULL DEFAULT '',
 			quantity INTEGER NOT NULL DEFAULT 0,
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
-		`CREATE TABLE IF NOT EXISTS public.dealer_shouts (
-			id BIGSERIAL PRIMARY KEY,
+		`CREATE TABLE IF NOT EXISTS dealer_shouts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'pending',
 			message TEXT NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
-		`ALTER TABLE public.dealer_shouts ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
-		`CREATE TABLE IF NOT EXISTS public.auto_payouts (
-			id BIGSERIAL PRIMARY KEY,
+		`ALTER TABLE dealer_shouts ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
+		`CREATE TABLE IF NOT EXISTS auto_payouts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'pending',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
-		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;`,
-		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS banker_trade_id INTEGER NULL;`,
-		`ALTER TABLE public.auto_payouts ADD COLUMN IF NOT EXISTS notified BOOLEAN DEFAULT FALSE;`,
-		`CREATE TABLE IF NOT EXISTS public.banker_trades (
-			id BIGSERIAL PRIMARY KEY,
+		`ALTER TABLE auto_payouts ADD COLUMN IF NOT EXISTS player_trade_id INTEGER NULL;`,
+		`ALTER TABLE auto_payouts ADD COLUMN IF NOT EXISTS banker_trade_id INTEGER NULL;`,
+		`ALTER TABLE auto_payouts ADD COLUMN IF NOT EXISTS notified BOOLEAN DEFAULT FALSE;`,
+		`CREATE TABLE IF NOT EXISTS banker_trades (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			status TEXT NOT NULL DEFAULT 'idle',
 			bet_amount INTEGER DEFAULT 0,
 			risk_bank INTEGER DEFAULT 0,
 			risk_status TEXT DEFAULT 'idle'
 		);`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS bet_amount INTEGER DEFAULT 0;`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_bank INTEGER DEFAULT 0;`,
-		`ALTER TABLE public.banker_trades ADD COLUMN IF NOT EXISTS risk_status TEXT DEFAULT 'idle';`,
-		`CREATE TABLE IF NOT EXISTS public.banned_players (
-			id BIGSERIAL PRIMARY KEY,
+		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS owner_key TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS bet_amount INTEGER DEFAULT 0;`,
+		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS risk_bank INTEGER DEFAULT 0;`,
+		`ALTER TABLE banker_trades ADD COLUMN IF NOT EXISTS risk_status TEXT DEFAULT 'idle';`,
+		`CREATE TABLE IF NOT EXISTS banned_players (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
 			username TEXT NOT NULL DEFAULT '',
 			is_active BOOLEAN DEFAULT TRUE,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
-		`CREATE TABLE IF NOT EXISTS public.auto_payout_settings (
-			id BIGSERIAL PRIMARY KEY,
+		`CREATE TABLE IF NOT EXISTS auto_payout_settings (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
 			setting_key TEXT NOT NULL DEFAULT '',
 			setting_value TEXT NOT NULL DEFAULT '',
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
-		`CREATE TABLE IF NOT EXISTS public.raffle_sessions (
-			id BIGSERIAL PRIMARY KEY,
+		`CREATE TABLE IF NOT EXISTS raffle_sessions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
-			started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			status TEXT NOT NULL DEFAULT 'pending',
 			raffle_name TEXT NOT NULL DEFAULT 'Flame Raffle',
 			prize_name TEXT NOT NULL DEFAULT 'Purple Dragon Lamp'
 		);`,
-		`CREATE TABLE IF NOT EXISTS public.raffle_participants (
-			id BIGSERIAL PRIMARY KEY,
+		`CREATE TABLE IF NOT EXISTS raffle_participants (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id BIGINT NOT NULL DEFAULT 0,
 			owner_key TEXT NOT NULL DEFAULT '',
 			username_key TEXT NOT NULL DEFAULT '',
 			ticket_count INTEGER NOT NULL DEFAULT 1,
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
-		`CREATE TABLE IF NOT EXISTS public.trade_sessions (
-			id BIGSERIAL PRIMARY KEY,
+		`CREATE TABLE IF NOT EXISTS trade_sessions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'pending',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
-		`CREATE TABLE IF NOT EXISTS public.trade_entries (
-			id BIGSERIAL PRIMARY KEY,
+		`CREATE TABLE IF NOT EXISTS trade_entries (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id BIGINT NOT NULL DEFAULT 0,
 			owner_key TEXT NOT NULL DEFAULT '',
-			occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			payload JSONB NOT NULL DEFAULT '{}'::jsonb
+			occurred_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			payload TEXT NOT NULL DEFAULT '{}'
 		);`,
-		`CREATE TABLE IF NOT EXISTS public.trade_entry_items (
-			id BIGSERIAL PRIMARY KEY,
+		`CREATE TABLE IF NOT EXISTS trade_entry_items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			trade_entry_id BIGINT NOT NULL DEFAULT 0,
 			owner_key TEXT NOT NULL DEFAULT '',
 			item_name TEXT NOT NULL DEFAULT '',
 			quantity INTEGER NOT NULL DEFAULT 1,
 			raw_data TEXT NOT NULL DEFAULT ''
 		);`,
-		`CREATE TABLE IF NOT EXISTS public.blocked_players (
-			id BIGSERIAL PRIMARY KEY,
+		`CREATE TABLE IF NOT EXISTS blocked_players (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
 			username TEXT NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
-		`CREATE TABLE IF NOT EXISTS public.ui_settings (
-			id BIGSERIAL PRIMARY KEY,
+		`CREATE TABLE IF NOT EXISTS ui_settings (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
 			setting_key TEXT NOT NULL DEFAULT '',
 			setting_value TEXT NOT NULL DEFAULT ''
@@ -395,7 +390,11 @@ func (a *App) CreateMissingTables() string {
 	}
 
 	for _, query := range queries {
-		if _, err := pool.Exec(ctx, query); err != nil {
+		if _, err := db.ExecContext(ctx, query); err != nil {
+			// ignore duplicate column errors in sqlite
+			if strings.Contains(err.Error(), "duplicate column name") {
+				continue
+			}
 			msg := fmt.Sprintf("CreateMissingTables failed: %v\nquery: %s", err, query)
 			a.emitLog(msg, "error")
 			return msg
@@ -403,6 +402,28 @@ func (a *App) CreateMissingTables() string {
 	}
 
 	return "Database tables checked/created successfully"
+}
+
+func (a *App) ConfigureLocalDatabase() string {
+	root := a.resolveWorkspaceRoot()
+	dbPath := filepath.Join(root, "database.sqlite")
+	
+	// Create db.local.json pointing to it
+	cfgPath := filepath.Join(root, "db.local.json")
+	cfgData := fmt.Sprintf(`{"databaseUrl":"file:%s"}`, filepath.ToSlash(dbPath))
+	if err := os.WriteFile(cfgPath, []byte(cfgData), 0644); err != nil {
+		return fmt.Sprintf("Failed to write config: %v", err)
+	}
+	
+	// Ensure file exists
+	if !fileExists(dbPath) {
+		if err := os.WriteFile(dbPath, []byte(""), 0644); err != nil {
+			return fmt.Sprintf("Failed to create db file: %v", err)
+		}
+	}
+	
+	// Run schema migrations
+	return a.CreateMissingTables()
 }
 
 // SetStopChildrenOnExit controls whether App Launcher will stop tracked/known

@@ -5,13 +5,18 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
-	dbURL := "postgresql://neondb_owner:npg_cPwtQn4ZGh7J@ep-crimson-frost-b4a01mk8-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+	dbURL := "./database.sqlite"
 	ctx := context.Background()
-	pool, _ := pgxpool.New(ctx, dbURL)
+	pool, err := sql.Open("sqlite", dbURL)
+	if err != nil {
+		fmt.Printf("Error opening database: %v\n", err)
+		return
+	}
 	defer pool.Close()
 
 	loc := time.FixedZone("GMT+10", 10*60*60)
@@ -20,13 +25,13 @@ func main() {
 	todayEnd := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, loc).Format(time.RFC3339)
 
 	fmt.Println("--- GAME HISTORY FOR TODAY ---")
-	grows, _ := pool.Query(ctx, `
+	grows, _ := pool.QueryContext(ctx, `
 		SELECT player_name, game, winner, status, notes, completed_at 
 		FROM game_history_entries 
-		WHERE completed_at >= $1 AND completed_at <= $2
+		WHERE completed_at >= ? AND completed_at <= ?
 		ORDER BY completed_at ASC
 	`, todayStart, todayEnd)
-	
+
 	for grows.Next() {
 		var p, g, w, s, notes, cat string
 		grows.Scan(&p, &g, &w, &s, &notes, &cat)
@@ -35,18 +40,17 @@ func main() {
 	grows.Close()
 
 	fmt.Println("\n--- TRADE LEDGER FOR TODAY ---")
-	trows, _ := pool.Query(ctx, `
+	trows, _ := pool.QueryContext(ctx, `
 		SELECT partner_name, trade_type, items, created_at 
 		FROM trade_ledger 
-		WHERE created_at >= $1 AND created_at <= $2
+		WHERE created_at >= ? AND created_at <= ?
 		ORDER BY created_at ASC
 	`, todayStart, todayEnd)
-	
+
 	for trows.Next() {
-		var p, tt, itemsJSON string
-		var cat time.Time
+		var p, tt, itemsJSON, cat string
 		trows.Scan(&p, &tt, &itemsJSON, &cat)
-		fmt.Printf("[%s] %s | %s | Items: %s\n", cat.Format(time.RFC3339), p, tt, itemsJSON)
+		fmt.Printf("[%s] %s | %s | Items: %s\n", cat, p, tt, itemsJSON)
 	}
 	trows.Close()
 }

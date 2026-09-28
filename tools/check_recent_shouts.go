@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	
 )
 
 func main() {
@@ -21,7 +21,7 @@ func main() {
 	defer conn.Close(ctx)
 
 	fmt.Println("--- Recent dealer_shouts for DESKTOP-B9TGIUH ---")
-	rows, err := conn.Query(ctx, `SELECT id, target_player, message, status, created_at FROM dealer_shouts WHERE owner_key = 'DESKTOP-B9TGIUH' ORDER BY id DESC LIMIT 20`)
+	rows, err := conn.QueryContext(ctx, `SELECT id, target_player, message, status, created_at FROM dealer_shouts WHERE owner_key = 'DESKTOP-B9TGIUH' ORDER BY id DESC LIMIT 20`)
 	if err != nil {
 		log.Fatalf("Query failed: %v", err)
 	}

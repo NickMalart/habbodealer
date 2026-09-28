@@ -3,14 +3,18 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+	_ "modernc.org/sqlite"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -22,7 +26,26 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-const DB_URL = "postgresql://neondb_owner:npg_cPwtQn4ZGh7J@ep-crimson-frost-b4a01mk8-pooler.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+var DB_URL = "./database.sqlite"
+
+func readLocalDBURL() string {
+	candidates := []string{"db.local.json", "../db.local.json"}
+	for _, c := range candidates {
+		data, err := os.ReadFile(c)
+		if err != nil {
+			continue
+		}
+		var cfg struct{ DatabaseURL string `json:"databaseUrl"` }
+		if json.Unmarshal(data, &cfg) == nil && cfg.DatabaseURL != "" {
+			return strings.TrimPrefix(cfg.DatabaseURL, "file:")
+		}
+	}
+	exeDir := func() string {
+		e, _ := os.Executable()
+		return filepath.Dir(e)
+	}()
+	return filepath.Join(exeDir, "database.sqlite")
+}
 
 type TradeItem struct {
 	Name     string `json:"name"`
@@ -37,7 +60,7 @@ type App struct {
 	running bool
 
 	// Database pool
-	dbPool *pgxpool.Pool
+	dbPool *sql.DB
 
 	// Hand scan state
 	stripScanMu           sync.Mutex
@@ -73,14 +96,13 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
 	// Initialize Database Pool
-	dbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	pool, err := pgxpool.New(dbCtx, DB_URL)
+	dbPath := readLocalDBURL()
+	pool, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		a.AddLog(fmt.Sprintf("CRITICAL ERROR: Failed to connect to DB: %v", err))
 	} else {
 		a.dbPool = pool
-		a.AddLog("Connected to PostgreSQL successfully.")
+		a.AddLog("Connected to local SQLite database successfully.")
 	}
 
 	a.ext = g.NewExt(g.ExtInfo{
@@ -194,7 +216,7 @@ func (a *App) checkActiveGames() ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	rows, err := a.dbPool.Query(ctx, "SELECT DISTINCT player_name FROM public.banker_trades WHERE status != 'completed'")
+	rows, err := a.dbPool.QueryContext(ctx, "SELECT DISTINCT player_name FROM banker_trades WHERE status != 'completed'")
 	if err != nil {
 		return nil, err
 	}

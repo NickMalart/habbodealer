@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	
 )
 
 func main() {
@@ -21,7 +21,7 @@ func main() {
 	defer conn.Close(ctx)
 
 	fmt.Println("--- Schema for auto_payouts ---")
-	rows, _ := conn.Query(ctx, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'auto_payouts'")
+	rows, _ := conn.QueryContext(ctx, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'auto_payouts'")
 	for rows.Next() {
 		var col, typ string
 		rows.Scan(&col, &typ)

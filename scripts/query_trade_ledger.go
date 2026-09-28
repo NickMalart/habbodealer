@@ -7,11 +7,12 @@ import (
 	"os"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+	_ "modernc.org/sqlite"
 )
 
-func printRows(ctx context.Context, pool *pgxpool.Pool, q string, args ...interface{}) error {
-	rows, err := pool.Query(ctx, q, args...)
+func printRows(ctx context.Context, pool *sql.DB, q string, args ...interface{}) error {
+	rows, err := pool.QueryContext(ctx, q, args...)
 	if err != nil {
 		return err
 	}
@@ -50,7 +51,8 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, dbURL)
+	dbURL = strings.TrimPrefix(dbURL, "file:")
+	pool, err := sql.Open("sqlite", dbURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "connect error: %v\n", err)
 		os.Exit(1)
@@ -60,7 +62,7 @@ func main() {
 	fmt.Println("--- Recent trade_ledger rows for partner (if provided) ---")
 	if partner != "" {
 		pattern := "%" + partner + "%"
-		q := `SELECT id, owner_key, partner_name, trade_type, total_quantity, items, created_at FROM public.trade_ledger WHERE partner_name ILIKE $1 ORDER BY created_at DESC LIMIT 50`
+		q := `SELECT id, owner_key, partner_name, trade_type, total_quantity, items, created_at FROM trade_ledger WHERE partner_name LIKE ? ORDER BY created_at DESC LIMIT 50`
 		if err := printRows(ctx, pool, q, pattern); err != nil {
 			fmt.Fprintf(os.Stderr, "query error: %v\n", err)
 		}
@@ -69,7 +71,7 @@ func main() {
 	}
 
 	fmt.Println("\n--- Last 20 trade_ledger rows overall ---")
-	q2 := `SELECT id, owner_key, partner_name, trade_type, total_quantity, items, created_at FROM public.trade_ledger ORDER BY created_at DESC LIMIT 20`
+	q2 := `SELECT id, owner_key, partner_name, trade_type, total_quantity, items, created_at FROM trade_ledger ORDER BY created_at DESC LIMIT 20`
 	if err := printRows(ctx, pool, q2); err != nil {
 		fmt.Fprintf(os.Stderr, "query error: %v\n", err)
 	}

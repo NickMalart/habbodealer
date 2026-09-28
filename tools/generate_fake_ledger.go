@@ -8,7 +8,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	
 )
 
 type TradeItem struct {
@@ -55,9 +55,9 @@ func main() {
 		// Random time in the last 24 hours
 		createdAt := time.Now().Add(-time.Duration(rand.Intn(24)) * time.Hour).Add(-time.Duration(rand.Intn(60)) * time.Minute)
 
-		_, err := conn.Exec(context.Background(), `
+		_, err := conn.ExecContext(context.Background(), `
 			INSERT INTO trade_ledger (owner_key, partner_name, trade_type, total_quantity, items, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6)
+			VALUES (?, ?, ?, ?, ?, ?)
 		`, owner, player, tradeType, qty, itemsJSON, createdAt)
 
 		if err != nil {
