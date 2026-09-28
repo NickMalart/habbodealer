@@ -684,6 +684,38 @@ func normalizeUsers28Name(name string, tokenHex string) string {
 			}
 		}
 	}
+
+	// USERS28 can leave encoded prefix fragments attached to the username.
+	// When the prefix contains protocol punctuation or multiple leading
+	// uppercase characters, use the final name-like case transition.
+	if len(name) >= 4 {
+		prefixHasMarker := false
+		for i := 0; i < len(name) && i < 4; i++ {
+			if !((name[i] >= 'A' && name[i] <= 'Z') || (name[i] >= 'a' && name[i] <= 'z') || (name[i] >= '0' && name[i] <= '9') || name[i] == '_' || name[i] == '-') {
+				prefixHasMarker = true
+				break
+			}
+		}
+		if prefixHasMarker || (name[0] >= 'A' && name[0] <= 'Z' && name[1] >= 'A' && name[1] <= 'Z') {
+			upperLowerStart := -1
+			lowerUpperStart := -1
+			for i := 1; i < len(name)-1; i++ {
+				if name[i] >= 'A' && name[i] <= 'Z' && name[i+1] >= 'a' && name[i+1] <= 'z' {
+					upperLowerStart = i
+				}
+				if name[i] >= 'a' && name[i] <= 'z' && name[i+1] >= 'A' && name[i+1] <= 'Z' {
+					lowerUpperStart = i
+				}
+			}
+			start := upperLowerStart
+			if name[0] < 'A' || name[0] > 'Z' {
+				start = lowerUpperStart
+			}
+			if start > 0 {
+				name = name[start:]
+			}
+		}
+	}
 	return name
 }
 
@@ -8936,7 +8968,14 @@ func handleUsers28Packet(a *App, e *g.Intercept) {
 	changed := make([]string, 0)
 
 	users28Mu.Lock()
+	// Header 28 is a complete room snapshot. Replace the indexes so users
+	// who leave or whose room IDs change cannot leave stale malformed names.
+	clear(users28Canonical)
+	clear(users28ByToken)
+	clear(users28ByIndex)
+	clear(users28ByTradeID)
 	for _, u := range parsed.Users {
+		u.Username = normalizeUsers28Name(u.Username, u.TokenHex)
 		username := strings.TrimSpace(u.Username)
 		if username == "" {
 			continue

@@ -135,6 +135,23 @@ func isAlphaByte(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
+func restoreDroppedUsernamePrefix(rawBlock, username string) string {
+	if username == "" || username[0] < 'a' || username[0] > 'z' {
+		return username
+	}
+
+	position := strings.LastIndex(rawBlock, username)
+	if position <= 0 || position+len(username) != len(rawBlock) {
+		return username
+	}
+
+	prefix := rawBlock[position-1]
+	if prefix < 'A' || prefix > 'Z' {
+		return username
+	}
+	return rawBlock[position-1:]
+}
+
 func extractEntityAndUsername(nameBlock string, nameBlockRaw []byte) (entityID, chatIDRaw, tradeIDRaw, username, tokenHex string, chatID, tradeID int) {
 	working := nameBlock
 	if strings.HasPrefix(working, "@\\") {
@@ -186,7 +203,7 @@ func extractEntityAndUsername(nameBlock string, nameBlockRaw []byte) (entityID, 
 
 	chatID = decodeVL64(chatIDRaw)
 	tradeID = decodeVL64(tradeIDRaw)
-	username = remaining
+	username = restoreDroppedUsernamePrefix(working, remaining)
 	return
 }
 
