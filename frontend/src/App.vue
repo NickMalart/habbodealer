@@ -978,7 +978,7 @@ export default {
   methods: {
     async configureDatabase() {
       try {
-        const result = await window.go.main.App.ConfigureLocalDatabase();
+        const result = await window.go.main.App.ResetDatabase();
         alert("Database Configuration Result:\n" + result);
       } catch (err) {
         alert("Error configuring database: " + err);

@@ -423,6 +423,36 @@ func (a *App) CreateMissingTables() string {
 	return "Database tables checked/created successfully"
 }
 
+// ResetDatabase wipes the existing database.sqlite and creates a fresh one
+// with all tables across every app. Overwrites db.local.json as well.
+func (a *App) ResetDatabase() string {
+	root := a.resolveWorkspaceRoot()
+	dbPath := filepath.Join(root, "database.sqlite")
+	cfgPath := filepath.Join(root, "db.local.json")
+
+	// Remove old database file if it exists
+	if fileExists(dbPath) {
+		if err := os.Remove(dbPath); err != nil {
+			msg := fmt.Sprintf("ResetDatabase: could not delete old database: %v", err)
+			a.emitLog(msg, "error")
+			return msg
+		}
+		a.emitLog("Old database.sqlite removed", "info")
+	}
+
+	// Write fresh db.local.json
+	cfgData := fmt.Sprintf(`{"databaseUrl":"file:%s"}`, filepath.ToSlash(dbPath))
+	if err := os.WriteFile(cfgPath, []byte(cfgData), 0644); err != nil {
+		msg := fmt.Sprintf("ResetDatabase: could not write db.local.json: %v", err)
+		a.emitLog(msg, "error")
+		return msg
+	}
+	a.emitLog(fmt.Sprintf("db.local.json written → %s", dbPath), "info")
+
+	// CreateMissingTables will create the file and all schemas
+	return a.CreateMissingTables()
+}
+
 func (a *App) ConfigureLocalDatabase() string {
 	root := a.resolveWorkspaceRoot()
 	dbPath := filepath.Join(root, "database.sqlite")
