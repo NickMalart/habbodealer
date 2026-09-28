@@ -2640,6 +2640,11 @@ func (a *App) initHistoryDatabase() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		var db *sql.DB
 		dbURL := strings.TrimPrefix(cfg.DatabaseURL, "file:")
+		if !strings.Contains(dbURL, "?") {
+			dbURL += "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+		} else if !strings.Contains(dbURL, "busy_timeout") {
+			dbURL += "&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+		}
 		db, err = sql.Open("sqlite", dbURL)
 		if err != nil {
 			cancel()
@@ -3406,7 +3411,7 @@ func (a *App) persistGameHistoryToDB(entries []GameHistoryEntry) error {
 					return err
 				}
 
-				if _, err := tx.ExecContext(ctx, `DELETE FROM game_history_items WHERE entry_id = ? AND (? = '' OR owner_key = ?)`, e.ID, owner); err != nil {
+				if _, err := tx.ExecContext(ctx, `DELETE FROM game_history_items WHERE entry_id = ? AND (? = '' OR owner_key = ?)`, e.ID, owner, owner); err != nil {
 					return err
 				}
 
@@ -3548,7 +3553,7 @@ func (a *App) persistSingleGameEntryToDB(entry GameHistoryEntry) error {
 			}
 
 			// Update items for this entry (delete old, insert new)
-			if _, err := tx.ExecContext(ctx, `DELETE FROM game_history_items WHERE entry_id = ? AND (? = '' OR owner_key = ?)`, entry.ID, owner); err != nil {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM game_history_items WHERE entry_id = ? AND (? = '' OR owner_key = ?)`, entry.ID, owner, owner); err != nil {
 				return err
 			}
 

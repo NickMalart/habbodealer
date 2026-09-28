@@ -80,7 +80,7 @@ def prefix_count_from_live_block(text: str) -> int:
         return 3
     first_len = vl64_chunk_length(text)
     if first_len == 2:
-        return 5
+        return 6
     return 3
 
 

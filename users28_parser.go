@@ -95,7 +95,7 @@ func prefixCountFromLiveBlock(text string) int {
 		return 3
 	}
 	if vl64ChunkLength(text) == 2 {
-		return 5
+		return 6
 	}
 	return 3
 }
