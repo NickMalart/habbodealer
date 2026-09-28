@@ -234,8 +234,10 @@ func readDatabaseURL(root string) (string, error) {
 func (a *App) CreateMissingTables() string {
 	root := a.resolveWorkspaceRoot()
 	connString, err := readDatabaseURL(root)
-	if err != nil {
-		// db.local.json doesn't exist yet — auto-create it
+
+	// If config is missing OR still has an old postgres URL, switch to local SQLite
+	isPostgres := strings.HasPrefix(connString, "postgresql://") || strings.HasPrefix(connString, "postgres://")
+	if err != nil || isPostgres {
 		dbPath := filepath.Join(root, "database.sqlite")
 		cfgPath := filepath.Join(root, "db.local.json")
 		cfgData := fmt.Sprintf(`{"databaseUrl":"file:%s"}`, filepath.ToSlash(dbPath))
@@ -245,7 +247,7 @@ func (a *App) CreateMissingTables() string {
 			return msg
 		}
 		connString = "file:" + filepath.ToSlash(dbPath)
-		a.emitLog(fmt.Sprintf("Created db.local.json at %s", cfgPath), "info")
+		a.emitLog(fmt.Sprintf("Configured local SQLite database at %s", dbPath), "info")
 	}
 
 	a.emitLog(fmt.Sprintf("Creating database schema using %s", root), "info")
@@ -253,7 +255,7 @@ func (a *App) CreateMissingTables() string {
 	defer cancel()
 
 	dbPath := strings.TrimPrefix(connString, "file:")
-	// Ensure the sqlite file exists (SQLite needs the file to exist or a valid path)
+	// Ensure the sqlite file exists before opening
 	if !fileExists(dbPath) {
 		if err := os.WriteFile(dbPath, []byte{}, 0644); err != nil {
 			msg := fmt.Sprintf("CreateMissingTables failed: could not create db file: %v", err)
