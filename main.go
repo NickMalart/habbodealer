@@ -2425,7 +2425,7 @@ func (a *App) loadStockedItems() {
 		SELECT id, raw_name, canonical_name, display_name, is_active
 		FROM stocked_items
 		WHERE (? = '' OR owner_key = ?)
-	`, owner)
+	`, owner, owner)
 	if err != nil {
 		a.AddLogMsg(fmt.Sprintf("[STOCKED_ITEMS] query failed: %v", err))
 		dbDiagLog(fmt.Sprintf("[STOCKED_ITEMS] query error: %v", err))
@@ -3002,7 +3002,7 @@ func (a *App) SetActiveRaffleSessionID(id int64) {
 func stockedItemsSchemaStatements() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS stocked_items (
-			id SERIAL PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
 			raw_name TEXT NOT NULL,
 			canonical_name TEXT NOT NULL DEFAULT '',
@@ -3053,8 +3053,6 @@ func (a *App) ensureGameHistoryTables() error {
 			updated_db_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (id, owner_key)
 		)`,
-		`ALTER TABLE game_history_entries ALTER COLUMN id TYPE TEXT USING id::text`,
-		`ALTER TABLE game_history_entries ALTER COLUMN started_at TYPE TEXT USING started_at::text`,
 		`ALTER TABLE game_history_entries ADD COLUMN player_name TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE game_history_entries ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE game_history_entries ADD COLUMN completed_at TEXT NOT NULL DEFAULT ''`,
@@ -3090,7 +3088,7 @@ func (a *App) ensureGameHistoryTables() error {
 		`CREATE INDEX IF NOT EXISTS idx_game_history_owner_started ON game_history_entries(owner_key, started_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_game_history_items_owner_entry ON game_history_items(owner_key, entry_id, item_type, item_index)`,
 		`CREATE TABLE IF NOT EXISTS trade_ledger (
-			id SERIAL PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL,
 			partner_name TEXT NOT NULL,
 			trade_type TEXT NOT NULL,
@@ -3100,7 +3098,7 @@ func (a *App) ensureGameHistoryTables() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_trade_ledger_owner_created ON trade_ledger(owner_key, created_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS dealer_shouts (
-			id SERIAL PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL DEFAULT '',
 			target_player TEXT NOT NULL,
 			message TEXT NOT NULL,
@@ -3115,6 +3113,9 @@ func (a *App) ensureGameHistoryTables() error {
 
 	for _, q := range queries {
 		if _, err := db.ExecContext(ctx, q); err != nil {
+			if strings.Contains(err.Error(), "duplicate column name") {
+				continue
+			}
 			return err
 		}
 	}

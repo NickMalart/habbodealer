@@ -217,7 +217,7 @@ func (a *App) initDB() {
 	// Create blocked_players table if not exists
 	_, err = a.db.ExecContext(context.Background(), `
 		CREATE TABLE IF NOT EXISTS blocked_players (
-			id SERIAL PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			owner_key TEXT NOT NULL,
 			player_name TEXT NOT NULL,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

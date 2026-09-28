@@ -1052,7 +1052,7 @@ func (a *App) initDatabase() {
 
 	// Create dealer_shouts table for cross-bot communication
 	query = `CREATE TABLE IF NOT EXISTS dealer_shouts (
-		id SERIAL PRIMARY KEY,
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		owner_key TEXT NOT NULL DEFAULT '',
 		target_player TEXT NOT NULL,
 		message TEXT NOT NULL,
@@ -1094,7 +1094,7 @@ func (a *App) initDatabase() {
 
 	// Create stocked_items table
 	query = `CREATE TABLE IF NOT EXISTS stocked_items (
-		id SERIAL PRIMARY KEY,
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		raw_name TEXT NOT NULL,
 		canonical_name TEXT NOT NULL,
 		display_name TEXT NOT NULL,
