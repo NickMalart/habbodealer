@@ -6285,7 +6285,11 @@ func startPayout(a *App, targetID int, targetName string) {
 	}
 
 	SafeGo(func() {
-		// Small delay so the winner shout clears Habbo's rate limiter first
+		// Unconditionally send a TRADE_CLOSE to clear any ghost/stuck trade windows
+		// before we begin our payout open attempts.
+		ext.Send(out.TRADE_CLOSE)
+
+		// Small delay so the close registers and the winner shout clears Habbo's rate limiter first
 		time.Sleep(1200 * time.Millisecond)
 
 		// Outgoing TRADE_OPEN must use a room/chat index domain. Keep payout
@@ -6307,6 +6311,12 @@ func startPayout(a *App, targetID int, targetName string) {
 				return
 			}
 			payoutAttempts = attempt
+
+			if attempt > 1 {
+				a.AddLogMsg(fmt.Sprintf("[PAYOUT_DEBUG] retry attempt %d: sending TRADE_CLOSE to clear potential stuck window", attempt))
+				ext.Send(out.TRADE_CLOSE)
+				time.Sleep(400 * time.Millisecond)
+			}
 
 			if hiddenBlockedTradeCleanupPending {
 				a.AddLogMsg("[PAYOUT_DEBUG] waiting for blocked-trade cleanup before opening payout trade")
