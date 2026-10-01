@@ -15130,6 +15130,10 @@ func (a *App) hitBjDice() {
 	resultsWaitGroup.Add(1)
 	mutex.Unlock()
 
+	if !diceList[slot].IsClosed {
+		diceList[slot].Close()
+		time.Sleep(600 * time.Millisecond)
+	}
 	diceList[slot].Roll()
 
 	time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
@@ -15516,6 +15520,10 @@ func (a *App) hit13Dice() {
 	resultsWaitGroup.Add(1)
 	mutex.Unlock()
 
+	if !diceList[slot].IsClosed {
+		diceList[slot].Close()
+		time.Sleep(600 * time.Millisecond)
+	}
 	diceList[slot].Roll()
 
 	time.Sleep(rollDelay + time.Duration(rand.Intn(100))*time.Millisecond)
