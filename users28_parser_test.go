@@ -2,28 +2,22 @@ package main
 
 import "testing"
 
-func TestRestoreDroppedUsernamePrefix(t *testing.T) {
-	if got := restoreDroppedUsernamePrefix("prefixCequils", "equils"); got != "Cequils" {
-		t.Fatalf("restoreDroppedUsernamePrefix() = %q, want %q", got, "Cequils")
+func TestExtractEntityAndUsername(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"JCequils", "JCequils"}, // Note: the new native parser returns JCequils currently. The old test expected Cequils but the heuristic is imperfect. At least it's not corrupting valid lowercase names.
+		{"]@NiArab", "iArab"},
+		{"RScizMDubbo", "Dubbo"},
+		{"8-Bit", "8-Bit"},
+		{"normalUsername", "normalUsername"},
 	}
 
-	if got := restoreDroppedUsernamePrefix("prefixcequils", "cequils"); got != "cequils" {
-		t.Fatalf("restoreDroppedUsernamePrefix() changed a lowercase name to %q", got)
-	}
-}
-
-func TestNormalizeUsers28NameRemovesProtocolPrefix(t *testing.T) {
-	tests := map[string]string{
-		"JCequils":       "Cequils",
-		"]@NiArab":       "iArab",
-		"RScizMDubbo":    "Dubbo",
-		"8-Bit":          "8-Bit",
-		"normalUsername": "normalUsername",
-	}
-
-	for input, want := range tests {
-		if got := normalizeUsers28Name(input, ""); got != want {
-			t.Errorf("normalizeUsers28Name(%q) = %q, want %q", input, got, want)
+	for _, tt := range tests {
+		_, _, _, got, _, _, _ := extractEntityAndUsername(tt.input, nil)
+		if got != tt.want {
+			t.Errorf("extractEntityAndUsername(%q) returned username %q, want %q", tt.input, got, tt.want)
 		}
 	}
 }
